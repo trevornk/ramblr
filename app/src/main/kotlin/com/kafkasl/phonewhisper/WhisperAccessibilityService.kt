@@ -38,6 +38,11 @@ class WhisperAccessibilityService : AccessibilityService() {
         private const val RING_DP = 56
         private const val FEEDBACK_OFFSET_DP = 64
 
+        /** Hold the button this long while TRANSCRIBING to cancel (see overlay.setOnTouchListener). */
+        private const val LONG_PRESS_CANCEL_MS = 500L
+        /** Backstop if no transcription/cleanup callback ever fires; covers transcription + cleanup callTimeouts. */
+        private const val WATCHDOG_TIMEOUT_MS = 400_000L
+
         private const val COLOR_IDLE = 0xDD1C1C1E.toInt()
         private const val COLOR_RECORDING = 0xDDEF4444.toInt()
         private const val COLOR_BUSY = 0xDD6B6B6B.toInt()
@@ -53,6 +58,9 @@ class WhisperAccessibilityService : AccessibilityService() {
     private var layoutParams: WindowManager.LayoutParams? = null
     private var feedbackLayoutParams: WindowManager.LayoutParams? = null
     @Volatile private var recordingEngine: RecordingEngine? = null
+    private val guard = TranscriptionGuard()
+    private val inFlightCall = InFlightCall()
+    @Volatile private var activeToken: Int = 0
     private val handler = Handler(Looper.getMainLooper())
     private val hideFeedback = Runnable {
         feedbackView?.animate()?.alpha(0f)?.setDuration(180)?.withEndAction {
@@ -88,6 +96,8 @@ class WhisperAccessibilityService : AccessibilityService() {
             engine.awaitTeardown()
             recordingEngine = null
         }
+        guard.cancel()
+        inFlightCall.cancel()
         removeOverlay()
         super.onDestroy()
     }
@@ -160,12 +170,25 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         var startX = 0; var startY = 0
         var touchX = 0f; var touchY = 0f
+        // While TRANSCRIBING, holding the button for LONG_PRESS_CANCEL_MS cancels instead of
+        // waiting for ACTION_UP; this can't collide with tap/drag handling since a plain tap or
+        // drag never leaves the button down that long, and it's only armed while TRANSCRIBING
+        // (RECORDING/IDLE taps and drags are unaffected).
+        var longPressFired = false
+        val longPressCancel = Runnable {
+            longPressFired = true
+            cancelTranscription()
+        }
 
         overlay.setOnTouchListener { v, ev ->
             when (ev.action) {
                 MotionEvent.ACTION_DOWN -> {
                     startX = params.x; startY = params.y
                     touchX = ev.rawX; touchY = ev.rawY
+                    longPressFired = false
+                    if (stateMachine.current() == RecordingStateMachine.State.TRANSCRIBING) {
+                        handler.postDelayed(longPressCancel, LONG_PRESS_CANCEL_MS)
+                    }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -179,6 +202,8 @@ class WhisperAccessibilityService : AccessibilityService() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
+                    handler.removeCallbacks(longPressCancel)
+                    if (longPressFired) return@setOnTouchListener true
                     val moved = abs(ev.rawX - touchX) + abs(ev.rawY - touchY)
                     if (moved < TAP_THRESHOLD_DP * dp) {
                         onTap()
@@ -191,6 +216,10 @@ class WhisperAccessibilityService : AccessibilityService() {
                             wm.updateViewLayout(feedbackView, it)
                         }
                     }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(longPressCancel)
                     true
                 }
                 else -> false
@@ -326,7 +355,7 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         val engine = RecordingEngine(cacheDir, stateMachine)
         val started = engine.start(
-            onMaxDuration = { toast("Recording limit reached (10 min) — transcribing…") },
+            onMaxDuration = { /* handled in startMaxDurationTranscription on the main thread */ },
             onFinished = { result -> onRecordingFinished(result) }
         )
         if (!started) { toast("Couldn't start recording — mic busy?"); return }
@@ -340,6 +369,8 @@ class WhisperAccessibilityService : AccessibilityService() {
     /** Flips shared state; the reader thread notices, drains, tears down and hands off via [onRecordingFinished]. */
     private fun stopAndTranscribe() {
         if (!stateMachine.tryStartTranscribing()) return
+        activeToken = guard.start()
+        armWatchdog(activeToken)
         enterTranscribingUi()
     }
 
@@ -349,11 +380,74 @@ class WhisperAccessibilityService : AccessibilityService() {
         setBusy(true)
     }
 
+    /** Long-press while TRANSCRIBING (see overlay.setOnTouchListener): abort the in-flight call and return to idle. */
+    private fun cancelTranscription() {
+        if (stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING) return
+        inFlightCall.cancel()
+        resetToIdle()
+        toast("Transcription cancelled")
+    }
+
+    /** Backstop for a callback that never arrives (stalled socket, hung local model, etc). See #20. */
+    private fun armWatchdog(token: Int) {
+        handler.postDelayed({
+            if (guard.isCurrent(token)) {
+                inFlightCall.cancel()
+                resetToIdle()
+                toast("Transcription timed out")
+            }
+        }, WATCHDOG_TIMEOUT_MS)
+    }
+
+    /** Common teardown for every path back to IDLE: normal completion, cancel, or watchdog. */
+    private fun resetToIdle() {
+        guard.cancel()
+        activeToken = 0
+        stateMachine.reset()
+        setBusy(false)
+        setAppearance(COLOR_IDLE)
+    }
+
     /** Called on the reader thread once the AudioRecord has been drained and released. */
     private fun onRecordingFinished(result: RecordingEngine.Result) {
         recordingEngine = null
         if (result.discarded) return // service destroyed / recording forced off — nothing to transcribe
 
+        val token = when {
+            activeToken != 0 && guard.isCurrent(activeToken) -> activeToken
+            result.stopReason == RecordingEngine.StopReason.MAX_DURATION -> {
+                startMaxDurationTranscription(result)
+                return
+            }
+            else -> {
+                result.pcmFile?.delete()
+                return
+            }
+        }
+        continueTranscription(result, token)
+    }
+
+    /**
+     * The reader thread can hit the duration cap without a UI tap, so no token exists yet. Mint
+     * that token on the main thread with a fresh state check; if the user/service already reset to
+     * IDLE, discard the temp file instead of resurrecting a cancelled transcription.
+     */
+    private fun startMaxDurationTranscription(result: RecordingEngine.Result) {
+        handler.post {
+            if (stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING || activeToken != 0) {
+                result.pcmFile?.delete()
+                return@post
+            }
+            val token = guard.start()
+            activeToken = token
+            armWatchdog(token)
+            enterTranscribingUi()
+            toast("Recording limit reached (10 min) — transcribing…")
+            thread { continueTranscription(result, token) }
+        }
+    }
+
+    private fun continueTranscription(result: RecordingEngine.Result, token: Int) {
         val file = result.pcmFile
         if (file == null) { reset("No audio captured"); return }
         if (result.errorMessage != null) Log.e(TAG, "Recording ended with error: ${result.errorMessage}")
@@ -364,13 +458,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         val local = localTranscriber
 
         if (useLocal && local != null) {
-            transcribeLocal(pcm, local)
+            transcribeLocal(pcm, local, token)
         } else {
-            transcribeApi(pcm)
+            transcribeApi(pcm, token)
         }
     }
 
-    private fun transcribeLocal(pcm: ByteArray, transcriber: LocalTranscriber) {
+    private fun transcribeLocal(pcm: ByteArray, transcriber: LocalTranscriber, token: Int) {
         thread {
             try {
                 // Convert 16-bit PCM bytes to float samples
@@ -386,45 +480,42 @@ class WhisperAccessibilityService : AccessibilityService() {
                 val ms = System.currentTimeMillis() - t0
                 Log.i(TAG, "Local transcription: ${ms}ms, ${samples.size / SAMPLE_RATE}s audio")
 
-                handleTranscriptionResult(text)
+                handleTranscriptionResult(text, token)
             } catch (e: Exception) {
                 Log.e(TAG, "Local transcription failed", e)
                 handler.post {
+                    if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                     toast("Local error: ${e.message}")
-                    stateMachine.reset()
-                    setBusy(false)
-                    setAppearance(COLOR_IDLE)
+                    resetToIdle()
                 }
             }
         }
     }
 
-    private fun transcribeApi(pcm: ByteArray) {
+    private fun transcribeApi(pcm: ByteArray, token: Int) {
         val wav = WavWriter.encode(pcm)
         val apiKey = prefs().getString("api_key", "") ?: ""
         if (apiKey.isBlank()) { reset("Set API key in Phone Whisper app"); return }
 
-        TranscriberClient.transcribe(wav, apiKey) { result ->
+        TranscriberClient.transcribe(wav, apiKey, inFlightCall) { result ->
             if (result.text != null && result.text.isNotBlank()) {
-                handleTranscriptionResult(result.text)
+                handleTranscriptionResult(result.text, token)
             } else {
                 handler.post {
+                    if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                     toast("Error: ${result.error ?: "empty transcript"}")
-                    stateMachine.reset()
-                    setBusy(false)
-                    setAppearance(COLOR_IDLE)
+                    resetToIdle()
                 }
             }
         }
     }
 
-    private fun handleTranscriptionResult(text: String?) {
+    private fun handleTranscriptionResult(text: String?, token: Int) {
         if (text.isNullOrBlank()) {
             handler.post {
+                if (!guard.isCurrent(token)) return@post
                 toast("No speech detected")
-                stateMachine.reset()
-                setBusy(false)
-                setAppearance(COLOR_IDLE)
+                resetToIdle()
             }
             return
         }
@@ -435,44 +526,40 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (usePostProcessing) {
             if (apiKey.isBlank()) {
                 handler.post {
+                    if (!guard.isCurrent(token)) return@post
                     toast("Post-processing needs API key. Using raw text.")
                     injectText(text)
-                    stateMachine.reset()
-                    setBusy(false)
-                    setAppearance(COLOR_IDLE)
+                    resetToIdle()
                 }
                 return
             }
 
             val prompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
 
-            PostProcessor.process(text, prompt, apiKey) { result ->
+            if (!guard.isCurrent(token)) return
+            PostProcessor.process(text, prompt, apiKey, inFlightCall) { result ->
                 handler.post {
+                    if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                     if (result.text != null && result.text.isNotBlank()) {
                         injectText(result.text)
                     } else {
                         injectText(text, feedback = "Cleanup failed — raw copied to clipboard", feedbackDurationMs = 3000)
                     }
-                    stateMachine.reset()
-                    setBusy(false)
-                    setAppearance(COLOR_IDLE)
+                    resetToIdle()
                 }
             }
         } else {
             handler.post {
+                if (!guard.isCurrent(token)) return@post
                 injectText(text)
-                stateMachine.reset()
-                setBusy(false)
-                setAppearance(COLOR_IDLE)
+                resetToIdle()
             }
         }
     }
 
     private fun reset(msg: String) {
         toast(msg)
-        stateMachine.reset()
-        setBusy(false)
-        setAppearance(COLOR_IDLE)
+        resetToIdle()
     }
 
     // --- Text injection ---

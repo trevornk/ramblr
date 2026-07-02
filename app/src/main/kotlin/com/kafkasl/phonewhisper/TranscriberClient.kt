@@ -9,7 +9,7 @@ import java.io.IOException
 object TranscriberClient {
     data class Result(val text: String?, val error: String?)
 
-    private val client = OkHttpClient()
+    private val client = NetworkClients.shared
 
     fun parseResponse(json: String): Result = try {
         val obj = JSONObject(json)
@@ -22,7 +22,7 @@ object TranscriberClient {
         Result(null, e.message ?: "Parse error")
     }
 
-    fun transcribe(wavData: ByteArray, apiKey: String, callback: (Result) -> Unit) {
+    fun transcribe(wavData: ByteArray, apiKey: String, cancelHolder: InFlightCall, callback: (Result) -> Unit) {
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("model", "whisper-1")
@@ -35,10 +35,17 @@ object TranscriberClient {
             .post(body)
             .build()
 
-        client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) = callback(Result(null, e.message))
-            override fun onResponse(call: Call, response: Response) =
+        val call = client.newCall(request)
+        cancelHolder.set(call)
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                cancelHolder.clear(call)
+                callback(Result(null, e.message))
+            }
+            override fun onResponse(call: Call, response: Response) {
+                cancelHolder.clear(call)
                 callback(parseResponse(response.body?.string() ?: ""))
+            }
         })
     }
 }
