@@ -25,6 +25,8 @@ android {
     @Suppress("DEPRECATION")
     kotlinOptions { jvmTarget = "17" }
 
+    buildFeatures { buildConfig = true }
+
     testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 

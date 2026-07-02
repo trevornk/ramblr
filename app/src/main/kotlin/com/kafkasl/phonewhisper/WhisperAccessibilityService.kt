@@ -2,14 +2,17 @@ package com.kafkasl.phonewhisper
 
 import android.accessibilityservice.AccessibilityService
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PersistableBundle
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -24,6 +27,34 @@ import android.widget.TextView
 import android.widget.Toast
 import kotlin.concurrent.thread
 import kotlin.math.abs
+
+/** How a candidate node ended up receiving the text; drives whether/when the clipboard gets cleared. */
+enum class InjectMethod {
+    /** Nothing worked; the clipboard is the fallback the user must paste from manually. */
+    NONE,
+    /** The node read the text back out of the clipboard (ACTION_PASTE or a custom paste action). */
+    FROM_CLIPBOARD,
+    /** The text was handed to the node directly (ACTION_SET_TEXT); the clipboard copy was never read. */
+    DIRECT
+}
+
+/** What to do with the clipboard after an injection attempt. Pure decision, no Android dependencies. */
+sealed class ClipboardClearAction {
+    object None : ClipboardClearAction()
+    object Immediate : ClipboardClearAction()
+    data class Delayed(val delayMs: Long) : ClipboardClearAction()
+}
+
+/**
+ * A DIRECT injection never reads the clipboard, so it's safe to wipe right away. A FROM_CLIPBOARD
+ * injection just read it, so clearing waits a grace period in case the target app hasn't finished
+ * consuming it. NONE means the clipboard is the actual fallback delivery path — leave it alone.
+ */
+fun clipboardClearActionFor(method: InjectMethod, delayMs: Long): ClipboardClearAction = when (method) {
+    InjectMethod.DIRECT -> ClipboardClearAction.Immediate
+    InjectMethod.FROM_CLIPBOARD -> ClipboardClearAction.Delayed(delayMs)
+    InjectMethod.NONE -> ClipboardClearAction.None
+}
 
 class WhisperAccessibilityService : AccessibilityService() {
 
@@ -42,6 +73,8 @@ class WhisperAccessibilityService : AccessibilityService() {
         private const val LONG_PRESS_CANCEL_MS = 500L
         /** Backstop if no transcription/cleanup callback ever fires; covers transcription + cleanup callTimeouts. */
         private const val WATCHDOG_TIMEOUT_MS = 400_000L
+        /** Grace period before wiping the clipboard after a paste-style injection reads it. */
+        private const val CLIPBOARD_CLEAR_DELAY_MS = 30_000L
 
         private const val COLOR_IDLE = 0xDD1C1C1E.toInt()
         private const val COLOR_RECORDING = 0xDDEF4444.toInt()
@@ -564,31 +597,49 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     // --- Text injection ---
 
+    private val clearClipboard = Runnable { clearPrimaryClip() }
+
     private fun injectText(
         text: String,
         feedback: String? = "Copied to clipboard",
         feedbackDurationMs: Long = 2000
     ) {
-        val clip = ClipData.newPlainText("phonewhisper", text)
+        handler.removeCallbacks(clearClipboard)
+
+        val clip = ClipData.newPlainText("phonewhisper", text).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                description.extras = PersistableBundle().apply {
+                    putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                }
+            }
+        }
         (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
         feedback?.let { showFeedback(it, feedbackDurationMs) }
 
         val candidates = findInjectionCandidates()
         Log.i(TAG, "Injecting text into ${candidates.size} candidate node(s)")
 
-        var injected = false
+        var method = InjectMethod.NONE
         try {
             for (candidate in candidates) {
-                if (tryInjectIntoNode(candidate, text)) {
-                    injected = true
-                    break
-                }
+                method = tryInjectIntoNode(candidate, text)
+                if (method != InjectMethod.NONE) break
             }
         } finally {
             candidates.forEach { it.recycle() }
         }
 
-        Log.i(TAG, if (injected) "Text injection action reported success" else "No injection action succeeded; clipboard fallback only")
+        Log.i(TAG, if (method != InjectMethod.NONE) "Text injection action reported success" else "No injection action succeeded; clipboard fallback only")
+
+        when (val action = clipboardClearActionFor(method, CLIPBOARD_CLEAR_DELAY_MS)) {
+            ClipboardClearAction.Immediate -> clearPrimaryClip()
+            is ClipboardClearAction.Delayed -> handler.postDelayed(clearClipboard, action.delayMs)
+            ClipboardClearAction.None -> {}
+        }
+    }
+
+    private fun clearPrimaryClip() {
+        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).clearPrimaryClip()
     }
 
     private fun findInjectionCandidates(): List<AccessibilityNodeInfo> {
@@ -662,7 +713,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         return score
     }
 
-    private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String): Boolean {
+    private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String): InjectMethod {
         logNode("Trying node", node)
 
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
@@ -670,12 +721,12 @@ class WhisperAccessibilityService : AccessibilityService() {
         findCustomPasteAction(node)?.let { action ->
             val ok = node.performAction(action.id)
             Log.i(TAG, "Custom action '${action.label}' (${action.id}) => $ok")
-            if (ok) return true
+            if (ok) return InjectMethod.FROM_CLIPBOARD
         }
 
         val pasteOk = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
         Log.i(TAG, "ACTION_PASTE => $pasteOk")
-        if (pasteOk) return true
+        if (pasteOk) return InjectMethod.FROM_CLIPBOARD
 
         if (node.isEditable || node.className?.toString()?.contains("EditText") == true) {
             val current = node.text?.toString().orEmpty()
@@ -692,10 +743,10 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
             val setTextOk = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
             Log.i(TAG, "ACTION_SET_TEXT => $setTextOk")
-            if (setTextOk) return true
+            if (setTextOk) return InjectMethod.DIRECT
         }
 
-        return false
+        return InjectMethod.NONE
     }
 
     private fun findCustomPasteAction(node: AccessibilityNodeInfo): AccessibilityNodeInfo.AccessibilityAction? =
@@ -703,13 +754,19 @@ class WhisperAccessibilityService : AccessibilityService() {
             action.label?.toString()?.contains("paste", ignoreCase = true) == true
         }
 
+    /**
+     * Debug-only structural trace of an injection candidate. Never logs [AccessibilityNodeInfo.getText]
+     * or [AccessibilityNodeInfo.getContentDescription] — those carry the on-screen contents of
+     * whatever app the user is dictating into, so they must not reach logcat, even in debug builds.
+     */
     private fun logNode(prefix: String, node: AccessibilityNodeInfo) {
+        if (!BuildConfig.DEBUG) return
         val actions = node.actionList.joinToString { action ->
             action.label?.toString() ?: action.id.toString()
         }
-        Log.i(
+        Log.d(
             TAG,
-            "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} text=${node.text} desc=${node.contentDescription} actions=[$actions]"
+            "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} actions=[$actions]"
         )
     }
 
