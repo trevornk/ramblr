@@ -14,12 +14,17 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
     /** Transcribe raw PCM float samples. Blocking — call from background thread. */
     fun transcribe(samples: FloatArray, sampleRate: Int = 16000): String {
         val stream = recognizer.createStream()
-        stream.acceptWaveform(samples, sampleRate)
-        recognizer.decode(stream)
-        val result = recognizer.getResult(stream)
-        stream.release()
-        return result.text.trim()
+        try {
+            stream.acceptWaveform(samples, sampleRate)
+            recognizer.decode(stream)
+            return recognizer.getResult(stream).text.trim()
+        } finally {
+            stream.release()
+        }
     }
+
+    /** Release the native recognizer. Call once no in-flight [transcribe] can still be using it. */
+    fun release() = recognizer.release()
 
     companion object {
         private const val TAG = "LocalTranscriber"
