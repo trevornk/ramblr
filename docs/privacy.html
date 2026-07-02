@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy — Phone Whisper</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    .legal-content {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 100px 24px 120px;
+    }
+    .legal-content h1 {
+      font-size: 32px;
+      margin-bottom: 40px;
+    }
+    .legal-content h2 {
+      font-size: 20px;
+      margin-top: 40px;
+      margin-bottom: 16px;
+    }
+    .legal-content p {
+      margin-bottom: 16px;
+      color: var(--text-secondary);
+    }
+    .legal-content ul {
+      margin-bottom: 24px;
+      margin-left: 20px;
+      color: var(--text-secondary);
+    }
+    .legal-content li {
+      margin-bottom: 8px;
+    }
+    .back-home {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 500;
+      margin-bottom: 32px;
+    }
+  </style>
+</head>
+<body>
+
+  <nav id="nav">
+    <div class="nav-inner">
+      <a href="index.html" class="nav-logo">
+        <svg class="nav-icon" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="40" height="40" rx="10" fill="var(--accent)"/>
+          <rect x="16" y="9" width="8" height="14" rx="4" fill="white"/>
+          <path d="M11 21c0 4.97 4.03 9 9 9s9-4.03 9-9" stroke="white" stroke-width="2" stroke-linecap="round" fill="none"/>
+          <line x1="20" y1="30" x2="20" y2="35" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          <line x1="16" y1="35" x2="24" y2="35" stroke="white" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>Phone Whisper</span>
+      </a>
+    </div>
+  </nav>
+
+  <main class="legal-content">
+    <a href="index.html" class="back-home">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      Back to home
+    </a>
+
+    <h1>Privacy Policy</h1>
+    
+    <p>Last updated: March 2026</p>
+
+    <p>Phone Whisper is an Android dictation app that records speech, transcribes it, and inserts the result into text fields across apps. Your privacy is a core feature of the app, not an afterthought.</p>
+
+    <h2>Data handling</h2>
+    <p>Phone Whisper supports two transcription modes, giving you control over where your audio is processed.</p>
+
+    <h3>Local mode</h3>
+    <p>In local mode, audio is processed on-device using local speech recognition models. <strong>Audio does not leave your device.</strong> This is the recommended mode for maximum privacy.</p>
+
+    <h3>Cloud mode</h3>
+    <p>In cloud mode, recorded audio is sent directly from the device to OpenAI's transcription API to generate text.</p>
+    <p>If optional cleanup is enabled, the transcribed text is also sent directly from the device to OpenAI's chat API to improve punctuation, capitalization, and clarity.</p>
+
+    <h2>API keys</h2>
+    <p>If you use cloud features, your OpenAI API key is stored locally on your device in secure app storage. It is used only to authenticate requests sent directly from your device to OpenAI.</p>
+    <p><strong>I do not operate a relay server.</strong> Your keys and your data never touch any infrastructure controlled by me.</p>
+
+    <h2>Accessibility Service</h2>
+    <p>Phone Whisper uses Android Accessibility Service for the sole purpose of identifying the currently focused text field and inserting dictated text. This happens only after you explicitly interact with the floating overlay button.</p>
+    <ul>
+      <li>It does not monitor your browsing.</li>
+      <li>It does not collect screen content for analytics.</li>
+      <li>It does not perform background automation or "keylogging."</li>
+    </ul>
+
+    <h2>Data collection</h2>
+    <p>I do not run a backend for Phone Whisper. I do not collect user accounts, analytics, crash reports, or uploaded recordings.</p>
+    <p>Third-party services you choose to use, such as OpenAI, may process data according to their own terms and privacy policies.</p>
+
+    <h2>Open source</h2>
+    <p>Because trust is earned, Phone Whisper is open source. You can audit the code yourself on GitHub to verify how your data and permissions are handled.</p>
+
+    <h2>Contact</h2>
+    <p>For questions about privacy, contact: <a href="mailto:pol.avms@gmail.com">pol.avms@gmail.com</a></p>
+  </main>
+
+  <footer id="footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="index.html">Home</a>
+        <span class="sep">·</span>
+        <a href="https://github.com/kafkasl/phone-whisper" target="_blank" rel="noopener">GitHub</a>
+        <span class="sep">·</span>
+        <a href="mailto:pol.avms@gmail.com">Contact</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Phone Whisper</string>
+    <string name="accessibility_description">Dictation: records audio, transcribes, and inserts text into focused fields.</string>
+</resources>

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phone Whisper — Push-to-talk dictation for Android</title>
+  <meta name="description" content="Phone Whisper lets you speak into most apps without switching keyboards. Tap the floating button, speak, and your text is inserted when the app exposes a standard Android input field. Local or cloud transcription." />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+  <nav id="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-logo" aria-label="Phone Whisper home">
+        <svg class="nav-icon" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="40" height="40" rx="10" fill="var(--accent)"/>
+          <rect x="16" y="9" width="8" height="14" rx="4" fill="white"/>
+          <path d="M11 21c0 4.97 4.03 9 9 9s9-4.03 9-9" stroke="white" stroke-width="2" stroke-linecap="round" fill="none"/>
+          <line x1="20" y1="30" x2="20" y2="35" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          <line x1="16" y1="35" x2="24" y2="35" stroke="white" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>Phone Whisper</span>
+      </a>
+      <div class="nav-links">
+        <a href="#termux">Termux</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="#modes">Local vs cloud</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://github.com/kafkasl/phone-whisper" target="_blank" rel="noopener" id="nav-github">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <section id="hero">
+    <div class="hero-content">
+      <div class="hero-text">
+        <div class="badge-row">
+          <span class="badge">Open source</span>
+          <span class="badge">Local mode available</span>
+        </div>
+        <h1>Push-to-talk dictation for Android that works across apps.</h1>
+        <p class="hero-sub">
+          Tap the floating button, speak, tap again, and your text is inserted into the currently focused field.<br>
+          No keyboard switching. Local or cloud transcription.
+        </p>
+        <ul class="hero-points">
+          <li>Better transcription than typical keyboard dictation</li>
+          <li>Dictate first, then keep editing in the same field</li>
+          <li>Optional cleanup for prompts, commands, and general writing</li>
+        </ul>
+        <div class="hero-ctas">
+          <a href="https://github.com/kafkasl/phone-whisper/releases" id="cta-download" class="btn btn-primary" target="_blank" rel="noopener">Download APK</a>
+          <a href="https://github.com/kafkasl/phone-whisper" id="cta-github" class="btn btn-secondary" target="_blank" rel="noopener">View on GitHub</a>
+        </div>
+        <div class="hero-links">
+          <a href="mailto:pol.avms@gmail.com" id="link-contact">Contact me</a>
+          <span class="sep">·</span>
+          <a href="https://github.com/sponsors/kafkasl" id="link-sponsor" target="_blank" rel="noopener">Sponsor the project</a>
+        </div>
+      </div>
+      <div class="hero-visual" aria-hidden="true">
+        <div class="phone-demo-card">
+          <div class="demo-caption">Reply by voice, send text</div>
+          <div class="phone-frame">
+            <div class="phone-screen">
+              <div class="phone-status-bar">
+                <span>9:41</span>
+                <span class="status-icons">
+                  <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor"><rect x="0" y="3" width="3" height="9" rx="1" opacity=".4"/><rect x="4" y="2" width="3" height="10" rx="1" opacity=".6"/><rect x="8" y="0" width="3" height="12" rx="1" opacity=".8"/><rect x="12" y="0" width="3" height="12" rx="1"/></svg>
+                  <svg width="14" height="12" viewBox="0 0 14 12" fill="currentColor"><path d="M7 0C4.24 0 1.76 1.08 0 2.83l1.41 1.41A7.97 7.97 0 017 2c2.21 0 4.21.9 5.66 2.35L14 2.89C12.24 1.08 9.76 0 7 0zm0 4c-1.66 0-3.16.67-4.24 1.76l1.42 1.41A3.98 3.98 0 017 6c1.1 0 2.1.45 2.83 1.17l1.41-1.41A5.96 5.96 0 007 4zm0 4c-.55 0-1.05.22-1.41.59L7 10l1.41-1.41A1.99 1.99 0 007 8z"/></svg>
+                </span>
+              </div>
+              <div class="phone-app-header">
+                <span class="phone-app-title">Signal</span>
+              </div>
+              <div class="phone-chat">
+                <div class="chat-bubble received">Can you send me the summary when you're done?</div>
+                <div class="chat-bubble received subtle">No rush.</div>
+              </div>
+              <div class="phone-input-row">
+                <div class="phone-input-field"><span class="input-placeholder" id="chat-placeholder">Message</span><span class="typed-input" id="chat-typed-text"></span><span class="cursor" id="chat-cursor">|</span></div>
+                <div class="phone-send-btn" id="chat-send-btn">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                </div>
+              </div>
+              <div class="overlay-button" id="overlay-btn" title="Tap to dictate" aria-label="Phone Whisper overlay button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor" stroke="none"/>
+                  <path d="M5 10c0 3.87 3.13 7 7 7s7-3.13 7-7"/>
+                  <line x1="12" y1="17" x2="12" y2="21"/>
+                  <line x1="9" y1="21" x2="15" y2="21"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="termux">
+    <div class="section-inner termux-inner">
+      <div class="termux-copy">
+        <div class="section-kicker">Dev mode. Niche, but fun</div>
+        <h2>If you type into terminals on your phone, this is going to be great for you.</h2>
+        <p class="section-sub">
+          In Dev mode, say <strong>“command mode”</strong> and then either describe the command you want or literally spell it. The spoken text and the inserted text do not have to be the same.
+        </p>
+        <div class="dev-mode-examples">
+          <div class="dev-example">
+            <span class="dev-example-label">You say</span>
+            <code>command mode show files in current dir</code>
+            <span class="dev-example-arrow">→</span>
+            <code>ls -l .</code>
+          </div>
+          <div class="dev-example">
+            <span class="dev-example-label">You say</span>
+            <code>command mode git commit minus m description</code>
+            <span class="dev-example-arrow">→</span>
+            <code>git commit -m "Clean up overlay timing"</code>
+          </div>
+        </div>
+      </div>
+      <div class="termux-demo" aria-hidden="true">
+        <div class="termux-card">
+          <div class="termux-topbar">
+            <span class="termux-dot"></span>
+            <span class="termux-dot"></span>
+            <span class="termux-dot"></span>
+            <span class="termux-title">Termux</span>
+            <span class="termux-mode-badge">Dev mode</span>
+          </div>
+          <div class="speech-bubble" id="termux-speech-bubble"><span id="termux-speech-text"></span></div>
+          <div class="termux-body">
+            <div class="termux-line muted">~/phone-whisper $</div>
+            <div class="termux-line"><span class="prompt">$</span> <span id="termux-typed-text"></span><span class="cursor" id="termux-cursor">|</span></div>
+            <div class="termux-note">The spoken text and inserted command can be different.</div>
+          </div>
+          <div class="overlay-button overlay-button-small" id="termux-overlay-btn" title="Tap to dictate">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor" stroke="none"/>
+              <path d="M5 10c0 3.87 3.13 7 7 7s7-3.13 7-7"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+              <line x1="9" y1="21" x2="15" y2="21"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how-it-works">
+    <div class="section-inner">
+      <h2>How it works</h2>
+      <ol class="steps-list">
+        <li class="step">
+          <span class="step-num">1</span>
+          <div class="step-body">
+            <strong>Tap the overlay button</strong>
+            <p>A small floating button lives on top of your apps. Tap it once to start recording.</p>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-num">2</span>
+          <div class="step-body">
+            <strong>Speak</strong>
+            <p>Dictate naturally. The button pulses red while it's listening.</p>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-num">3</span>
+          <div class="step-body">
+            <strong>Tap again to stop</strong>
+            <p>The button turns gray while the transcription runs.</p>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-num">4</span>
+          <div class="step-body">
+            <strong>Audio is transcribed</strong>
+            <p>On-device using local models, or sent to OpenAI Whisper with your own API key.</p>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-num">5</span>
+          <div class="step-body">
+            <strong>Text is inserted</strong>
+            <p>The transcribed text goes into the currently focused field when the app exposes a standard Android input field. If insertion fails, it falls back to the clipboard.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="modes">
+    <div class="section-inner">
+      <h2>Local or cloud — your choice</h2>
+      <p class="section-sub">Both modes use your own hardware or your own API key. I run no backend.</p>
+      <div class="modes-grid">
+        <div class="mode-card">
+          <h3>Local mode</h3>
+          <ul>
+            <li>On-device transcription</li>
+            <li>Audio never leaves your phone</li>
+            <li>No API key required</li>
+            <li>Download a model once, use it offline</li>
+          </ul>
+          <div class="models-table">
+            <div class="models-table-head">Available models</div>
+            <div class="model-row">
+              <span class="model-name">Parakeet 110M</span>
+              <span class="model-size">100 MB</span>
+              <span class="model-note default-badge">Recommended</span>
+            </div>
+            <div class="model-row">
+              <span class="model-name">Moonshine Tiny</span>
+              <span class="model-size">103 MB</span>
+              <span class="model-note">Fastest</span>
+            </div>
+            <div class="model-row">
+              <span class="model-name">Whisper Base</span>
+              <span class="model-size">199 MB</span>
+              <span class="model-note">Solid baseline</span>
+            </div>
+            <div class="model-row">
+              <span class="model-name">Parakeet 0.6B</span>
+              <span class="model-size">465 MB</span>
+              <span class="model-note">Best quality</span>
+            </div>
+          </div>
+        </div>
+        <div class="mode-card">
+          <h3>Cloud mode</h3>
+          <ul>
+            <li>Uses OpenAI Whisper API</li>
+            <li>Your own API key, stored on-device</li>
+            <li>No backend run by me</li>
+            <li>Optional: send transcript to OpenAI for cleanup</li>
+          </ul>
+          <div class="cloud-note">
+            Requests go straight from your phone to OpenAI. I'm not in the loop.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="accessibility">
+    <div class="section-inner">
+      <div class="info-box">
+        <h2>Why Accessibility permission is needed</h2>
+        <p>
+          Phone Whisper uses Android Accessibility Service for one narrow reason: <strong>inserting dictated text into the currently focused text field across apps.</strong>
+        </p>
+        <p>
+          It does not replace your keyboard. It does not run background automation. It only acts after you explicitly tap the overlay button.
+        </p>
+        <p>
+          The app is open source. You can read exactly what it does before granting the permission.
+        </p>
+        <a href="https://github.com/kafkasl/phone-whisper" class="info-link" target="_blank" rel="noopener">Read the source code on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="privacy">
+    <div class="section-inner">
+      <h2>Privacy and open source</h2>
+      <div class="privacy-points">
+        <div class="privacy-point">
+          <div class="pp-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          </div>
+          <div>
+            <strong>Local mode keeps audio on-device.</strong>
+            <p>No audio leaves your phone. Transcription runs entirely on your hardware.</p>
+          </div>
+        </div>
+        <div class="privacy-point">
+          <div class="pp-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <div>
+            <strong>Cloud mode goes direct to OpenAI.</strong>
+            <p>Audio is sent from your device straight to the OpenAI API using your own key. I don't operate a relay server.</p>
+          </div>
+        </div>
+        <div class="privacy-point">
+          <div class="pp-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9 9s0-3 3-3 3 2 3 3c0 2-3 2.5-3 4.5M12 18h.01"/></svg>
+          </div>
+          <div>
+            <strong>Open source.</strong>
+            <p>The full source code is on GitHub. No hidden behavior.</p>
+          </div>
+        </div>
+      </div>
+      <div class="privacy-links">
+        <a href="https://github.com/kafkasl/phone-whisper" target="_blank" rel="noopener">GitHub repo</a>
+        <span class="sep">·</span>
+        <a href="privacy.html">Privacy policy</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="section-inner">
+      <h2>FAQ</h2>
+      <div class="faq-list">
+        <details class="faq-item" id="faq-keyboard">
+          <summary>Why not just make it a keyboard?</summary>
+          <p>A custom keyboard means replacing your existing keyboard entirely. That's a lot of friction. Phone Whisper leaves your keyboard alone and works on top of any app, any keyboard.</p>
+        </details>
+        <details class="faq-item" id="faq-accessibility">
+          <summary>Why does it need Accessibility permission?</summary>
+          <p>Android doesn't have a standard API for inserting text into another app's focused field. The Accessibility Service is the sanctioned way to do that cross-app. Phone Whisper uses it for exactly one thing: inserting the transcribed text.</p>
+        </details>
+        <details class="faq-item" id="faq-audio">
+          <summary>Does audio stay on-device?</summary>
+          <p>In local mode, yes. In cloud mode, audio is sent directly to OpenAI's API from your device using your own API key. I don't have a backend and never see your audio.</p>
+        </details>
+        <details class="faq-item" id="faq-compatibility">
+          <summary>Does it work in every app?</summary>
+          <p>It works in most apps with standard text fields. Some apps restrict text injection for security reasons, and others use custom text surfaces instead of normal input fields. In those cases, the transcribed text is copied to your clipboard as a fallback.</p>
+        </details>
+        <details class="faq-item" id="faq-termux">
+          <summary>How does it work in Termux?</summary>
+          <p>Termux's main terminal area is not a standard Android text field, so direct insertion may not work there. Swipe the extra keys row left or right to switch to Termux's native text input box, then dictate there.</p>
+        </details>
+        <details class="faq-item" id="faq-playstore">
+          <summary>Is it on the Play Store?</summary>
+          <p>Not yet. I'm shipping the APK directly first, tightening the experience, and deciding later whether a Play Store release makes sense.</p>
+        </details>
+        <details class="faq-item" id="faq-mvp">
+          <summary>Is this finished?</summary>
+          <p>Not really. It's an early but working MVP. The core loop already works well enough to use every day, and I'm improving it in public.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <footer id="footer">
+    <div class="footer-inner">
+      <p class="footer-line">Built by Pol. A small open-source Android app, shipped early and improved in public.</p>
+      <div class="footer-links">
+        <a href="https://github.com/kafkasl/phone-whisper" target="_blank" rel="noopener">GitHub</a>
+        <span class="sep">·</span>
+        <a href="mailto:pol.avms@gmail.com">pol.avms@gmail.com</a>
+        <span class="sep">·</span>
+        <a href="https://github.com/sponsors/kafkasl" target="_blank" rel="noopener">Sponsor</a>
+        <span class="sep">·</span>
+        <a href="privacy.html">Privacy policy</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>
