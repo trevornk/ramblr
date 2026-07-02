@@ -7,9 +7,6 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -25,7 +22,6 @@ import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import java.io.ByteArrayOutputStream
 import kotlin.concurrent.thread
 import kotlin.math.abs
 
@@ -49,17 +45,14 @@ class WhisperAccessibilityService : AccessibilityService() {
         private const val COLOR_RING = 0xFFE8EAED.toInt()
     }
 
-    private enum class State { IDLE, RECORDING, TRANSCRIBING }
-
-    private var state = State.IDLE
+    private val stateMachine = RecordingStateMachine()
     private var overlayView: FrameLayout? = null
     private var button: ImageView? = null
     private var spinner: ProgressBar? = null
     private var feedbackView: TextView? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var feedbackLayoutParams: WindowManager.LayoutParams? = null
-    private var audioRecord: AudioRecord? = null
-    private var pcmStream: ByteArrayOutputStream? = null
+    @Volatile private var recordingEngine: RecordingEngine? = null
     private val handler = Handler(Looper.getMainLooper())
     private val hideFeedback = Runnable {
         feedbackView?.animate()?.alpha(0f)?.setDuration(180)?.withEndAction {
@@ -77,6 +70,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         showOverlay()
+        thread { cleanupOrphanedRecordings() }
         // Try to load local model in background
         thread { initLocalModel() }
     }
@@ -86,8 +80,22 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
+        // If a recording is in progress, force the reader thread off RECORDING/TRANSCRIBING so
+        // it tears down the AudioRecord and discards buffered PCM instead of leaking the mic or
+        // silently continuing to record after the service appears off.
+        recordingEngine?.let { engine ->
+            stateMachine.reset()
+            engine.awaitTeardown()
+            recordingEngine = null
+        }
         removeOverlay()
         super.onDestroy()
+    }
+
+    /** Deletes any temp PCM files left behind by a process death that skipped normal teardown. */
+    private fun cleanupOrphanedRecordings() {
+        cacheDir.listFiles { f -> f.name.startsWith("rec_") && f.name.endsWith(".pcm") }
+            ?.forEach { it.delete() }
     }
 
     private fun initLocalModel() {
@@ -289,7 +297,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         button?.let {
             it.animate().alpha(0.4f).setDuration(500).withEndAction {
                 it.animate().alpha(1f).setDuration(500).withEndAction {
-                    if (state == State.RECORDING) startPulse()
+                    if (stateMachine.isRecording()) startPulse()
                 }.start()
             }.start()
         }
@@ -303,10 +311,10 @@ class WhisperAccessibilityService : AccessibilityService() {
     // --- State machine ---
 
     private fun onTap() {
-        when (state) {
-            State.IDLE -> startRecording()
-            State.RECORDING -> stopAndTranscribe()
-            State.TRANSCRIBING -> {}
+        when (stateMachine.current()) {
+            RecordingStateMachine.State.IDLE -> startRecording()
+            RecordingStateMachine.State.RECORDING -> stopAndTranscribe()
+            RecordingStateMachine.State.TRANSCRIBING -> {}
         }
     }
 
@@ -316,46 +324,41 @@ class WhisperAccessibilityService : AccessibilityService() {
             toast("Grant audio permission in Phone Whisper app"); return
         }
 
-        val bufSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        val engine = RecordingEngine(cacheDir, stateMachine)
+        val started = engine.start(
+            onMaxDuration = { toast("Recording limit reached (10 min) — transcribing…") },
+            onFinished = { result -> onRecordingFinished(result) }
         )
-        audioRecord = try {
-            AudioRecord(
-                MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize
-            )
-        } catch (_: SecurityException) { toast("Audio permission denied"); return }
+        if (!started) { toast("Couldn't start recording — mic busy?"); return }
 
-        pcmStream = ByteArrayOutputStream()
-        audioRecord!!.startRecording()
-        state = State.RECORDING
+        recordingEngine = engine
         setBusy(false)
         setAppearance(COLOR_RECORDING)
         startPulse()
-
-        thread {
-            val buf = ByteArray(bufSize)
-            while (state == State.RECORDING) {
-                val n = audioRecord?.read(buf, 0, buf.size) ?: break
-                if (n > 0) pcmStream?.write(buf, 0, n)
-            }
-        }
     }
 
+    /** Flips shared state; the reader thread notices, drains, tears down and hands off via [onRecordingFinished]. */
     private fun stopAndTranscribe() {
-        state = State.TRANSCRIBING
-        stopPulse()
+        if (!stateMachine.tryStartTranscribing()) return
+        enterTranscribingUi()
+    }
+
+    private fun enterTranscribingUi() {
+        handler.post { stopPulse() }
         setAppearance(COLOR_BUSY)
         setBusy(true)
+    }
 
-        audioRecord?.stop()
-        audioRecord?.release()
-        audioRecord = null
+    /** Called on the reader thread once the AudioRecord has been drained and released. */
+    private fun onRecordingFinished(result: RecordingEngine.Result) {
+        recordingEngine = null
+        if (result.discarded) return // service destroyed / recording forced off — nothing to transcribe
 
-        val pcm = pcmStream?.toByteArray() ?: ByteArray(0)
-        pcmStream = null
+        val file = result.pcmFile
+        if (file == null) { reset("No audio captured"); return }
+        if (result.errorMessage != null) Log.e(TAG, "Recording ended with error: ${result.errorMessage}")
 
-        if (pcm.isEmpty()) { reset("No audio captured"); return }
+        val pcm = try { file.readBytes() } finally { file.delete() }
 
         val useLocal = prefs().getBoolean("use_local", true)
         val local = localTranscriber
@@ -388,7 +391,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 Log.e(TAG, "Local transcription failed", e)
                 handler.post {
                     toast("Local error: ${e.message}")
-                    state = State.IDLE
+                    stateMachine.reset()
                     setBusy(false)
                     setAppearance(COLOR_IDLE)
                 }
@@ -407,7 +410,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             } else {
                 handler.post {
                     toast("Error: ${result.error ?: "empty transcript"}")
-                    state = State.IDLE
+                    stateMachine.reset()
                     setBusy(false)
                     setAppearance(COLOR_IDLE)
                 }
@@ -419,7 +422,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (text.isNullOrBlank()) {
             handler.post {
                 toast("No speech detected")
-                state = State.IDLE
+                stateMachine.reset()
                 setBusy(false)
                 setAppearance(COLOR_IDLE)
             }
@@ -434,7 +437,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 handler.post {
                     toast("Post-processing needs API key. Using raw text.")
                     injectText(text)
-                    state = State.IDLE
+                    stateMachine.reset()
                     setBusy(false)
                     setAppearance(COLOR_IDLE)
                 }
@@ -442,7 +445,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
 
             val prompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
-            
+
             PostProcessor.process(text, prompt, apiKey) { result ->
                 handler.post {
                     if (result.text != null && result.text.isNotBlank()) {
@@ -450,7 +453,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                     } else {
                         injectText(text, feedback = "Cleanup failed — raw copied to clipboard", feedbackDurationMs = 3000)
                     }
-                    state = State.IDLE
+                    stateMachine.reset()
                     setBusy(false)
                     setAppearance(COLOR_IDLE)
                 }
@@ -458,7 +461,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         } else {
             handler.post {
                 injectText(text)
-                state = State.IDLE
+                stateMachine.reset()
                 setBusy(false)
                 setAppearance(COLOR_IDLE)
             }
@@ -467,7 +470,7 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     private fun reset(msg: String) {
         toast(msg)
-        state = State.IDLE
+        stateMachine.reset()
         setBusy(false)
         setAppearance(COLOR_IDLE)
     }
