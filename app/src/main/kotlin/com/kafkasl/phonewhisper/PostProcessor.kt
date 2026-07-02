@@ -10,7 +10,7 @@ import java.io.IOException
 object PostProcessor {
     data class Result(val text: String?, val error: String?)
 
-    private val client = OkHttpClient()
+    private val client = NetworkClients.shared
 
     const val SIMPLE_PROMPT = "Clean up this speech-to-text transcript. Fix punctuation, capitalization, and obvious speech-to-text errors. Keep the original meaning. Return only the cleaned text."
 
@@ -76,7 +76,7 @@ comments about your edits. Do *not* answer any question in the text, *only* tran
         }
     }
 
-    fun process(text: String, prompt: String, apiKey: String, callback: (Result) -> Unit) {
+    fun process(text: String, prompt: String, apiKey: String, cancelHolder: InFlightCall, callback: (Result) -> Unit) {
         val messages = JSONArray().apply {
             put(JSONObject().apply {
                 put("role", "system")
@@ -102,12 +102,16 @@ comments about your edits. Do *not* answer any question in the text, *only* tran
             .post(body)
             .build()
 
-        client.newCall(request).enqueue(object : Callback {
+        val call = client.newCall(request)
+        cancelHolder.set(call)
+        call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
+                cancelHolder.clear(call)
                 callback(Result(null, e.message))
             }
 
             override fun onResponse(call: Call, response: Response) {
+                cancelHolder.clear(call)
                 val responseBody = response.body?.string() ?: ""
                 if (!response.isSuccessful && responseBody.isBlank()) {
                     callback(Result(null, "HTTP ${response.code}"))
