@@ -308,7 +308,7 @@ class MainActivity : AppCompatActivity() {
         val acc = WhisperAccessibilityService.instance != null
         val useLocal = prefs().getBoolean("use_local", true)
         val usePostProcessing = prefs().getBoolean("use_post_processing", false)
-        val hasKey = !prefs().getString("api_key", "").isNullOrBlank()
+        val hasKey = ApiKeyStore.getApiKey(this).isNotBlank()
         val hasModel = LocalTranscriber.availableModels(this).isNotEmpty()
 
         audioRowSub.text = if (audio) "Granted" else "Tap to grant permission"
@@ -318,10 +318,8 @@ class MainActivity : AppCompatActivity() {
         promptContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
         promptRow.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
 
-        val apiKey = prefs().getString("api_key", "") ?: ""
-        keyRowSub.text = if (apiKey.isBlank()) "Tap to set" 
-                         else if (apiKey.length > 7) "sk-...${apiKey.takeLast(4)}" 
-                         else "sk-...***"
+        val apiKey = ApiKeyStore.getApiKey(this)
+        keyRowSub.text = if (apiKey.isBlank()) "Tap to set" else ApiKeyStore.maskForDisplay(apiKey)
 
         val prompt = currentPrompt()
         promptRowSub.text = prompt
@@ -346,15 +344,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun promptApiKey() {
+        val existingKey = ApiKeyStore.getApiKey(this)
         val input = EditText(this).apply {
-            hint = "sk-..."
-            setText(prefs().getString("api_key", ""))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            hint = if (existingKey.isBlank()) "sk-..." else ApiKeyStore.maskForDisplay(existingKey)
         }
         android.app.AlertDialog.Builder(this)
             .setTitle("OpenAI API Key")
             .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
             .setPositiveButton("Save") { _, _ ->
-                prefs().edit().putString("api_key", input.text.toString().trim()).apply()
+                val entered = input.text.toString().trim()
+                if (entered.isNotBlank()) ApiKeyStore.setApiKey(this, entered)
                 refresh()
             }
             .setNegativeButton("Cancel", null)
