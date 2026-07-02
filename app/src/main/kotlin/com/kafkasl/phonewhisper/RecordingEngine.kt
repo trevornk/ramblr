@@ -101,7 +101,7 @@ class RecordingEngine(
             val buf = ByteArray(bufSize)
             val startedAt = System.currentTimeMillis()
 
-            PcmFileBuffer(pcmFile, MAX_BYTES).use { buffer ->
+            val result = PcmFileBuffer(pcmFile, MAX_BYTES).use { buffer ->
                 try {
                     while (stateMachine.isRecording()) {
                         if (RecordingDurationCap.exceeded(startedAt, System.currentTimeMillis(), MAX_DURATION_MS)) {
@@ -137,16 +137,22 @@ class RecordingEngine(
                 // whoever loses the race being treated as "discarded".
                 stateMachine.tryStartTranscribing()
                 val discarded = stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING
-                if (!discarded && stopReason == StopReason.MAX_DURATION) onMaxDuration()
-
                 val bytes = buffer.bytesWritten
-                if (discarded || bytes <= 0L) {
-                    buffer.deleteFile()
-                    onFinished(Result(null, bytes, discarded, stopReason, errorMessage))
-                } else {
-                    onFinished(Result(pcmFile, bytes, discarded, stopReason, errorMessage))
-                }
+                Result(
+                    pcmFile = if (!discarded && bytes > 0L) pcmFile else null,
+                    bytesRecorded = bytes,
+                    discarded = discarded,
+                    stopReason = stopReason,
+                    errorMessage = errorMessage
+                )
             }
+
+            // The file-backed buffer must be closed before the handoff reads the file; otherwise
+            // the reader thread can synchronously re-open the PCM file while its FileOutputStream
+            // is still open.
+            if (result.pcmFile == null) pcmFile.delete()
+            if (!result.discarded && result.stopReason == StopReason.MAX_DURATION) onMaxDuration()
+            onFinished(result)
         }
         return true
     }
