@@ -102,7 +102,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     // Local transcription engine (loaded lazily)
-    private var localTranscriber: LocalTranscriber? = null
+    private val transcriberSlot = TranscriberSlot<LocalTranscriber> { it.release() }
 
     private val dp get() = resources.displayMetrics.density
     private val screenW get() = resources.displayMetrics.widthPixels
@@ -143,17 +143,20 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     private fun initLocalModel() {
         val modelName = prefs().getString("model_name", "") ?: ""
-        if (modelName.isBlank()) {
+        val newTranscriber = if (modelName.isBlank()) {
             // Auto-detect first available model
             val models = LocalTranscriber.availableModels(this)
             if (models.isNotEmpty()) {
                 Log.i(TAG, "Auto-detected model: ${models.first()}")
-                localTranscriber = LocalTranscriber.create(this, models.first())
-            }
+                LocalTranscriber.create(this, models.first())
+            } else null
         } else {
-            localTranscriber = LocalTranscriber.create(this, modelName)
+            LocalTranscriber.create(this, modelName)
         }
-        if (localTranscriber != null) {
+        // Swap in the new transcriber, then release the old one — waiting for any transcription
+        // still in flight on it — so switching models never holds more than one native recognizer.
+        transcriberSlot.replace(newTranscriber)
+        if (newTranscriber != null) {
             Log.i(TAG, "Local transcription ready")
         } else {
             Log.i(TAG, "No local model found, will use API")
@@ -488,16 +491,15 @@ class WhisperAccessibilityService : AccessibilityService() {
         val pcm = try { file.readBytes() } finally { file.delete() }
 
         val useLocal = prefs().getBoolean("use_local", true)
-        val local = localTranscriber
 
-        if (useLocal && local != null) {
-            transcribeLocal(pcm, local, token)
+        if (useLocal && transcriberSlot.get() != null) {
+            transcribeLocal(pcm, token)
         } else {
             transcribeApi(pcm, token)
         }
     }
 
-    private fun transcribeLocal(pcm: ByteArray, transcriber: LocalTranscriber, token: Int) {
+    private fun transcribeLocal(pcm: ByteArray, token: Int) {
         thread {
             try {
                 // Convert 16-bit PCM bytes to float samples
@@ -509,7 +511,8 @@ class WhisperAccessibilityService : AccessibilityService() {
                 }
 
                 val t0 = System.currentTimeMillis()
-                val text = transcriber.transcribe(samples, SAMPLE_RATE)
+                val text = transcriberSlot.use { it.transcribe(samples, SAMPLE_RATE) }
+                    ?: throw IllegalStateException("Local model was unloaded during transcription")
                 val ms = System.currentTimeMillis() - t0
                 Log.i(TAG, "Local transcription: ${ms}ms, ${samples.size / SAMPLE_RATE}s audio")
 
