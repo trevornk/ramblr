@@ -60,17 +60,17 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
         }
 
         /** Auto-detect model type from files present in the directory. */
-        private fun detectModelConfig(dir: File): OfflineRecognizerConfig? {
+        fun detectModelConfig(dir: File): OfflineRecognizerConfig? {
             val p = dir.absolutePath
-            val tokens = "$p/tokens.txt"
-            if (!File(tokens).exists()) return null
+            val tokens = findTokens(p) ?: return null
 
             // Moonshine (has preprocess.onnx)
-            if (File("$p/preprocess.onnx").exists()) {
+            val preprocessor = findFile(p, "preprocess")
+            if (preprocessor != null) {
                 return OfflineRecognizerConfig(
                     modelConfig = OfflineModelConfig(
                         moonshine = OfflineMoonshineModelConfig(
-                            preprocessor = "$p/preprocess.onnx",
+                            preprocessor = preprocessor,
                             encoder = findFile(p, "encode") ?: return null,
                             uncachedDecoder = findFile(p, "uncached_decode") ?: return null,
                             cachedDecoder = findFile(p, "cached_decode") ?: return null,
@@ -132,15 +132,24 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
             return null
         }
 
-        /** Find first file matching prefix (prefer int8 quantized). */
-        private fun findFile(dir: String, prefix: String): String? {
+        /** Find the tokens file, bare (`tokens.txt`) or model-name-prefixed (`<name>-tokens.txt`). */
+        fun findTokens(dir: String): String? =
+            File(dir).listFiles()?.firstOrNull { it.name == "tokens.txt" || it.name.endsWith("-tokens.txt") }
+                ?.absolutePath
+
+        /**
+         * Find first file whose name contains [needle] (prefer int8 quantized). Matches by
+         * `contains` rather than `startsWith` since sherpa-onnx archives (e.g. Whisper) prefix
+         * every filename with the model name, e.g. `base.en-encoder.int8.onnx`.
+         */
+        fun findFile(dir: String, needle: String): String? {
             val d = File(dir)
             // Prefer int8 quantized
-            d.listFiles()?.firstOrNull { it.name.startsWith(prefix) && it.name.contains("int8") }
+            d.listFiles()?.firstOrNull { it.name.contains(needle) && it.name.contains("int8") }
                 ?.let { return it.absolutePath }
             // Fallback to any onnx/ort
             return d.listFiles()?.firstOrNull {
-                it.name.startsWith(prefix) && (it.name.endsWith(".onnx") || it.name.endsWith(".ort"))
+                it.name.contains(needle) && (it.name.endsWith(".onnx") || it.name.endsWith(".ort"))
             }?.absolutePath
         }
     }
