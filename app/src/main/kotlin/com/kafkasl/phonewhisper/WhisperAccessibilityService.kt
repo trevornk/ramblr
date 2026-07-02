@@ -494,7 +494,7 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     private fun transcribeApi(pcm: ByteArray, token: Int) {
         val wav = WavWriter.encode(pcm)
-        val apiKey = prefs().getString("api_key", "") ?: ""
+        val apiKey = ApiKeyStore.getApiKey(this)
         if (apiKey.isBlank()) { reset("Set API key in Phone Whisper app"); return }
 
         TranscriberClient.transcribe(wav, apiKey, inFlightCall) { result ->
@@ -521,7 +521,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
 
         val usePostProcessing = prefs().getBoolean("use_post_processing", false)
-        val apiKey = prefs().getString("api_key", "") ?: ""
+        val apiKey = ApiKeyStore.getApiKey(this)
 
         if (usePostProcessing) {
             if (apiKey.isBlank()) {
