@@ -134,6 +134,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(postProcessRow)
 
         promptContainer = vertical(0)
+        promptContainer.addView(sectionHeader("Style"))
         for (preset in promptPresets()) promptContainer.addView(buildPromptRow(preset))
         root.addView(promptContainer)
 
@@ -323,11 +324,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectPrompt(key: String) {
-        val prompt = when (key) {
-            "custom" -> customPrompt()
-            else -> promptPresets().firstOrNull { it.key == key }?.prompt
-        } ?: return
-        prefs().edit().putString("post_processing_prompt", prompt).apply()
+        if (key == "custom") {
+            // Reactivate the saved custom prompt without touching the remembered style, so
+            // switching back to a style later still recalls where the user left off.
+            prefs().edit().putString("post_processing_prompt", customPrompt()).apply()
+        } else {
+            val style = CleanupStyle.fromKey(key)
+            val resolved = CleanupStyle.resolvePrompt(style, customPrompt())
+            prefs().edit()
+                .putString("cleanup_style", style.key)
+                .putString("post_processing_prompt", resolved)
+                .apply()
+        }
         refreshPromptRows(); refresh()
     }
 
@@ -335,8 +343,7 @@ class MainActivity : AppCompatActivity() {
         val views = promptRows[preset.key] ?: return
         val current = currentPrompt()
         val active = when (preset.key) {
-            "custom" -> current != PostProcessor.DEV_PROMPT && current != PostProcessor.SIMPLE_PROMPT &&
-                current != PostProcessor.STRUCTURED_PROMPT
+            "custom" -> CleanupStyle.entries.none { it.prompt == current }
             else -> current == preset.prompt
         }
         views.radio.isChecked = active
@@ -474,10 +481,11 @@ class MainActivity : AppCompatActivity() {
             .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
             .setPositiveButton("Save") { _, _ ->
                 val text = input.text.toString().trim()
-                val finalPrompt = if (text.isBlank()) PostProcessor.DEFAULT_PROMPT else text
+                val customPrompt = if (text.isBlank()) PostProcessor.DEFAULT_PROMPT else text
+                val active = CleanupStyle.resolvePrompt(currentStyle(), customPrompt)
                 prefs().edit()
-                    .putString("custom_post_processing_prompt", finalPrompt)
-                    .putString("post_processing_prompt", finalPrompt)
+                    .putString("custom_post_processing_prompt", customPrompt)
+                    .putString("post_processing_prompt", active)
                     .apply()
                 refresh()
             }
@@ -550,32 +558,23 @@ class MainActivity : AppCompatActivity() {
 
     private data class PromptPreset(val key: String, val title: String, val subtitle: String, val prompt: String)
 
-    private fun promptPresets() = listOf(
-        PromptPreset(
-            key = "dev",
-            title = "Dev cleanup",
-            subtitle = "Best for coding, CLI, and project names",
-            prompt = PostProcessor.DEV_PROMPT
-        ),
-        PromptPreset(
-            key = "simple",
-            title = "Simple cleanup",
-            subtitle = "Grammar, punctuation, and light cleanup",
-            prompt = PostProcessor.SIMPLE_PROMPT
-        ),
-        PromptPreset(
-            key = "structured",
-            title = "Structured rewrite",
-            subtitle = "Removes filler, resolves self-corrections, turns rambling into lists",
-            prompt = PostProcessor.STRUCTURED_PROMPT
-        ),
-        PromptPreset(
-            key = "custom",
-            title = "Custom",
-            subtitle = customPromptSummary(),
-            prompt = customPrompt()
-        )
+    private fun promptPresets() = CleanupStyle.entries.map {
+        PromptPreset(key = it.key, title = it.title, subtitle = it.subtitle, prompt = it.prompt)
+    } + PromptPreset(
+        key = "custom",
+        title = "Custom",
+        subtitle = customPromptSummary(),
+        prompt = customPrompt()
     )
+
+    /** Currently selected style, inferring one from the active prompt if none was saved yet
+     *  (e.g. on upgrade) so existing users keep their prompt instead of resetting to the
+     *  default style (#3). */
+    private fun currentStyle(): CleanupStyle {
+        val saved = prefs().getString("cleanup_style", null)
+        if (saved != null) return CleanupStyle.fromKey(saved)
+        return CleanupStyle.entries.firstOrNull { it.prompt == currentPrompt() } ?: CleanupStyle.DEFAULT
+    }
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun hasPerm(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
