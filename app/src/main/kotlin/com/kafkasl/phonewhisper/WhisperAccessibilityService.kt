@@ -120,6 +120,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         /** Clipboard-fallback feedback stays up much longer than a normal success bubble (#5): it's
          *  the only record the user gets that injection didn't happen, so it shouldn't be easy to miss. */
         private const val FALLBACK_FEEDBACK_DURATION_MS = 6000L
+        /** How long a pending preview (#40) waits for an explicit commit tap before it auto-resolves
+         *  to the raw transcript — long enough to read a short dictation, short enough that a
+         *  distracted user isn't left staring at an un-injected bubble for too long. */
+        private const val PREVIEW_TIMEOUT_MS = 8000L
+        /** Feedback bubble text is a small pill, not a paragraph — the preview candidate is
+         *  truncated to this many characters before display. */
+        private const val PREVIEW_PREVIEW_CHARS = 80
 
         private const val COLOR_IDLE = 0xDD1C1C1E.toInt()
         private const val COLOR_RECORDING = 0xDDEF4444.toInt()
@@ -165,6 +172,11 @@ class WhisperAccessibilityService : AccessibilityService() {
     // Undo / retry-raw state (#27) — last injection only, cleared on use or expiry.
     private var pendingInjection: PendingInjection? = null
     private val expirePendingInjection = Runnable { clearPendingInjection() }
+
+    // Preview-before-inject (#40) — the cleaned-up candidate awaiting an explicit commit tap,
+    // null whenever no preview is in flight. Only touched on the main thread.
+    private var pendingPreview: CleanupPreviewState? = null
+    private val previewTimeoutRunnable = Runnable { resolvePreview { it.timeout() } }
 
     // Empty-scan retry (#5) — at most one in flight, cancelled if the service tears down first.
     private var pendingInjectionRetry: Runnable? = null
@@ -232,6 +244,8 @@ class WhisperAccessibilityService : AccessibilityService() {
         pendingInjection = null
         pendingInjectionRetry?.let { handler.removeCallbacks(it) }
         pendingInjectionRetry = null
+        handler.removeCallbacks(previewTimeoutRunnable)
+        pendingPreview = null
         removeOverlay()
         super.onDestroy()
     }
@@ -660,6 +674,10 @@ class WhisperAccessibilityService : AccessibilityService() {
             toast("Grant audio permission in Ramblr app"); return
         }
 
+        // A still-pending preview (#40) from the previous dictation shouldn't linger silently
+        // while a new one starts -- resolve it the same safe way a timeout would.
+        pendingPreview?.let { resolvePreview { p -> p.timeout() } }
+
         endStreamingSession()
         val streamingActive = streamingTranscriberSlot.get() != null
         if (streamingActive) streamingTranscriberSlot.use { it.beginSession() }
@@ -861,7 +879,11 @@ class WhisperAccessibilityService : AccessibilityService() {
                     if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                     if (result.text != null && result.text.isNotBlank()) {
                         recordWaterfallSuccess(waterfall)
-                        injectText(result.text, rawText = text)
+                        if (PreviewBeforeInjectToggle.isEnabled(this)) {
+                            beginPreview(rawText = text, candidateText = result.text)
+                        } else {
+                            injectText(result.text, rawText = text)
+                        }
                     } else {
                         injectText(text, feedback = "Cleanup failed — raw copied to clipboard", feedbackDurationMs = 3000)
                     }
@@ -889,6 +911,39 @@ class WhisperAccessibilityService : AccessibilityService() {
         val succeededIndex = cleanupCursor.startIndex(System.currentTimeMillis())
         waterfall.steps.getOrNull(succeededIndex)?.let {
             CleanupStepStatusStore.record(this, it, CleanupStepHealth.SUCCESS)
+        }
+    }
+
+    // --- Preview-before-inject (#40) ---
+
+    /**
+     * Holds [candidateText] instead of injecting it immediately, showing it via the same feedback
+     * bubble used for the raw-retry/copy-again affordances (#5/#27) so this doesn't need a new UI
+     * surface. A tap commits (see [onFeedbackTapped]); [PREVIEW_TIMEOUT_MS] with no tap falls back
+     * to [rawText] (see [CleanupPreviewState]). Any earlier still-pending preview is resolved as a
+     * timeout first, so a fast second dictation never silently drops the first one.
+     */
+    private fun beginPreview(rawText: String, candidateText: String) {
+        pendingPreview?.let { resolvePreview { p -> p.timeout() } }
+
+        pendingPreview = CleanupPreviewState(rawText, candidateText)
+        handler.postDelayed(previewTimeoutRunnable, PREVIEW_TIMEOUT_MS)
+
+        val truncated = candidateText.take(PREVIEW_PREVIEW_CHARS)
+        val suffix = if (candidateText.length > truncated.length) "…" else ""
+        showFeedback("Preview: $truncated$suffix · tap to insert", PREVIEW_TIMEOUT_MS, touchable = true)
+    }
+
+    /** Runs [action] against the pending preview (if any) and injects whatever it resolved to. */
+    private fun resolvePreview(action: (CleanupPreviewState) -> PreviewResolution) {
+        val preview = pendingPreview ?: return
+        pendingPreview = null
+        handler.removeCallbacks(previewTimeoutRunnable)
+        val resolution = action(preview)
+        if (resolution.committed) {
+            injectText(resolution.textToInject, rawText = preview.rawText)
+        } else {
+            injectText(resolution.textToInject, feedback = "Cleanup skipped — raw copied to clipboard")
         }
     }
 
@@ -1161,12 +1216,18 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Tap-the-feedback-bubble affordance: re-injects the pre-cleanup transcript when cleanup ran
-     * (#27), or re-copies the transcript to the clipboard when the last injection was a clipboard
-     * fallback (#5). The two never overlap — [fallbackClipboardText] is only set when the last
-     * injection method was NONE, and raw retry requires a successful injection.
+     * Tap-the-feedback-bubble affordance: commits a pending preview (#40) when one is showing,
+     * re-injects the pre-cleanup transcript when cleanup already ran (#27), or re-copies the
+     * transcript to the clipboard when the last injection was a clipboard fallback (#5). These
+     * never overlap — a pending preview means nothing has been injected yet, so it's checked
+     * first; [fallbackClipboardText] is only set when the last injection method was NONE, and raw
+     * retry requires a successful injection.
      */
     private fun onFeedbackTapped() {
+        if (pendingPreview != null) {
+            resolvePreview { p -> p.commit() }
+            return
+        }
         val pending = pendingInjection
         if (pending != null) {
             val ageMs = System.currentTimeMillis() - pending.timestamp

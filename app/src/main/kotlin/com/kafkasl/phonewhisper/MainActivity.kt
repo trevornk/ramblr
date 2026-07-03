@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cloudSwitch: MaterialSwitch
     private lateinit var postProcessSwitch: MaterialSwitch
     private lateinit var postProcessRowSub: TextView
+    private lateinit var previewBeforeInjectSwitch: MaterialSwitch
     private lateinit var historyEnabledSwitch: MaterialSwitch
 
     // Streaming live preview (#29) — separate from the offline model rows above: this switch and
@@ -196,6 +197,23 @@ class MainActivity : AppCompatActivity() {
         vocabularyRow = settingsRow("Personal vocabulary", vocabularySummary()) { promptVocabulary() }
         vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
         root.addView(vocabularyRow)
+
+        // Preview-before-inject (#40) — off by default so cleanup keeps auto-injecting exactly as
+        // it always has; turning this on holds the cleaned-up candidate for a tap-to-commit instead.
+        previewBeforeInjectSwitch = MaterialSwitch(this).apply {
+            isChecked = PreviewBeforeInjectToggle.isEnabled(this@MainActivity)
+            isClickable = false
+        }
+        val previewBeforeInjectRow = settingsRow(
+            "Preview before inserting",
+            "Review the cleaned-up text and tap to insert it, instead of inserting automatically",
+            previewBeforeInjectSwitch
+        ) {
+            val newVal = !previewBeforeInjectSwitch.isChecked
+            PreviewBeforeInjectToggle.setEnabled(this, newVal)
+            previewBeforeInjectSwitch.isChecked = newVal
+        }
+        root.addView(previewBeforeInjectRow)
 
         // --- Settings Section ---
         root.addView(sectionHeader("Settings"))
@@ -571,10 +589,10 @@ class MainActivity : AppCompatActivity() {
             // switching back to a style later still recalls where the user left off.
             prefs().edit().putString("post_processing_prompt", customPrompt()).apply()
         } else {
-            val style = CleanupStyle.fromKey(key)
-            val resolved = CleanupStyle.resolvePrompt(style, customPrompt())
+            val persona = CleanupPersonas.fromKey(key)
+            val resolved = CleanupPersonas.resolvePrompt(persona, customPrompt())
             prefs().edit()
-                .putString("cleanup_style", style.key)
+                .putString("cleanup_style", persona.key)
                 .putString("post_processing_prompt", resolved)
                 .apply()
         }
@@ -585,7 +603,7 @@ class MainActivity : AppCompatActivity() {
         val views = promptRows[preset.key] ?: return
         val current = currentPrompt()
         val active = when (preset.key) {
-            "custom" -> CleanupStyle.entries.none { it.prompt == current }
+            "custom" -> CleanupPersonas.BUILT_IN.none { it.prompt == current }
             else -> current == preset.prompt
         }
         views.radio.isChecked = active
@@ -610,6 +628,7 @@ class MainActivity : AppCompatActivity() {
         cloudSwitch.isChecked = !useLocal
         postProcessSwitch.isChecked = usePostProcessing
         postProcessRowSub.text = cleanupSubtitle()
+        previewBeforeInjectSwitch.isChecked = PreviewBeforeInjectToggle.isEnabled(this)
         historyEnabledSwitch.isChecked = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
 
         streamingPreviewSwitch.isChecked = shouldUseStreamingPreview(
@@ -1050,7 +1069,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Save") { _, _ ->
                 val text = input.text.toString().trim()
                 val customPrompt = if (text.isBlank()) PostProcessor.DEFAULT_PROMPT else text
-                val active = CleanupStyle.resolvePrompt(currentStyle(), customPrompt)
+                val active = CleanupPersonas.resolvePrompt(currentPersona(), customPrompt)
                 prefs().edit()
                     .putString("custom_post_processing_prompt", customPrompt)
                     .putString("post_processing_prompt", active)
@@ -1388,7 +1407,7 @@ class MainActivity : AppCompatActivity() {
 
     private data class PromptPreset(val key: String, val title: String, val subtitle: String, val prompt: String)
 
-    private fun promptPresets() = CleanupStyle.entries.map {
+    private fun promptPresets() = CleanupPersonas.BUILT_IN.map {
         PromptPreset(key = it.key, title = it.title, subtitle = it.subtitle, prompt = it.prompt)
     } + PromptPreset(
         key = "custom",
@@ -1397,13 +1416,13 @@ class MainActivity : AppCompatActivity() {
         prompt = customPrompt()
     )
 
-    /** Currently selected style, inferring one from the active prompt if none was saved yet
+    /** Currently selected persona, inferring one from the active prompt if none was saved yet
      *  (e.g. on upgrade) so existing users keep their prompt instead of resetting to the
-     *  default style (#3). */
-    private fun currentStyle(): CleanupStyle {
+     *  default persona (#3, #40). */
+    private fun currentPersona(): CleanupPersona {
         val saved = prefs().getString("cleanup_style", null)
-        if (saved != null) return CleanupStyle.fromKey(saved)
-        return CleanupStyle.entries.firstOrNull { it.prompt == currentPrompt() } ?: CleanupStyle.DEFAULT
+        if (saved != null) return CleanupPersonas.fromKey(saved)
+        return CleanupPersonas.BUILT_IN.firstOrNull { it.prompt == currentPrompt() } ?: CleanupPersonas.DEFAULT
     }
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
