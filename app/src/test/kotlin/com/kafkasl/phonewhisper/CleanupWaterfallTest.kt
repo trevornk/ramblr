@@ -41,6 +41,11 @@ class CleanupStepTest {
         assertEquals(CleanupCredentialSlot.ANTHROPIC_DIRECT, step.credentialSlot())
     }
 
+    @Test fun `local llm step has no credential slot, same as legacy (#37)`() {
+        val step = CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)
+        assertEquals(null, step.credentialSlot())
+    }
+
     @Test fun `default waterfall is a single legacy step using the existing default model`() {
         val waterfall = CleanupWaterfall.LEGACY_SINGLE_STEP
         assertEquals(1, waterfall.steps.size)

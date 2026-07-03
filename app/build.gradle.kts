@@ -112,3 +112,43 @@ tasks.register("fetchSherpaOnnxNativeLibs") {
 tasks.matching { it.name.matches(Regex("merge[A-Za-z]+JniLibFolders")) }.configureEach {
     dependsOn("fetchSherpaOnnxNativeLibs")
 }
+
+// --- llama.cpp native libs for on-device cleanup (#37) -- KNOWN GAP, see below ---
+//
+// Unlike fetchSherpaOnnxNativeLibs above, this task is deliberately NOT wired into any build
+// lifecycle hook (no preBuild, no mergeJniLibFolders dependency) and is NOT itself capable of
+// producing a working native library -- invoking it directly always fails with the explanation
+// below. This is intentional, not an oversight:
+//
+//   - sherpa-onnx publishes a prebuilt release .aar containing the exact JNI-bound .so this app
+//     needs, so fetchSherpaOnnxNativeLibs above is a real, working, three-line download+extract.
+//     llama.cpp has no equivalent: its own GitHub Releases publish real prebuilt Android arm64
+//     libraries (e.g. `llama-b9867-bin-android-arm64.tar.gz`, confirmed to exist and contain
+//     libllama.so/libggml*.so during this work), but NOT with the app-specific JNI entry points
+//     (Java_com_kafkasl_phonewhisper_LlamaCppInference_*) this app's Kotlin side calls -- those
+//     live in the small vendored/adapted JNI shim under app/src/main/cpp/llama_cleanup/, which
+//     still has to be *compiled* (even if only linked against llama.cpp's prebuilt .so/headers,
+//     not built from source) using the Android NDK's CMake/Clang toolchain.
+//   - This development sandbox has the Android SDK but no NDK installed (confirmed: no
+//     $ANDROID_HOME/ndk directory, no ndk-build on PATH), so that compile step cannot be
+//     performed or verified here. Forcing a fragile, unverified externalNativeBuild wire-up
+//     would risk exactly the class of bug #36 fixed (a native surface that "compiles" on paper
+//     but was never actually built/run) -- worse here, since it wouldn't even compile.
+//
+// See app/src/main/cpp/llama_cleanup/README.md for the full status and the two concrete,
+// recommended next steps (compile the shim against llama.cpp's official prebuilt Android
+// release, or a full from-source CMake build mirroring SmolChat-Android's own approach) --
+// either requires a machine with the NDK installed to implement and verify.
+tasks.register("fetchLlamaCppNativeLibs") {
+    description = "NOT IMPLEMENTED (#37): provisioning llama.cpp's native Android libs requires " +
+        "the Android NDK, which isn't available in the sandbox that authored this task. See " +
+        "app/src/main/cpp/llama_cleanup/README.md for the concrete next step. Deliberately not " +
+        "wired into preBuild/mergeJniLibFolders so normal build/test are unaffected."
+    doLast {
+        throw GradleException(
+            "fetchLlamaCppNativeLibs is a documented stub, not a working task -- see " +
+                "app/src/main/cpp/llama_cleanup/README.md (issue #37) for exactly what's needed " +
+                "to implement it (requires a machine with the Android NDK installed)."
+        )
+    }
+}

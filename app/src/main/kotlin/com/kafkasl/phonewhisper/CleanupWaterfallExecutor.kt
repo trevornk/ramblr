@@ -127,6 +127,47 @@ fun interface CleanupHttpTransport {
     )
 }
 
+/**
+ * Outcome of one on-device llama.cpp completion, before it's interpreted as a
+ * [CleanupStepOutcome]. Kept distinct from [CleanupHttpOutcome] because local inference has no
+ * HTTP status code or connection-level failure -- it either produces text or it doesn't (#37).
+ */
+sealed class LocalInferenceResult {
+    data class Success(val text: String) : LocalInferenceResult()
+    data class Failure(val message: String) : LocalInferenceResult()
+}
+
+/**
+ * Seam over on-device llama.cpp inference (#37): [CleanupWaterfallExecutor] depends on this
+ * interface rather than [LlamaCppInference] directly so tests can fake local-model completions
+ * without any native code, mirroring how [CleanupHttpTransport] fakes the network layer for the
+ * cloud provider groups. [systemPrompt]/[userText] are passed through unchanged from
+ * [CleanupWaterfallExecutor.execute]'s `prompt`/`text` -- see [LocalCleanupProvider] for why no
+ * translation is needed. [modelPath] is the absolute path to the installed GGUF file.
+ */
+fun interface LocalInferenceEngine {
+    fun complete(systemPrompt: String, userText: String, modelPath: String): LocalInferenceResult
+}
+
+/** Production [LocalInferenceEngine]: drives the vendored/adapted llama.cpp JNI wrapper. See
+ *  [LlamaCppInference] for the native binding itself and its current build-status caveats. */
+object RealLocalInferenceEngine : LocalInferenceEngine {
+    override fun complete(systemPrompt: String, userText: String, modelPath: String): LocalInferenceResult =
+        try {
+            val text = LlamaCppInference().use { inference ->
+                inference.load(modelPath)
+                inference.complete(systemPrompt, userText)
+            }
+            if (text.isNotBlank()) LocalInferenceResult.Success(text)
+            else LocalInferenceResult.Failure("Local model produced an empty response")
+        } catch (e: Throwable) {
+            // Broad catch is deliberate: this boundary also absorbs UnsatisfiedLinkError, which
+            // is expected (not a bug) until the native provisioning gap documented in #37 is
+            // closed -- see LlamaCppInference's kdoc.
+            LocalInferenceResult.Failure(e.message ?: "Local inference failed")
+        }
+}
+
 /** Production [CleanupHttpTransport]: a plain POST with per-step connect/read timeouts (ADR-0001). */
 object RealCleanupHttpTransport : CleanupHttpTransport {
     override fun send(
@@ -200,6 +241,8 @@ object CleanupWaterfallExecutor {
         legacyBaseUrl: String,
         credentialLookup: (CleanupCredentialSlot) -> String,
         transport: CleanupHttpTransport = RealCleanupHttpTransport,
+        localInference: LocalInferenceEngine = RealLocalInferenceEngine,
+        localModelPath: () -> String? = { null },
         callback: (PostProcessor.Result) -> Unit,
     ) {
         val steps = waterfall.steps
@@ -228,7 +271,7 @@ object CleanupWaterfallExecutor {
                 return
             }
 
-            performStep(steps[index], text, prompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, cancelHolder) { outcome ->
+            performStep(steps[index], text, prompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, localInference, localModelPath, cancelHolder) { outcome ->
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
                         cursor.recordSuccess(index, System.currentTimeMillis())
@@ -259,9 +302,29 @@ object CleanupWaterfallExecutor {
         legacyBaseUrl: String,
         credentialLookup: (CleanupCredentialSlot) -> String,
         transport: CleanupHttpTransport,
+        localInference: LocalInferenceEngine,
+        localModelPath: () -> String?,
         cancelHolder: InFlightCall,
         callback: (CleanupStepOutcome) -> Unit,
     ) {
+        // LOCAL_LLM branches before the credential check below: it's the one group with no
+        // credential slot and no network host, so "no credential configured" would be a
+        // misleading failure reason for it (#37).
+        if (step.group == CleanupStepGroup.LOCAL_LLM) {
+            val modelPath = localModelPath()
+            if (modelPath.isNullOrBlank()) {
+                callback(CleanupStepOutcome.StepFailed("Local cleanup model not downloaded"))
+                return
+            }
+            callback(
+                when (val result = localInference.complete(prompt, text, modelPath)) {
+                    is LocalInferenceResult.Success -> CleanupStepOutcome.Success(result.text)
+                    is LocalInferenceResult.Failure -> CleanupStepOutcome.StepFailed(result.message)
+                }
+            )
+            return
+        }
+
         val apiKey = if (step.group == CleanupStepGroup.LEGACY) {
             legacyApiKey
         } else {
@@ -290,6 +353,7 @@ object CleanupWaterfallExecutor {
             CleanupStepGroup.OMNIROUTE -> OmniRoute.BASE_URL
             CleanupStepGroup.OPENAI_DIRECT -> step.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL
             CleanupStepGroup.ANTHROPIC_DIRECT -> "" // unreachable, handled above
+            CleanupStepGroup.LOCAL_LLM -> "" // unreachable, handled above
         }
         transport.send(
             PostProcessor.endpointUrl(baseUrl),

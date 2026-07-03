@@ -329,6 +329,7 @@ explanations, headers, or comments about your edits.
             legacyApiKey = legacyApiKey,
             legacyBaseUrl = legacyBaseUrl,
             credentialLookup = { slot -> CleanupCredentialStore.get(context, slot) },
+            localModelPath = { ModelDownloader.localCleanupModelFile(context, LocalCleanupProvider.MODEL)?.absolutePath },
             callback = callback,
         )
     }
