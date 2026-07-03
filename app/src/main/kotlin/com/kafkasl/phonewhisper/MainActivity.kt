@@ -53,6 +53,12 @@ class MainActivity : AppCompatActivity() {
     // re-toast/re-select a model that finished downloading earlier.
     private val modelDownloadAcked = mutableSetOf<String>()
 
+    // First-run wizard state (#6). Tracked in-memory so a dialog already on screen is never
+    // duplicated by a stray onResume, and reset per Activity instance so a fresh launch always
+    // re-shows the intro while setup remains incomplete.
+    private var onboardingIntroShown = false
+    private var onboardingDialog: android.app.AlertDialog? = null
+
     private data class ModelRowViews(
         val radio: MaterialRadioButton,
         val progress: LinearProgressIndicator,
@@ -172,16 +178,22 @@ class MainActivity : AppCompatActivity() {
             addView(root)
         })
 
-        if (!hasPerm(Manifest.permission.RECORD_AUDIO)) {
+        // The wizard requests mic permission itself as one of its steps; only auto-request here
+        // for a returning user who's already past onboarding.
+        val alreadyOnboarded = !OnboardingWizard.shouldShow(
+            accessibilityEnabled = WhisperAccessibilityService.instance != null,
+            onboardingComplete = prefs().getBoolean(KEY_ONBOARDING_COMPLETE, false)
+        )
+        if (alreadyOnboarded && !hasPerm(Manifest.permission.RECORD_AUDIO)) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         }
-        
+
         refresh()
     }
 
-    override fun onResume() { super.onResume(); refresh() }
+    override fun onResume() { super.onResume(); refresh(); advanceOnboarding() }
     override fun onRequestPermissionsResult(c: Int, p: Array<String>, r: IntArray) {
-        super.onRequestPermissionsResult(c, p, r); refresh()
+        super.onRequestPermissionsResult(c, p, r); refresh(); advanceOnboarding()
     }
 
     // --- Model Rows ---
@@ -419,12 +431,17 @@ class MainActivity : AppCompatActivity() {
         refreshPromptRows()
     }
 
-    /** Subtitle for the cleanup toggle, always naming the actual network destination. See #23, #4. */
+    /** Subtitle for the cleanup toggle, always naming the actual network destination (#23, #4)
+     *  and, when that destination is OpenAI's own API, why it needs a key and what it costs (#6). */
     private fun cleanupSubtitle(): String {
         val useLocal = prefs().getBoolean("use_local", true)
         val host = PostProcessor.destinationHost(cleanupBaseUrl())
-        return if (useLocal) "Sends transcript over the network to $host, even though transcription stays on-device"
+        val base = if (useLocal) "Sends transcript over the network to $host, even though transcription stays on-device"
         else "Sends transcript to $host to fix grammar and punctuation"
+        val costNote = if (cleanupBaseUrl() == PostProcessor.DEFAULT_BASE_URL)
+            " Uses your OpenAI API key and is billed pay-per-use (typically a fraction of a cent per dictation)."
+        else ""
+        return base + costNote
     }
 
     /**
@@ -587,6 +604,155 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // --- Onboarding Wizard (#6) ---
+
+    /** Shows the next wizard dialog for the current permission/setup state, or does nothing if
+     *  a dialog is already up or [OnboardingWizard] says setup is already done. Called from every
+     *  point the Activity resumes control (onResume, permission results) so a step that requires
+     *  leaving the app (mic prompt, Accessibility settings) picks back up automatically. */
+    private fun advanceOnboarding() {
+        if (onboardingDialog?.isShowing == true) return
+        val accessibilityEnabled = WhisperAccessibilityService.instance != null
+        val complete = prefs().getBoolean(KEY_ONBOARDING_COMPLETE, false)
+        if (!OnboardingWizard.shouldShow(accessibilityEnabled, complete)) return
+
+        when {
+            !onboardingIntroShown -> {
+                onboardingIntroShown = true
+                showOnboardingIntro()
+            }
+            !hasPerm(Manifest.permission.RECORD_AUDIO) -> showOnboardingMicStep()
+            !accessibilityEnabled -> showOnboardingAccessibilityStep()
+            else -> showOnboardingModeStep()
+        }
+    }
+
+    private fun dismissOnboarding() { onboardingDialog = null }
+
+    private fun finishOnboarding() {
+        prefs().edit().putBoolean(KEY_ONBOARDING_COMPLETE, true).apply()
+        onboardingDialog = null
+        refresh()
+    }
+
+    private fun showOnboardingIntro() {
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Welcome to Phone Whisper")
+            .setMessage(
+                "Phone Whisper lets you dictate into any text field: tap the floating button, " +
+                    "speak, tap again, and your words are inserted where you were typing.\n\n" +
+                    "It needs two things to do that:\n" +
+                    "• Microphone — to record what you say\n" +
+                    "• Accessibility service — to insert the text into the focused field across apps. " +
+                    "It doesn't read your screen or run background automation; it only acts after you " +
+                    "tap the overlay button."
+            )
+            .setCancelable(false)
+            .setPositiveButton("Get started") { _, _ -> dismissOnboarding(); advanceOnboarding() }
+            .setNegativeButton("Not now") { _, _ -> dismissOnboarding() }
+            .show()
+    }
+
+    private fun showOnboardingMicStep() {
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Microphone access")
+            .setMessage("Phone Whisper needs the microphone to record what you say before transcribing it.")
+            .setCancelable(false)
+            .setPositiveButton("Continue") { _, _ ->
+                dismissOnboarding()
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
+            }
+            .setNegativeButton("Not now") { _, _ -> dismissOnboarding() }
+            .show()
+    }
+
+    private fun showOnboardingAccessibilityStep() {
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Turn on Accessibility")
+            .setMessage(
+                "Phone Whisper uses Android's Accessibility service for one narrow reason: to insert " +
+                    "dictated text into whatever text field is currently focused. It doesn't replace your " +
+                    "keyboard and doesn't run background automation.\n\n" +
+                    "On the next screen, look for \"Phone Whisper\" (may be listed as \"Ramblr\") in the list and turn it on."
+            )
+            .setCancelable(false)
+            .setPositiveButton("Open Accessibility Settings") { _, _ ->
+                dismissOnboarding()
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+            .setNegativeButton("Not now") { _, _ -> dismissOnboarding() }
+            .show()
+    }
+
+    private fun showOnboardingModeStep() {
+        val recommended = MODEL_CATALOG.firstOrNull { it.recommended } ?: MODEL_CATALOG.first()
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Choose transcription mode")
+            .setMessage(
+                "On-device (recommended): downloads \"${recommended.name}\" and keeps your audio on " +
+                    "this phone.\n\nCloud: uses OpenAI's API with your own key — no download, but audio " +
+                    "leaves your device and OpenAI usage is billed to you."
+            )
+            .setCancelable(false)
+            .setPositiveButton("Use on-device (recommended)") { _, _ ->
+                dismissOnboarding()
+                prefs().edit().putBoolean("use_local", true).apply()
+                if (ModelDownloader.isInstalled(this, recommended)) {
+                    selectModel(recommended.archive)
+                } else {
+                    ModelDownloadWorker.enqueue(this, recommended)
+                    toast("Downloading ${recommended.name}...")
+                }
+                refresh()
+                showOnboardingTryStep()
+            }
+            .setNegativeButton("Use cloud (needs API key)") { _, _ ->
+                dismissOnboarding()
+                prefs().edit().putBoolean("use_local", false).apply()
+                refresh()
+                promptOnboardingApiKey()
+            }
+            .setNeutralButton("Not now") { _, _ -> dismissOnboarding() }
+            .show()
+    }
+
+    private fun promptOnboardingApiKey() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            hint = "sk-..."
+        }
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("OpenAI API Key")
+            .setMessage("Used only to call OpenAI's transcription API directly from your phone — billed pay-per-use to your own account.")
+            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
+            .setCancelable(false)
+            .setPositiveButton("Save") { _, _ ->
+                val entered = input.text.toString().trim()
+                if (entered.isNotBlank()) ApiKeyStore.setApiKey(this, entered)
+                refresh()
+                showOnboardingTryStep()
+            }
+            .setNegativeButton("Skip") { _, _ -> dismissOnboarding(); showOnboardingTryStep() }
+            .show()
+    }
+
+    private fun showOnboardingTryStep() {
+        val testField = EditText(this).apply {
+            hint = "Tap here, then use the floating button to dictate a test phrase"
+            setPadding(dp(24), dp(16), dp(24), dp(16))
+        }
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Try it out (optional)")
+            .setMessage(
+                "Setup is done. If the floating button is visible, tap it, speak a test phrase, and " +
+                    "tap it again to confirm the text lands in the field below."
+            )
+            .setView(testField)
+            .setCancelable(false)
+            .setPositiveButton("Finish setup") { _, _ -> finishOnboarding() }
+            .show()
+    }
+
     // --- UI Helpers ---
 
     private fun settingsRow(title: String, subtitle: String, widget: View? = null, onClick: (() -> Unit)? = null): LinearLayout {
@@ -696,5 +862,6 @@ class MainActivity : AppCompatActivity() {
         private const val LP_MATCH = LinearLayout.LayoutParams.MATCH_PARENT
         private const val LP_WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
+        private const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
     }
 }
