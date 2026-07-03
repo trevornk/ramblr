@@ -1,18 +1,14 @@
 package com.kafkasl.phonewhisper
 
 import android.accessibilityservice.AccessibilityService
-import android.content.ClipData
-import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.PersistableBundle
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -103,6 +99,9 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     // Local transcription engine (loaded lazily)
     private val transcriberSlot = TranscriberSlot<LocalTranscriber> { it.release() }
+
+    // Local dictation history (#25), so a transcript survives even if injection fails.
+    private val historyStore by lazy { DictationHistoryStore.forContext(this) }
 
     private val dp get() = resources.displayMetrics.density
     private val screenW get() = resources.displayMetrics.widthPixels
@@ -581,7 +580,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 handler.post {
                     if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                     if (result.text != null && result.text.isNotBlank()) {
-                        injectText(result.text)
+                        injectText(result.text, rawText = text)
                     } else {
                         injectText(text, feedback = "Cleanup failed — raw copied to clipboard", feedbackDurationMs = 3000)
                     }
@@ -608,19 +607,14 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     private fun injectText(
         text: String,
+        rawText: String? = null,
         feedback: String? = "Copied to clipboard",
         feedbackDurationMs: Long = 2000
     ) {
         handler.removeCallbacks(clearClipboard)
+        recordHistory(rawText ?: text, cleanedText = if (rawText != null) text else null)
 
-        val clip = ClipData.newPlainText("phonewhisper", text).apply {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                description.extras = PersistableBundle().apply {
-                    putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
-                }
-            }
-        }
-        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
+        ClipboardUtil.copy(this, text)
         feedback?.let { showFeedback(it, feedbackDurationMs) }
 
         val candidates = findInjectionCandidates()
@@ -647,6 +641,19 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     private fun clearPrimaryClip() {
         (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).clearPrimaryClip()
+    }
+
+    /** Persists the transcript to local history off the main thread, right as it's handed off
+     *  for injection/clipboard-copy, so a failed injection still leaves it recoverable (#25). */
+    private fun recordHistory(rawText: String, cleanedText: String?) {
+        val timestamp = System.currentTimeMillis()
+        thread {
+            try {
+                historyStore.add(DictationHistoryEntry(timestamp, rawText, cleanedText))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to record dictation history", e)
+            }
+        }
     }
 
     private fun findInjectionCandidates(): List<AccessibilityNodeInfo> {
