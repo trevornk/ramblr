@@ -1,5 +1,6 @@
 package com.kafkasl.phonewhisper
 
+import android.content.Context
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -286,5 +287,49 @@ explanations, headers, or comments about your edits.
                 callback(parseResponse(responseBody))
             }
         })
+    }
+
+    /**
+     * True when [waterfall] is anything other than the pre-waterfall default (a single LEGACY
+     * step) — i.e. the user has actually configured a multi-provider waterfall (see ADR-0001).
+     * Pulled out as a pure predicate so it's unit-testable without a [Context].
+     */
+    fun shouldUseWaterfallExecutor(waterfall: CleanupWaterfall): Boolean =
+        !(waterfall.steps.size == 1 && waterfall.steps[0].group == CleanupStepGroup.LEGACY)
+
+    /**
+     * Entry point cleanup call sites should use going forward (see #30). [waterfall] is normally
+     * [CleanupWaterfall.LEGACY_SINGLE_STEP], in which case this calls [process] exactly as before —
+     * zero behavior change. Once a caller (e.g. the Settings UI in #32) configures a real
+     * multi-step waterfall, this instead drives it through [CleanupWaterfallExecutor], reading
+     * OMNIROUTE/OPENAI_DIRECT/ANTHROPIC_DIRECT credentials from [CleanupCredentialStore].
+     */
+    fun processWaterfall(
+        context: Context,
+        text: String,
+        prompt: String,
+        waterfall: CleanupWaterfall,
+        cursor: CleanupWaterfallCursor,
+        cancelHolder: InFlightCall,
+        legacyApiKey: String,
+        legacyBaseUrl: String = DEFAULT_BASE_URL,
+        legacyModel: String = DEFAULT_MODEL,
+        callback: (Result) -> Unit,
+    ) {
+        if (!shouldUseWaterfallExecutor(waterfall)) {
+            process(text, prompt, legacyApiKey, cancelHolder, legacyBaseUrl, legacyModel, callback)
+            return
+        }
+        CleanupWaterfallExecutor.execute(
+            text = text,
+            prompt = prompt,
+            waterfall = waterfall,
+            cursor = cursor,
+            cancelHolder = cancelHolder,
+            legacyApiKey = legacyApiKey,
+            legacyBaseUrl = legacyBaseUrl,
+            credentialLookup = { slot -> CleanupCredentialStore.get(context, slot) },
+            callback = callback,
+        )
     }
 }
