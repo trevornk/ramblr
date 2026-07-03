@@ -52,6 +52,21 @@ fun clipboardClearActionFor(method: InjectMethod, delayMs: Long): ClipboardClear
     InjectMethod.NONE -> ClipboardClearAction.None
 }
 
+/**
+ * Snapshot of the most recent successful injection, kept briefly (~10s) to back "undo last
+ * insertion" / "retry with raw text" (#27). [node] is only set for a DIRECT (ACTION_SET_TEXT)
+ * injection, since that's the only path where restoring the target in place is possible; it's an
+ * owned copy that must be recycled when superseded or cleared.
+ */
+private data class PendingInjection(
+    val timestamp: Long,
+    val rawText: String,
+    val injectedText: String,
+    val priorClipboard: String?,
+    val priorNodeText: String?,
+    val node: AccessibilityNodeInfo?
+)
+
 class WhisperAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -71,6 +86,8 @@ class WhisperAccessibilityService : AccessibilityService() {
         private const val WATCHDOG_TIMEOUT_MS = 400_000L
         /** Grace period before wiping the clipboard after a paste-style injection reads it. */
         private const val CLIPBOARD_CLEAR_DELAY_MS = 30_000L
+        /** How long "undo last insertion" / "retry with raw text" stay available after an injection (#27). */
+        private const val UNDO_RETRY_WINDOW_MS = 10_000L
 
         private const val COLOR_IDLE = 0xDD1C1C1E.toInt()
         private const val COLOR_RECORDING = 0xDDEF4444.toInt()
@@ -92,10 +109,15 @@ class WhisperAccessibilityService : AccessibilityService() {
     @Volatile private var activeToken: Int = 0
     private val handler = Handler(Looper.getMainLooper())
     private val hideFeedback = Runnable {
+        setFeedbackTouchable(false)
         feedbackView?.animate()?.alpha(0f)?.setDuration(180)?.withEndAction {
             feedbackView?.visibility = View.GONE
         }?.start()
     }
+
+    // Undo / retry-raw state (#27) — last injection only, cleared on use or expiry.
+    private var pendingInjection: PendingInjection? = null
+    private val expirePendingInjection = Runnable { clearPendingInjection() }
 
     // Local transcription engine (loaded lazily)
     private val transcriberSlot = TranscriberSlot<LocalTranscriber> { it.release() }
@@ -130,6 +152,9 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
         guard.cancel()
         inFlightCall.cancel()
+        handler.removeCallbacks(expirePendingInjection)
+        pendingInjection?.node?.recycle()
+        pendingInjection = null
         removeOverlay()
         super.onDestroy()
     }
@@ -207,12 +232,17 @@ class WhisperAccessibilityService : AccessibilityService() {
         var touchX = 0f; var touchY = 0f
         // While TRANSCRIBING, holding the button for LONG_PRESS_CANCEL_MS cancels instead of
         // waiting for ACTION_UP; this can't collide with tap/drag handling since a plain tap or
-        // drag never leaves the button down that long, and it's only armed while TRANSCRIBING
-        // (RECORDING/IDLE taps and drags are unaffected).
+        // drag never leaves the button down that long. The same hold also doubles as "undo last
+        // insertion" (#27) when IDLE with a pending injection — the two never overlap since one
+        // requires TRANSCRIBING and the other requires IDLE (RECORDING taps/drags are unaffected).
         var longPressFired = false
-        val longPressCancel = Runnable {
+        val longPressAction = Runnable {
             longPressFired = true
-            cancelTranscription()
+            if (stateMachine.current() == RecordingStateMachine.State.TRANSCRIBING) {
+                cancelTranscription()
+            } else if (pendingInjection != null) {
+                undoLastInjection()
+            }
         }
 
         overlay.setOnTouchListener { v, ev ->
@@ -221,8 +251,8 @@ class WhisperAccessibilityService : AccessibilityService() {
                     startX = params.x; startY = params.y
                     touchX = ev.rawX; touchY = ev.rawY
                     longPressFired = false
-                    if (stateMachine.current() == RecordingStateMachine.State.TRANSCRIBING) {
-                        handler.postDelayed(longPressCancel, LONG_PRESS_CANCEL_MS)
+                    if (stateMachine.current() == RecordingStateMachine.State.TRANSCRIBING || pendingInjection != null) {
+                        handler.postDelayed(longPressAction, LONG_PRESS_CANCEL_MS)
                     }
                     true
                 }
@@ -237,7 +267,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    handler.removeCallbacks(longPressCancel)
+                    handler.removeCallbacks(longPressAction)
                     if (longPressFired) return@setOnTouchListener true
                     val moved = abs(ev.rawX - touchX) + abs(ev.rawY - touchY)
                     if (moved < TAP_THRESHOLD_DP * dp) {
@@ -254,13 +284,15 @@ class WhisperAccessibilityService : AccessibilityService() {
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    handler.removeCallbacks(longPressCancel)
+                    handler.removeCallbacks(longPressAction)
                     true
                 }
                 else -> false
             }
         }
 
+        // Tapping the feedback bubble retries with the raw (pre-cleanup) transcript (#27); only
+        // touchable while that's actually on offer — see setFeedbackTouchable.
         val feedback = TextView(this).apply {
             textSize = 13f
             setTextColor(0xFFFFFFFF.toInt())
@@ -268,6 +300,8 @@ class WhisperAccessibilityService : AccessibilityService() {
             background = pill(COLOR_FEEDBACK_BG)
             alpha = 0f
             visibility = View.GONE
+            isClickable = true
+            setOnClickListener { retryWithRawText() }
         }
 
         val feedbackParams = WindowManager.LayoutParams(
@@ -337,14 +371,15 @@ class WhisperAccessibilityService : AccessibilityService() {
         feedbackParams.y = maxOf(margin, bubbleParams.y - margin)
     }
 
-    private fun showFeedback(text: String, durationMs: Long = 2000) {
+    private fun showFeedback(text: String, durationMs: Long = 2000, allowRetryRaw: Boolean = false) {
         handler.post {
             val view = feedbackView ?: return@post
             val bubbleParams = layoutParams ?: return@post
             val feedbackParams = feedbackLayoutParams ?: return@post
             val wm = getSystemService(WINDOW_SERVICE) as WindowManager
 
-            view.text = text
+            view.text = if (allowRetryRaw) "$text · tap to use raw text" else text
+            setFeedbackTouchable(allowRetryRaw)
             positionFeedback(feedbackParams, bubbleParams)
             wm.updateViewLayout(view, feedbackParams)
 
@@ -355,6 +390,21 @@ class WhisperAccessibilityService : AccessibilityService() {
             view.animate().alpha(1f).setDuration(120).start()
             handler.postDelayed(hideFeedback, durationMs)
         }
+    }
+
+    /**
+     * The feedback bubble is normally FLAG_NOT_TOUCHABLE so it never steals taps from the app
+     * underneath; it's made touchable only while "retry with raw text" is on offer (#27).
+     */
+    private fun setFeedbackTouchable(touchable: Boolean) {
+        val view = feedbackView ?: return
+        val params = feedbackLayoutParams ?: return
+        params.flags = if (touchable) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        } else {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        (getSystemService(WINDOW_SERVICE) as WindowManager).updateViewLayout(view, params)
     }
 
     private fun startPulse() {
@@ -614,23 +664,35 @@ class WhisperAccessibilityService : AccessibilityService() {
         handler.removeCallbacks(clearClipboard)
         recordHistory(rawText ?: text, cleanedText = if (rawText != null) text else null)
 
+        val priorClipboard = currentClipboardText()
         ClipboardUtil.copy(this, text)
-        feedback?.let { showFeedback(it, feedbackDurationMs) }
 
         val candidates = findInjectionCandidates()
         Log.i(TAG, "Injecting text into ${candidates.size} candidate node(s)")
 
         var method = InjectMethod.NONE
+        var priorNodeText: String? = null
+        var injectedNode: AccessibilityNodeInfo? = null
         try {
             for (candidate in candidates) {
-                method = tryInjectIntoNode(candidate, text)
-                if (method != InjectMethod.NONE) break
+                val attempt = tryInjectIntoNode(candidate, text)
+                if (attempt.method != InjectMethod.NONE) {
+                    method = attempt.method
+                    priorNodeText = attempt.priorText
+                    if (attempt.method == InjectMethod.DIRECT) injectedNode = AccessibilityNodeInfo.obtain(candidate)
+                    break
+                }
             }
         } finally {
             candidates.forEach { it.recycle() }
         }
 
         Log.i(TAG, if (method != InjectMethod.NONE) "Text injection action reported success" else "No injection action succeeded; clipboard fallback only")
+
+        updatePendingInjection(method, injectedText = text, rawText = rawText ?: text, priorClipboard, priorNodeText, injectedNode)
+
+        val retryOffered = method != InjectMethod.NONE && rawText != null && rawText != text
+        feedback?.let { showFeedback(it, if (retryOffered) UNDO_RETRY_WINDOW_MS else feedbackDurationMs, allowRetryRaw = retryOffered) }
 
         when (val action = clipboardClearActionFor(method, CLIPBOARD_CLEAR_DELAY_MS)) {
             ClipboardClearAction.Immediate -> clearPrimaryClip()
@@ -641,6 +703,93 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     private fun clearPrimaryClip() {
         (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).clearPrimaryClip()
+    }
+
+    private fun currentClipboardText(): String? {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        if (!clipboard.hasPrimaryClip()) return null
+        val clip = clipboard.primaryClip ?: return null
+        if (clip.itemCount == 0) return null
+        return clip.getItemAt(0).coerceToText(this)?.toString()
+    }
+
+    /** Replaces the undo/retry snapshot with the outcome of the injection that just ran (#27); a
+     *  failed injection (NONE) clears it, since the clipboard copy is the intended deliverable
+     *  there, not a side effect to undo. */
+    private fun updatePendingInjection(
+        method: InjectMethod,
+        injectedText: String,
+        rawText: String,
+        priorClipboard: String?,
+        priorNodeText: String?,
+        node: AccessibilityNodeInfo?
+    ) {
+        pendingInjection?.node?.recycle()
+        handler.removeCallbacks(expirePendingInjection)
+        pendingInjection = if (method != InjectMethod.NONE) {
+            PendingInjection(System.currentTimeMillis(), rawText, injectedText, priorClipboard, priorNodeText, node)
+        } else {
+            node?.recycle()
+            null
+        }
+        pendingInjection?.let { handler.postDelayed(expirePendingInjection, UNDO_RETRY_WINDOW_MS) }
+    }
+
+    private fun clearPendingInjection() {
+        pendingInjection?.node?.recycle()
+        pendingInjection = null
+        setFeedbackTouchable(false)
+    }
+
+    /** Long-press-while-IDLE affordance (#27): best-effort, last-injection-only undo. */
+    private fun undoLastInjection() {
+        val pending = pendingInjection
+        if (pending == null) { toast("Nothing to undo"); return }
+
+        val ageMs = System.currentTimeMillis() - pending.timestamp
+        val nodeAvailable = pending.node != null && isNodeRestorable(pending.node)
+        when (val plan = planUndo(ageMs, UNDO_RETRY_WINDOW_MS, nodeAvailable, pending.priorNodeText, pending.priorClipboard)) {
+            is UndoPlan.RestoreInPlace -> {
+                val args = Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, plan.priorNodeText)
+                }
+                val restored = pending.node?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) == true
+                if (restored) {
+                    toast("Undid last insertion")
+                } else if (pending.priorClipboard != null) {
+                    ClipboardUtil.copy(this, pending.priorClipboard)
+                    toast("Couldn't undo in place — previous text copied")
+                } else {
+                    toast("Couldn't undo — no prior text available")
+                }
+            }
+            is UndoPlan.ClipboardOnly -> {
+                ClipboardUtil.copy(this, plan.priorClipboard)
+                toast("Couldn't undo in place — previous text copied")
+            }
+            UndoPlan.Expired -> toast("Undo window expired")
+            UndoPlan.Unavailable -> toast("Nothing to undo")
+        }
+        clearPendingInjection()
+    }
+
+    /** A node can go stale the moment the user switches apps; refresh() catches a destroyed view,
+     *  and the package check catches a view that's still alive but no longer in the foreground app. */
+    private fun isNodeRestorable(node: AccessibilityNodeInfo): Boolean {
+        val refreshed = try { node.refresh() } catch (e: Exception) { false }
+        if (!refreshed) return false
+        val activeRoot = rootInActiveWindow ?: return true
+        val samePackage = activeRoot.packageName == node.packageName
+        activeRoot.recycle()
+        return samePackage
+    }
+
+    /** Tap-the-feedback-bubble affordance (#27): re-injects the pre-cleanup transcript. */
+    private fun retryWithRawText() {
+        val pending = pendingInjection ?: return
+        val ageMs = System.currentTimeMillis() - pending.timestamp
+        if (!canRetryRaw(ageMs, UNDO_RETRY_WINDOW_MS, pending.rawText, pending.injectedText)) return
+        injectText(pending.rawText, feedback = "Raw text copied", feedbackDurationMs = 2000)
     }
 
     /** Persists the transcript to local history off the main thread, right as it's handed off
@@ -727,7 +876,11 @@ class WhisperAccessibilityService : AccessibilityService() {
         return score
     }
 
-    private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String): InjectMethod {
+    /** Outcome of one injection attempt. [priorText] is the node's full text before replacement —
+     *  only captured on the DIRECT path, since that's the only case where undo can restore it (#27). */
+    private data class InjectAttempt(val method: InjectMethod, val priorText: String? = null)
+
+    private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String): InjectAttempt {
         logNode("Trying node", node)
 
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
@@ -735,12 +888,12 @@ class WhisperAccessibilityService : AccessibilityService() {
         findCustomPasteAction(node)?.let { action ->
             val ok = node.performAction(action.id)
             Log.i(TAG, "Custom action '${action.label}' (${action.id}) => $ok")
-            if (ok) return InjectMethod.FROM_CLIPBOARD
+            if (ok) return InjectAttempt(InjectMethod.FROM_CLIPBOARD)
         }
 
         val pasteOk = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
         Log.i(TAG, "ACTION_PASTE => $pasteOk")
-        if (pasteOk) return InjectMethod.FROM_CLIPBOARD
+        if (pasteOk) return InjectAttempt(InjectMethod.FROM_CLIPBOARD)
 
         if (node.isEditable || node.className?.toString()?.contains("EditText") == true) {
             val current = node.text?.toString().orEmpty()
@@ -757,10 +910,10 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
             val setTextOk = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
             Log.i(TAG, "ACTION_SET_TEXT => $setTextOk")
-            if (setTextOk) return InjectMethod.DIRECT
+            if (setTextOk) return InjectAttempt(InjectMethod.DIRECT, priorText = current)
         }
 
-        return InjectMethod.NONE
+        return InjectAttempt(InjectMethod.NONE)
     }
 
     private fun findCustomPasteAction(node: AccessibilityNodeInfo): AccessibilityNodeInfo.AccessibilityAction? =
