@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -41,6 +42,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var postProcessSwitch: MaterialSwitch
     private lateinit var postProcessRowSub: TextView
     private lateinit var historyEnabledSwitch: MaterialSwitch
+
+    // Cleanup waterfall (#32) — credential rows + the reorderable step list container.
+    private lateinit var omnirouteKeyRowSub: TextView
+    private lateinit var openaiDirectKeyRowSub: TextView
+    private lateinit var anthropicDirectKeyRowSub: TextView
+    private lateinit var waterfallStepsContainer: LinearLayout
 
     private val modelRows = mutableMapOf<String, ModelRowViews>()
     private val promptRows = mutableMapOf<String, PromptRowViews>()
@@ -173,6 +180,42 @@ class MainActivity : AppCompatActivity() {
         val modelRow = settingsRow("Cleanup model name", cleanupModel()) { promptCleanupModel() }
         modelRowSub = modelRow.findViewWithTag("subtitle")
         root.addView(modelRow)
+
+        // --- Cleanup waterfall (advanced, #32) ---
+        // Additive and off by default: the rows above keep working unchanged until the user adds
+        // at least one waterfall step here (see ADR-0001's "zero behavior change" requirement).
+        root.addView(sectionHeader("Cleanup waterfall (advanced)"))
+        root.addView(TextView(this).apply {
+            text = "Try multiple cleanup providers in order, falling through on failure. Leave empty to keep using the Cleanup API base URL/model above."
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(8))
+        })
+
+        val omnirouteKeyRow = settingsRow("OmniRoute key", credentialSubtitle(CleanupCredentialSlot.OMNIROUTE)) {
+            promptCleanupCredential(CleanupCredentialSlot.OMNIROUTE, "OmniRoute key")
+        }
+        omnirouteKeyRowSub = omnirouteKeyRow.findViewWithTag("subtitle")
+        root.addView(omnirouteKeyRow)
+
+        val openaiDirectKeyRow = settingsRow("Direct OpenAI key (cleanup)", credentialSubtitle(CleanupCredentialSlot.OPENAI_DIRECT)) {
+            promptCleanupCredential(CleanupCredentialSlot.OPENAI_DIRECT, "Direct OpenAI key")
+        }
+        openaiDirectKeyRowSub = openaiDirectKeyRow.findViewWithTag("subtitle")
+        root.addView(openaiDirectKeyRow)
+
+        val anthropicDirectKeyRow = settingsRow("Direct Anthropic key", credentialSubtitle(CleanupCredentialSlot.ANTHROPIC_DIRECT)) {
+            promptCleanupCredential(CleanupCredentialSlot.ANTHROPIC_DIRECT, "Direct Anthropic key")
+        }
+        anthropicDirectKeyRowSub = anthropicDirectKeyRow.findViewWithTag("subtitle")
+        root.addView(anthropicDirectKeyRow)
+
+        waterfallStepsContainer = vertical(0)
+        root.addView(waterfallStepsContainer)
+
+        root.addView(settingsRow("Add waterfall step", "OmniRoute / Direct OpenAI / Direct Anthropic") {
+            promptAddOrEditStep(null) { newStep -> saveWaterfallSteps(waterfallSteps() + newStep) }
+        })
 
         val isHistoryEnabled = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
         historyEnabledSwitch = MaterialSwitch(this).apply {
@@ -424,6 +467,11 @@ class MainActivity : AppCompatActivity() {
         baseUrlRowSub.text = cleanupBaseUrl()
         modelRowSub.text = cleanupModel()
 
+        omnirouteKeyRowSub.text = credentialSubtitle(CleanupCredentialSlot.OMNIROUTE)
+        openaiDirectKeyRowSub.text = credentialSubtitle(CleanupCredentialSlot.OPENAI_DIRECT)
+        anthropicDirectKeyRowSub.text = credentialSubtitle(CleanupCredentialSlot.ANTHROPIC_DIRECT)
+        refreshWaterfallSteps()
+
         val prompt = currentPrompt()
         promptRowSub.text = prompt
 
@@ -592,6 +640,214 @@ class MainActivity : AppCompatActivity() {
                     prefs().edit().putString("cleanup_model", entered).apply()
                 }
                 refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // --- Cleanup Waterfall (#32) ---
+
+    private fun credentialSubtitle(slot: CleanupCredentialSlot): String {
+        val value = CleanupCredentialStore.get(this, slot)
+        return if (value.isBlank()) "Tap to set" else CleanupCredentialStore.maskForDisplay(value)
+    }
+
+    private fun promptCleanupCredential(slot: CleanupCredentialSlot, title: String) {
+        val existing = CleanupCredentialStore.get(this, slot)
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            hint = if (existing.isBlank()) "Paste key" else CleanupCredentialStore.maskForDisplay(existing)
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
+            .setPositiveButton("Save") { _, _ ->
+                val entered = input.text.toString().trim()
+                if (entered.isNotBlank()) CleanupCredentialStore.set(this, slot, entered)
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** The user-configured waterfall steps shown in Settings, i.e. [CleanupWaterfallStore.load]
+     *  with the invisible [CleanupStepGroup.LEGACY] placeholder step filtered back out — a fresh
+     *  install or an emptied-out step list both naturally render as "no steps configured" here. */
+    private fun waterfallSteps(): List<CleanupStep> =
+        CleanupWaterfallStore.load(this).steps.filter { it.group != CleanupStepGroup.LEGACY }
+
+    private fun saveWaterfallSteps(steps: List<CleanupStep>) {
+        CleanupWaterfallStore.save(this, CleanupWaterfall(steps))
+        refreshWaterfallSteps()
+    }
+
+    private fun refreshWaterfallSteps() {
+        waterfallStepsContainer.removeAllViews()
+        val steps = waterfallSteps()
+        if (steps.isEmpty()) {
+            waterfallStepsContainer.addView(TextView(this).apply {
+                text = "No waterfall steps configured yet."
+                textSize = 14f
+                setTextColor(attrColor(android.R.attr.textColorSecondary))
+                setPadding(dp(24), dp(4), dp(24), dp(12))
+            })
+            return
+        }
+        steps.forEachIndexed { index, step ->
+            waterfallStepsContainer.addView(buildWaterfallStepRow(step, index, steps.size))
+        }
+    }
+
+    private fun buildWaterfallStepRow(step: CleanupStep, index: Int, total: Int): View {
+        val row = vertical(0).apply { setPadding(dp(24), dp(10), dp(24), dp(10)) }
+
+        val topLine = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        topLine.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(12), dp(12)).apply { marginEnd = dp(12) }
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(colorForHealth(CleanupStepStatusStore.healthFor(this@MainActivity, step)))
+            }
+        })
+        topLine.addView(TextView(this).apply {
+            text = "${groupLabel(step.group)} · ${step.model}"
+            textSize = 16f
+            setTextColor(attrColor(android.R.attr.textColorPrimary))
+            layoutParams = LinearLayout.LayoutParams(0, LP_WRAP, 1f)
+            setOnClickListener {
+                promptAddOrEditStep(step) { updated ->
+                    saveWaterfallSteps(CleanupWaterfallEditing.replace(waterfallSteps(), index, updated))
+                }
+            }
+        })
+        row.addView(topLine)
+
+        val buttonRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+        }
+        buttonRow.addView(waterfallStepButton("Test") { testWaterfallStep(step) })
+        buttonRow.addView(waterfallStepButton("▲") {
+            saveWaterfallSteps(CleanupWaterfallEditing.moveUp(waterfallSteps(), index))
+        }.apply { isEnabled = index > 0 })
+        buttonRow.addView(waterfallStepButton("▼") {
+            saveWaterfallSteps(CleanupWaterfallEditing.moveDown(waterfallSteps(), index))
+        }.apply { isEnabled = index < total - 1 })
+        buttonRow.addView(waterfallStepButton("✕") {
+            saveWaterfallSteps(CleanupWaterfallEditing.remove(waterfallSteps(), index))
+        })
+        row.addView(buttonRow)
+
+        return row
+    }
+
+    private fun waterfallStepButton(label: String, onClick: () -> Unit) =
+        MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
+            text = label
+            textSize = 12f
+            insetTop = 0
+            insetBottom = 0
+            setOnClickListener { onClick() }
+        }
+
+    private fun groupLabel(group: CleanupStepGroup) = when (group) {
+        CleanupStepGroup.LEGACY -> "Legacy"
+        CleanupStepGroup.OMNIROUTE -> "OmniRoute"
+        CleanupStepGroup.OPENAI_DIRECT -> "Direct OpenAI"
+        CleanupStepGroup.ANTHROPIC_DIRECT -> "Direct Anthropic"
+    }
+
+    private fun colorForHealth(health: CleanupStepHealth) = when (health) {
+        CleanupStepHealth.UNTESTED -> 0xFF9E9E9E.toInt()
+        CleanupStepHealth.SUCCESS -> 0xFF4CAF50.toInt()
+        CleanupStepHealth.FAILURE -> 0xFFF44336.toInt()
+    }
+
+    /** Fires one real request through [PostProcessor.processWaterfall]/[CleanupWaterfallExecutor]
+     *  for just [step], so a typo'd model string or bad key is caught here instead of silently
+     *  falling through to a paid step later (see ADR-0001). Updates [CleanupStepStatusStore]
+     *  with the real outcome regardless of pass/fail, unlike a real dictation cleanup call, which
+     *  only ever attributes a *success* to a specific step (see
+     *  WhisperAccessibilityService.recordWaterfallSuccess). */
+    private fun testWaterfallStep(step: CleanupStep) {
+        toast("Testing ${groupLabel(step.group)}...")
+        PostProcessor.processWaterfall(
+            context = this,
+            text = "Testing waterfall connectivity.",
+            prompt = PostProcessor.SIMPLE_PROMPT,
+            waterfall = CleanupWaterfall(listOf(step)),
+            cursor = CleanupWaterfallCursor(),
+            cancelHolder = InFlightCall(),
+            legacyApiKey = "",
+        ) { result ->
+            runOnUiThread {
+                val success = !result.text.isNullOrBlank()
+                CleanupStepStatusStore.record(this, step, if (success) CleanupStepHealth.SUCCESS else CleanupStepHealth.FAILURE)
+                toast(if (success) "${groupLabel(step.group)} OK" else "${groupLabel(step.group)} failed: ${result.error ?: "unknown error"}")
+                refreshWaterfallSteps()
+            }
+        }
+    }
+
+    /** Add/edit dialog for one waterfall step: provider group (radio), model (text), and an
+     *  optional base URL override tucked behind an "Advanced" expand (only meaningful for
+     *  [CleanupStepGroup.OPENAI_DIRECT] — see [CleanupStep.baseUrlOverride]), per ADR-0001. */
+    private fun promptAddOrEditStep(existing: CleanupStep?, onSave: (CleanupStep) -> Unit) {
+        val groupOptions = listOf(
+            CleanupStepGroup.OMNIROUTE to "OmniRoute",
+            CleanupStepGroup.OPENAI_DIRECT to "Direct OpenAI",
+            CleanupStepGroup.ANTHROPIC_DIRECT to "Direct Anthropic",
+        )
+
+        val container = vertical(dp(24), dp(8))
+
+        val radioGroup = RadioGroup(this).apply { orientation = LinearLayout.VERTICAL }
+        val radioButtons = groupOptions.map { (group, label) ->
+            MaterialRadioButton(this).apply {
+                text = label
+                id = View.generateViewId()
+                isChecked = (existing?.group ?: CleanupStepGroup.OMNIROUTE) == group
+            }
+        }
+        radioButtons.forEach { radioGroup.addView(it) }
+        container.addView(radioGroup)
+
+        val modelInput = EditText(this).apply {
+            hint = "Model, e.g. claude/claude-sonnet-4-6"
+            setText(existing?.model ?: "")
+        }
+        container.addView(modelInput)
+
+        val baseUrlInput = EditText(this).apply {
+            hint = "Base URL override (Direct OpenAI only)"
+            setText(existing?.baseUrlOverride ?: "")
+            visibility = if (existing?.baseUrlOverride.isNullOrBlank()) View.GONE else View.VISIBLE
+        }
+        container.addView(TextView(this).apply {
+            text = "Advanced"
+            setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
+            setPadding(0, dp(8), 0, dp(4))
+            setOnClickListener { baseUrlInput.visibility = View.VISIBLE }
+        })
+        container.addView(baseUrlInput)
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "Add waterfall step" else "Edit waterfall step")
+            .setView(ScrollView(this).apply { addView(container) })
+            .setPositiveButton("Save") { _, _ ->
+                val checkedIndex = radioButtons.indexOfFirst { it.isChecked }
+                val group = groupOptions.getOrElse(checkedIndex) { groupOptions[0] }.first
+                val model = modelInput.text.toString().trim()
+                if (model.isBlank()) {
+                    toast("Model can't be blank")
+                    return@setPositiveButton
+                }
+                val baseUrlOverride = baseUrlInput.text.toString().trim()
+                    .takeIf { it.isNotBlank() && group == CleanupStepGroup.OPENAI_DIRECT }
+                onSave(CleanupStep(group, model, baseUrlOverride))
             }
             .setNegativeButton("Cancel", null)
             .show()
