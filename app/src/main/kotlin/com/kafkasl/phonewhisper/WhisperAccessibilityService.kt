@@ -116,6 +116,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     @Volatile private var recordingEngine: RecordingEngine? = null
     private val guard = TranscriptionGuard()
     private val inFlightCall = InFlightCall()
+    private val cleanupCursor = CleanupWaterfallCursor()
     @Volatile private var activeToken: Int = 0
     private val handler = Handler(Looper.getMainLooper())
     private val hideFeedback = Runnable {
@@ -647,7 +648,9 @@ class WhisperAccessibilityService : AccessibilityService() {
             val model = prefs().getString("cleanup_model", PostProcessor.DEFAULT_MODEL) ?: PostProcessor.DEFAULT_MODEL
 
             if (!guard.isCurrent(token)) return
-            PostProcessor.process(text, prompt, apiKey, inFlightCall, baseUrl, model) { result ->
+            PostProcessor.processWaterfall(
+                this, text, prompt, CleanupWaterfall.LEGACY_SINGLE_STEP, cleanupCursor, inFlightCall, apiKey, baseUrl, model,
+            ) { result ->
                 handler.post {
                     if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                     if (result.text != null && result.text.isNotBlank()) {

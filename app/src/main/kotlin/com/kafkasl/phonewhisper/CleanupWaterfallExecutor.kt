@@ -1,5 +1,14 @@
 package com.kafkasl.phonewhisper
 
+import java.util.concurrent.TimeUnit
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
+
 /**
  * Timeouts for one waterfall step's network client. See ADR-0001 / docs/adr/0001-cleanup-
  * waterfall.md: the connect timeout is deliberately short so an unreachable host (e.g. OmniRoute
@@ -92,4 +101,213 @@ class CleanupWaterfallCursor(private val idleExpiryMs: Long = 5 * 60 * 1000L) {
     fun reset() {
         index = 0
     }
+}
+
+/** Raw result of one HTTP attempt, before it's interpreted as a [CleanupStepOutcome] (which
+ *  requires knowing whether the body parses for that step's wire format). */
+sealed class CleanupHttpOutcome {
+    data class Ok(val body: String) : CleanupHttpOutcome()
+    data class HttpError(val code: Int, val body: String) : CleanupHttpOutcome()
+    data class ConnectionFailure(val message: String?) : CleanupHttpOutcome()
+}
+
+/**
+ * Seam over the network layer: [CleanupWaterfallExecutor] depends on this interface rather than
+ * OkHttp directly so tests can fake HTTP responses (including connection failures) without any
+ * real I/O. See [RealCleanupHttpTransport] for the production implementation.
+ */
+fun interface CleanupHttpTransport {
+    fun send(
+        url: String,
+        headers: Map<String, String>,
+        jsonBody: String,
+        timeouts: CleanupStepTimeouts,
+        cancelHolder: InFlightCall,
+        callback: (CleanupHttpOutcome) -> Unit,
+    )
+}
+
+/** Production [CleanupHttpTransport]: a plain POST with per-step connect/read timeouts (ADR-0001). */
+object RealCleanupHttpTransport : CleanupHttpTransport {
+    override fun send(
+        url: String,
+        headers: Map<String, String>,
+        jsonBody: String,
+        timeouts: CleanupStepTimeouts,
+        cancelHolder: InFlightCall,
+        callback: (CleanupHttpOutcome) -> Unit,
+    ) {
+        val client = NetworkClients.shared.newBuilder()
+            .connectTimeout(timeouts.connectMs, TimeUnit.MILLISECONDS)
+            .readTimeout(timeouts.readMs, TimeUnit.MILLISECONDS)
+            .build()
+        val body = jsonBody.toRequestBody("application/json".toMediaType())
+        val requestBuilder = Request.Builder().url(url).post(body)
+        headers.forEach { (name, value) -> requestBuilder.header(name, value) }
+
+        // A malformed URL throws IllegalArgumentException from Request.Builder().url() rather
+        // than failing the call; treated as a connection failure so it advances the waterfall
+        // instead of crashing (mirrors PostProcessor.process's handling of a bad custom base URL).
+        val request = try {
+            requestBuilder.build()
+        } catch (e: IllegalArgumentException) {
+            callback(CleanupHttpOutcome.ConnectionFailure(e.message))
+            return
+        }
+
+        val call = client.newCall(request)
+        cancelHolder.set(call)
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                cancelHolder.clear(call)
+                callback(CleanupHttpOutcome.ConnectionFailure(e.message))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                cancelHolder.clear(call)
+                val responseBody = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    callback(CleanupHttpOutcome.Ok(responseBody))
+                } else {
+                    callback(CleanupHttpOutcome.HttpError(response.code, responseBody))
+                }
+            }
+        })
+    }
+}
+
+/**
+ * The network-calling half of the cleanup waterfall (see ADR-0001 / docs/adr/0001-cleanup-
+ * waterfall.md and [CleanupWaterfallPlanner] for the pure grouping logic this walks). Starts at
+ * [cursor]'s last-known-good index, attempts steps in order, and on any [CleanupStepOutcome]
+ * falls through to the next step — or, for a [CleanupStepOutcome.ConnectionFailed], skips every
+ * remaining step in that same host group, since they'd fail identically against the same dead
+ * host. No retries: this is a foreground call blocking a user waiting on their transcript.
+ *
+ * Deliberately takes no [android.content.Context] — [credentialLookup] is the caller's seam onto
+ * [CleanupCredentialStore] (see [PostProcessor.processWaterfall]), and [transport] is the seam
+ * onto the network. Both let this object's step-sequencing logic run in a plain JVM unit test
+ * with fakes, with no real I/O and no Android framework dependency.
+ */
+object CleanupWaterfallExecutor {
+    fun execute(
+        text: String,
+        prompt: String,
+        waterfall: CleanupWaterfall,
+        cursor: CleanupWaterfallCursor,
+        cancelHolder: InFlightCall,
+        legacyApiKey: String,
+        legacyBaseUrl: String,
+        credentialLookup: (CleanupCredentialSlot) -> String,
+        transport: CleanupHttpTransport = RealCleanupHttpTransport,
+        callback: (PostProcessor.Result) -> Unit,
+    ) {
+        val steps = waterfall.steps
+        if (steps.isEmpty()) {
+            callback(PostProcessor.Result(null, "No cleanup steps configured"))
+            return
+        }
+
+        val groups = CleanupWaterfallPlanner.groupConsecutive(steps)
+        val groupRanges = groupBoundaries(groups)
+        val startedAtMs = System.currentTimeMillis()
+        val startIndex = cursor.startIndex(startedAtMs).takeIf { it in steps.indices } ?: 0
+
+        fun nextGroupStart(index: Int): Int {
+            val range = groupRanges.first { index in it }
+            return range.last + 1
+        }
+
+        fun attempt(index: Int) {
+            if (index >= steps.size) {
+                callback(PostProcessor.Result(null, "All cleanup steps failed"))
+                return
+            }
+            if (System.currentTimeMillis() - startedAtMs >= CLEANUP_WATERFALL_HARD_CAP_MS) {
+                callback(PostProcessor.Result(null, "Cleanup waterfall exceeded time budget"))
+                return
+            }
+
+            performStep(steps[index], text, prompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, cancelHolder) { outcome ->
+                when (outcome) {
+                    is CleanupStepOutcome.Success -> {
+                        cursor.recordSuccess(index, System.currentTimeMillis())
+                        callback(PostProcessor.Result(outcome.text, null))
+                    }
+                    is CleanupStepOutcome.StepFailed -> attempt(index + 1)
+                    is CleanupStepOutcome.ConnectionFailed -> attempt(nextGroupStart(index))
+                }
+            }
+        }
+
+        attempt(startIndex)
+    }
+
+    private fun groupBoundaries(groups: List<List<CleanupStep>>): List<IntRange> {
+        var offset = 0
+        return groups.map { group ->
+            (offset until offset + group.size).also { offset += group.size }
+        }
+    }
+
+    /** Resolves one step's credential, builds its wire-format-specific request, and interprets the result. */
+    private fun performStep(
+        step: CleanupStep,
+        text: String,
+        prompt: String,
+        legacyApiKey: String,
+        legacyBaseUrl: String,
+        credentialLookup: (CleanupCredentialSlot) -> String,
+        transport: CleanupHttpTransport,
+        cancelHolder: InFlightCall,
+        callback: (CleanupStepOutcome) -> Unit,
+    ) {
+        val apiKey = if (step.group == CleanupStepGroup.LEGACY) {
+            legacyApiKey
+        } else {
+            step.credentialSlot()?.let(credentialLookup) ?: ""
+        }
+        if (apiKey.isBlank()) {
+            // No live host was ever contacted, so this is a step-level (not connection-level)
+            // failure: it only skips this one step, not the rest of its group.
+            callback(CleanupStepOutcome.StepFailed("No credential configured for ${step.group}"))
+            return
+        }
+
+        if (step.group == CleanupStepGroup.ANTHROPIC_DIRECT) {
+            transport.send(
+                AnthropicCleanupProvider.ENDPOINT_URL,
+                AnthropicCleanupProvider.headers(apiKey),
+                AnthropicCleanupProvider.buildRequestBody(text, prompt, step.model).toString(),
+                CleanupStepTimeouts.DEFAULT,
+                cancelHolder,
+            ) { httpOutcome -> callback(toStepOutcome(httpOutcome, AnthropicCleanupProvider::parseResponse)) }
+            return
+        }
+
+        val baseUrl = when (step.group) {
+            CleanupStepGroup.LEGACY -> legacyBaseUrl
+            CleanupStepGroup.OMNIROUTE -> OmniRoute.BASE_URL
+            CleanupStepGroup.OPENAI_DIRECT -> step.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL
+            CleanupStepGroup.ANTHROPIC_DIRECT -> "" // unreachable, handled above
+        }
+        transport.send(
+            PostProcessor.endpointUrl(baseUrl),
+            mapOf("Authorization" to "Bearer $apiKey"),
+            PostProcessor.buildRequestBody(text, prompt, step.model).toString(),
+            CleanupStepTimeouts.DEFAULT,
+            cancelHolder,
+        ) { httpOutcome -> callback(toStepOutcome(httpOutcome, PostProcessor::parseResponse)) }
+    }
+
+    private fun toStepOutcome(httpOutcome: CleanupHttpOutcome, parse: (String) -> PostProcessor.Result): CleanupStepOutcome =
+        when (httpOutcome) {
+            is CleanupHttpOutcome.ConnectionFailure -> CleanupStepOutcome.ConnectionFailed(httpOutcome.message)
+            is CleanupHttpOutcome.HttpError -> CleanupStepOutcome.StepFailed("HTTP ${httpOutcome.code}")
+            is CleanupHttpOutcome.Ok -> {
+                val result = parse(httpOutcome.body)
+                if (!result.text.isNullOrBlank()) CleanupStepOutcome.Success(result.text)
+                else CleanupStepOutcome.StepFailed(result.error)
+            }
+        }
 }
