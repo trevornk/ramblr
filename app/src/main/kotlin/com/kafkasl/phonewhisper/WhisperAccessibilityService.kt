@@ -648,12 +648,14 @@ class WhisperAccessibilityService : AccessibilityService() {
             val model = prefs().getString("cleanup_model", PostProcessor.DEFAULT_MODEL) ?: PostProcessor.DEFAULT_MODEL
 
             if (!guard.isCurrent(token)) return
+            val waterfall = CleanupWaterfallStore.load(this)
             PostProcessor.processWaterfall(
-                this, text, prompt, CleanupWaterfall.LEGACY_SINGLE_STEP, cleanupCursor, inFlightCall, apiKey, baseUrl, model,
+                this, text, prompt, waterfall, cleanupCursor, inFlightCall, apiKey, baseUrl, model,
             ) { result ->
                 handler.post {
                     if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                     if (result.text != null && result.text.isNotBlank()) {
+                        recordWaterfallSuccess(waterfall)
                         injectText(result.text, rawText = text)
                     } else {
                         injectText(text, feedback = "Cleanup failed — raw copied to clipboard", feedbackDurationMs = 3000)
@@ -667,6 +669,21 @@ class WhisperAccessibilityService : AccessibilityService() {
                 injectText(text)
                 resetToIdle()
             }
+        }
+    }
+
+    /** Marks whichever step of [waterfall] just served this cleanup call as healthy (#32), so the
+     *  Settings status dot reflects real usage, not just a Test-button press. Which step that was
+     *  isn't threaded through [PostProcessor.processWaterfall]'s callback, so it's inferred from
+     *  [cleanupCursor]'s last-known-good index instead -- safe to read immediately after a success
+     *  since [CleanupWaterfallCursor.recordSuccess] was just called with "now", well inside the
+     *  idle-expiry window [CleanupWaterfallCursor.startIndex] checks. A total-waterfall failure is
+     *  deliberately not attributed to any one step here, since several steps may have failed for
+     *  different reasons -- the Settings "Test" button is the deterministic way to pin down which. */
+    private fun recordWaterfallSuccess(waterfall: CleanupWaterfall) {
+        val succeededIndex = cleanupCursor.startIndex(System.currentTimeMillis())
+        waterfall.steps.getOrNull(succeededIndex)?.let {
+            CleanupStepStatusStore.record(this, it, CleanupStepHealth.SUCCESS)
         }
     }
 
