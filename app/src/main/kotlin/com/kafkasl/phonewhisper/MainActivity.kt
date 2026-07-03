@@ -33,6 +33,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var promptRow: LinearLayout
     private lateinit var modelContainer: LinearLayout
     private lateinit var promptContainer: LinearLayout
+    private lateinit var cloudSwitch: MaterialSwitch
+    private lateinit var postProcessSwitch: MaterialSwitch
+    private lateinit var postProcessRowSub: TextView
 
     private val modelRows = mutableMapOf<String, ModelRowViews>()
     private val promptRows = mutableMapOf<String, PromptRowViews>()
@@ -96,16 +99,15 @@ class MainActivity : AppCompatActivity() {
         // --- Engine Section ---
         
         val isCloud = !prefs().getBoolean("use_local", true)
-        
-        val cloudSwitch = MaterialSwitch(this).apply {
+
+        cloudSwitch = MaterialSwitch(this).apply {
             isChecked = isCloud
             isClickable = false
         }
         val cloudRow = settingsRow("Use cloud transcription", "Requires OpenAI API key", cloudSwitch) {
             val newCloud = !cloudSwitch.isChecked
-            prefs().edit().putBoolean("use_local", !newCloud).apply()
-            cloudSwitch.isChecked = newCloud
-            refresh()
+            val usePostProcessing = prefs().getBoolean("use_post_processing", false)
+            applyLocalCleanupChange(useLocal = !newCloud, usePostProcessing = usePostProcessing)
         }
         root.addView(cloudRow)
 
@@ -117,18 +119,18 @@ class MainActivity : AppCompatActivity() {
 
         // --- Post-Processing Section ---
         root.addView(sectionHeader("Post-Processing"))
-        
+
         val isPostProcessing = prefs().getBoolean("use_post_processing", false)
-        val postProcessSwitch = MaterialSwitch(this).apply {
+        postProcessSwitch = MaterialSwitch(this).apply {
             isChecked = isPostProcessing
             isClickable = false
         }
-        val postProcessRow = settingsRow("Cleanup transcript", "Uses OpenAI Chat API to fix grammar and punctuation", postProcessSwitch) {
+        val postProcessRow = settingsRow("Cleanup transcript", cleanupSubtitle(), postProcessSwitch) {
             val newVal = !postProcessSwitch.isChecked
-            prefs().edit().putBoolean("use_post_processing", newVal).apply()
-            postProcessSwitch.isChecked = newVal
-            refresh()
+            val useLocal = prefs().getBoolean("use_local", true)
+            applyLocalCleanupChange(useLocal, newVal)
         }
+        postProcessRowSub = postProcessRow.findViewWithTag("subtitle")
         root.addView(postProcessRow)
 
         promptContainer = vertical(0)
@@ -356,6 +358,10 @@ class MainActivity : AppCompatActivity() {
         audioRowSub.text = if (audio) "Granted" else "Tap to grant permission"
         accRowSub.text = if (acc) "Enabled" else "Tap to enable in settings"
 
+        cloudSwitch.isChecked = !useLocal
+        postProcessSwitch.isChecked = usePostProcessing
+        postProcessRowSub.text = cleanupSubtitle()
+
         modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
         promptContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
         promptRow.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
@@ -384,6 +390,57 @@ class MainActivity : AppCompatActivity() {
         
         refreshAllCards()
         refreshPromptRows()
+    }
+
+    /** Subtitle for the cleanup toggle, always naming the actual network destination. See #23. */
+    private fun cleanupSubtitle(): String {
+        val useLocal = prefs().getBoolean("use_local", true)
+        val host = PostProcessor.DESTINATION_HOST
+        return if (useLocal) "Sends transcript over the network to $host, even though transcription stays on-device"
+        else "Sends transcript to $host to fix grammar and punctuation"
+    }
+
+    /**
+     * Applies a change to the local/cleanup toggles, inserting the one-time consent dialog from
+     * #23 when the change would first combine local transcription with cleanup.
+     */
+    private fun applyLocalCleanupChange(useLocal: Boolean, usePostProcessing: Boolean) {
+        val hasConsented = prefs().getBoolean(KEY_LOCAL_CLEANUP_CONSENT, false)
+        if (!LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing, hasConsented)) {
+            prefs().edit()
+                .putBoolean("use_local", useLocal)
+                .putBoolean("use_post_processing", usePostProcessing)
+                .apply()
+            refresh()
+            return
+        }
+
+        val declineCleanup = {
+            prefs().edit()
+                .putBoolean("use_local", useLocal)
+                .putBoolean("use_post_processing", false)
+                .apply()
+            refresh()
+        }
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Cleanup sends text off-device")
+            .setMessage(
+                "Local transcription keeps audio on your phone, but cleanup sends the " +
+                    "transcribed text to ${PostProcessor.DESTINATION_HOST} to fix grammar and " +
+                    "punctuation. Enable cleanup anyway?"
+            )
+            .setPositiveButton("Enable cleanup") { _, _ ->
+                prefs().edit()
+                    .putBoolean("use_local", useLocal)
+                    .putBoolean("use_post_processing", true)
+                    .putBoolean(KEY_LOCAL_CLEANUP_CONSENT, true)
+                    .apply()
+                refresh()
+            }
+            .setNegativeButton("Keep cleanup off") { _, _ -> declineCleanup() }
+            .setOnCancelListener { declineCleanup() }
+            .show()
     }
 
     private fun promptApiKey() {
@@ -534,5 +591,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val LP_MATCH = LinearLayout.LayoutParams.MATCH_PARENT
         private const val LP_WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
+        private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
     }
 }
