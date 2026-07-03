@@ -221,6 +221,14 @@ class WhisperAccessibilityService : AccessibilityService() {
     )
     private var streamingSession: StreamingPreviewSession? = null
 
+    // Captured once a recording concludes (#45): the streaming session's tracked span, preserved
+    // here (instead of recycled outright) so the eventual final injection can still reconcile it
+    // even when that injection is delayed behind a preview-before-inject commit (#40) that runs
+    // after teardownStreamingPreview() has already ended the live session. Consumed (and its node
+    // recycled) by the very next injectText() call; flushed defensively if a new recording starts
+    // or the service tears down before any injection ever consumes it. Only touched on the main thread.
+    private var pendingStreamingHandoff: StreamingPreviewSession? = null
+
     // Local dictation history (#25), so a transcript survives even if injection fails.
     private val historyStore by lazy { DictationHistoryStore.forContext(this) }
 
@@ -266,6 +274,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         guard.cancel()
         inFlightCall.cancel()
         teardownStreamingPreview()
+        flushPendingStreamingHandoff()
         handler.removeCallbacks(expirePendingInjection)
         pendingInjection?.node?.recycle()
         pendingInjection = null
@@ -777,6 +786,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         pendingPreview?.let { resolvePreview { p -> p.timeout() } }
 
         endStreamingSession()
+        flushPendingStreamingHandoff()
         val streamingActive = streamingTranscriberSlot.get() != null
         if (streamingActive) streamingTranscriberSlot.use { it.beginSession() }
 
@@ -1137,12 +1147,26 @@ class WhisperAccessibilityService : AccessibilityService() {
         streamingSession = null
     }
 
-    /** Tears down everything about the current recording's live-preview session: the injected-node
-     *  reference and the streaming recognizer's per-recording stream. Called from every path back
-     *  to IDLE ([resetToIdle]) and from [onDestroy]; safe to call even when no session is active. */
+    /** Tears down everything about the current recording's live-preview session: the streaming
+     *  recognizer's per-recording stream, and the injected-node reference. The node reference isn't
+     *  recycled outright here but moved into [pendingStreamingHandoff] (#45) -- the final batch
+     *  injection may still be pending behind a preview-before-inject commit (#40) at this point, and
+     *  needs that reference to reconcile its tracked span once it actually runs. Called from every
+     *  path back to IDLE ([resetToIdle]) and from [onDestroy] (which flushes it right after, since
+     *  no injection will ever follow there); safe to call even when no session is active. */
     private fun teardownStreamingPreview() {
-        endStreamingSession()
+        flushPendingStreamingHandoff()
+        pendingStreamingHandoff = streamingSession
+        streamingSession = null
         streamingTranscriberSlot.use { it.endSession() }
+    }
+
+    /** Discards [pendingStreamingHandoff] without attempting to reconcile it against any field --
+     *  used when a new recording starts or the service is destroyed before any final injection
+     *  consumed it (e.g. the recording was cancelled or hit the watchdog, so no text ever followed). */
+    private fun flushPendingStreamingHandoff() {
+        pendingStreamingHandoff?.node?.recycle()
+        pendingStreamingHandoff = null
     }
 
     // --- Text injection ---
@@ -1161,6 +1185,19 @@ class WhisperAccessibilityService : AccessibilityService() {
         pendingInjectionRetry = null
         recordHistory(rawText ?: text, cleanedText = if (rawText != null) text else null, paidFallbackGroup = paidFallbackGroup)
 
+        // Claim whichever streaming-preview session (#29) is relevant to this injection right now,
+        // before doing anything else (#45): either the recording's session is still live (this is
+        // the normal, non-preview path -- resetToIdle() hasn't run yet) or it's already been moved to
+        // pendingStreamingHandoff by an earlier resetToIdle() (the preview-before-inject path, #40,
+        // where this injectText() call happens well after the recording ended). Either way, claiming
+        // it here -- synchronously, before the empty-scan retry's delay -- guarantees finishInjection
+        // always sees the session's real tracked data, never a nulled-out one. Zero effect when
+        // streaming preview never ran this recording: both are already null, so streamingHandoff
+        // stays null and every path below behaves exactly as it did before #45.
+        val streamingHandoff = streamingSession ?: pendingStreamingHandoff
+        streamingSession = null
+        pendingStreamingHandoff = null
+
         val priorClipboard = currentClipboardText()
         ClipboardUtil.copy(this, text)
 
@@ -1173,14 +1210,14 @@ class WhisperAccessibilityService : AccessibilityService() {
             Log.i(TAG, "No injection candidates on first scan; retrying in ${INJECTION_RETRY_DELAY_MS}ms")
             val retry = Runnable {
                 pendingInjectionRetry = null
-                finishInjection(findInjectionCandidates(), text, rawText, priorClipboard, feedback, feedbackDurationMs)
+                finishInjection(findInjectionCandidates(), text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff)
             }
             pendingInjectionRetry = retry
             handler.postDelayed(retry, INJECTION_RETRY_DELAY_MS)
             return
         }
 
-        finishInjection(candidates, text, rawText, priorClipboard, feedback, feedbackDurationMs)
+        finishInjection(candidates, text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff)
     }
 
     private fun finishInjection(
@@ -1189,25 +1226,47 @@ class WhisperAccessibilityService : AccessibilityService() {
         rawText: String?,
         priorClipboard: String?,
         feedback: String?,
-        feedbackDurationMs: Long
+        feedbackDurationMs: Long,
+        streamingHandoff: StreamingPreviewSession?
     ) {
         Log.i(TAG, "Injecting text into ${candidates.size} candidate node(s)")
 
         var method = InjectMethod.NONE
         var priorNodeText: String? = null
         var injectedNode: AccessibilityNodeInfo? = null
+        var handledStreamingHandoff = false
         try {
             for (candidate in candidates) {
-                val attempt = tryInjectIntoNode(candidate, text)
+                // #45: when this candidate is the exact node the streaming session was tracking,
+                // the final text must close out its tracked span instead of an independent
+                // selection-based insert -- otherwise the streaming leftover survives concatenated
+                // alongside the final text (see reconcileStreamingSpan). Every other candidate goes
+                // through the normal, unmodified path.
+                val trackedSession = streamingHandoff?.takeIf { candidate == it.node }
+                val attempt = if (trackedSession != null) {
+                    tryCloseStreamingSpan(candidate, trackedSession, text)
+                } else {
+                    tryInjectIntoNode(candidate, text)
+                }
                 if (attempt.method != InjectMethod.NONE) {
                     method = attempt.method
                     priorNodeText = attempt.priorText
                     if (attempt.method == InjectMethod.DIRECT) injectedNode = AccessibilityNodeInfo.obtain(candidate)
+                    handledStreamingHandoff = trackedSession != null
                     break
                 }
             }
         } finally {
             candidates.forEach { it.recycle() }
+        }
+
+        // #45: the final text didn't land on the streaming session's tracked node/span (either it
+        // wasn't among this scan's candidates at all, or it was tried and failed) -- its leftover
+        // partial must be explicitly reverted so it isn't left silently orphaned in a field nobody
+        // is about to overwrite.
+        if (streamingHandoff != null) {
+            if (!handledStreamingHandoff) clearStreamingLeftover(streamingHandoff)
+            streamingHandoff.node.recycle()
         }
 
         Log.i(TAG, if (method != InjectMethod.NONE) "Text injection action reported success" else "No injection action succeeded; clipboard fallback only")
@@ -1435,6 +1494,32 @@ class WhisperAccessibilityService : AccessibilityService() {
     /** Outcome of one injection attempt. [priorText] is the node's full text before replacement —
      *  only captured on the DIRECT path, since that's the only case where undo can restore it (#27). */
     private data class InjectAttempt(val method: InjectMethod, val priorText: String? = null)
+
+    /** Closes out a streaming-preview session's tracked span with the final text (#45): the
+     *  counterpart to [tryInjectIntoNode]'s selection-based insert, used only when [node] is the
+     *  exact node [session] was already managing, so the streaming leftover is fully replaced rather
+     *  than left concatenated alongside the final transcript. */
+    private fun tryCloseStreamingSpan(node: AccessibilityNodeInfo, session: StreamingPreviewSession, text: String): InjectAttempt {
+        if (!refreshNode(node)) return InjectAttempt(InjectMethod.NONE)
+        val current = node.text?.toString().orEmpty()
+        val updated = reconcileStreamingSpan(
+            current, StreamingSpan(session.insertionStart, session.lastPartialLength), text, isFinalInjectionTarget = true
+        ) ?: return InjectAttempt(InjectMethod.NONE)
+        return if (setNodeText(node, updated)) InjectAttempt(InjectMethod.DIRECT, priorText = current) else InjectAttempt(InjectMethod.NONE)
+    }
+
+    /** Reverts [session]'s leftover partial in its own node when the final injection ends up landing
+     *  somewhere else (#45, e.g. focus moved after recording stopped) -- otherwise that fragment is
+     *  left silently orphaned in a field nobody is about to overwrite. Best-effort: a node that's
+     *  gone stale by now just has nothing left to revert. */
+    private fun clearStreamingLeftover(session: StreamingPreviewSession) {
+        if (!refreshNode(session.node)) return
+        val current = session.node.text?.toString().orEmpty()
+        val cleared = reconcileStreamingSpan(
+            current, StreamingSpan(session.insertionStart, session.lastPartialLength), finalText = "", isFinalInjectionTarget = false
+        ) ?: return
+        setNodeText(session.node, cleared)
+    }
 
     private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String): InjectAttempt {
         logNode("Trying node", node)

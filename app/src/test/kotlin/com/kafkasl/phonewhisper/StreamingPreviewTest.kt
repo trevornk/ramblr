@@ -67,6 +67,42 @@ class StreamingPreviewTest {
         assertEquals("Hello world", updated)
     }
 
+    // --- reconcileStreamingSpan (final-injection handoff, #45) ---
+
+    @Test fun `streaming session tracking the final injection's own target node has its span replaced with the final text`() {
+        // "S awright now..." bug repro: the tracked 1-char leftover "S" must be fully replaced by
+        // the final transcript, not left concatenated alongside it.
+        val updated = reconcileStreamingSpan(
+            current = "S",
+            session = StreamingSpan(insertionStart = 0, previousLength = 1),
+            finalText = "awright now so this is what it looks like",
+            isFinalInjectionTarget = true
+        )
+        assertEquals("awright now so this is what it looks like", updated)
+    }
+
+    @Test fun `streaming session tracking a different node than the final injection has its leftover span cleared, not left orphaned`() {
+        val updated = reconcileStreamingSpan(
+            current = "Draft: S",
+            session = StreamingSpan(insertionStart = 7, previousLength = 1),
+            finalText = "irrelevant -- lands elsewhere",
+            isFinalInjectionTarget = false
+        )
+        assertEquals("Draft: ", updated)
+    }
+
+    @Test fun `no streaming session at all is completely unaffected`() {
+        assertEquals(
+            null,
+            reconcileStreamingSpan(
+                current = "whatever is currently in the field",
+                session = null,
+                finalText = "final transcript",
+                isFinalInjectionTarget = true
+            )
+        )
+    }
+
     // --- shouldUseStreamingPreview (streaming-vs-offline gating) ---
 
     @Test fun `streaming preview requires both the setting and an installed model`() {

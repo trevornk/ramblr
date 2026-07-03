@@ -72,6 +72,40 @@ fun smartCapitalize(text: String): String {
 }
 
 /**
+ * A streaming-preview session's tracked span (#29), stripped of its Android/node dependency so the
+ * final-injection handoff decision (#45) can be unit tested in isolation. [WhisperAccessibilityService]
+ * builds one of these from its own (node-holding) `StreamingPreviewSession` right before reconciling.
+ */
+data class StreamingSpan(val insertionStart: Int, val previousLength: Int)
+
+/**
+ * What a field the streaming-preview session (#29) was tracking should become now that the final
+ * batch transcript is ready (#45). Returns null when [session] is null -- streaming preview never
+ * ran (or never injected a partial) this recording, so there's nothing to reconcile and the final
+ * injection's existing selection-based path must run completely unmodified.
+ *
+ * When [isFinalInjectionTarget] is true, the node in question is the exact one the final text is
+ * about to land in, so its tracked span is closed out with [finalText] -- replacing it outright
+ * (see [replacePartialInField]) rather than leaving the final injection to compute an independent,
+ * selection-based insertion point that has no knowledge the span exists. This is what guarantees the
+ * streaming leftover never survives concatenated alongside the final text.
+ *
+ * When false, the final injection is landing in a *different* node (focus moved after recording
+ * stopped) -- so this node's tracked span is instead reverted (replaced with nothing) so it isn't
+ * left silently orphaned in a field nobody is about to overwrite.
+ */
+fun reconcileStreamingSpan(
+    current: String,
+    session: StreamingSpan?,
+    finalText: String,
+    isFinalInjectionTarget: Boolean
+): String? {
+    if (session == null) return null
+    val replacement = if (isFinalInjectionTarget) finalText else ""
+    return replacePartialInField(current, session.insertionStart, session.previousLength, replacement)
+}
+
+/**
  * Decides where the very first partial of a recording should be inserted (#42). Many Android
  * EditText/keyboard implementations don't reliably report selection state via
  * `AccessibilityNodeInfo` until a real selection-changed event has fired for that field, and can
