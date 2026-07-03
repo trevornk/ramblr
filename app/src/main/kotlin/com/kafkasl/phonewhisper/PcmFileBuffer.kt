@@ -66,5 +66,23 @@ class PcmFileBuffer(private val file: File, private val maxBytes: Long) : AutoCl
             }
             return samples
         }
+
+        /**
+         * Converts [len] bytes of 16-bit little-endian PCM at the start of [buf] into a
+         * [FloatArray] of samples in [-1, 1] -- the same conversion as [readAsFloatArray], but for
+         * one small chunk at a time instead of a whole file. Used by the streaming live-preview
+         * path (#29) to feed each [android.media.AudioRecord.read] chunk to the streaming
+         * recognizer as it arrives, without waiting for the recording to finish.
+         */
+        fun bytesToFloatArray(buf: ByteArray, len: Int): FloatArray {
+            val sampleCount = len / 2
+            val samples = FloatArray(sampleCount)
+            for (i in 0 until sampleCount) {
+                val lo = buf[i * 2].toInt() and 0xFF
+                val hi = buf[i * 2 + 1].toInt()
+                samples[i] = ((hi shl 8) or lo).toShort().toFloat() / 32768f
+            }
+            return samples
+        }
     }
 }

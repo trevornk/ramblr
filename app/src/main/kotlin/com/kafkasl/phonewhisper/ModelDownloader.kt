@@ -24,6 +24,15 @@ data class Model(
      * see [ModelDownloader.download].
      */
     val sha256: String? = null,
+    /**
+     * True for a streaming (sherpa-onnx OnlineRecognizer) model, as opposed to the batch
+     * OfflineRecognizer models above (#29). Installed under a separate `streaming_models/`
+     * directory (see [ModelDownloader.modelDir]) so it can never be picked up by
+     * [LocalTranscriber.availableModels]'s scan of `models/` and mistaken for an offline model —
+     * its encoder/decoder/joiner files match that offline auto-detection's file-name heuristics
+     * but aren't compatible with the OfflineRecognizer graph shapes.
+     */
+    val isStreaming: Boolean = false,
 )
 
 val MODEL_CATALOG = listOf(
@@ -40,6 +49,21 @@ val MODEL_CATALOG = listOf(
         103, "★★☆ Fast",
         sha256 = "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2"),
 )
+
+/**
+ * Streaming zipformer (English), used only for live preview during recording (#29) — the final
+ * injected transcript always still comes from the batch [MODEL_CATALOG] (or cloud) pipeline above,
+ * unchanged. Kept in its own catalog/list rather than appended to [MODEL_CATALOG] so it's never
+ * offered as a selectable *offline* model. Archive size and SHA-256 verified against `checksum.txt`
+ * published alongside the sherpa-onnx `asr-models` GitHub release (and independently re-hashed from
+ * the downloaded asset) on 2026-07-03.
+ */
+val STREAMING_MODEL = Model("Streaming Zipformer (EN)", "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
+    128, "★★☆ Live preview",
+    sha256 = "9c559283e8498d3fe95913c79ca1cb454bb26281ac2b102b41306c7d752765d9",
+    isStreaming = true)
+
+val STREAMING_MODEL_CATALOG = listOf(STREAMING_MODEL)
 
 sealed class DownloadState {
     data class Downloading(val progress: Float) : DownloadState()
@@ -82,13 +106,22 @@ object ModelDownloader {
     fun hasEnoughSpace(availableBytes: Long, sizeMb: Int): Boolean =
         availableBytes >= requiredSpaceBytes(sizeMb)
 
-    fun modelDir(ctx: Context, model: Model) =
-        File(ctx.filesDir, "models/${model.archive}")
+    /** "models" for a batch/offline model, "streaming_models" for a streaming one (#29) — kept
+     *  out of files/models/ entirely so it's structurally impossible for
+     *  [LocalTranscriber.availableModels]'s directory scan to ever see it. */
+    private fun kindDir(model: Model) = if (model.isStreaming) "streaming_models" else "models"
 
-    /** Staging dir for an in-progress extraction. Lives outside files/models/
-     *  so a half-extracted model never shows up in LocalTranscriber.availableModels(). */
+    /** Pure path computation, exposed separately from [modelDir] so it's testable without a real
+     *  Android [Context]. */
+    fun modelDirPath(filesDir: File, model: Model): File =
+        File(filesDir, "${kindDir(model)}/${model.archive}")
+
+    fun modelDir(ctx: Context, model: Model) = modelDirPath(ctx.filesDir, model)
+
+    /** Staging dir for an in-progress extraction. Lives outside files/models/ (and the streaming
+     *  equivalent) so a half-extracted model never shows up as installed. */
     private fun stagingDir(ctx: Context, model: Model) =
-        File(ctx.cacheDir, "model-extract/${model.archive}")
+        File(ctx.cacheDir, "model-extract/${kindDir(model)}/${model.archive}")
 
     /** Marker written only after extraction + atomic move both succeed. */
     fun completeMarker(dir: File): File = File(dir, ".complete")

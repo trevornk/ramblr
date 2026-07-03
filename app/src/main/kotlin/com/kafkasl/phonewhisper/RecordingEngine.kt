@@ -53,9 +53,18 @@ class RecordingEngine(
      * effects if the AudioRecord could not be acquired (mic busy, permission race, bad
      * buffer size) — the caller should surface that as user feedback ("mic busy") rather than
      * crash. [onMaxDuration] and [onFinished] run on the reader thread; callers must hop back to
-     * the main thread themselves before touching UI.
+     * the main thread themselves before touching UI. [onChunk] is an optional tee (#29): called
+     * with each freshly-read buffer and its valid length right after every successful
+     * `AudioRecord.read`, before it's written to [PcmFileBuffer] — e.g. to feed live audio to a
+     * streaming recognizer. Defaults to a no-op so callers that don't need it (the common case)
+     * are unaffected. A throwing [onChunk] is caught and logged rather than tearing down the
+     * recording, since a bug in an optional preview feature must never break base recording.
      */
-    fun start(onMaxDuration: () -> Unit, onFinished: (Result) -> Unit): Boolean {
+    fun start(
+        onMaxDuration: () -> Unit,
+        onFinished: (Result) -> Unit,
+        onChunk: (ByteArray, Int) -> Unit = { _, _ -> }
+    ): Boolean {
         val bufSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
@@ -116,6 +125,7 @@ class RecordingEngine(
                             }
                             break
                         }
+                        try { onChunk(buf, n) } catch (e: Exception) { Log.e(TAG, "onChunk failed", e) }
                         if (!buffer.write(buf, 0, n)) {
                             stopReason = StopReason.MAX_DURATION
                             break

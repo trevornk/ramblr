@@ -43,6 +43,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var postProcessRowSub: TextView
     private lateinit var historyEnabledSwitch: MaterialSwitch
 
+    // Streaming live preview (#29) — separate from the offline model rows above: this switch and
+    // its model row never touch "model_name" (the offline model selection).
+    private lateinit var streamingPreviewSwitch: MaterialSwitch
+    private lateinit var streamingPreviewRowSub: TextView
+    private lateinit var streamingModelSub: TextView
+    private lateinit var streamingModelProgress: LinearProgressIndicator
+    private lateinit var streamingModelDlBtn: MaterialButton
+    private var streamingModelDownloadState: WorkInfo.State? = null
+    private var streamingModelDownloadAcked = false
+
     // Cleanup waterfall (#32) — credential rows + the reorderable step list container.
     private lateinit var omnirouteKeyRowSub: TextView
     private lateinit var openaiDirectKeyRowSub: TextView
@@ -134,6 +144,27 @@ class MainActivity : AppCompatActivity() {
         modelContainer.addView(sectionHeader("Local models"))
         for (m in MODEL_CATALOG) modelContainer.addView(buildModelRow(m))
         root.addView(modelContainer)
+
+        // --- Streaming live preview (#29) ---
+        root.addView(sectionHeader("Streaming live preview"))
+        root.addView(TextView(this).apply {
+            text = "Shows live partial text in the focused field as you speak, using a separate " +
+                "on-device streaming model. The final text (after you tap to stop) still comes " +
+                "from your regular transcription + cleanup settings above — this only changes " +
+                "what's shown while recording."
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(8))
+        })
+
+        streamingPreviewSwitch = MaterialSwitch(this).apply { isClickable = false }
+        val streamingPreviewRow = settingsRow(
+            "Streaming live preview", streamingPreviewSubtitle(), streamingPreviewSwitch
+        ) { onStreamingPreviewToggle(!streamingPreviewSwitch.isChecked) }
+        streamingPreviewRowSub = streamingPreviewRow.findViewWithTag("subtitle")
+        root.addView(streamingPreviewRow)
+
+        root.addView(buildStreamingModelRow())
 
         // --- Post-Processing Section ---
         root.addView(sectionHeader("Post-Processing"))
@@ -404,6 +435,119 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshAllCards() = MODEL_CATALOG.forEach { refreshCard(it) }
 
+    // --- Streaming live preview (#29) ---
+
+    private fun buildStreamingModelRow(): View {
+        val dlBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
+            text = "↓"
+            textSize = 18f
+            setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
+        }
+        val progress = LinearProgressIndicator(this).apply {
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(4)).apply { topMargin = dp(8) }
+        }
+
+        val row = settingsRow(STREAMING_MODEL.name, streamingModelSubtitle(), dlBtn) { onStreamingModelAction() }
+        val textContainer = row.getChildAt(0) as LinearLayout
+        textContainer.addView(progress)
+
+        streamingModelSub = textContainer.findViewWithTag("subtitle")
+        streamingModelProgress = progress
+        streamingModelDlBtn = dlBtn
+
+        observeStreamingDownload()
+        refreshStreamingModelRow()
+        return row
+    }
+
+    private fun onStreamingModelAction() {
+        if (ModelDownloader.isInstalled(this, STREAMING_MODEL)) return
+        if (ModelDownloadWorker.isInFlight(streamingModelDownloadState)) return
+        ModelDownloadWorker.enqueue(this, STREAMING_MODEL)
+    }
+
+    private fun observeStreamingDownload() {
+        WorkManager.getInstance(this)
+            .getWorkInfosForUniqueWorkLiveData(ModelDownloadWorker.workName(STREAMING_MODEL.archive))
+            .observe(this) { infos -> onStreamingWorkInfos(infos) }
+    }
+
+    private fun onStreamingWorkInfos(infos: List<WorkInfo>) {
+        val info = infos.firstOrNull { !it.state.isFinished } ?: infos.firstOrNull()
+        streamingModelDownloadState = info?.state
+
+        when (info?.state) {
+            WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> {
+                streamingModelDlBtn.isEnabled = false
+                streamingModelProgress.visibility = View.VISIBLE
+                val phase = info.progress.getString(ModelDownloadWorker.KEY_PHASE)
+                if (phase == ModelDownloadWorker.PHASE_EXTRACTING) {
+                    streamingModelProgress.isIndeterminate = true
+                    streamingModelSub.text = "Extracting..."
+                } else {
+                    val pct = info.progress.getFloat(ModelDownloadWorker.KEY_PROGRESS, 0f)
+                    streamingModelProgress.isIndeterminate = false
+                    streamingModelProgress.progress = (pct * 100).toInt()
+                    streamingModelSub.text =
+                        if (info.state == WorkInfo.State.ENQUEUED) "Starting download..."
+                        else "Downloading: ${(pct * 100).toInt()}%"
+                }
+            }
+            WorkInfo.State.SUCCEEDED -> {
+                streamingModelProgress.visibility = View.GONE
+                streamingModelDlBtn.isEnabled = true
+                if (!streamingModelDownloadAcked) {
+                    streamingModelDownloadAcked = true
+                    toast("${STREAMING_MODEL.name} ready — enable streaming live preview above")
+                    WhisperAccessibilityService.instance?.reloadStreamingModel()
+                }
+                refreshStreamingModelRow()
+            }
+            WorkInfo.State.FAILED -> {
+                streamingModelProgress.visibility = View.GONE
+                streamingModelDlBtn.isEnabled = true
+                val err = info.outputData.getString(ModelDownloadWorker.KEY_ERROR) ?: "Unknown error"
+                streamingModelSub.text = "Error: $err"
+            }
+            else -> {
+                streamingModelProgress.visibility = View.GONE
+                streamingModelDlBtn.isEnabled = true
+                refreshStreamingModelRow()
+            }
+        }
+    }
+
+    private fun refreshStreamingModelRow() {
+        val installed = ModelDownloader.isInstalled(this, STREAMING_MODEL)
+        streamingModelDlBtn.visibility = if (installed) View.GONE else View.VISIBLE
+        if (streamingModelProgress.visibility == View.GONE) {
+            streamingModelSub.text = streamingModelSubtitle()
+        }
+    }
+
+    private fun streamingModelSubtitle(): String {
+        val base = "${STREAMING_MODEL.quality} · ${STREAMING_MODEL.sizeMb} MB"
+        return if (ModelDownloader.isInstalled(this, STREAMING_MODEL)) "$base · Installed" else base
+    }
+
+    private fun streamingPreviewSubtitle(): String =
+        if (!ModelDownloader.isInstalled(this, STREAMING_MODEL)) "Download the streaming model below first"
+        else "Shows live partial results in the field as you speak"
+
+    /** Flips the opt-in streaming-preview setting (#29). Enabling while the streaming model isn't
+     *  installed is refused with a nudge toward the download row below, rather than silently
+     *  leaving the switch on with nothing to back it (see [shouldUseStreamingPreview]). */
+    private fun onStreamingPreviewToggle(enabling: Boolean) {
+        if (enabling && !ModelDownloader.isInstalled(this, STREAMING_MODEL)) {
+            toast("Download the streaming model first")
+            return
+        }
+        prefs().edit().putBoolean(KEY_STREAMING_PREVIEW, enabling).apply()
+        WhisperAccessibilityService.instance?.reloadStreamingModel()
+        refresh()
+    }
+
     // --- Prompt Rows ---
 
     private fun buildPromptRow(preset: PromptPreset): View {
@@ -467,6 +611,13 @@ class MainActivity : AppCompatActivity() {
         postProcessSwitch.isChecked = usePostProcessing
         postProcessRowSub.text = cleanupSubtitle()
         historyEnabledSwitch.isChecked = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
+
+        streamingPreviewSwitch.isChecked = shouldUseStreamingPreview(
+            settingEnabled = prefs().getBoolean(KEY_STREAMING_PREVIEW, false),
+            streamingModelInstalled = ModelDownloader.isInstalled(this, STREAMING_MODEL)
+        )
+        streamingPreviewRowSub.text = streamingPreviewSubtitle()
+        refreshStreamingModelRow()
 
         modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
         promptContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
@@ -1252,5 +1403,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
         private const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
         private const val KEY_HISTORY_ENABLED = "dictation_history_enabled"
+        private const val KEY_STREAMING_PREVIEW = "streaming_preview_enabled"
     }
 }

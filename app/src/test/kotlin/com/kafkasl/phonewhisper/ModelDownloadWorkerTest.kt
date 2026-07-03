@@ -18,8 +18,16 @@ class ModelDownloadWorkerTest {
     }
 
     @Test fun `workName differs for different archives, so unrelated model downloads don't collide`() {
-        val names = MODEL_CATALOG.map { ModelDownloadWorker.workName(it.archive) }
+        val names = (MODEL_CATALOG + STREAMING_MODEL_CATALOG).map { ModelDownloadWorker.workName(it.archive) }
         assertEquals(names.size, names.toSet().size)
+    }
+
+    @Test fun `worker's model lookup covers both the offline and streaming catalogs`() {
+        // Mirrors ModelDownloadWorker.doWork()'s lookup so a download request for the streaming
+        // model (#29) is recognized, not rejected as "Unknown model".
+        val all = MODEL_CATALOG + STREAMING_MODEL_CATALOG
+        assertEquals(STREAMING_MODEL, all.firstOrNull { it.archive == STREAMING_MODEL.archive })
+        assertEquals(MODEL_CATALOG.first(), all.firstOrNull { it.archive == MODEL_CATALOG.first().archive })
     }
 
     @Test fun `workName is stable for the same archive, so re-enqueuing targets the same unique work`() {
