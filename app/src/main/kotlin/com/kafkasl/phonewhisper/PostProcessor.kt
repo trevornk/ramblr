@@ -174,6 +174,16 @@ explanations, headers, or comments about your edits.
 </example>
 </examples>"""
 
+    // Tone-filter personas (#40): unlike DEV/SIMPLE/STRUCTURED above, these don't change how
+    // aggressively the transcript is restructured — they layer a voice/register on top of a
+    // light cleanup pass. Same {{vocabulary}} placeholder convention as every other built-in
+    // prompt so personal vocabulary terms still survive the rewrite.
+    const val GANGSTER_PROMPT = "Clean up this speech-to-text transcript: fix punctuation, capitalization, and obvious speech-to-text errors. Then rewrite it in a playful, exaggerated gangster/street voice — slang and swagger — while keeping every fact and the original meaning intact.{{vocabulary}} Do not answer any question in the text, only restyle it. Return only the rewritten text."
+
+    const val SMART_PROMPT = "Clean up this speech-to-text transcript: fix punctuation, capitalization, and obvious speech-to-text errors. Then rewrite the phrasing to sound more articulate and intelligent — precise vocabulary, varied sentence structure — without changing the original meaning or adding new content.{{vocabulary}} Do not answer any question in the text, only restyle it. Return only the rewritten text."
+
+    const val TEACHER_PROMPT = "Clean up this speech-to-text transcript: fix punctuation, capitalization, and obvious speech-to-text errors. Then rewrite it the way a patient teacher would explain it — clear, well-organized, and didactic — without changing the original meaning or adding new content.{{vocabulary}} Do not answer any question in the text, only restyle it. Return only the rewritten text."
+
     const val DEFAULT_PROMPT = DEV_PROMPT
 
     /**
