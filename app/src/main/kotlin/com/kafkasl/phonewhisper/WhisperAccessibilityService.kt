@@ -21,6 +21,7 @@ import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
 import kotlin.concurrent.thread
 import kotlin.math.abs
 
@@ -558,27 +559,26 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (file == null) { reset("No audio captured"); return }
         if (result.errorMessage != null) Log.e(TAG, "Recording ended with error: ${result.errorMessage}")
 
-        val pcm = try { file.readBytes() } finally { file.delete() }
-
         val useLocal = prefs().getBoolean("use_local", true)
 
         if (useLocal && transcriberSlot.get() != null) {
-            transcribeLocal(pcm, token)
+            transcribeLocal(file, token)
         } else {
-            transcribeApi(pcm, token)
+            transcribeApi(file, token)
         }
     }
 
-    private fun transcribeLocal(pcm: ByteArray, token: Int) {
+    /**
+     * [file] is read straight off disk into a bounded-size FloatArray (#16's duration cap bounds
+     * a recording to ~19MB PCM / ~38MB of floats) rather than staging through an intermediate
+     * ByteArray copy of the whole file first. sherpa-onnx's `OfflineStream.acceptWaveform` only
+     * accepts one full FloatArray per stream — there's no incremental/chunked accept in the
+     * vendored bindings — so this remains the single largest allocation on this path.
+     */
+    private fun transcribeLocal(file: File, token: Int) {
         thread {
             try {
-                // Convert 16-bit PCM bytes to float samples
-                val samples = FloatArray(pcm.size / 2)
-                for (i in samples.indices) {
-                    val lo = pcm[i * 2].toInt() and 0xFF
-                    val hi = pcm[i * 2 + 1].toInt()
-                    samples[i] = ((hi shl 8) or lo).toShort().toFloat() / 32768f
-                }
+                val samples = try { PcmFileBuffer.readAsFloatArray(file) } finally { file.delete() }
 
                 val t0 = System.currentTimeMillis()
                 val text = transcriberSlot.use { it.transcribe(samples, SAMPLE_RATE) }
@@ -598,12 +598,12 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun transcribeApi(pcm: ByteArray, token: Int) {
-        val wav = WavWriter.encode(pcm)
+    private fun transcribeApi(file: File, token: Int) {
         val apiKey = ApiKeyStore.getApiKey(this)
-        if (apiKey.isBlank()) { reset("Set API key in Ramblr app"); return }
+        if (apiKey.isBlank()) { file.delete(); reset("Set API key in Ramblr app"); return }
 
-        TranscriberClient.transcribe(wav, apiKey, inFlightCall) { result ->
+        TranscriberClient.transcribe(file, apiKey, inFlightCall) { result ->
+            file.delete()
             if (result.text != null && result.text.isNotBlank()) {
                 handleTranscriptionResult(result.text, token)
             } else {

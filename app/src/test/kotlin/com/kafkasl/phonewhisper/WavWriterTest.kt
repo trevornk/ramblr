@@ -47,6 +47,26 @@ class WavWriterTest {
         assertArrayEquals(pcm, wav.copyOfRange(44, 48))
     }
 
+    // -- header (used directly by the streaming upload path, see PcmWavRequestBodyTest) --
+
+    @Test fun `header is 44 bytes regardless of pcm size`() {
+        assertEquals(44, WavWriter.header(0L).size)
+        assertEquals(44, WavWriter.header(123_456_789L).size)
+    }
+
+    @Test fun `header matches encode's header for the same pcm size`() {
+        val pcm = ByteArray(500)
+        val encoded = WavWriter.encode(pcm)
+        val header = WavWriter.header(pcm.size.toLong())
+        assertArrayEquals(encoded.copyOfRange(0, 44), header)
+    }
+
+    @Test fun `header data size field reflects a pcm size larger than any single write`() {
+        val header = WavWriter.header(5_000_000L)
+        assertEquals(5_000_000, readInt(header, 40))
+        assertEquals(36 + 5_000_000, readInt(header, 4))
+    }
+
     private fun readInt(buf: ByteArray, off: Int): Int =
         (buf[off].toInt() and 0xFF) or
         ((buf[off + 1].toInt() and 0xFF) shl 8) or
