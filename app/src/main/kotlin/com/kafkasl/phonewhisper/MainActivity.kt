@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cloudSwitch: MaterialSwitch
     private lateinit var postProcessSwitch: MaterialSwitch
     private lateinit var postProcessRowSub: TextView
+    private lateinit var historyEnabledSwitch: MaterialSwitch
 
     private val modelRows = mutableMapOf<String, ModelRowViews>()
     private val promptRows = mutableMapOf<String, PromptRowViews>()
@@ -172,6 +173,18 @@ class MainActivity : AppCompatActivity() {
         val modelRow = settingsRow("Cleanup model name", cleanupModel()) { promptCleanupModel() }
         modelRowSub = modelRow.findViewWithTag("subtitle")
         root.addView(modelRow)
+
+        val isHistoryEnabled = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
+        historyEnabledSwitch = MaterialSwitch(this).apply {
+            isChecked = isHistoryEnabled
+            isClickable = false
+        }
+        val historyToggleRow = settingsRow(
+            "Save dictation history",
+            "Keeps past transcripts on-device so a failed insertion isn't lost",
+            historyEnabledSwitch
+        ) { onHistoryToggle(!historyEnabledSwitch.isChecked) }
+        root.addView(historyToggleRow)
 
         root.addView(settingsRow("Dictation history", "Recover past transcripts, tap to copy") { showHistory() })
 
@@ -398,6 +411,7 @@ class MainActivity : AppCompatActivity() {
         cloudSwitch.isChecked = !useLocal
         postProcessSwitch.isChecked = usePostProcessing
         postProcessRowSub.text = cleanupSubtitle()
+        historyEnabledSwitch.isChecked = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
 
         modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
         promptContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
@@ -486,6 +500,32 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Keep cleanup off") { _, _ -> declineCleanup() }
             .setOnCancelListener { declineCleanup() }
+            .show()
+    }
+
+    /** Applies a change to the "save dictation history" toggle. Turning it on just flips the
+     *  pref; turning it off offers to clear what's already saved, since the user may be turning
+     *  it off specifically because they don't want that history sitting on the device (#25). */
+    private fun onHistoryToggle(enabled: Boolean) {
+        if (enabled) {
+            prefs().edit().putBoolean(KEY_HISTORY_ENABLED, true).apply()
+            refresh()
+            return
+        }
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Turn off dictation history")
+            .setMessage("New dictations won't be saved. Clear the transcripts already saved on this device?")
+            .setPositiveButton("Clear history") { _, _ ->
+                prefs().edit().putBoolean(KEY_HISTORY_ENABLED, false).apply()
+                DictationHistoryStore.forContext(this).clear()
+                refresh()
+            }
+            .setNegativeButton("Keep history") { _, _ ->
+                prefs().edit().putBoolean(KEY_HISTORY_ENABLED, false).apply()
+                refresh()
+            }
+            .setOnCancelListener { refresh() }
             .show()
     }
 
@@ -609,9 +649,14 @@ class MainActivity : AppCompatActivity() {
     // --- Dictation History (#25) ---
 
     /** Local-only recovery list of past transcripts, so a failed injection is never a lost
-     *  dictation: tap any row to re-copy it to the clipboard. */
+     *  dictation: tap any row to re-copy it to the clipboard, long-press to delete it, or
+     *  "Clear all" to wipe the whole list (#25). */
     private fun showHistory() {
-        val entries = DictationHistoryStore.forContext(this).all()
+        val store = DictationHistoryStore.forContext(this)
+        val entries = store.all()
+
+        lateinit var dialog: android.app.AlertDialog
+        val onChanged = { dialog.dismiss(); showHistory() }
 
         val list = vertical(0)
         if (entries.isEmpty()) {
@@ -621,26 +666,58 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(attrColor(android.R.attr.textColorSecondary))
             })
         } else {
-            entries.forEach { list.addView(historyRow(it)) }
+            entries.forEach { list.addView(historyRow(store, it, onChanged)) }
         }
 
-        android.app.AlertDialog.Builder(this)
+        val builder = android.app.AlertDialog.Builder(this)
             .setTitle("Dictation history")
             .setView(ScrollView(this).apply { addView(list) })
             .setNegativeButton("Close", null)
+        if (entries.isNotEmpty()) {
+            builder.setNeutralButton("Clear all") { _, _ -> confirmClearAllHistory(store, onChanged) }
+        }
+        dialog = builder.show()
+    }
+
+    private fun confirmClearAllHistory(store: DictationHistoryStore, onCleared: () -> Unit) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Clear all history?")
+            .setMessage("Removes every saved transcript from this device. This can't be undone.")
+            .setPositiveButton("Clear") { _, _ ->
+                store.clear()
+                toast("History cleared")
+                onCleared()
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun historyRow(entry: DictationHistoryEntry): View {
+    private fun historyRow(store: DictationHistoryStore, entry: DictationHistoryEntry, onDeleted: () -> Unit): View {
         val text = entry.cleanedText ?: entry.rawText
         val row = settingsRow(historyTimestampFormat.format(java.util.Date(entry.timestamp)), text) {
             ClipboardUtil.copy(this, text)
             toast("Copied to clipboard")
         }
+        row.setOnLongClickListener {
+            confirmDeleteHistoryEntry(store, entry, onDeleted)
+            true
+        }
         val subtitle = row.findViewWithTag<TextView>("subtitle")
         subtitle.maxLines = 2
         subtitle.ellipsize = android.text.TextUtils.TruncateAt.END
         return row
+    }
+
+    private fun confirmDeleteHistoryEntry(store: DictationHistoryStore, entry: DictationHistoryEntry, onDeleted: () -> Unit) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Delete this transcript?")
+            .setPositiveButton("Delete") { _, _ ->
+                store.delete(entry.timestamp)
+                toast("Deleted")
+                onDeleted()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private val historyTimestampFormat by lazy {
@@ -906,5 +983,6 @@ class MainActivity : AppCompatActivity() {
         private const val LP_WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
         private const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
+        private const val KEY_HISTORY_ENABLED = "dictation_history_enabled"
     }
 }

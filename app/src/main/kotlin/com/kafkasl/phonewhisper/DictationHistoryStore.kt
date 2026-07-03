@@ -44,6 +44,13 @@ class DictationHistoryStore(private val file: File, private val maxEntries: Int 
         if (file.exists()) file.writeText("")
     }
 
+    /** Removes every entry with the given [timestamp], which is unique per dictation and doubles
+     *  as the entry's identity since there's no separate id field. */
+    @Synchronized
+    fun delete(timestamp: Long) {
+        writeAll(readAll().filterNot { it.timestamp == timestamp })
+    }
+
     private fun readAll(): List<DictationHistoryEntry> {
         if (!file.exists()) return emptyList()
         return file.readLines()

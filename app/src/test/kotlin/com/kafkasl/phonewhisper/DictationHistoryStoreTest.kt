@@ -75,6 +75,38 @@ class DictationHistoryStoreTest {
         assertTrue(store.all().isEmpty())
     }
 
+    @Test fun `delete removes only the entry with the matching timestamp`() {
+        val store = DictationHistoryStore(tempFile())
+        store.add(entry(1))
+        store.add(entry(2))
+        store.add(entry(3))
+
+        store.delete(2)
+
+        assertEquals(listOf(3L, 1L), store.all().map { it.timestamp })
+    }
+
+    @Test fun `delete of an unknown timestamp is a no-op`() {
+        val store = DictationHistoryStore(tempFile())
+        store.add(entry(1))
+
+        store.delete(999)
+
+        assertEquals(listOf(1L), store.all().map { it.timestamp })
+    }
+
+    @Test fun `delete persists across separate store instances backed by the same file`() {
+        val file = tempFile()
+        val store = DictationHistoryStore(file)
+        store.add(entry(1))
+        store.add(entry(2))
+
+        store.delete(1)
+
+        val reopened = DictationHistoryStore(file)
+        assertEquals(listOf(2L), reopened.all().map { it.timestamp })
+    }
+
     @Test fun `skips a corrupt line instead of losing the rest of the file`() {
         val file = tempFile()
         val store = DictationHistoryStore(file)
