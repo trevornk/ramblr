@@ -4,21 +4,29 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Minimal native client for Anthropic's real `/v1/messages` API, used only by the
- * ANTHROPIC_DIRECT waterfall step (see ADR-0001 / docs/adr/0001-cleanup-waterfall.md). Anthropic's
- * wire format is not OpenAI-compatible (different endpoint, `x-api-key` auth instead of a Bearer
- * token, and a content-block response shape), so it can't reuse [PostProcessor]'s chat-completions
- * request/response code.
+ * Native client for Anthropic's real `/v1/messages` API, used only by the ANTHROPIC_DIRECT
+ * waterfall step (see ADR-0001 / docs/adr/0001-cleanup-waterfall.md, #31). Anthropic's wire format
+ * is not OpenAI-compatible (different endpoint, `x-api-key` auth instead of a Bearer token, and a
+ * content-block response shape), so it can't reuse [PostProcessor]'s chat-completions request/
+ * response code.
  *
  * Deliberately covers only a single-turn system+user completion, which is all the cleanup
- * waterfall needs — issue #31 is the tracked follow-up for a fuller client (streaming, tool use,
- * multi-turn, etc.) if that's ever needed elsewhere.
+ * waterfall needs — no streaming (Anthropic defaults to non-streaming when `stream` is omitted,
+ * unlike OmniRoute), no tool use, no multi-turn history. Per-status-code error classification
+ * (401 vs 429 vs 5xx) is intentionally *not* done here: ADR-0001 treats any non-2xx as an
+ * immediate, non-retried step failure, and [CleanupWaterfallExecutor]/[RealCleanupHttpTransport]
+ * already classify that uniformly for every provider.
  */
 object AnthropicCleanupProvider {
     const val BASE_URL = "https://api.anthropic.com/v1"
     const val ENDPOINT_URL = "$BASE_URL/messages"
     const val ANTHROPIC_VERSION = "2023-06-01"
-    const val DEFAULT_MAX_TOKENS = 1024
+
+    /** Anthropic requires max_tokens; this is a cap, not a target, so billing only reflects
+     *  tokens actually generated. 1024 was tight enough to risk silently truncating a longer
+     *  dictation restructured by [PostProcessor.STRUCTURED_PROMPT]; 4096 gives real headroom
+     *  while staying well under every current Claude model's output limit. */
+    const val DEFAULT_MAX_TOKENS = 4096
 
     fun headers(apiKey: String): Map<String, String> = mapOf(
         "x-api-key" to apiKey,
