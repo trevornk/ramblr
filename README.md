@@ -92,6 +92,12 @@ Phone Whisper supports two modes:
 
 I don't run a backend for this app. In cloud mode, requests go straight from your phone to OpenAI using your own API key.
 
+Cleanup can instead be pointed at any OpenAI-compatible chat completions API (e.g. a self-hosted
+router on your own LAN) by setting a custom base URL and model name in **Settings → Cleanup API
+base URL / Cleanup model name**. In that mode, transcript text is sent to whatever host you
+configure — e.g. `http://192.168.1.50:8000/v1` — not to OpenAI. The API key field is reused as a
+Bearer token for the custom endpoint too. See [PRIVACY.md](PRIVACY.md) for details.
+
 Full policy: [PRIVACY.md](PRIVACY.md)
 
 ## Local models

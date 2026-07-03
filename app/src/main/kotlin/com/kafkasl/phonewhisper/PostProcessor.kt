@@ -12,10 +12,45 @@ object PostProcessor {
 
     private val client = NetworkClients.shared
 
-    const val ENDPOINT_URL = "https://api.openai.com/v1/chat/completions"
+    /** Default OpenAI-compatible base URL, used when the user hasn't configured a custom one (see #4). */
+    const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    const val DEFAULT_MODEL = "gpt-4o-mini"
 
-    /** Host cleanup requests are actually sent to, for use in UI copy. See #23. */
+    val ENDPOINT_URL = "$DEFAULT_BASE_URL/chat/completions"
+
+    /** Host cleanup requests are actually sent to by default, for use in UI copy. See #23. */
     val DESTINATION_HOST: String = java.net.URI(ENDPOINT_URL).host
+
+    /**
+     * Validates and normalizes a user-entered cleanup base URL: must parse as an absolute
+     * http/https URL with a host, and any trailing slash is stripped so callers can safely
+     * append "/chat/completions". Returns null if the input is blank or invalid, so callers
+     * can fall back to [DEFAULT_BASE_URL] instead of building a malformed request URL. See #4.
+     */
+    fun normalizeBaseUrl(raw: String): String? {
+        val trimmed = raw.trim().trimEnd('/')
+        if (trimmed.isBlank()) return null
+        val uri = try {
+            java.net.URI(trimmed)
+        } catch (e: Exception) {
+            return null
+        }
+        if (uri.scheme != "http" && uri.scheme != "https") return null
+        if (uri.host.isNullOrBlank()) return null
+        return trimmed
+    }
+
+    /** The chat-completions endpoint for a (possibly custom) base URL, falling back to the default if invalid/blank. */
+    fun endpointUrl(baseUrl: String): String {
+        val normalized = normalizeBaseUrl(baseUrl) ?: DEFAULT_BASE_URL
+        return "$normalized/chat/completions"
+    }
+
+    /** Host cleanup requests are actually sent to for a (possibly custom) base URL, for use in UI copy. */
+    fun destinationHost(baseUrl: String): String {
+        val normalized = normalizeBaseUrl(baseUrl) ?: DEFAULT_BASE_URL
+        return java.net.URI(normalized).host ?: DESTINATION_HOST
+    }
 
     const val SIMPLE_PROMPT = "Clean up this speech-to-text transcript. Fix punctuation, capitalization, and obvious speech-to-text errors. Keep the original meaning. Return only the cleaned text."
 
@@ -156,7 +191,8 @@ explanations, headers, or comments about your edits.
         }
     }
 
-    fun process(text: String, prompt: String, apiKey: String, cancelHolder: InFlightCall, callback: (Result) -> Unit) {
+    /** Builds the chat-completions request body, defaulting a blank model to [DEFAULT_MODEL]. */
+    fun buildRequestBody(text: String, prompt: String, model: String): JSONObject {
         val messages = JSONArray().apply {
             put(JSONObject().apply {
                 put("role", "system")
@@ -168,19 +204,38 @@ explanations, headers, or comments about your edits.
             })
         }
 
-        val bodyJson = JSONObject().apply {
-            put("model", "gpt-4o-mini")
+        return JSONObject().apply {
+            put("model", model.ifBlank { DEFAULT_MODEL })
             put("messages", messages)
             put("temperature", 0.0)
         }
+    }
 
-        val body = bodyJson.toString().toRequestBody("application/json".toMediaType())
+    fun process(
+        text: String,
+        prompt: String,
+        apiKey: String,
+        cancelHolder: InFlightCall,
+        baseUrl: String = DEFAULT_BASE_URL,
+        model: String = DEFAULT_MODEL,
+        callback: (Result) -> Unit
+    ) {
+        val body = buildRequestBody(text, prompt, model).toString().toRequestBody("application/json".toMediaType())
 
-        val request = Request.Builder()
-            .url(ENDPOINT_URL)
-            .header("Authorization", "Bearer $apiKey")
-            .post(body)
-            .build()
+        // A malformed base URL (or one OkHttp otherwise rejects) throws IllegalArgumentException
+        // from Request.Builder().url() rather than failing the call — caught here so a bad custom
+        // endpoint reports through the same Result/callback path as a network failure, instead of
+        // crashing. See #4.
+        val request = try {
+            Request.Builder()
+                .url(endpointUrl(baseUrl))
+                .header("Authorization", "Bearer $apiKey")
+                .post(body)
+                .build()
+        } catch (e: IllegalArgumentException) {
+            callback(Result(null, "Invalid cleanup endpoint: ${e.message}"))
+            return
+        }
 
         val call = client.newCall(request)
         cancelHolder.set(call)
