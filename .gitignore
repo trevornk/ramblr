@@ -5,3 +5,4 @@ local.properties
 .env
 *.apk
 app/src/main/jniLibs/
+eval-reports/

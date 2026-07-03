@@ -122,6 +122,45 @@ make adb-install # build + install via ADB
 make clean       # clean build artifacts
 ```
 
+### Prompt eval harness
+
+`PostProcessorTest.kt` only checks JSON parsing, not output *quality*. To compare cleanup
+prompts (`SIMPLE_PROMPT` vs `DEV_PROMPT`, or future variants) side by side, there's a manual
+eval harness:
+
+- Sample transcripts live in `app/src/test/resources/eval_samples/` — ~20 synthetic but
+  realistic dictation samples covering rambling brainstorms, self-corrected sentences,
+  technical jargon, spoken lists, and quick notes.
+- The harness itself is `app/src/test/kotlin/com/kafkasl/phonewhisper/tools/EvalHarness.kt`, a
+  standalone `main()` — **not** a JUnit test. It compiles as part of `make test`'s Kotlin
+  compilation (so it's checked for compile errors), but JUnit never discovers or runs it, so it
+  has no effect on `make test`, `make build`, or CI.
+
+**This tool calls the real OpenAI API and spends real credits.** Only run it manually, with your
+own key:
+
+```bash
+export OPENAI_API_KEY=sk-...   # your own key — never commit this, no .env is read by the tool
+./gradlew runEvalHarness                                    # compares SIMPLE_PROMPT vs DEV_PROMPT
+./gradlew runEvalHarness --args="SIMPLE_PROMPT,DEV_PROMPT"   # explicit prompt list
+```
+
+Optional overrides:
+
+```bash
+OPENAI_EVAL_MODEL=gpt-4o ./gradlew runEvalHarness   # defaults to gpt-4o-mini, matching PostProcessor
+./gradlew runEvalHarness --args="DEV_PROMPT eval-reports/dev-only.md"  # custom output path
+```
+
+Each run writes a markdown report (default `eval-reports/<prompts>.md`) with the raw transcript
+and the cleaned-up output from each prompt for every sample, for manual side-by-side review.
+Review the report yourself before trusting a prompt change — the harness doesn't score or grade
+output automatically. `eval-reports/` is gitignored so local runs don't clutter the repo; if you
+want to share or archive a specific report, `git add -f` it.
+
+To add a new prompt variant (e.g. a future `STRUCTURED_PROMPT`) to the comparison, add it to the
+`PROMPT_REGISTRY` map at the top of `EvalHarness.kt`.
+
 ## App compatibility
 
 Phone Whisper works best in apps that use standard Android text fields.
