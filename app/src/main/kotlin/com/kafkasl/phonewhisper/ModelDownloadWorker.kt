@@ -22,7 +22,7 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
     override fun doWork(): Result {
         val archive = inputData.getString(KEY_ARCHIVE)
             ?: return Result.failure(errorData("Missing archive name"))
-        val model = MODEL_CATALOG.firstOrNull { it.archive == archive }
+        val model = (MODEL_CATALOG + STREAMING_MODEL_CATALOG).firstOrNull { it.archive == archive }
             ?: return Result.failure(errorData("Unknown model: $archive"))
 
         var failure: Data? = null

@@ -56,6 +56,43 @@ class ModelDownloaderTest {
         assertTrue(MODEL_CATALOG.all { it.sha256!!.matches(Regex("[0-9a-f]{64}")) })
     }
 
+    @Test fun `no offline catalog entry is marked streaming`() {
+        // MODEL_CATALOG is the offline/batch list surfaced by MainActivity's "Local models"
+        // radio-select UI; a streaming model there would be selectable as an offline model_name
+        // and break LocalTranscriber's auto-detection (#29).
+        assertTrue(MODEL_CATALOG.none { it.isStreaming })
+    }
+
+    // -- streaming model catalog (#29) --
+
+    @Test fun `streaming catalog has exactly the one streaming model, marked and checksummed`() {
+        assertEquals(1, STREAMING_MODEL_CATALOG.size)
+        assertTrue(STREAMING_MODEL_CATALOG.all { it.isStreaming })
+        assertTrue(STREAMING_MODEL_CATALOG.all { it.sha256 != null })
+        assertTrue(STREAMING_MODEL_CATALOG.all { it.sha256!!.matches(Regex("[0-9a-f]{64}")) })
+        assertEquals(STREAMING_MODEL, STREAMING_MODEL_CATALOG.single())
+    }
+
+    @Test fun `streaming and offline model archive names never collide`() {
+        val offlineArchives = MODEL_CATALOG.map { it.archive }.toSet()
+        assertTrue(STREAMING_MODEL_CATALOG.none { it.archive in offlineArchives })
+    }
+
+    @Test fun `streaming model installs under a separate streaming_models directory`() {
+        withTempDir { tmp ->
+            val dir = ModelDownloader.modelDirPath(tmp, STREAMING_MODEL)
+            assertTrue(dir.path.contains("/streaming_models/"))
+            assertFalse(dir.path.contains("/models/"))
+        }
+    }
+
+    @Test fun `offline model install path is unchanged by the streaming addition`() {
+        withTempDir { tmp ->
+            val dir = ModelDownloader.modelDirPath(tmp, MODEL_CATALOG.first())
+            assertEquals(File(tmp, "models/${MODEL_CATALOG.first().archive}").path, dir.path)
+        }
+    }
+
     // -- isInstalledDir / completion marker --
 
     @Test fun `isInstalledDir is false when directory is missing`() {

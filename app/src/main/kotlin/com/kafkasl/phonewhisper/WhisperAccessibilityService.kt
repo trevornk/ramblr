@@ -112,6 +112,11 @@ class WhisperAccessibilityService : AccessibilityService() {
         /** Delay before rescanning once if the first candidate scan comes up empty (#5) — long enough
          *  for a transient post-tap focus race to settle, short enough not to feel laggy. */
         private const val INJECTION_RETRY_DELAY_MS = 200L
+        /** Minimum gap between two streaming-preview partial injections into the focused field
+         *  (#29) — chunks arrive far more often than this; injecting on every one would hammer the
+         *  target app's input and feel janky. The very first partial of a recording bypasses this
+         *  (see [shouldInjectPartial]) so live preview doesn't feel laggy at speech onset. */
+        private const val STREAMING_PARTIAL_MIN_INTERVAL_MS = 400L
         /** Clipboard-fallback feedback stays up much longer than a normal success bubble (#5): it's
          *  the only record the user gets that injection didn't happen, so it shouldn't be easy to miss. */
         private const val FALLBACK_FEEDBACK_DURATION_MS = 6000L
@@ -171,6 +176,23 @@ class WhisperAccessibilityService : AccessibilityService() {
     // Local transcription engine (loaded lazily)
     private val transcriberSlot = TranscriberSlot<LocalTranscriber> { it.release() }
 
+    // Streaming live-preview engine (#29) — only loaded when the opt-in setting is on and the
+    // streaming model is installed (see initStreamingModel/shouldUseStreamingPreview). Kept loaded
+    // across recordings like transcriberSlot; only its per-recording OnlineStream is torn down
+    // between dictations (see StreamingTranscriber.beginSession/endSession).
+    private val streamingTranscriberSlot = TranscriberSlot<StreamingTranscriber> { it.release() }
+
+    // Live-preview injection state for the current recording (#29), null when no partial has been
+    // injected yet this recording or once the session has ended. Only touched on the main thread.
+    private data class StreamingPreviewSession(
+        val node: AccessibilityNodeInfo,
+        val insertionStart: Int,
+        var lastPartialLength: Int,
+        var lastInjectedText: String?,
+        var lastInjectedAtMs: Long
+    )
+    private var streamingSession: StreamingPreviewSession? = null
+
     // Local dictation history (#25), so a transcript survives even if injection fails.
     private val historyStore by lazy { DictationHistoryStore.forContext(this) }
 
@@ -185,6 +207,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         thread { cleanupOrphanedRecordings() }
         // Try to load local model in background
         thread { initLocalModel() }
+        thread { initStreamingModel() }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
@@ -203,6 +226,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         prefs().unregisterOnSharedPreferenceChangeListener(prefsListener)
         guard.cancel()
         inFlightCall.cancel()
+        teardownStreamingPreview()
         handler.removeCallbacks(expirePendingInjection)
         pendingInjection?.node?.recycle()
         pendingInjection = null
@@ -242,6 +266,25 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     /** Reload local model (called from MainActivity when settings change) */
     fun reloadModel() { thread { initLocalModel() } }
+
+    /**
+     * (Re)loads the streaming live-preview model (#29), gated on both the opt-in setting and the
+     * streaming model being installed (see [shouldUseStreamingPreview]). Called from MainActivity
+     * when either changes, mirroring [reloadModel]'s pattern for the offline model.
+     */
+    private fun initStreamingModel() {
+        val enabled = shouldUseStreamingPreview(
+            settingEnabled = prefs().getBoolean("streaming_preview_enabled", false),
+            streamingModelInstalled = StreamingTranscriber.isAvailable(this)
+        )
+        val newTranscriber = if (enabled) StreamingTranscriber.create(this) else null
+        streamingTranscriberSlot.replace(newTranscriber)
+        Log.i(TAG, if (newTranscriber != null) "Streaming preview ready" else "Streaming preview unavailable")
+    }
+
+    /** Reload the streaming preview model (called from MainActivity when the toggle or the
+     *  streaming model's install state changes). */
+    fun reloadStreamingModel() { thread { initStreamingModel() } }
 
     // --- Overlay ---
 
@@ -617,10 +660,15 @@ class WhisperAccessibilityService : AccessibilityService() {
             toast("Grant audio permission in Ramblr app"); return
         }
 
+        endStreamingSession()
+        val streamingActive = streamingTranscriberSlot.get() != null
+        if (streamingActive) streamingTranscriberSlot.use { it.beginSession() }
+
         val engine = RecordingEngine(cacheDir, stateMachine)
         val started = engine.start(
             onMaxDuration = { /* handled in startMaxDurationTranscription on the main thread */ },
-            onFinished = { result -> onRecordingFinished(result) }
+            onFinished = { result -> onRecordingFinished(result) },
+            onChunk = if (streamingActive) ::handleStreamingChunk else { _, _ -> }
         )
         if (!started) { toast("Couldn't start recording — mic busy?"); return }
 
@@ -670,6 +718,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         stateMachine.reset()
         setBusy(false)
         setAppearance(COLOR_IDLE)
+        teardownStreamingPreview()
     }
 
     /** Called on the reader thread once the AudioRecord has been drained and released. */
@@ -846,6 +895,95 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun reset(msg: String) {
         toast(msg)
         resetToIdle()
+    }
+
+    // --- Streaming preview (#29) ---
+
+    /**
+     * Runs on [RecordingEngine]'s reader thread (see [RecordingEngine.start]'s `onChunk`): converts
+     * the raw PCM chunk and feeds it to the streaming recognizer, then hops to the main thread only
+     * if there's a new hypothesis to potentially show. Decoding happens on every chunk regardless of
+     * whether the result ends up injected — [maybeInjectPartial] is what throttles actual UI/field
+     * updates, not this.
+     */
+    private fun handleStreamingChunk(buf: ByteArray, len: Int) {
+        val samples = PcmFileBuffer.bytesToFloatArray(buf, len)
+        val text = streamingTranscriberSlot.use { it.acceptChunk(samples, SAMPLE_RATE) } ?: return
+        handler.post { maybeInjectPartial(text) }
+    }
+
+    /**
+     * Injects (or replaces) the live partial preview in the focused field, throttled by
+     * [shouldInjectPartial]. The very first partial of a recording scans for an injection
+     * candidate the same way the final batch injection does ([findInjectionCandidates]), but only
+     * accepts one that supports direct (ACTION_SET_TEXT) injection — a paste-only target can't have
+     * a specific span replaced in place, so preview is silently skipped there and only the final
+     * batch injection (unaffected by any of this) will land in that field. Subsequent partials
+     * reuse the same node rather than rescanning, both for cost and to avoid re-resolving focus
+     * mid-dictation.
+     */
+    private fun maybeInjectPartial(text: String) {
+        if (!stateMachine.isRecording()) return // stale post after stop/cancel raced this
+        if (text.isBlank()) return
+        val now = System.currentTimeMillis()
+
+        val session = streamingSession
+        if (session == null) {
+            val candidate = findDirectInjectionCandidate() ?: return
+            val current = candidate.text?.toString().orEmpty()
+            val selStart = if (candidate.textSelectionStart >= 0) candidate.textSelectionStart else current.length
+            val selEnd = if (candidate.textSelectionEnd >= 0) candidate.textSelectionEnd else selStart
+            val insertionStart = minOf(selStart, selEnd)
+            if (!setNodeText(candidate, replacePartialInField(current, insertionStart, 0, text))) {
+                candidate.recycle()
+                return
+            }
+            streamingSession = StreamingPreviewSession(candidate, insertionStart, text.length, text, now)
+            return
+        }
+
+        if (!shouldInjectPartial(text, session.lastInjectedText, session.lastInjectedAtMs, now, STREAMING_PARTIAL_MIN_INTERVAL_MS)) return
+        if (!refreshNode(session.node)) { endStreamingSession(); return }
+
+        val current = session.node.text?.toString().orEmpty()
+        val updated = replacePartialInField(current, session.insertionStart, session.lastPartialLength, text)
+        if (!setNodeText(session.node, updated)) { endStreamingSession(); return }
+        session.lastPartialLength = text.length
+        session.lastInjectedText = text
+        session.lastInjectedAtMs = now
+    }
+
+    /** First candidate from [findInjectionCandidates] that supports direct (ACTION_SET_TEXT)
+     *  injection — the only method compatible with replacing a specific span in place, which the
+     *  live preview needs and paste-based injection can't do. Recycles every other candidate. */
+    private fun findDirectInjectionCandidate(): AccessibilityNodeInfo? {
+        val candidates = findInjectionCandidates()
+        val direct = candidates.firstOrNull { it.isEditable || it.className?.toString()?.contains("EditText") == true }
+        candidates.forEach { if (it !== direct) it.recycle() }
+        return direct
+    }
+
+    private fun setNodeText(node: AccessibilityNodeInfo, text: String): Boolean {
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        }
+        return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    private fun refreshNode(node: AccessibilityNodeInfo): Boolean =
+        try { node.refresh() } catch (e: Exception) { false }
+
+    private fun endStreamingSession() {
+        streamingSession?.node?.recycle()
+        streamingSession = null
+    }
+
+    /** Tears down everything about the current recording's live-preview session: the injected-node
+     *  reference and the streaming recognizer's per-recording stream. Called from every path back
+     *  to IDLE ([resetToIdle]) and from [onDestroy]; safe to call even when no session is active. */
+    private fun teardownStreamingPreview() {
+        endStreamingSession()
+        streamingTranscriberSlot.use { it.endSession() }
     }
 
     // --- Text injection ---

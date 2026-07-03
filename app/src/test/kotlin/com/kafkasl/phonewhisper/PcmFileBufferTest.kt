@@ -120,4 +120,52 @@ class PcmFileBufferTest {
         assertEquals(1, result.size)
         assertEquals(42f / 32768f, result[0], 1e-6f)
     }
+
+    // -- bytesToFloatArray (streaming chunk conversion, #29) --
+
+    private fun pcm16Bytes(samples: ShortArray): ByteArray {
+        val bytes = ByteArray(samples.size * 2)
+        samples.forEachIndexed { i, s ->
+            bytes[i * 2] = (s.toInt() and 0xFF).toByte()
+            bytes[i * 2 + 1] = (s.toInt() shr 8 and 0xFF).toByte()
+        }
+        return bytes
+    }
+
+    @Test fun `bytesToFloatArray converts known 16-bit samples the same way as readAsFloatArray`() {
+        val bytes = pcm16Bytes(shortArrayOf(0, Short.MAX_VALUE, Short.MIN_VALUE, -1))
+
+        val samples = PcmFileBuffer.bytesToFloatArray(bytes, bytes.size)
+
+        assertEquals(4, samples.size)
+        assertEquals(0f, samples[0], 1e-6f)
+        assertEquals(Short.MAX_VALUE.toFloat() / 32768f, samples[1], 1e-6f)
+        assertEquals(Short.MIN_VALUE.toFloat() / 32768f, samples[2], 1e-6f)
+        assertEquals(-1f / 32768f, samples[3], 1e-6f)
+    }
+
+    @Test fun `bytesToFloatArray only converts the first len bytes, ignoring the rest of a reused buffer`() {
+        // Mirrors how RecordingEngine calls it: a fixed-size buffer reused across reads, only
+        // the first `n` bytes of which are valid for this particular chunk.
+        val bytes = pcm16Bytes(shortArrayOf(100, 200, 300, 400))
+
+        val samples = PcmFileBuffer.bytesToFloatArray(bytes, 4) // first 2 samples only
+
+        assertEquals(2, samples.size)
+        assertEquals(100f / 32768f, samples[0], 1e-6f)
+        assertEquals(200f / 32768f, samples[1], 1e-6f)
+    }
+
+    @Test fun `bytesToFloatArray truncates a trailing odd byte`() {
+        val bytes = pcm16Bytes(shortArrayOf(42)) + byteArrayOf(7)
+
+        val samples = PcmFileBuffer.bytesToFloatArray(bytes, bytes.size)
+
+        assertEquals(1, samples.size)
+        assertEquals(42f / 32768f, samples[0], 1e-6f)
+    }
+
+    @Test fun `bytesToFloatArray of zero length returns an empty array`() {
+        assertArrayEquals(FloatArray(0), PcmFileBuffer.bytesToFloatArray(ByteArray(0), 0), 0f)
+    }
 }
