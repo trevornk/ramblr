@@ -1,0 +1,1 @@
+deploy the changes to staging first then run the integration tests actually hold on run the integration tests first and only deploy to staging if they all pass otherwise we're gonna waste time debugging on a broken environment

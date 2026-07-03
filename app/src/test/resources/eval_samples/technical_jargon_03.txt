@@ -1,0 +1,1 @@
+clawed code kept getting stuck in a loop trying to fix the failing test so i switched over to codecks for that one file and it actually one shotted it which was surprising honestly i think it's because the test file had a really long stack trace and clawed code's context window handling of long tool outputs is still kind of rough compared to codecks in that specific scenario

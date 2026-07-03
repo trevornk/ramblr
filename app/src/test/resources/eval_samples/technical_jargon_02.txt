@@ -1,0 +1,1 @@
+ssh into the box on hetzsner and check if the docker daemon is even running because the health check has been failing for like twenty minutes and pi didn't send an alert for some reason which is weird since that's literally the whole point of running pi on that instance also can you check the nginx config while you're in there i think someone left a debug flag on

@@ -1,0 +1,1 @@
+okay for the launch checklist we've got the following items pending first legal needs to sign off on the updated privacy policy second the app store listing screenshots still need to be updated to match the new ui third we need a rollback plan documented in case the release causes crashes and fourth someone needs to be on call during the rollout window in case anything goes wrong

@@ -1,0 +1,1 @@
+steps to reproduce the bug first open the app with cloud mode enabled second start a recording and immediately background the app before stopping it third wait about thirty seconds fourth bring the app back to the foreground and stop the recording at that point the transcription just hangs forever with no error shown

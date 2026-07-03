@@ -1,0 +1,1 @@
+quick note the fast dot ai course this year is using a completely different notebook format than last year it's all built on top of solve it now instead of the old n b dev based workflow so if you're following along from an older cohort a lot of the file paths and commands are gonna be different especially around exporting notebooks to modules
