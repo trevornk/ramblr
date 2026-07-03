@@ -173,6 +173,8 @@ class MainActivity : AppCompatActivity() {
         modelRowSub = modelRow.findViewWithTag("subtitle")
         root.addView(modelRow)
 
+        root.addView(settingsRow("Dictation history", "Recover past transcripts, tap to copy") { showHistory() })
+
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
             addView(root)
@@ -602,6 +604,47 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    // --- Dictation History (#25) ---
+
+    /** Local-only recovery list of past transcripts, so a failed injection is never a lost
+     *  dictation: tap any row to re-copy it to the clipboard. */
+    private fun showHistory() {
+        val entries = DictationHistoryStore.forContext(this).all()
+
+        val list = vertical(0)
+        if (entries.isEmpty()) {
+            list.addView(TextView(this).apply {
+                text = "No dictations yet"
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+                setTextColor(attrColor(android.R.attr.textColorSecondary))
+            })
+        } else {
+            entries.forEach { list.addView(historyRow(it)) }
+        }
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Dictation history")
+            .setView(ScrollView(this).apply { addView(list) })
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun historyRow(entry: DictationHistoryEntry): View {
+        val text = entry.cleanedText ?: entry.rawText
+        val row = settingsRow(historyTimestampFormat.format(java.util.Date(entry.timestamp)), text) {
+            ClipboardUtil.copy(this, text)
+            toast("Copied to clipboard")
+        }
+        val subtitle = row.findViewWithTag<TextView>("subtitle")
+        subtitle.maxLines = 2
+        subtitle.ellipsize = android.text.TextUtils.TruncateAt.END
+        return row
+    }
+
+    private val historyTimestampFormat by lazy {
+        java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault())
     }
 
     // --- Onboarding Wizard (#6) ---
