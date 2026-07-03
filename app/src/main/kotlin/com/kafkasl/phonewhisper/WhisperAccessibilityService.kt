@@ -164,10 +164,20 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     // Keeps the cleanup-toggle badge (#34) in sync the instant the toggle changes from anywhere
-    // else -- e.g. MainActivity's Settings switch -- not just taps on the badge itself.
+    // else -- e.g. MainActivity's Settings switch -- not just taps on the badge itself. Also
+    // reacts to the "ever configured" flag (#38) flipping, since that's what brings the badge
+    // into existence the first time cleanup is turned on.
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == PostProcessingToggle.KEY) handler.post { updateCleanupToggleAppearance() }
+        if (key == PostProcessingToggle.KEY || key == CleanupBadgeVisibility.KEY_EVER_CONFIGURED) {
+            handler.post { applyCleanupBadgeVisibility() }
+        }
     }
+
+    // Whether the cleanup badge window is currently added to the WindowManager (#38). The badge
+    // View/LayoutParams are always constructed in showOverlay(), but only actually attached once
+    // shouldShowBadge() is true -- see applyCleanupBadgeVisibility() -- so a plain-dictation user
+    // who's never touched cleanup never has an (even grey/off) badge added at all.
+    private var cleanupToggleAdded = false
 
     // Undo / retry-raw state (#27) — last injection only, cleared on use or expiry.
     private var pendingInjection: PendingInjection? = null
@@ -376,7 +386,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                     }
                     cleanupToggleLayoutParams?.let {
                         positionCleanupToggle(it, params, ringSize)
-                        wm.updateViewLayout(cleanupToggleView, it)
+                        if (cleanupToggleAdded) wm.updateViewLayout(cleanupToggleView, it)
                     }
                     true
                 }
@@ -396,7 +406,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                         }
                         cleanupToggleLayoutParams?.let {
                             positionCleanupToggle(it, params, ringSize)
-                            wm.updateViewLayout(cleanupToggleView, it)
+                            if (cleanupToggleAdded) wm.updateViewLayout(cleanupToggleView, it)
                         }
                     }
                     true
@@ -459,7 +469,6 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         wm.addView(overlay, params)
         wm.addView(feedback, feedbackParams)
-        wm.addView(cleanupToggle, cleanupToggleParams)
         overlayView = overlay
         button = img
         spinner = ring
@@ -468,8 +477,35 @@ class WhisperAccessibilityService : AccessibilityService() {
         layoutParams = params
         feedbackLayoutParams = feedbackParams
         cleanupToggleLayoutParams = cleanupToggleParams
-        updateCleanupToggleAppearance()
+        // Attaches the badge window only if shouldShowBadge() says it should exist yet (#38); a
+        // plain-dictation user who's never touched cleanup gets no badge at all, not even hidden.
+        applyCleanupBadgeVisibility()
         applyOverlayVisibility()
+    }
+
+    /**
+     * Adds or removes the cleanup badge's WindowManager window based on
+     * [CleanupBadgeVisibility.shouldShowBadge] (#38), so the badge simply doesn't exist for a
+     * user who has never turned cleanup on -- not merely hidden/grey. Safe to call at any time;
+     * a no-op if the badge's already in the desired state. [updateCleanupToggleAppearance] is
+     * only meaningful once the badge is actually attached, so it's called after ensuring that.
+     */
+    private fun applyCleanupBadgeVisibility() {
+        val view = cleanupToggleView ?: return
+        val params = cleanupToggleLayoutParams ?: return
+        val shouldShow = CleanupBadgeVisibility.shouldShowBadge(
+            everConfigured = CleanupBadgeVisibility.hasEverConfigured(this),
+            currentlyEnabled = PostProcessingToggle.isEnabled(this)
+        )
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        if (shouldShow && !cleanupToggleAdded) {
+            wm.addView(view, params)
+            cleanupToggleAdded = true
+        } else if (!shouldShow && cleanupToggleAdded) {
+            wm.removeView(view)
+            cleanupToggleAdded = false
+        }
+        if (cleanupToggleAdded) updateCleanupToggleAppearance()
     }
 
     /**
@@ -498,7 +534,10 @@ class WhisperAccessibilityService : AccessibilityService() {
             else flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         }
         layoutParams?.let { it.applyTouchable(); overlayView?.let { v -> wm.updateViewLayout(v, it) } }
-        cleanupToggleLayoutParams?.let { it.applyTouchable(); cleanupToggleView?.let { v -> wm.updateViewLayout(v, it) } }
+        cleanupToggleLayoutParams?.let {
+            it.applyTouchable()
+            if (cleanupToggleAdded) cleanupToggleView?.let { v -> wm.updateViewLayout(v, it) }
+        }
     }
 
     private fun removeOverlay() {
@@ -511,10 +550,9 @@ class WhisperAccessibilityService : AccessibilityService() {
             wm.removeView(it)
             feedbackView = null
         }
-        cleanupToggleView?.let {
-            wm.removeView(it)
-            cleanupToggleView = null
-        }
+        if (cleanupToggleAdded) cleanupToggleView?.let { wm.removeView(it) }
+        cleanupToggleAdded = false
+        cleanupToggleView = null
         button = null
         spinner = null
         layoutParams = null
@@ -638,6 +676,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 return
             }
         }
+        if (enabling) CleanupBadgeVisibility.markConfigured(this)
         PostProcessingToggle.setEnabled(this, enabling)
         updateCleanupToggleAppearance()
         showFeedback(if (enabling) "Cleanup on" else "Cleanup off", durationMs = 1200)

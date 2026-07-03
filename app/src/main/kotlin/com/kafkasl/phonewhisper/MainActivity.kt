@@ -44,6 +44,24 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewBeforeInjectSwitch: MaterialSwitch
     private lateinit var historyEnabledSwitch: MaterialSwitch
 
+    // Tier 2 (#38) — everything below the top-level cleanup toggle, shown/hidden as one unit
+    // instead of each row separately, since none of it matters while cleanup is off.
+    private lateinit var cleanupDetailContainer: LinearLayout
+    private lateinit var cleanupLocalRadio: MaterialRadioButton
+    private lateinit var cleanupCloudRadio: MaterialRadioButton
+    private lateinit var cleanupChoiceCaption: TextView
+    private lateinit var cleanupModelSub: TextView
+    private lateinit var cleanupModelProgress: LinearProgressIndicator
+    private lateinit var cleanupModelDlBtn: MaterialButton
+    private var cleanupModelDownloadState: WorkInfo.State? = null
+    private var cleanupModelDownloadAcked = false
+
+    // "Advanced" waterfall disclosure (#38) — genuinely collapsed by default; the full #32/#37
+    // editor underneath is untouched, just not front-and-center for a first-time user.
+    private lateinit var advancedContainer: LinearLayout
+    private lateinit var advancedChevron: TextView
+    private var advancedExpanded = false
+
     // Streaming live preview (#29) — separate from the offline model rows above: this switch and
     // its model row never touch "model_name" (the offline model selection).
     private lateinit var streamingPreviewSwitch: MaterialSwitch
@@ -110,7 +128,7 @@ class MainActivity : AppCompatActivity() {
 
         // --- Setup Section ---
         root.addView(sectionHeader("Setup"))
-        
+
         val audioRow = settingsRow("Audio permission", "Checking...") {
             if (!hasPerm(Manifest.permission.RECORD_AUDIO)) {
                 ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
@@ -125,8 +143,19 @@ class MainActivity : AppCompatActivity() {
         accRowSub = accRow.findViewWithTag("subtitle")
         root.addView(accRow)
 
-        // --- Engine Section ---
-        
+        // ============================================================
+        // Tier 1 -- Transcription (#38): required, but has a working default. Local needs no
+        // download beyond picking a model size below, and nothing here auto-downloads anything.
+        // ============================================================
+        root.addView(sectionHeader("Transcription"))
+        root.addView(TextView(this).apply {
+            text = "Required — choose how speech becomes text. Local (default): fastest, fully " +
+                "private, works with no internet. Cloud: sends audio to OpenAI using your own API key."
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(8))
+        })
+
         val isCloud = !prefs().getBoolean("use_local", true)
 
         cloudSwitch = MaterialSwitch(this).apply {
@@ -145,6 +174,177 @@ class MainActivity : AppCompatActivity() {
         modelContainer.addView(sectionHeader("Local models"))
         for (m in MODEL_CATALOG) modelContainer.addView(buildModelRow(m))
         root.addView(modelContainer)
+
+        // Shared by cloud transcription above and cloud cleanup below -- one key, one place to set it.
+        val keyRow = settingsRow("OpenAI API Key", "Tap to set") { promptApiKey() }
+        keyRowSub = keyRow.findViewWithTag("subtitle")
+        root.addView(keyRow)
+
+        // ============================================================
+        // Tier 2 -- Cleanup / Post-Processing (#38): fully optional, off by default. No model
+        // download and no API key is required unless the user opts in below.
+        // ============================================================
+        root.addView(sectionHeader("Cleanup (optional)"))
+
+        val isPostProcessing = prefs().getBoolean("use_post_processing", false)
+        postProcessSwitch = MaterialSwitch(this).apply {
+            isChecked = isPostProcessing
+            isClickable = false
+        }
+        val postProcessRow = settingsRow("Improve my dictation with AI", cleanupSubtitle(), postProcessSwitch) {
+            val newVal = !postProcessSwitch.isChecked
+            val useLocal = prefs().getBoolean("use_local", true)
+            applyLocalCleanupChange(useLocal, newVal)
+        }
+        postProcessRowSub = postProcessRow.findViewWithTag("subtitle")
+        root.addView(postProcessRow)
+
+        // Everything below only matters once cleanup is on -- shown/hidden as one unit in refresh().
+        cleanupDetailContainer = vertical(0)
+
+        promptContainer = vertical(0)
+        promptContainer.addView(sectionHeader("Style"))
+        for (preset in promptPresets()) promptContainer.addView(buildPromptRow(preset))
+        cleanupDetailContainer.addView(promptContainer)
+
+        promptRow = settingsRow("Edit current prompt", currentPrompt()) { promptPostProcessing() }
+        promptRowSub = promptRow.findViewWithTag("subtitle")
+        promptRowSub.maxLines = 2
+        promptRowSub.ellipsize = android.text.TextUtils.TruncateAt.END
+        cleanupDetailContainer.addView(promptRow)
+
+        // Simple primary choice (#38): Local vs Cloud, standing in front of the full waterfall
+        // editor under Advanced below. See simpleCleanupChoiceFor().
+        cleanupDetailContainer.addView(sectionHeader("How cleanup runs"))
+
+        cleanupLocalRadio = MaterialRadioButton(this).apply {
+            isClickable = false
+            buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
+        }
+        cleanupDetailContainer.addView(
+            settingsRow("Local", "Private, runs on-device, no API key needed", cleanupLocalRadio) {
+                onSelectSimpleCleanup(SimpleCleanupChoice.LOCAL)
+            }
+        )
+        cleanupDetailContainer.addView(buildCleanupModelRow())
+
+        cleanupCloudRadio = MaterialRadioButton(this).apply {
+            isClickable = false
+            buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
+        }
+        cleanupDetailContainer.addView(
+            settingsRow("Cloud", "Uses your OpenAI API key, billed pay-per-use", cleanupCloudRadio) {
+                onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
+            }
+        )
+
+        val baseUrlRow = settingsRow("Cleanup API base URL", cleanupBaseUrl()) { promptCleanupBaseUrl() }
+        baseUrlRowSub = baseUrlRow.findViewWithTag("subtitle")
+        cleanupDetailContainer.addView(baseUrlRow)
+
+        val modelRow = settingsRow("Cleanup model name", cleanupModel()) { promptCleanupModel() }
+        modelRowSub = modelRow.findViewWithTag("subtitle")
+        cleanupDetailContainer.addView(modelRow)
+
+        cleanupChoiceCaption = TextView(this).apply {
+            text = "Doesn't match a simple choice — your existing configuration is preserved under Advanced below."
+            textSize = 12f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(8))
+            visibility = View.GONE
+        }
+        cleanupDetailContainer.addView(cleanupChoiceCaption)
+
+        // Preview-before-inject (#40) — off by default so cleanup keeps auto-injecting exactly as
+        // it always has; turning this on holds the cleaned-up candidate for a tap-to-commit instead.
+        previewBeforeInjectSwitch = MaterialSwitch(this).apply {
+            isChecked = PreviewBeforeInjectToggle.isEnabled(this@MainActivity)
+            isClickable = false
+        }
+        val previewBeforeInjectRow = settingsRow(
+            "Preview before inserting",
+            "Review the cleaned-up text and tap to insert it, instead of inserting automatically",
+            previewBeforeInjectSwitch
+        ) {
+            val newVal = !previewBeforeInjectSwitch.isChecked
+            PreviewBeforeInjectToggle.setEnabled(this, newVal)
+            previewBeforeInjectSwitch.isChecked = newVal
+        }
+        cleanupDetailContainer.addView(previewBeforeInjectRow)
+
+        // --- Advanced: full cleanup waterfall (#32/#37) — genuinely collapsed by default (#38).
+        // Additive and off by default: the simple choice above keeps working unchanged until the
+        // user adds at least one waterfall step here (see ADR-0001's "zero behavior change").
+        advancedChevron = TextView(this).apply {
+            text = "▸"
+            textSize = 18f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+        }
+        cleanupDetailContainer.addView(
+            settingsRow("Advanced", "Multi-step waterfall, credentials, fallback order (power users)", advancedChevron) {
+                toggleAdvanced()
+            }
+        )
+
+        advancedContainer = vertical(0).apply { visibility = View.GONE }
+        advancedContainer.addView(TextView(this).apply {
+            text = "Try multiple cleanup providers in order, falling through on failure. Leave empty to keep using the simple choice above."
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(8))
+        })
+
+        val omnirouteKeyRow = settingsRow("OmniRoute key", credentialSubtitle(CleanupCredentialSlot.OMNIROUTE)) {
+            promptCleanupCredential(CleanupCredentialSlot.OMNIROUTE, "OmniRoute key")
+        }
+        omnirouteKeyRowSub = omnirouteKeyRow.findViewWithTag("subtitle")
+        advancedContainer.addView(omnirouteKeyRow)
+
+        val openaiDirectKeyRow = settingsRow("Direct OpenAI key (cleanup)", credentialSubtitle(CleanupCredentialSlot.OPENAI_DIRECT)) {
+            promptCleanupCredential(CleanupCredentialSlot.OPENAI_DIRECT, "Direct OpenAI key")
+        }
+        openaiDirectKeyRowSub = openaiDirectKeyRow.findViewWithTag("subtitle")
+        advancedContainer.addView(openaiDirectKeyRow)
+
+        val anthropicDirectKeyRow = settingsRow("Direct Anthropic key", credentialSubtitle(CleanupCredentialSlot.ANTHROPIC_DIRECT)) {
+            promptCleanupCredential(CleanupCredentialSlot.ANTHROPIC_DIRECT, "Direct Anthropic key")
+        }
+        anthropicDirectKeyRowSub = anthropicDirectKeyRow.findViewWithTag("subtitle")
+        advancedContainer.addView(anthropicDirectKeyRow)
+
+        waterfallStepsContainer = vertical(0)
+        advancedContainer.addView(waterfallStepsContainer)
+
+        advancedContainer.addView(settingsRow("Add waterfall step", "OmniRoute / Direct OpenAI / Direct Anthropic / Local") {
+            promptAddOrEditStep(null) { newStep -> saveWaterfallSteps(waterfallSteps() + newStep) }
+        })
+
+        cleanupDetailContainer.addView(advancedContainer)
+        root.addView(cleanupDetailContainer)
+
+        // ============================================================
+        // Tier 3 -- Everything else (#38): clearly optional, sensible defaults, not interleaved
+        // with the required Transcription tier above.
+        // ============================================================
+        root.addView(sectionHeader("More (optional)"))
+
+        vocabularyRow = settingsRow("Personal vocabulary", vocabularySummary()) { promptVocabulary() }
+        vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
+        root.addView(vocabularyRow)
+
+        val isHistoryEnabled = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
+        historyEnabledSwitch = MaterialSwitch(this).apply {
+            isChecked = isHistoryEnabled
+            isClickable = false
+        }
+        val historyToggleRow = settingsRow(
+            "Save dictation history",
+            "Keeps past transcripts on-device so a failed insertion isn't lost",
+            historyEnabledSwitch
+        ) { onHistoryToggle(!historyEnabledSwitch.isChecked) }
+        root.addView(historyToggleRow)
+
+        root.addView(settingsRow("Dictation history", "Recover past transcripts, tap to copy") { showHistory() })
 
         // --- Streaming live preview (#29) ---
         root.addView(sectionHeader("Streaming live preview"))
@@ -166,119 +366,6 @@ class MainActivity : AppCompatActivity() {
         root.addView(streamingPreviewRow)
 
         root.addView(buildStreamingModelRow())
-
-        // --- Post-Processing Section ---
-        root.addView(sectionHeader("Post-Processing"))
-
-        val isPostProcessing = prefs().getBoolean("use_post_processing", false)
-        postProcessSwitch = MaterialSwitch(this).apply {
-            isChecked = isPostProcessing
-            isClickable = false
-        }
-        val postProcessRow = settingsRow("Cleanup transcript", cleanupSubtitle(), postProcessSwitch) {
-            val newVal = !postProcessSwitch.isChecked
-            val useLocal = prefs().getBoolean("use_local", true)
-            applyLocalCleanupChange(useLocal, newVal)
-        }
-        postProcessRowSub = postProcessRow.findViewWithTag("subtitle")
-        root.addView(postProcessRow)
-
-        promptContainer = vertical(0)
-        promptContainer.addView(sectionHeader("Style"))
-        for (preset in promptPresets()) promptContainer.addView(buildPromptRow(preset))
-        root.addView(promptContainer)
-
-        promptRow = settingsRow("Edit current prompt", currentPrompt()) { promptPostProcessing() }
-        promptRowSub = promptRow.findViewWithTag("subtitle")
-        promptRowSub.maxLines = 2
-        promptRowSub.ellipsize = android.text.TextUtils.TruncateAt.END
-        root.addView(promptRow)
-
-        vocabularyRow = settingsRow("Personal vocabulary", vocabularySummary()) { promptVocabulary() }
-        vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
-        root.addView(vocabularyRow)
-
-        // Preview-before-inject (#40) — off by default so cleanup keeps auto-injecting exactly as
-        // it always has; turning this on holds the cleaned-up candidate for a tap-to-commit instead.
-        previewBeforeInjectSwitch = MaterialSwitch(this).apply {
-            isChecked = PreviewBeforeInjectToggle.isEnabled(this@MainActivity)
-            isClickable = false
-        }
-        val previewBeforeInjectRow = settingsRow(
-            "Preview before inserting",
-            "Review the cleaned-up text and tap to insert it, instead of inserting automatically",
-            previewBeforeInjectSwitch
-        ) {
-            val newVal = !previewBeforeInjectSwitch.isChecked
-            PreviewBeforeInjectToggle.setEnabled(this, newVal)
-            previewBeforeInjectSwitch.isChecked = newVal
-        }
-        root.addView(previewBeforeInjectRow)
-
-        // --- Settings Section ---
-        root.addView(sectionHeader("Settings"))
-        
-        val keyRow = settingsRow("OpenAI API Key", "Tap to set") { promptApiKey() }
-        keyRowSub = keyRow.findViewWithTag("subtitle")
-        root.addView(keyRow)
-
-        val baseUrlRow = settingsRow("Cleanup API base URL", cleanupBaseUrl()) { promptCleanupBaseUrl() }
-        baseUrlRowSub = baseUrlRow.findViewWithTag("subtitle")
-        root.addView(baseUrlRow)
-
-        val modelRow = settingsRow("Cleanup model name", cleanupModel()) { promptCleanupModel() }
-        modelRowSub = modelRow.findViewWithTag("subtitle")
-        root.addView(modelRow)
-
-        // --- Cleanup waterfall (advanced, #32) ---
-        // Additive and off by default: the rows above keep working unchanged until the user adds
-        // at least one waterfall step here (see ADR-0001's "zero behavior change" requirement).
-        root.addView(sectionHeader("Cleanup waterfall (advanced)"))
-        root.addView(TextView(this).apply {
-            text = "Try multiple cleanup providers in order, falling through on failure. Leave empty to keep using the Cleanup API base URL/model above."
-            textSize = 14f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(8))
-        })
-
-        val omnirouteKeyRow = settingsRow("OmniRoute key", credentialSubtitle(CleanupCredentialSlot.OMNIROUTE)) {
-            promptCleanupCredential(CleanupCredentialSlot.OMNIROUTE, "OmniRoute key")
-        }
-        omnirouteKeyRowSub = omnirouteKeyRow.findViewWithTag("subtitle")
-        root.addView(omnirouteKeyRow)
-
-        val openaiDirectKeyRow = settingsRow("Direct OpenAI key (cleanup)", credentialSubtitle(CleanupCredentialSlot.OPENAI_DIRECT)) {
-            promptCleanupCredential(CleanupCredentialSlot.OPENAI_DIRECT, "Direct OpenAI key")
-        }
-        openaiDirectKeyRowSub = openaiDirectKeyRow.findViewWithTag("subtitle")
-        root.addView(openaiDirectKeyRow)
-
-        val anthropicDirectKeyRow = settingsRow("Direct Anthropic key", credentialSubtitle(CleanupCredentialSlot.ANTHROPIC_DIRECT)) {
-            promptCleanupCredential(CleanupCredentialSlot.ANTHROPIC_DIRECT, "Direct Anthropic key")
-        }
-        anthropicDirectKeyRowSub = anthropicDirectKeyRow.findViewWithTag("subtitle")
-        root.addView(anthropicDirectKeyRow)
-
-        waterfallStepsContainer = vertical(0)
-        root.addView(waterfallStepsContainer)
-
-        root.addView(settingsRow("Add waterfall step", "OmniRoute / Direct OpenAI / Direct Anthropic") {
-            promptAddOrEditStep(null) { newStep -> saveWaterfallSteps(waterfallSteps() + newStep) }
-        })
-
-        val isHistoryEnabled = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
-        historyEnabledSwitch = MaterialSwitch(this).apply {
-            isChecked = isHistoryEnabled
-            isClickable = false
-        }
-        val historyToggleRow = settingsRow(
-            "Save dictation history",
-            "Keeps past transcripts on-device so a failed insertion isn't lost",
-            historyEnabledSwitch
-        ) { onHistoryToggle(!historyEnabledSwitch.isChecked) }
-        root.addView(historyToggleRow)
-
-        root.addView(settingsRow("Dictation history", "Recover past transcripts, tap to copy") { showHistory() })
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -566,6 +653,136 @@ class MainActivity : AppCompatActivity() {
         refresh()
     }
 
+    // --- Simple Local/Cloud cleanup choice (#38) ---
+
+    private fun buildCleanupModelRow(): View {
+        val dlBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
+            text = "↓"
+            textSize = 18f
+            setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
+        }
+        val progress = LinearProgressIndicator(this).apply {
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(4)).apply { topMargin = dp(8) }
+        }
+
+        val row = settingsRow(LOCAL_CLEANUP_MODEL.name, cleanupModelSubtitle(), dlBtn) { onCleanupModelAction() }
+        val textContainer = row.getChildAt(0) as LinearLayout
+        textContainer.addView(progress)
+
+        cleanupModelSub = textContainer.findViewWithTag("subtitle")
+        cleanupModelProgress = progress
+        cleanupModelDlBtn = dlBtn
+
+        observeCleanupModelDownload()
+        refreshCleanupModelRow()
+        return row
+    }
+
+    private fun onCleanupModelAction() {
+        if (ModelDownloader.isInstalled(this, LOCAL_CLEANUP_MODEL)) return
+        if (ModelDownloadWorker.isInFlight(cleanupModelDownloadState)) return
+        ModelDownloadWorker.enqueue(this, LOCAL_CLEANUP_MODEL)
+    }
+
+    private fun observeCleanupModelDownload() {
+        WorkManager.getInstance(this)
+            .getWorkInfosForUniqueWorkLiveData(ModelDownloadWorker.workName(LOCAL_CLEANUP_MODEL.archive))
+            .observe(this) { infos -> onCleanupModelWorkInfos(infos) }
+    }
+
+    private fun onCleanupModelWorkInfos(infos: List<WorkInfo>) {
+        val info = infos.firstOrNull { !it.state.isFinished } ?: infos.firstOrNull()
+        cleanupModelDownloadState = info?.state
+
+        when (info?.state) {
+            WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> {
+                cleanupModelDlBtn.isEnabled = false
+                cleanupModelProgress.visibility = View.VISIBLE
+                val phase = info.progress.getString(ModelDownloadWorker.KEY_PHASE)
+                if (phase == ModelDownloadWorker.PHASE_EXTRACTING) {
+                    cleanupModelProgress.isIndeterminate = true
+                    cleanupModelSub.text = "Installing..."
+                } else {
+                    val pct = info.progress.getFloat(ModelDownloadWorker.KEY_PROGRESS, 0f)
+                    cleanupModelProgress.isIndeterminate = false
+                    cleanupModelProgress.progress = (pct * 100).toInt()
+                    cleanupModelSub.text =
+                        if (info.state == WorkInfo.State.ENQUEUED) "Starting download..."
+                        else "Downloading: ${(pct * 100).toInt()}%"
+                }
+            }
+            WorkInfo.State.SUCCEEDED -> {
+                cleanupModelProgress.visibility = View.GONE
+                cleanupModelDlBtn.isEnabled = true
+                if (!cleanupModelDownloadAcked) {
+                    cleanupModelDownloadAcked = true
+                    toast("${LOCAL_CLEANUP_MODEL.name} ready — tap Local above to use it for cleanup")
+                }
+                refreshCleanupModelRow()
+            }
+            WorkInfo.State.FAILED -> {
+                cleanupModelProgress.visibility = View.GONE
+                cleanupModelDlBtn.isEnabled = true
+                val err = info.outputData.getString(ModelDownloadWorker.KEY_ERROR) ?: "Unknown error"
+                cleanupModelSub.text = "Error: $err"
+            }
+            else -> {
+                cleanupModelProgress.visibility = View.GONE
+                cleanupModelDlBtn.isEnabled = true
+                refreshCleanupModelRow()
+            }
+        }
+    }
+
+    private fun refreshCleanupModelRow() {
+        val installed = ModelDownloader.isInstalled(this, LOCAL_CLEANUP_MODEL)
+        cleanupModelDlBtn.visibility = if (installed) View.GONE else View.VISIBLE
+        if (cleanupModelProgress.visibility == View.GONE) {
+            cleanupModelSub.text = cleanupModelSubtitle()
+        }
+    }
+
+    private fun cleanupModelSubtitle(): String {
+        val base = "${LOCAL_CLEANUP_MODEL.quality} · ${LOCAL_CLEANUP_MODEL.sizeMb} MB"
+        return if (ModelDownloader.isInstalled(this, LOCAL_CLEANUP_MODEL)) "$base · Installed" else base
+    }
+
+    /** Applies the user's tap on the simple Local/Cloud cleanup radio (#38) by replacing the
+     *  waterfall with the single matching step -- see [simpleCleanupChoiceFor] for how the choice
+     *  is read back. A power user's existing multi-step/custom Advanced configuration is only
+     *  ever touched by an explicit tap here, never silently overwritten by this restructure. */
+    private fun onSelectSimpleCleanup(choice: SimpleCleanupChoice) {
+        when (choice) {
+            SimpleCleanupChoice.LOCAL -> {
+                if (!ModelDownloader.isInstalled(this, LOCAL_CLEANUP_MODEL)) {
+                    toast("Download the local cleanup model first")
+                    return
+                }
+                saveWaterfallSteps(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+            }
+            SimpleCleanupChoice.CLOUD ->
+                saveWaterfallSteps(listOf(CleanupStep(CleanupStepGroup.LEGACY, PostProcessor.DEFAULT_MODEL)))
+            SimpleCleanupChoice.CUSTOM -> return
+        }
+        refreshSimpleCleanupChoice()
+    }
+
+    private fun refreshSimpleCleanupChoice() {
+        val choice = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this))
+        cleanupLocalRadio.isChecked = choice == SimpleCleanupChoice.LOCAL
+        cleanupCloudRadio.isChecked = choice == SimpleCleanupChoice.CLOUD
+        cleanupChoiceCaption.visibility = if (choice == SimpleCleanupChoice.CUSTOM) View.VISIBLE else View.GONE
+    }
+
+    /** Expands/collapses the Advanced waterfall editor (#38); always starts collapsed each time
+     *  Settings is opened, restored purely in-memory -- no persisted "was expanded" state. */
+    private fun toggleAdvanced() {
+        advancedExpanded = !advancedExpanded
+        advancedContainer.visibility = if (advancedExpanded) View.VISIBLE else View.GONE
+        advancedChevron.text = if (advancedExpanded) "▾" else "▸"
+    }
+
     // --- Prompt Rows ---
 
     private fun buildPromptRow(preset: PromptPreset): View {
@@ -639,9 +856,7 @@ class MainActivity : AppCompatActivity() {
         refreshStreamingModelRow()
 
         modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
-        promptContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
-        promptRow.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
-        vocabularyRow.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
+        cleanupDetailContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
         vocabularyRowSub.text = vocabularySummary()
 
         val apiKey = ApiKeyStore.getApiKey(this)
@@ -653,6 +868,8 @@ class MainActivity : AppCompatActivity() {
         openaiDirectKeyRowSub.text = credentialSubtitle(CleanupCredentialSlot.OPENAI_DIRECT)
         anthropicDirectKeyRowSub.text = credentialSubtitle(CleanupCredentialSlot.ANTHROPIC_DIRECT)
         refreshWaterfallSteps()
+        refreshSimpleCleanupChoice()
+        refreshCleanupModelRow()
 
         val prompt = currentPrompt()
         promptRowSub.text = prompt
@@ -697,6 +914,7 @@ class MainActivity : AppCompatActivity() {
     private fun applyLocalCleanupChange(useLocal: Boolean, usePostProcessing: Boolean) {
         val hasConsented = prefs().getBoolean(KEY_LOCAL_CLEANUP_CONSENT, false)
         if (!LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing, hasConsented)) {
+            if (usePostProcessing) CleanupBadgeVisibility.markConfigured(this)
             prefs().edit()
                 .putBoolean("use_local", useLocal)
                 .putBoolean("use_post_processing", usePostProcessing)
@@ -721,6 +939,7 @@ class MainActivity : AppCompatActivity() {
                     "grammar and punctuation. Enable cleanup anyway?"
             )
             .setPositiveButton("Enable cleanup") { _, _ ->
+                CleanupBadgeVisibility.markConfigured(this)
                 prefs().edit()
                     .putBoolean("use_local", useLocal)
                     .putBoolean("use_post_processing", true)
