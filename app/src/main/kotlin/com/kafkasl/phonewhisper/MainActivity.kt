@@ -29,6 +29,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var audioRowSub: TextView
     private lateinit var accRowSub: TextView
     private lateinit var keyRowSub: TextView
+    private lateinit var baseUrlRowSub: TextView
+    private lateinit var modelRowSub: TextView
     private lateinit var promptRowSub: TextView
     private lateinit var promptRow: LinearLayout
     private lateinit var modelContainer: LinearLayout
@@ -150,6 +152,14 @@ class MainActivity : AppCompatActivity() {
         val keyRow = settingsRow("OpenAI API Key", "Tap to set") { promptApiKey() }
         keyRowSub = keyRow.findViewWithTag("subtitle")
         root.addView(keyRow)
+
+        val baseUrlRow = settingsRow("Cleanup API base URL", cleanupBaseUrl()) { promptCleanupBaseUrl() }
+        baseUrlRowSub = baseUrlRow.findViewWithTag("subtitle")
+        root.addView(baseUrlRow)
+
+        val modelRow = settingsRow("Cleanup model name", cleanupModel()) { promptCleanupModel() }
+        modelRowSub = modelRow.findViewWithTag("subtitle")
+        root.addView(modelRow)
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -375,6 +385,8 @@ class MainActivity : AppCompatActivity() {
 
         val apiKey = ApiKeyStore.getApiKey(this)
         keyRowSub.text = if (apiKey.isBlank()) "Tap to set" else ApiKeyStore.maskForDisplay(apiKey)
+        baseUrlRowSub.text = cleanupBaseUrl()
+        modelRowSub.text = cleanupModel()
 
         val prompt = currentPrompt()
         promptRowSub.text = prompt
@@ -399,10 +411,10 @@ class MainActivity : AppCompatActivity() {
         refreshPromptRows()
     }
 
-    /** Subtitle for the cleanup toggle, always naming the actual network destination. See #23. */
+    /** Subtitle for the cleanup toggle, always naming the actual network destination. See #23, #4. */
     private fun cleanupSubtitle(): String {
         val useLocal = prefs().getBoolean("use_local", true)
-        val host = PostProcessor.DESTINATION_HOST
+        val host = PostProcessor.destinationHost(cleanupBaseUrl())
         return if (useLocal) "Sends transcript over the network to $host, even though transcription stays on-device"
         else "Sends transcript to $host to fix grammar and punctuation"
     }
@@ -434,8 +446,8 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Cleanup sends text off-device")
             .setMessage(
                 "Local transcription keeps audio on your phone, but cleanup sends the " +
-                    "transcribed text to ${PostProcessor.DESTINATION_HOST} to fix grammar and " +
-                    "punctuation. Enable cleanup anyway?"
+                    "transcribed text to ${PostProcessor.destinationHost(cleanupBaseUrl())} to fix " +
+                    "grammar and punctuation. Enable cleanup anyway?"
             )
             .setPositiveButton("Enable cleanup") { _, _ ->
                 prefs().edit()
@@ -462,6 +474,56 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Save") { _, _ ->
                 val entered = input.text.toString().trim()
                 if (entered.isNotBlank()) ApiKeyStore.setApiKey(this, entered)
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Lets the user point cleanup requests at a self-hosted OpenAI-compatible endpoint (e.g. OmniRoute). See #4. */
+    private fun promptCleanupBaseUrl() {
+        val input = EditText(this).apply {
+            hint = PostProcessor.DEFAULT_BASE_URL
+            setText(cleanupBaseUrl())
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Cleanup API base URL")
+            .setMessage("OpenAI-compatible chat completions base URL. Leave blank to use OpenAI's API.")
+            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
+            .setPositiveButton("Save") { _, _ ->
+                val entered = input.text.toString().trim()
+                if (entered.isBlank()) {
+                    prefs().edit().remove("cleanup_base_url").apply()
+                    refresh()
+                    return@setPositiveButton
+                }
+                val normalized = PostProcessor.normalizeBaseUrl(entered)
+                if (normalized == null) {
+                    toast("Invalid URL — must start with http:// or https://")
+                    return@setPositiveButton
+                }
+                prefs().edit().putString("cleanup_base_url", normalized).apply()
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun promptCleanupModel() {
+        val input = EditText(this).apply {
+            hint = PostProcessor.DEFAULT_MODEL
+            setText(cleanupModel())
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Cleanup model name")
+            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
+            .setPositiveButton("Save") { _, _ ->
+                val entered = input.text.toString().trim()
+                if (entered.isBlank()) {
+                    prefs().edit().remove("cleanup_model").apply()
+                } else {
+                    prefs().edit().putString("cleanup_model", entered).apply()
+                }
                 refresh()
             }
             .setNegativeButton("Cancel", null)
@@ -549,6 +611,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun currentPrompt() = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
     private fun customPrompt() = prefs().getString("custom_post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+    private fun cleanupBaseUrl() = prefs().getString("cleanup_base_url", PostProcessor.DEFAULT_BASE_URL) ?: PostProcessor.DEFAULT_BASE_URL
+    private fun cleanupModel() = prefs().getString("cleanup_model", PostProcessor.DEFAULT_MODEL) ?: PostProcessor.DEFAULT_MODEL
 
     private fun customPromptSummary(): String {
         val prompt = customPrompt()

@@ -24,6 +24,17 @@ If you use cloud features, your OpenAI API key is stored locally on your device 
 
 I do not operate a relay server for these requests.
 
+### Custom cleanup endpoint
+
+Cleanup can optionally be pointed at any OpenAI-compatible chat completions API instead of
+OpenAI's, by setting a custom base URL and model name in Settings (e.g. to use a self-hosted
+router such as OmniRoute). In this mode, the transcribed text is sent to whatever host you
+configure — not to OpenAI — using the same API key field as Bearer token auth. This app has no
+way to vouch for the privacy practices of a custom endpoint; that responsibility is yours as the
+person who configured it. The cleanup toggle's subtitle always names the actual destination host
+so this is never silent. If the configured endpoint is unreachable, cleanup is skipped and the
+raw transcript is used instead — no request is sent elsewhere as a fallback.
+
 ## Accessibility Service
 
 Phone Whisper uses Android Accessibility Service only to identify the currently focused text field and insert dictated text after you explicitly interact with the floating overlay button.
