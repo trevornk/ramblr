@@ -3,6 +3,7 @@ package com.kafkasl.phonewhisper
 import android.accessibilityservice.AccessibilityService
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -80,6 +81,8 @@ class WhisperAccessibilityService : AccessibilityService() {
         private const val TAP_THRESHOLD_DP = 10
         private const val RING_DP = 56
         private const val FEEDBACK_OFFSET_DP = 64
+        /** Small badge overlapping the ring's top-right corner (#34): shows/toggles the cleanup gate. */
+        private const val CLEANUP_BADGE_DP = 20
 
         /** Hold the button this long while TRANSCRIBING to cancel (see overlay.setOnTouchListener). */
         private const val LONG_PRESS_CANCEL_MS = 500L
@@ -104,6 +107,9 @@ class WhisperAccessibilityService : AccessibilityService() {
          *  from a routine success bubble instead of looking identical. */
         private const val COLOR_FEEDBACK_FALLBACK_BG = 0xEEB45309.toInt()
         private const val COLOR_RING = 0xFFE8EAED.toInt()
+        /** Cleanup-toggle badge (#34): emerald when cleanup will run, neutral grey when it's off. */
+        private const val COLOR_CLEANUP_ON = 0xFF34D399.toInt()
+        private const val COLOR_CLEANUP_OFF = 0xFF6B7280.toInt()
     }
 
     private val stateMachine = RecordingStateMachine()
@@ -111,8 +117,10 @@ class WhisperAccessibilityService : AccessibilityService() {
     private var button: ImageView? = null
     private var spinner: ProgressBar? = null
     private var feedbackView: TextView? = null
+    private var cleanupToggleView: ImageView? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var feedbackLayoutParams: WindowManager.LayoutParams? = null
+    private var cleanupToggleLayoutParams: WindowManager.LayoutParams? = null
     @Volatile private var recordingEngine: RecordingEngine? = null
     private val guard = TranscriptionGuard()
     private val inFlightCall = InFlightCall()
@@ -124,6 +132,12 @@ class WhisperAccessibilityService : AccessibilityService() {
         feedbackView?.animate()?.alpha(0f)?.setDuration(180)?.withEndAction {
             feedbackView?.visibility = View.GONE
         }?.start()
+    }
+
+    // Keeps the cleanup-toggle badge (#34) in sync the instant the toggle changes from anywhere
+    // else -- e.g. MainActivity's Settings switch -- not just taps on the badge itself.
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == PostProcessingToggle.KEY) handler.post { updateCleanupToggleAppearance() }
     }
 
     // Undo / retry-raw state (#27) — last injection only, cleared on use or expiry.
@@ -150,6 +164,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         showOverlay()
+        prefs().registerOnSharedPreferenceChangeListener(prefsListener)
         thread { cleanupOrphanedRecordings() }
         // Try to load local model in background
         thread { initLocalModel() }
@@ -168,6 +183,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             engine.awaitTeardown()
             recordingEngine = null
         }
+        prefs().unregisterOnSharedPreferenceChangeListener(prefsListener)
         guard.cancel()
         inFlightCall.cancel()
         handler.removeCallbacks(expirePendingInjection)
@@ -284,6 +300,10 @@ class WhisperAccessibilityService : AccessibilityService() {
                         positionFeedback(it, params)
                         wm.updateViewLayout(feedbackView, it)
                     }
+                    cleanupToggleLayoutParams?.let {
+                        positionCleanupToggle(it, params, ringSize)
+                        wm.updateViewLayout(cleanupToggleView, it)
+                    }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
@@ -299,6 +319,10 @@ class WhisperAccessibilityService : AccessibilityService() {
                         feedbackLayoutParams?.let {
                             positionFeedback(it, params)
                             wm.updateViewLayout(feedbackView, it)
+                        }
+                        cleanupToggleLayoutParams?.let {
+                            positionCleanupToggle(it, params, ringSize)
+                            wm.updateViewLayout(cleanupToggleView, it)
                         }
                     }
                     true
@@ -336,14 +360,41 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
         positionFeedback(feedbackParams, params)
 
+        // 1-tap cleanup on/off badge (#34): a small always-touchable dot overlapping the ring's
+        // top-right corner, so flipping the global cleanup gate never requires leaving whatever
+        // app is being dictated into, or even letting go of the drag-to-reposition affordance.
+        val cleanupToggle = ImageView(this).apply {
+            setImageResource(R.drawable.ic_cleanup)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            val badgePad = (3 * dp).toInt()
+            setPadding(badgePad, badgePad, badgePad, badgePad)
+            isClickable = true
+            setOnClickListener { onCleanupToggleTapped() }
+        }
+
+        val cleanupToggleSize = (CLEANUP_BADGE_DP * dp).toInt()
+        val cleanupToggleParams = WindowManager.LayoutParams(
+            cleanupToggleSize, cleanupToggleSize,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+        positionCleanupToggle(cleanupToggleParams, params, ringSize)
+
         wm.addView(overlay, params)
         wm.addView(feedback, feedbackParams)
+        wm.addView(cleanupToggle, cleanupToggleParams)
         overlayView = overlay
         button = img
         spinner = ring
         feedbackView = feedback
+        cleanupToggleView = cleanupToggle
         layoutParams = params
         feedbackLayoutParams = feedbackParams
+        cleanupToggleLayoutParams = cleanupToggleParams
+        updateCleanupToggleAppearance()
     }
 
     private fun removeOverlay() {
@@ -356,10 +407,15 @@ class WhisperAccessibilityService : AccessibilityService() {
             wm.removeView(it)
             feedbackView = null
         }
+        cleanupToggleView?.let {
+            wm.removeView(it)
+            cleanupToggleView = null
+        }
         button = null
         spinner = null
         layoutParams = null
         feedbackLayoutParams = null
+        cleanupToggleLayoutParams = null
     }
 
     private fun circle(color: Int) = GradientDrawable().apply {
@@ -428,6 +484,49 @@ class WhisperAccessibilityService : AccessibilityService() {
             params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         }
         (getSystemService(WINDOW_SERVICE) as WindowManager).updateViewLayout(view, params)
+    }
+
+    /** Keeps the cleanup badge (#34) glued to the ring's top-right corner as the bubble is dragged. */
+    private fun positionCleanupToggle(
+        toggleParams: WindowManager.LayoutParams,
+        bubbleParams: WindowManager.LayoutParams,
+        ringSize: Int
+    ) {
+        val badgeSize = (CLEANUP_BADGE_DP * dp).toInt()
+        val margin = (MARGIN_DP * dp).toInt()
+        toggleParams.x = (bubbleParams.x + ringSize - badgeSize * 3 / 4)
+            .coerceIn(margin, screenW - badgeSize - margin)
+        toggleParams.y = (bubbleParams.y - badgeSize / 3).coerceIn(margin, screenH - badgeSize - margin)
+    }
+
+    /** Reflects the current [PostProcessingToggle] state on the badge: green when cleanup will run
+     *  on the next dictation, grey when it's off. */
+    private fun updateCleanupToggleAppearance() {
+        val view = cleanupToggleView ?: return
+        val enabled = PostProcessingToggle.isEnabled(this)
+        view.background = circle(if (enabled) COLOR_CLEANUP_ON else COLOR_CLEANUP_OFF)
+        view.alpha = if (enabled) 1f else 0.6f
+    }
+
+    /**
+     * 1-tap flip of the global cleanup gate (#34). Turning it OFF is always instant. Turning it ON
+     * respects the existing local-transcription + cleanup consent gate (#23) instead of silently
+     * bypassing it -- if consent hasn't been given yet, this sends the user to Settings once rather
+     * than starting to send local transcripts off-device without the warning they'd get there.
+     */
+    private fun onCleanupToggleTapped() {
+        val enabling = !PostProcessingToggle.isEnabled(this)
+        if (enabling) {
+            val useLocal = prefs().getBoolean("use_local", true)
+            val hasConsented = prefs().getBoolean("local_cleanup_consent_seen", false)
+            if (LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing = true, hasConsented = hasConsented)) {
+                toast("Enable cleanup once in Ramblr settings first")
+                return
+            }
+        }
+        PostProcessingToggle.setEnabled(this, enabling)
+        updateCleanupToggleAppearance()
+        showFeedback(if (enabling) "Cleanup on" else "Cleanup off", durationMs = 1200)
     }
 
     private fun startPulse() {
@@ -627,7 +726,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             return
         }
 
-        val usePostProcessing = prefs().getBoolean("use_post_processing", false)
+        val usePostProcessing = PostProcessingToggle.shouldRunCleanup(PostProcessingToggle.isEnabled(this))
         val apiKey = ApiKeyStore.getApiKey(this)
 
         if (usePostProcessing) {
