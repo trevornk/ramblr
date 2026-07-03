@@ -22,6 +22,16 @@ package com.kafkasl.phonewhisper
 enum class CleanupStepGroup { LEGACY, OMNIROUTE, OPENAI_DIRECT, ANTHROPIC_DIRECT, LOCAL_LLM }
 
 /**
+ * True for the groups that are billed per-token out of the user's own wallet (see ADR-0001's
+ * "served by paid fallback" badge, issue #33). OMNIROUTE is subscription-billed -- effectively
+ * free at the margin despite being a network fallback -- and LEGACY/LOCAL_LLM have no
+ * incremental cost either, so only the two direct-provider groups count as a "paid fallback"
+ * from the user's cost perspective.
+ */
+fun CleanupStepGroup.isPaidFallback(): Boolean =
+    this == CleanupStepGroup.OPENAI_DIRECT || this == CleanupStepGroup.ANTHROPIC_DIRECT
+
+/**
  * One entry in the user-configured cleanup waterfall. [group] determines which credential and
  * base host this step uses; [model] is the model string sent to that provider (e.g.
  * "claude/claude-sonnet-4-6" for an OmniRoute step, "gpt-4o-mini" for a direct-OpenAI step).

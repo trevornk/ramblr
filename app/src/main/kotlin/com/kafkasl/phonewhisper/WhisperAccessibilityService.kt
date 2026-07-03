@@ -976,11 +976,12 @@ class WhisperAccessibilityService : AccessibilityService() {
                 handler.post {
                     if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                     if (result.text != null && result.text.isNotBlank()) {
-                        recordWaterfallSuccess(waterfall)
+                        val servingGroup = recordWaterfallSuccess(waterfall)
+                        val paidFallbackGroup = servingGroup?.takeIf { it.isPaidFallback() }
                         if (PreviewBeforeInjectToggle.isEnabled(this)) {
-                            beginPreview(rawText = text, candidateText = result.text)
+                            beginPreview(rawText = text, candidateText = result.text, paidFallbackGroup = paidFallbackGroup)
                         } else {
-                            injectText(result.text, rawText = text)
+                            injectText(result.text, rawText = text, paidFallbackGroup = paidFallbackGroup)
                         }
                     } else {
                         injectText(text, feedback = "Cleanup failed — raw copied to clipboard", feedbackDurationMs = 3000)
@@ -998,18 +999,20 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     /** Marks whichever step of [waterfall] just served this cleanup call as healthy (#32), so the
-     *  Settings status dot reflects real usage, not just a Test-button press. Which step that was
-     *  isn't threaded through [PostProcessor.processWaterfall]'s callback, so it's inferred from
-     *  [cleanupCursor]'s last-known-good index instead -- safe to read immediately after a success
-     *  since [CleanupWaterfallCursor.recordSuccess] was just called with "now", well inside the
-     *  idle-expiry window [CleanupWaterfallCursor.startIndex] checks. A total-waterfall failure is
-     *  deliberately not attributed to any one step here, since several steps may have failed for
-     *  different reasons -- the Settings "Test" button is the deterministic way to pin down which. */
-    private fun recordWaterfallSuccess(waterfall: CleanupWaterfall) {
+     *  Settings status dot reflects real usage, not just a Test-button press, and returns that
+     *  step's group so callers can attribute the result for dictation history's "paid fallback"
+     *  badge (#33). Which step that was isn't threaded through [PostProcessor.processWaterfall]'s
+     *  callback, so it's inferred from [cleanupCursor]'s last-known-good index instead -- safe to
+     *  read immediately after a success since [CleanupWaterfallCursor.recordSuccess] was just
+     *  called with "now", well inside the idle-expiry window [CleanupWaterfallCursor.startIndex]
+     *  checks. A total-waterfall failure is deliberately not attributed to any one step here,
+     *  since several steps may have failed for different reasons -- the Settings "Test" button is
+     *  the deterministic way to pin down which. */
+    private fun recordWaterfallSuccess(waterfall: CleanupWaterfall): CleanupStepGroup? {
         val succeededIndex = cleanupCursor.startIndex(System.currentTimeMillis())
-        waterfall.steps.getOrNull(succeededIndex)?.let {
-            CleanupStepStatusStore.record(this, it, CleanupStepHealth.SUCCESS)
-        }
+        val step = waterfall.steps.getOrNull(succeededIndex) ?: return null
+        CleanupStepStatusStore.record(this, step, CleanupStepHealth.SUCCESS)
+        return step.group
     }
 
     // --- Preview-before-inject (#40) ---
@@ -1021,10 +1024,10 @@ class WhisperAccessibilityService : AccessibilityService() {
      * to [rawText] (see [CleanupPreviewState]). Any earlier still-pending preview is resolved as a
      * timeout first, so a fast second dictation never silently drops the first one.
      */
-    private fun beginPreview(rawText: String, candidateText: String) {
+    private fun beginPreview(rawText: String, candidateText: String, paidFallbackGroup: CleanupStepGroup? = null) {
         pendingPreview?.let { resolvePreview { p -> p.timeout() } }
 
-        pendingPreview = CleanupPreviewState(rawText, candidateText)
+        pendingPreview = CleanupPreviewState(rawText, candidateText, paidFallbackGroup)
         handler.postDelayed(previewTimeoutRunnable, PREVIEW_TIMEOUT_MS)
 
         val truncated = candidateText.take(PREVIEW_PREVIEW_CHARS)
@@ -1039,7 +1042,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         handler.removeCallbacks(previewTimeoutRunnable)
         val resolution = action(preview)
         if (resolution.committed) {
-            injectText(resolution.textToInject, rawText = preview.rawText)
+            injectText(resolution.textToInject, rawText = preview.rawText, paidFallbackGroup = preview.paidFallbackGroup)
         } else {
             injectText(resolution.textToInject, feedback = "Cleanup skipped — raw copied to clipboard")
         }
@@ -1150,12 +1153,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         text: String,
         rawText: String? = null,
         feedback: String? = "Copied to clipboard",
-        feedbackDurationMs: Long = 2000
+        feedbackDurationMs: Long = 2000,
+        paidFallbackGroup: CleanupStepGroup? = null
     ) {
         handler.removeCallbacks(clearClipboard)
         pendingInjectionRetry?.let { handler.removeCallbacks(it) }
         pendingInjectionRetry = null
-        recordHistory(rawText ?: text, cleanedText = if (rawText != null) text else null)
+        recordHistory(rawText ?: text, cleanedText = if (rawText != null) text else null, paidFallbackGroup = paidFallbackGroup)
 
         val priorClipboard = currentClipboardText()
         ClipboardUtil.copy(this, text)
@@ -1345,12 +1349,12 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     /** Persists the transcript to local history off the main thread, right as it's handed off
      *  for injection/clipboard-copy, so a failed injection still leaves it recoverable (#25). */
-    private fun recordHistory(rawText: String, cleanedText: String?) {
+    private fun recordHistory(rawText: String, cleanedText: String?, paidFallbackGroup: CleanupStepGroup? = null) {
         if (!prefs().getBoolean("dictation_history_enabled", true)) return
         val timestamp = System.currentTimeMillis()
         thread {
             try {
-                historyStore.add(DictationHistoryEntry(timestamp, rawText, cleanedText))
+                historyStore.add(DictationHistoryEntry(timestamp, rawText, cleanedText, paidFallbackGroup))
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to record dictation history", e)
             }

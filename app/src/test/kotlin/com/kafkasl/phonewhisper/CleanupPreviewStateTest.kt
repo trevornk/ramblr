@@ -69,4 +69,18 @@ class CleanupPreviewStateTest {
         val state = CleanupPreviewState(rawText = "raw", candidateText = "")
         assertEquals("", state.commit().textToInject)
     }
+
+    @Test fun `paidFallbackGroup defaults to null`() {
+        val state = CleanupPreviewState(rawText = "raw", candidateText = "cleaned")
+        assertEquals(null, state.paidFallbackGroup)
+    }
+
+    @Test fun `paidFallbackGroup is carried through unchanged for the caller to read after commit`() {
+        // #33: which group served the candidate is decided by the caller before the preview even
+        // starts (see WhisperAccessibilityService.beginPreview) -- this state machine just carries
+        // it, it doesn't attach it to PreviewResolution since it's only meaningful on commit.
+        val state = CleanupPreviewState(rawText = "raw", candidateText = "cleaned", paidFallbackGroup = CleanupStepGroup.OPENAI_DIRECT)
+        state.commit()
+        assertEquals(CleanupStepGroup.OPENAI_DIRECT, state.paidFallbackGroup)
+    }
 }

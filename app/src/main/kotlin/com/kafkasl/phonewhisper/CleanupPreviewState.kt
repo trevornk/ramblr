@@ -22,8 +22,12 @@ data class PreviewResolution(val textToInject: String, val committed: Boolean)
  * are no-ops that return the original outcome. This matters for the real caller
  * ([WhisperAccessibilityService]), which can't always guarantee a stray timeout callback won't
  * fire after a tap already resolved the preview, or vice versa.
+ *
+ * [paidFallbackGroup] carries which waterfall group produced [candidateText], if it was a paid
+ * one (#33) -- only meaningful on [commit], since [discard]/[timeout] fall back to [rawText],
+ * which was never touched by cleanup.
  */
-class CleanupPreviewState(val rawText: String, val candidateText: String) {
+class CleanupPreviewState(val rawText: String, val candidateText: String, val paidFallbackGroup: CleanupStepGroup? = null) {
     var resolution: PreviewResolution? = null
         private set
 
