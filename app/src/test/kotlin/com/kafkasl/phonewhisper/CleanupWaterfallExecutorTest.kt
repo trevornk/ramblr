@@ -300,6 +300,82 @@ class CleanupWaterfallExecutorTest {
         assertEquals("anthropic result", result.text)
         assertEquals(AnthropicCleanupProvider.ENDPOINT_URL, transport.requestedUrls.single())
     }
+
+    /** Per ADR-0001, every non-2xx status is an immediate, non-retried step failure -- no
+     *  provider-specific status-code handling. These confirm the Anthropic step participates in
+     *  that shared classification like every other provider: 401/429/5xx all just fall through
+     *  to the next step, and a connection-level failure is classified separately. */
+    @Test fun `a 401 from the Anthropic step falls through to the next step, no retry`() {
+        val transport = FakeCleanupHttpTransport(
+            mutableListOf(
+                CleanupHttpOutcome.HttpError(401, """{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"""),
+                okOutcome("cleaned via fallback"),
+            )
+        )
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.ANTHROPIC_DIRECT, "claude-haiku-4-5"),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+        val result = execute(waterfall, transport)
+        assertEquals("cleaned via fallback", result.text)
+        assertEquals(2, transport.requestedUrls.size)
+    }
+
+    @Test fun `a 429 from the Anthropic step falls through immediately without honoring Retry-After`() {
+        val transport = FakeCleanupHttpTransport(
+            mutableListOf(
+                CleanupHttpOutcome.HttpError(429, """{"type":"error","error":{"type":"rate_limit_error","message":"rate limited"}}"""),
+                okOutcome("cleaned via fallback"),
+            )
+        )
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.ANTHROPIC_DIRECT, "claude-haiku-4-5"),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+        val result = execute(waterfall, transport)
+        assertEquals("cleaned via fallback", result.text)
+        assertEquals(2, transport.requestedUrls.size)
+    }
+
+    @Test fun `a 5xx from the Anthropic step falls through to the next step`() {
+        val transport = FakeCleanupHttpTransport(
+            mutableListOf(
+                CleanupHttpOutcome.HttpError(529, """{"type":"error","error":{"type":"overloaded_error","message":"overloaded"}}"""),
+                okOutcome("cleaned via fallback"),
+            )
+        )
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.ANTHROPIC_DIRECT, "claude-haiku-4-5"),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+        val result = execute(waterfall, transport)
+        assertEquals("cleaned via fallback", result.text)
+        assertEquals(2, transport.requestedUrls.size)
+    }
+
+    @Test fun `a network timeout on the Anthropic step is classified as a connection failure and falls through`() {
+        val transport = FakeCleanupHttpTransport(
+            mutableListOf(
+                CleanupHttpOutcome.ConnectionFailure("timeout"),
+                okOutcome("cleaned via fallback"),
+            )
+        )
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.ANTHROPIC_DIRECT, "claude-haiku-4-5"),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+        val result = execute(waterfall, transport)
+        assertEquals("cleaned via fallback", result.text)
+        assertEquals(2, transport.requestedUrls.size)
+    }
 }
 
 /** LOCAL_LLM step-sequencing behavior (#37) -- exercises the executor's fakeable seam over

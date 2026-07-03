@@ -30,6 +30,34 @@ class AnthropicCleanupProviderTest {
         assertNull(result.error)
     }
 
+    @Test fun `parses a real full response envelope, not just a stripped-down content array`() {
+        // Full shape a live /v1/messages call actually returns, including fields this parser
+        // doesn't need (id, type, role, model, stop_reason, usage) -- confirms their presence
+        // doesn't break extraction of the text block.
+        val json = """
+            {
+              "id": "msg_01ABC",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-haiku-4-5-20251001",
+              "content": [{"type": "text", "text": "cleaned up text"}],
+              "stop_reason": "end_turn",
+              "stop_sequence": null,
+              "usage": {"input_tokens": 42, "output_tokens": 7}
+            }
+        """.trimIndent()
+        val result = AnthropicCleanupProvider.parseResponse(json)
+        assertEquals("cleaned up text", result.text)
+        assertNull(result.error)
+    }
+
+    @Test fun `a max_tokens stop_reason still extracts the truncated text rather than failing`() {
+        val json = """{"content":[{"type":"text","text":"cleaned up but cut off"}],"stop_reason":"max_tokens"}"""
+        val result = AnthropicCleanupProvider.parseResponse(json)
+        assertEquals("cleaned up but cut off", result.text)
+        assertNull(result.error)
+    }
+
     @Test fun `parses an Anthropic error response`() {
         val json = """{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"""
         val result = AnthropicCleanupProvider.parseResponse(json)
