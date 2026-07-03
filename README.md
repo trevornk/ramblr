@@ -42,6 +42,9 @@ git clone https://github.com/trevornk/ramblr.git && cd ramblr
 make build
 ```
 
+The build automatically downloads the sherpa-onnx native libs (`libsherpa-onnx-jni.so`,
+`libonnxruntime.so`) it needs for local transcription — no manual step required.
+
 APK output:
 
 ```bash
