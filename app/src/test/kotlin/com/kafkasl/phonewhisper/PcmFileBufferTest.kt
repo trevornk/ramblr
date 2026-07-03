@@ -64,4 +64,60 @@ class PcmFileBufferTest {
         buffer.deleteFile()
         assertFalse(file.exists())
     }
+
+    // -- readAsFloatArray --
+
+    private fun writePcm16(file: File, samples: ShortArray) {
+        val bytes = ByteArray(samples.size * 2)
+        samples.forEachIndexed { i, s ->
+            bytes[i * 2] = (s.toInt() and 0xFF).toByte()
+            bytes[i * 2 + 1] = (s.toInt() shr 8 and 0xFF).toByte()
+        }
+        file.writeBytes(bytes)
+    }
+
+    @Test fun `readAsFloatArray converts an empty file to an empty array`() {
+        val file = tempFile()
+        assertArrayEquals(FloatArray(0), PcmFileBuffer.readAsFloatArray(file), 0f)
+    }
+
+    @Test fun `readAsFloatArray converts known 16-bit samples to normalized floats`() {
+        val file = tempFile()
+        writePcm16(file, shortArrayOf(0, Short.MAX_VALUE, Short.MIN_VALUE, -1))
+
+        val samples = PcmFileBuffer.readAsFloatArray(file)
+
+        assertEquals(4, samples.size)
+        assertEquals(0f, samples[0], 1e-6f)
+        assertEquals(Short.MAX_VALUE.toFloat() / 32768f, samples[1], 1e-6f)
+        assertEquals(Short.MIN_VALUE.toFloat() / 32768f, samples[2], 1e-6f)
+        assertEquals(-1f / 32768f, samples[3], 1e-6f)
+    }
+
+    @Test fun `readAsFloatArray handles a file larger than one internal chunk`() {
+        val file = tempFile()
+        // One 16-bit sample per index, cycling through a range of values, spanning several
+        // internal 64KB read chunks (CHUNK_BYTES / 2 samples per chunk).
+        val count = 100_000
+        val samples = ShortArray(count) { (it % 30000).toShort() }
+        writePcm16(file, samples)
+
+        val result = PcmFileBuffer.readAsFloatArray(file)
+
+        assertEquals(count, result.size)
+        for (i in samples.indices step 4999) {
+            assertEquals(samples[i].toFloat() / 32768f, result[i], 1e-6f)
+        }
+    }
+
+    @Test fun `readAsFloatArray truncates a trailing odd byte`() {
+        val file = tempFile()
+        writePcm16(file, shortArrayOf(42))
+        file.appendBytes(byteArrayOf(7)) // dangling half-sample
+
+        val result = PcmFileBuffer.readAsFloatArray(file)
+
+        assertEquals(1, result.size)
+        assertEquals(42f / 32768f, result[0], 1e-6f)
+    }
 }
