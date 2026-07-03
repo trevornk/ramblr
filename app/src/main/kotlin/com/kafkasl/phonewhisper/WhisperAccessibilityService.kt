@@ -96,8 +96,10 @@ class WhisperAccessibilityService : AccessibilityService() {
         private const val TAP_THRESHOLD_DP = 10
         private const val RING_DP = 56
         private const val FEEDBACK_OFFSET_DP = 64
-        /** Small badge overlapping the ring's top-right corner (#34): shows/toggles the cleanup gate. */
-        private const val CLEANUP_BADGE_DP = 20
+        /** Small badge overlapping the ring's top-right corner (#34): shows/toggles the cleanup gate.
+         *  Sized and bordered for at-a-glance visibility even in its OFF/grey state (Trevor found the
+         *  original 20dp unbordered dot too easy to miss against the ring/background in practice). */
+        private const val CLEANUP_BADGE_DP = 28
 
         /** Hold the button this long while TRANSCRIBING to cancel (see overlay.setOnTouchListener). */
         private const val LONG_PRESS_CANCEL_MS = 500L
@@ -467,6 +469,14 @@ class WhisperAccessibilityService : AccessibilityService() {
         shape = GradientDrawable.OVAL; setColor(color)
     }
 
+    /** Same as [circle] but with a white border, used for small badges (the #34 cleanup toggle)
+     *  that need to read clearly against both the dark ring and whatever's behind it on-screen. */
+    private fun circleWithBorder(color: Int) = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL
+        setColor(color)
+        setStroke((2 * dp).toInt(), 0xFFFFFFFF.toInt())
+    }
+
     private fun pill(color: Int) = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
         cornerRadius = 16 * dp
@@ -545,12 +555,14 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     /** Reflects the current [PostProcessingToggle] state on the badge: green when cleanup will run
-     *  on the next dictation, grey when it's off. */
+     *  on the next dictation, grey when it's off. A white border keeps it visible against both the
+     *  dark ring and light backgrounds in either state -- alpha is no longer used to signal OFF
+     *  (color contrast alone does that job) since a dimmed badge was too easy to overlook. */
     private fun updateCleanupToggleAppearance() {
         val view = cleanupToggleView ?: return
         val enabled = PostProcessingToggle.isEnabled(this)
-        view.background = circle(if (enabled) COLOR_CLEANUP_ON else COLOR_CLEANUP_OFF)
-        view.alpha = if (enabled) 1f else 0.6f
+        view.background = circleWithBorder(if (enabled) COLOR_CLEANUP_ON else COLOR_CLEANUP_OFF)
+        view.alpha = 1f
     }
 
     /**
