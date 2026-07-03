@@ -870,6 +870,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     /** Persists the transcript to local history off the main thread, right as it's handed off
      *  for injection/clipboard-copy, so a failed injection still leaves it recoverable (#25). */
     private fun recordHistory(rawText: String, cleanedText: String?) {
+        if (!prefs().getBoolean("dictation_history_enabled", true)) return
         val timestamp = System.currentTimeMillis()
         thread {
             try {
