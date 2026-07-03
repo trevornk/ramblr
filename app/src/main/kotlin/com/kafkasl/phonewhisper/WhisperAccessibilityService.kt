@@ -88,11 +88,20 @@ class WhisperAccessibilityService : AccessibilityService() {
         private const val CLIPBOARD_CLEAR_DELAY_MS = 30_000L
         /** How long "undo last insertion" / "retry with raw text" stay available after an injection (#27). */
         private const val UNDO_RETRY_WINDOW_MS = 10_000L
+        /** Delay before rescanning once if the first candidate scan comes up empty (#5) — long enough
+         *  for a transient post-tap focus race to settle, short enough not to feel laggy. */
+        private const val INJECTION_RETRY_DELAY_MS = 200L
+        /** Clipboard-fallback feedback stays up much longer than a normal success bubble (#5): it's
+         *  the only record the user gets that injection didn't happen, so it shouldn't be easy to miss. */
+        private const val FALLBACK_FEEDBACK_DURATION_MS = 6000L
 
         private const val COLOR_IDLE = 0xDD1C1C1E.toInt()
         private const val COLOR_RECORDING = 0xDDEF4444.toInt()
         private const val COLOR_BUSY = 0xDD6B6B6B.toInt()
         private const val COLOR_FEEDBACK_BG = 0xEE1C1C1E.toInt()
+        /** Warmer/brighter than [COLOR_FEEDBACK_BG] so a clipboard-fallback (#5) visually stands out
+         *  from a routine success bubble instead of looking identical. */
+        private const val COLOR_FEEDBACK_FALLBACK_BG = 0xEEB45309.toInt()
         private const val COLOR_RING = 0xFFE8EAED.toInt()
     }
 
@@ -118,6 +127,13 @@ class WhisperAccessibilityService : AccessibilityService() {
     // Undo / retry-raw state (#27) — last injection only, cleared on use or expiry.
     private var pendingInjection: PendingInjection? = null
     private val expirePendingInjection = Runnable { clearPendingInjection() }
+
+    // Empty-scan retry (#5) — at most one in flight, cancelled if the service tears down first.
+    private var pendingInjectionRetry: Runnable? = null
+
+    // Text last delivered via clipboard-only fallback (#5); backs the feedback bubble's "tap to
+    // copy again" affordance. Null whenever the last injection wasn't a fallback.
+    private var fallbackClipboardText: String? = null
 
     // Local transcription engine (loaded lazily)
     private val transcriberSlot = TranscriberSlot<LocalTranscriber> { it.release() }
@@ -155,6 +171,8 @@ class WhisperAccessibilityService : AccessibilityService() {
         handler.removeCallbacks(expirePendingInjection)
         pendingInjection?.node?.recycle()
         pendingInjection = null
+        pendingInjectionRetry?.let { handler.removeCallbacks(it) }
+        pendingInjectionRetry = null
         removeOverlay()
         super.onDestroy()
     }
@@ -291,8 +309,9 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Tapping the feedback bubble retries with the raw (pre-cleanup) transcript (#27); only
-        // touchable while that's actually on offer — see setFeedbackTouchable.
+        // Tapping the feedback bubble either retries with the raw (pre-cleanup) transcript (#27)
+        // or, on a clipboard fallback, re-copies the text (#5); only touchable while one of those
+        // is actually on offer — see setFeedbackTouchable.
         val feedback = TextView(this).apply {
             textSize = 13f
             setTextColor(0xFFFFFFFF.toInt())
@@ -301,7 +320,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             alpha = 0f
             visibility = View.GONE
             isClickable = true
-            setOnClickListener { retryWithRawText() }
+            setOnClickListener { onFeedbackTapped() }
         }
 
         val feedbackParams = WindowManager.LayoutParams(
@@ -371,15 +390,16 @@ class WhisperAccessibilityService : AccessibilityService() {
         feedbackParams.y = maxOf(margin, bubbleParams.y - margin)
     }
 
-    private fun showFeedback(text: String, durationMs: Long = 2000, allowRetryRaw: Boolean = false) {
+    private fun showFeedback(text: String, durationMs: Long = 2000, touchable: Boolean = false, isFallback: Boolean = false) {
         handler.post {
             val view = feedbackView ?: return@post
             val bubbleParams = layoutParams ?: return@post
             val feedbackParams = feedbackLayoutParams ?: return@post
             val wm = getSystemService(WINDOW_SERVICE) as WindowManager
 
-            view.text = if (allowRetryRaw) "$text · tap to use raw text" else text
-            setFeedbackTouchable(allowRetryRaw)
+            view.text = text
+            view.background = pill(if (isFallback) COLOR_FEEDBACK_FALLBACK_BG else COLOR_FEEDBACK_BG)
+            setFeedbackTouchable(touchable)
             positionFeedback(feedbackParams, bubbleParams)
             wm.updateViewLayout(view, feedbackParams)
 
@@ -394,7 +414,8 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     /**
      * The feedback bubble is normally FLAG_NOT_TOUCHABLE so it never steals taps from the app
-     * underneath; it's made touchable only while "retry with raw text" is on offer (#27).
+     * underneath; it's made touchable only while "retry with raw text" (#27) or "copy again" (#5)
+     * is on offer.
      */
     private fun setFeedbackTouchable(touchable: Boolean) {
         val view = feedbackView ?: return
@@ -662,12 +683,40 @@ class WhisperAccessibilityService : AccessibilityService() {
         feedbackDurationMs: Long = 2000
     ) {
         handler.removeCallbacks(clearClipboard)
+        pendingInjectionRetry?.let { handler.removeCallbacks(it) }
+        pendingInjectionRetry = null
         recordHistory(rawText ?: text, cleanedText = if (rawText != null) text else null)
 
         val priorClipboard = currentClipboardText()
         ClipboardUtil.copy(this, text)
 
         val candidates = findInjectionCandidates()
+
+        // A tap that just stole focus from the target field can leave the very next scan seeing no
+        // focused/editable node; one short rescan (#5) rescues that transient case without adding a
+        // real delay to the common case where a candidate is already there.
+        if (shouldRetryEmptyScan(candidates.size)) {
+            Log.i(TAG, "No injection candidates on first scan; retrying in ${INJECTION_RETRY_DELAY_MS}ms")
+            val retry = Runnable {
+                pendingInjectionRetry = null
+                finishInjection(findInjectionCandidates(), text, rawText, priorClipboard, feedback, feedbackDurationMs)
+            }
+            pendingInjectionRetry = retry
+            handler.postDelayed(retry, INJECTION_RETRY_DELAY_MS)
+            return
+        }
+
+        finishInjection(candidates, text, rawText, priorClipboard, feedback, feedbackDurationMs)
+    }
+
+    private fun finishInjection(
+        candidates: List<AccessibilityNodeInfo>,
+        text: String,
+        rawText: String?,
+        priorClipboard: String?,
+        feedback: String?,
+        feedbackDurationMs: Long
+    ) {
         Log.i(TAG, "Injecting text into ${candidates.size} candidate node(s)")
 
         var method = InjectMethod.NONE
@@ -691,8 +740,21 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         updatePendingInjection(method, injectedText = text, rawText = rawText ?: text, priorClipboard, priorNodeText, injectedNode)
 
-        val retryOffered = method != InjectMethod.NONE && rawText != null && rawText != text
-        feedback?.let { showFeedback(it, if (retryOffered) UNDO_RETRY_WINDOW_MS else feedbackDurationMs, allowRetryRaw = retryOffered) }
+        val retryRawOffered = method != InjectMethod.NONE && rawText != null && rawText != text
+        val isFallback = method == InjectMethod.NONE
+        fallbackClipboardText = if (isFallback) text else null
+
+        val suffix = when {
+            retryRawOffered -> " · tap to use raw text"
+            isFallback -> " · tap to copy again"
+            else -> ""
+        }
+        val duration = when {
+            retryRawOffered -> UNDO_RETRY_WINDOW_MS
+            isFallback -> FALLBACK_FEEDBACK_DURATION_MS
+            else -> feedbackDurationMs
+        }
+        feedback?.let { showFeedback(it + suffix, duration, touchable = retryRawOffered || isFallback, isFallback = isFallback) }
 
         when (val action = clipboardClearActionFor(method, CLIPBOARD_CLEAR_DELAY_MS)) {
             ClipboardClearAction.Immediate -> clearPrimaryClip()
@@ -784,12 +846,25 @@ class WhisperAccessibilityService : AccessibilityService() {
         return samePackage
     }
 
-    /** Tap-the-feedback-bubble affordance (#27): re-injects the pre-cleanup transcript. */
-    private fun retryWithRawText() {
-        val pending = pendingInjection ?: return
-        val ageMs = System.currentTimeMillis() - pending.timestamp
-        if (!canRetryRaw(ageMs, UNDO_RETRY_WINDOW_MS, pending.rawText, pending.injectedText)) return
-        injectText(pending.rawText, feedback = "Raw text copied", feedbackDurationMs = 2000)
+    /**
+     * Tap-the-feedback-bubble affordance: re-injects the pre-cleanup transcript when cleanup ran
+     * (#27), or re-copies the transcript to the clipboard when the last injection was a clipboard
+     * fallback (#5). The two never overlap — [fallbackClipboardText] is only set when the last
+     * injection method was NONE, and raw retry requires a successful injection.
+     */
+    private fun onFeedbackTapped() {
+        val pending = pendingInjection
+        if (pending != null) {
+            val ageMs = System.currentTimeMillis() - pending.timestamp
+            if (canRetryRaw(ageMs, UNDO_RETRY_WINDOW_MS, pending.rawText, pending.injectedText)) {
+                injectText(pending.rawText, feedback = "Raw text copied", feedbackDurationMs = 2000)
+                return
+            }
+        }
+        fallbackClipboardText?.let {
+            ClipboardUtil.copy(this, it)
+            toast("Copied to clipboard")
+        }
     }
 
     /** Persists the transcript to local history off the main thread, right as it's handed off
