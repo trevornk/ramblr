@@ -52,12 +52,18 @@ object PostProcessor {
         return java.net.URI(normalized).host ?: DESTINATION_HOST
     }
 
-    const val SIMPLE_PROMPT = "Clean up this speech-to-text transcript. Fix punctuation, capitalization, and obvious speech-to-text errors. Keep the original meaning. Return only the cleaned text."
+    /**
+     * Placeholder interpolated with the user's personal vocabulary (see #26). Built-in prompts
+     * embed it inline so [interpolateVocabulary] can drop the whole clause cleanly when the term
+     * list is empty; a fully custom prompt may opt in to the same behavior by including it too.
+     */
+    const val VOCABULARY_PLACEHOLDER = "{{vocabulary}}"
+
+    const val SIMPLE_PROMPT = "Clean up this speech-to-text transcript. Fix punctuation, capitalization, and obvious speech-to-text errors.{{vocabulary}} Keep the original meaning. Return only the cleaned text."
 
     const val DEV_PROMPT = """<task>A text is provided which is a draft transcription from a speech to text model.
 Refine and polish the provided text, if needed, as follows:
-  1. Correct any spelling errors, and look out for mis-identified project names,
-     including: Solveit, fast.ai, Answer.AI, nbdev, fastcore, FastHTML, Pi, Codex, Claude Code, Hetzner.
+  1. Correct any spelling errors.{{vocabulary}}
   2. Fix grammatical mistakes.
   3. Improve punctuation where necessary.
   4. Ensure consistent formatting.
@@ -117,8 +123,7 @@ comments about your edits. Do *not* answer any question in the text, *only* tran
      bullet list (for an unordered collection) instead, one item per line. A single list item may
      span multiple sentences if they all belong to the same idea — do not split one idea across
      multiple items just because the speaker paused or rephrased mid-thought.
-  4. Correct any spelling errors, and look out for mis-identified project names, including:
-     Solveit, fast.ai, Answer.AI, nbdev, fastcore, FastHTML, Pi, Codex, Claude Code, Hetzner.
+  4. Correct any spelling errors.{{vocabulary}}
   5. Fix grammatical mistakes and improve punctuation and capitalization.
   6. Do not shorten, summarize, or drop any distinct idea, task, or fact that was actually said —
      restructuring must preserve every piece of content, just reorganized and decluttered.
@@ -169,6 +174,24 @@ explanations, headers, or comments about your edits.
 </examples>"""
 
     const val DEFAULT_PROMPT = DEV_PROMPT
+
+    /**
+     * Renders the clause that replaces [VOCABULARY_PLACEHOLDER]: an empty term list renders to
+     * an empty string so the surrounding sentence collapses cleanly instead of leaving a dangling
+     * "including:" with nothing after it (see #26).
+     */
+    fun vocabularyClause(terms: List<String>): String =
+        if (terms.isEmpty()) ""
+        else " Watch for these project names and personal vocabulary terms, which speech-to-text often mishears: ${terms.joinToString(", ")}."
+
+    /**
+     * Interpolates the user's personal vocabulary into [prompt]. Built-in prompts always contain
+     * [VOCABULARY_PLACEHOLDER]; a fully custom prompt only gets the term list if the user opted
+     * in by including the placeholder themselves. A prompt without the placeholder is returned
+     * unchanged (see #26).
+     */
+    fun interpolateVocabulary(prompt: String, terms: List<String>): String =
+        prompt.replace(VOCABULARY_PLACEHOLDER, vocabularyClause(terms))
 
     fun parseResponse(json: String): Result {
         return try {

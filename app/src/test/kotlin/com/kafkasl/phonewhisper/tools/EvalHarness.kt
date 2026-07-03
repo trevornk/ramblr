@@ -2,6 +2,7 @@ package com.kafkasl.phonewhisper.tools
 
 import com.kafkasl.phonewhisper.NetworkClients
 import com.kafkasl.phonewhisper.PostProcessor
+import com.kafkasl.phonewhisper.VocabularyTerms
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -28,11 +29,13 @@ import kotlin.system.exitProcess
  */
 
 /** Known prompt variants, by name, that [main] can run. Add new PostProcessor prompt constants
- *  here as they're introduced. */
+ *  here as they're introduced. Each is interpolated with [VocabularyTerms.DEFAULTS] — the same
+ *  seed used for a fresh install — so the report reflects real output instead of a dangling
+ *  `{{vocabulary}}` placeholder (see #26). */
 private val PROMPT_REGISTRY: Map<String, String> = mapOf(
-    "SIMPLE_PROMPT" to PostProcessor.SIMPLE_PROMPT,
-    "DEV_PROMPT" to PostProcessor.DEV_PROMPT,
-    "STRUCTURED_PROMPT" to PostProcessor.STRUCTURED_PROMPT,
+    "SIMPLE_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.SIMPLE_PROMPT, VocabularyTerms.DEFAULTS),
+    "DEV_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.DEV_PROMPT, VocabularyTerms.DEFAULTS),
+    "STRUCTURED_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.STRUCTURED_PROMPT, VocabularyTerms.DEFAULTS),
 )
 
 private const val DEFAULT_MODEL = "gpt-4o-mini"

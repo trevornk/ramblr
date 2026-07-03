@@ -135,6 +135,12 @@ prompt** presets, or write your own:
 All three built-in presets are defined as prompt constants in `PostProcessor.kt`
 (`DEV_PROMPT`, `SIMPLE_PROMPT`, `STRUCTURED_PROMPT`) so you can read or fork them directly.
 
+**Settings → Personal vocabulary** lets you edit the list of project names and jargon (one per
+line) that cleanup should recognize instead of mis-hearing, seeded with Phone Whisper's own
+defaults on first run. Built-in prompts interpolate this list at send time via a `{{vocabulary}}`
+placeholder; a fully custom prompt can opt in to the same behavior by including that placeholder
+itself (see #26).
+
 ## Development
 
 ```bash

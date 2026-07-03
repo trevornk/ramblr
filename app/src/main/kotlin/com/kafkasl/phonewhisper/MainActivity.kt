@@ -33,6 +33,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var modelRowSub: TextView
     private lateinit var promptRowSub: TextView
     private lateinit var promptRow: LinearLayout
+    private lateinit var vocabularyRowSub: TextView
+    private lateinit var vocabularyRow: LinearLayout
     private lateinit var modelContainer: LinearLayout
     private lateinit var promptContainer: LinearLayout
     private lateinit var cloudSwitch: MaterialSwitch
@@ -145,6 +147,10 @@ class MainActivity : AppCompatActivity() {
         promptRowSub.maxLines = 2
         promptRowSub.ellipsize = android.text.TextUtils.TruncateAt.END
         root.addView(promptRow)
+
+        vocabularyRow = settingsRow("Personal vocabulary", vocabularySummary()) { promptVocabulary() }
+        vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
+        root.addView(vocabularyRow)
 
         // --- Settings Section ---
         root.addView(sectionHeader("Settings"))
@@ -382,6 +388,8 @@ class MainActivity : AppCompatActivity() {
         modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
         promptContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
         promptRow.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
+        vocabularyRow.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
+        vocabularyRowSub.text = vocabularySummary()
 
         val apiKey = ApiKeyStore.getApiKey(this)
         keyRowSub.text = if (apiKey.isBlank()) "Tap to set" else ApiKeyStore.maskForDisplay(apiKey)
@@ -555,6 +563,30 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    /** Lets the user edit their personal vocabulary — project names and jargon cleanup should
+     *  preserve verbatim — one term per line, seeded from [VocabularyTerms.DEFAULTS] on first
+     *  run so existing behavior doesn't regress (#26). */
+    private fun promptVocabulary() {
+        val input = EditText(this).apply {
+            hint = "One term per line, e.g. FastHTML"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = 3
+            gravity = Gravity.TOP or Gravity.START
+            setText(VocabularyTerms.serialize(vocabularyTerms()))
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Personal vocabulary")
+            .setMessage("Project names or jargon the cleanup step often mishears. One per line.")
+            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
+            .setPositiveButton("Save") { _, _ ->
+                val terms = VocabularyTerms.parse(input.text.toString())
+                prefs().edit().putString("custom_vocabulary_terms", VocabularyTerms.serialize(terms)).apply()
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     // --- UI Helpers ---
 
     private fun settingsRow(title: String, subtitle: String, widget: View? = null, onClick: (() -> Unit)? = null): LinearLayout {
@@ -613,6 +645,15 @@ class MainActivity : AppCompatActivity() {
     private fun customPrompt() = prefs().getString("custom_post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
     private fun cleanupBaseUrl() = prefs().getString("cleanup_base_url", PostProcessor.DEFAULT_BASE_URL) ?: PostProcessor.DEFAULT_BASE_URL
     private fun cleanupModel() = prefs().getString("cleanup_model", PostProcessor.DEFAULT_MODEL) ?: PostProcessor.DEFAULT_MODEL
+
+    private fun vocabularyTerms() = VocabularyTerms.parse(
+        prefs().getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED)
+    )
+
+    private fun vocabularySummary(): String {
+        val terms = vocabularyTerms()
+        return if (terms.isEmpty()) "No custom terms" else terms.joinToString(", ")
+    }
 
     private fun customPromptSummary(): String {
         val prompt = customPrompt()

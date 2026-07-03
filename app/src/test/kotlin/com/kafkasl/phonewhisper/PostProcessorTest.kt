@@ -184,4 +184,82 @@ class PostProcessorTest {
         val body = PostProcessor.buildRequestBody("raw text", "system prompt", "gpt-4o-mini")
         assertEquals(0.0, body.getDouble("temperature"), 0.0001)
     }
+
+    // --- vocabulary interpolation (#26) ---
+
+    @Test
+    fun vocabularyClauseIsEmptyForNoTerms() {
+        assertEquals("", PostProcessor.vocabularyClause(emptyList()))
+    }
+
+    @Test
+    fun vocabularyClauseListsEveryTerm() {
+        val clause = PostProcessor.vocabularyClause(listOf("FastHTML", "OmniRoute", "nbdev"))
+        assertTrue(clause.contains("FastHTML"))
+        assertTrue(clause.contains("OmniRoute"))
+        assertTrue(clause.contains("nbdev"))
+    }
+
+    @Test
+    fun interpolateVocabularyReplacesPlaceholderWithClause() {
+        val prompt = "Fix spelling.${PostProcessor.VOCABULARY_PLACEHOLDER} Done."
+        val result = PostProcessor.interpolateVocabulary(prompt, listOf("FastHTML"))
+        assertEquals("Fix spelling. Watch for these project names and personal vocabulary terms, which speech-to-text often mishears: FastHTML. Done.", result)
+    }
+
+    @Test
+    fun interpolateVocabularyWithEmptyTermsLeavesNoDanglingPlaceholderText() {
+        val prompt = "Fix spelling.${PostProcessor.VOCABULARY_PLACEHOLDER} Done."
+        val result = PostProcessor.interpolateVocabulary(prompt, emptyList())
+        assertEquals("Fix spelling. Done.", result)
+        assertTrue(!result.contains("{{"))
+        assertTrue(!result.contains("}}"))
+    }
+
+    @Test
+    fun interpolateVocabularyOnCustomPromptWithoutPlaceholderIsUnchanged() {
+        val prompt = "Always write in pirate speak."
+        assertEquals(prompt, PostProcessor.interpolateVocabulary(prompt, listOf("FastHTML")))
+    }
+
+    @Test
+    fun interpolateVocabularyOnCustomPromptOptsInViaPlaceholder() {
+        val prompt = "Always write in pirate speak. Known terms:${PostProcessor.VOCABULARY_PLACEHOLDER}"
+        val result = PostProcessor.interpolateVocabulary(prompt, listOf("FastHTML"))
+        assertTrue(result.contains("FastHTML"))
+        assertTrue(!result.contains(PostProcessor.VOCABULARY_PLACEHOLDER))
+    }
+
+    @Test
+    fun devPromptProvablyContainsCurrentTermList() {
+        val terms = listOf("OmniRoute", "Ramblr")
+        val active = PostProcessor.interpolateVocabulary(PostProcessor.DEV_PROMPT, terms)
+        for (term in terms) assertTrue(active.contains(term))
+        assertTrue(!active.contains(PostProcessor.VOCABULARY_PLACEHOLDER))
+    }
+
+    @Test
+    fun structuredPromptProvablyContainsCurrentTermList() {
+        val terms = listOf("OmniRoute", "Ramblr")
+        val active = PostProcessor.interpolateVocabulary(PostProcessor.STRUCTURED_PROMPT, terms)
+        for (term in terms) assertTrue(active.contains(term))
+        assertTrue(!active.contains(PostProcessor.VOCABULARY_PLACEHOLDER))
+    }
+
+    @Test
+    fun simplePromptProvablyContainsCurrentTermList() {
+        val terms = listOf("OmniRoute", "Ramblr")
+        val active = PostProcessor.interpolateVocabulary(PostProcessor.SIMPLE_PROMPT, terms)
+        for (term in terms) assertTrue(active.contains(term))
+        assertTrue(!active.contains(PostProcessor.VOCABULARY_PLACEHOLDER))
+    }
+
+    @Test
+    fun builtInPromptsWithEmptyTermsHaveNoDanglingPlaceholder() {
+        for (prompt in listOf(PostProcessor.SIMPLE_PROMPT, PostProcessor.DEV_PROMPT, PostProcessor.STRUCTURED_PROMPT)) {
+            val active = PostProcessor.interpolateVocabulary(prompt, emptyList())
+            assertTrue(!active.contains(PostProcessor.VOCABULARY_PLACEHOLDER))
+            assertTrue(!active.contains("{{"))
+        }
+    }
 }
