@@ -113,6 +113,22 @@ Current catalog:
 
 The app downloads and extracts models directly from the sherpa-onnx release archives.
 
+## Post-processing
+
+When cloud cleanup is enabled, the raw transcript is sent to OpenAI's chat API with a system
+prompt before being inserted. You can pick which prompt to use from **Settings → Edit current
+prompt** presets, or write your own:
+
+| Preset | Behavior |
+|---|---|
+| **Dev cleanup** (default) | Fixes spelling, grammar, and punctuation, corrects known project/technical names, and preserves the original sentence structure 1:1. Best for coding, CLI commands, and short technical notes. |
+| **Simple cleanup** | Minimal edit: punctuation, capitalization, and obvious speech-to-text errors only. |
+| **Structured rewrite** | Fluid-1/Typeless-style rewrite for rambling dictation: strips filler words and false starts ("um", "like", "you know"), collapses self-corrections ("wait no, actually...") down to the final intended meaning, and reorganizes long rambling monologue into paragraphs or numbered/bulleted lists when the speaker is clearly enumerating items or steps. It still corrects the same technical/project-name list as Dev cleanup, and never adds facts, opinions, or answers that weren't in the source. Short one-line notes are left as a single sentence rather than restructured. |
+| **Custom** | Any prompt you type yourself in the "Edit current prompt" dialog. |
+
+All three built-in presets are defined as prompt constants in `PostProcessor.kt`
+(`DEV_PROMPT`, `SIMPLE_PROMPT`, `STRUCTURED_PROMPT`) so you can read or fork them directly.
+
 ## Development
 
 ```bash
@@ -125,8 +141,8 @@ make clean       # clean build artifacts
 ### Prompt eval harness
 
 `PostProcessorTest.kt` only checks JSON parsing, not output *quality*. To compare cleanup
-prompts (`SIMPLE_PROMPT` vs `DEV_PROMPT`, or future variants) side by side, there's a manual
-eval harness:
+prompts (`SIMPLE_PROMPT`, `DEV_PROMPT`, `STRUCTURED_PROMPT`, or future variants) side by side,
+there's a manual eval harness:
 
 - Sample transcripts live in `app/src/test/resources/eval_samples/` — ~20 synthetic but
   realistic dictation samples covering rambling brainstorms, self-corrected sentences,
@@ -141,8 +157,8 @@ own key:
 
 ```bash
 export OPENAI_API_KEY=sk-...   # your own key — never commit this, no .env is read by the tool
-./gradlew runEvalHarness                                    # compares SIMPLE_PROMPT vs DEV_PROMPT
-./gradlew runEvalHarness --args="SIMPLE_PROMPT,DEV_PROMPT"   # explicit prompt list
+./gradlew runEvalHarness                                              # compares SIMPLE_PROMPT vs DEV_PROMPT
+./gradlew runEvalHarness --args="SIMPLE_PROMPT,DEV_PROMPT,STRUCTURED_PROMPT"   # explicit prompt list
 ```
 
 Optional overrides:
@@ -158,8 +174,8 @@ Review the report yourself before trusting a prompt change — the harness doesn
 output automatically. `eval-reports/` is gitignored so local runs don't clutter the repo; if you
 want to share or archive a specific report, `git add -f` it.
 
-To add a new prompt variant (e.g. a future `STRUCTURED_PROMPT`) to the comparison, add it to the
-`PROMPT_REGISTRY` map at the top of `EvalHarness.kt`.
+To add a new prompt variant to the comparison, add it to the `PROMPT_REGISTRY` map at the top of
+`EvalHarness.kt`.
 
 ## App compatibility
 
