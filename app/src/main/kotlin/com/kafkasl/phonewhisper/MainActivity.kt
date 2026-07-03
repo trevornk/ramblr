@@ -16,11 +16,12 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.radiobutton.MaterialRadioButton
-import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -35,6 +36,15 @@ class MainActivity : AppCompatActivity() {
 
     private val modelRows = mutableMapOf<String, ModelRowViews>()
     private val promptRows = mutableMapOf<String, PromptRowViews>()
+
+    // Latest WorkInfo.State observed per model archive, kept in sync by the
+    // WorkManager LiveData observer registered in buildModelRow. Read by
+    // onModelAction to make a duplicate tap on an in-flight download a no-op.
+    private val modelDownloadState = mutableMapOf<String, WorkInfo.State>()
+    // Archives we've already reacted to a SUCCEEDED WorkInfo for in this Activity
+    // instance, so re-observing old WorkInfo (e.g. after rotation) doesn't
+    // re-toast/re-select a model that finished downloading earlier.
+    private val modelDownloadAcked = mutableSetOf<String>()
 
     private data class ModelRowViews(
         val radio: MaterialRadioButton,
@@ -197,45 +207,76 @@ class MainActivity : AppCompatActivity() {
             radio, progress, textContainer.findViewWithTag("subtitle"), dlBtn
         )
         refreshCard(model)
-        
+        observeDownload(model)
+
         return row
     }
 
     private fun onModelAction(model: Model) {
-        val views = modelRows[model.archive] ?: return
-
         if (ModelDownloader.isInstalled(this, model)) {
             selectModel(model.archive)
             return
         }
 
-        views.dlBtn.isEnabled = false
-        views.progress.visibility = View.VISIBLE
-        views.progress.isIndeterminate = false
-        views.subtitle.text = "Starting download..."
+        // Duplicate tap while a download for this archive is already
+        // enqueued/running is a no-op -- WorkManager's unique work would drop
+        // a re-enqueue anyway, but this also avoids resetting live progress
+        // text back to "Starting download...".
+        if (ModelDownloadWorker.isInFlight(modelDownloadState[model.archive])) return
 
-        ModelDownloader.download(this, model) { state ->
-            runOnUiThread {
-                when (state) {
-                    is DownloadState.Downloading -> {
-                        views.progress.progress = (state.progress * 100).toInt()
-                        views.subtitle.text = "Downloading: ${(state.progress * 100).toInt()}%"
-                    }
-                    is DownloadState.Extracting -> {
-                        views.progress.isIndeterminate = true
-                        views.subtitle.text = "Extracting..."
-                    }
-                    is DownloadState.Done -> {
-                        views.progress.visibility = View.GONE
-                        selectModel(model.archive)
-                        toast("${model.name} ready!")
-                    }
-                    is DownloadState.Error -> {
-                        views.progress.visibility = View.GONE
-                        views.subtitle.text = "Error: ${state.message}"
-                        views.dlBtn.isEnabled = true
-                    }
+        ModelDownloadWorker.enqueue(this, model)
+    }
+
+    /** Observes this model's WorkManager state for the lifetime of the Activity,
+     *  so download progress survives rotation/recreation without any Activity
+     *  reference being captured by the download work itself. */
+    private fun observeDownload(model: Model) {
+        WorkManager.getInstance(this)
+            .getWorkInfosForUniqueWorkLiveData(ModelDownloadWorker.workName(model.archive))
+            .observe(this) { infos -> onWorkInfos(model, infos) }
+    }
+
+    private fun onWorkInfos(model: Model, infos: List<WorkInfo>) {
+        val views = modelRows[model.archive] ?: return
+        val info = infos.firstOrNull { !it.state.isFinished } ?: infos.firstOrNull()
+        modelDownloadState[model.archive] = info?.state ?: WorkInfo.State.CANCELLED
+
+        when (info?.state) {
+            WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> {
+                views.dlBtn.isEnabled = false
+                views.progress.visibility = View.VISIBLE
+                val phase = info.progress.getString(ModelDownloadWorker.KEY_PHASE)
+                if (phase == ModelDownloadWorker.PHASE_EXTRACTING) {
+                    views.progress.isIndeterminate = true
+                    views.subtitle.text = "Extracting..."
+                } else {
+                    val pct = info.progress.getFloat(ModelDownloadWorker.KEY_PROGRESS, 0f)
+                    views.progress.isIndeterminate = false
+                    views.progress.progress = (pct * 100).toInt()
+                    views.subtitle.text =
+                        if (info.state == WorkInfo.State.ENQUEUED) "Starting download..."
+                        else "Downloading: ${(pct * 100).toInt()}%"
                 }
+            }
+            WorkInfo.State.SUCCEEDED -> {
+                views.progress.visibility = View.GONE
+                views.dlBtn.isEnabled = true
+                if (modelDownloadAcked.add(model.archive)) {
+                    selectModel(model.archive)
+                    toast("${model.name} ready!")
+                }
+                refreshCard(model)
+            }
+            WorkInfo.State.FAILED -> {
+                views.progress.visibility = View.GONE
+                views.dlBtn.isEnabled = true
+                val err = info.outputData.getString(ModelDownloadWorker.KEY_ERROR) ?: "Unknown error"
+                views.subtitle.text = "Error: $err"
+            }
+            else -> {
+                views.progress.visibility = View.GONE
+                views.dlBtn.isEnabled = true
+                refreshCard(model)
             }
         }
     }
@@ -325,7 +366,8 @@ class MainActivity : AppCompatActivity() {
         promptRowSub.text = prompt
 
         val cur = prefs().getString("model_name", "") ?: ""
-        if (cur.isBlank() || !File(filesDir, "models/$cur").exists()) {
+        val curModel = MODEL_CATALOG.firstOrNull { it.archive == cur }
+        if (cur.isBlank() || curModel == null || !ModelDownloader.isInstalled(this, curModel)) {
             MODEL_CATALOG.firstOrNull { ModelDownloader.isInstalled(this, it) }
                 ?.let { selectModel(it.archive) }
         }

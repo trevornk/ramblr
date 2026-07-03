@@ -101,41 +101,47 @@ object ModelDownloader {
 
     fun isInstalled(ctx: Context, model: Model) = isInstalledDir(modelDir(ctx, model))
 
-    /** Download and extract model. Callbacks fire on background thread. */
+    /**
+     * Download and extract model, blocking the calling thread until done (or
+     * failed). Callbacks fire synchronously on the calling thread. Callers
+     * (currently [ModelDownloadWorker]) are responsible for running this off
+     * the main thread; this function itself no longer spawns one, so a
+     * single in-flight download can't race a second call writing the same
+     * [tmpFile] -- that single-flight guarantee is enforced by the caller
+     * (WorkManager unique work), not here.
+     */
     fun download(ctx: Context, model: Model, onState: (DownloadState) -> Unit) {
         val url = "$BASE_URL/${model.archive}.tar.bz2"
         val tmpFile = File(ctx.cacheDir, "${model.archive}.tar.bz2")
         val staging = stagingDir(ctx, model)
         val finalDir = modelDir(ctx, model)
 
-        Thread {
-            // Only cleared once downloadFile() returns successfully, i.e. the
-            // archive on disk is complete. If a network error interrupts the
-            // download partway, tmpFile is left in place so the next call can
-            // resume it via HTTP Range instead of restarting from byte 0.
-            var downloadComplete = false
-            try {
-                val availableBytes = minOf(ctx.cacheDir.usableSpace, ctx.filesDir.usableSpace)
-                if (!hasEnoughSpace(availableBytes, model.sizeMb)) {
-                    throw NotEnoughSpaceException(requiredSpaceBytes(model.sizeMb), availableBytes)
-                }
-                downloadFile(url, tmpFile, onState)
-                downloadComplete = true
-                val expected = model.sha256
-                    ?: throw IOException("No checksum configured for ${model.archive}; refusing to install unverified")
-                verifyChecksum(tmpFile, expected)
-                onState(DownloadState.Extracting)
-                extractAndInstall(tmpFile, staging, finalDir, model.archive)
-                onState(DownloadState.Done)
-            } catch (e: Exception) {
-                onState(DownloadState.Error(e.message ?: "Unknown error"))
-            } finally {
-                // A checksum mismatch also lands here with downloadComplete == true:
-                // the archive is fully present but wrong, so resuming it wouldn't
-                // help -- delete it and let the next attempt start clean.
-                if (downloadComplete) tmpFile.delete()
+        // Only cleared once downloadFile() returns successfully, i.e. the
+        // archive on disk is complete. If a network error interrupts the
+        // download partway, tmpFile is left in place so the next call can
+        // resume it via HTTP Range instead of restarting from byte 0.
+        var downloadComplete = false
+        try {
+            val availableBytes = minOf(ctx.cacheDir.usableSpace, ctx.filesDir.usableSpace)
+            if (!hasEnoughSpace(availableBytes, model.sizeMb)) {
+                throw NotEnoughSpaceException(requiredSpaceBytes(model.sizeMb), availableBytes)
             }
-        }.start()
+            downloadFile(url, tmpFile, onState)
+            downloadComplete = true
+            val expected = model.sha256
+                ?: throw IOException("No checksum configured for ${model.archive}; refusing to install unverified")
+            verifyChecksum(tmpFile, expected)
+            onState(DownloadState.Extracting)
+            extractAndInstall(tmpFile, staging, finalDir, model.archive)
+            onState(DownloadState.Done)
+        } catch (e: Exception) {
+            onState(DownloadState.Error(e.message ?: "Unknown error"))
+        } finally {
+            // A checksum mismatch also lands here with downloadComplete == true:
+            // the archive is fully present but wrong, so resuming it wouldn't
+            // help -- delete it and let the next attempt start clean.
+            if (downloadComplete) tmpFile.delete()
+        }
     }
 
     fun delete(ctx: Context, model: Model) {
