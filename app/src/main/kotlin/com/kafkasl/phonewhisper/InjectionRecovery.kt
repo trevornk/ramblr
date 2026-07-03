@@ -41,3 +41,12 @@ fun planUndo(
  */
 fun canRetryRaw(ageMs: Long, windowMs: Long, rawText: String, injectedText: String): Boolean =
     ageMs <= windowMs && rawText != injectedText
+
+/**
+ * Whether to wait and rescan before falling back to the clipboard (see #5). Some apps briefly
+ * report no focused/editable node right in the moment the overlay tap hands focus back after
+ * stealing it for the gesture; a short delay lets that settle. The caller only ever consults this
+ * once per injection — a still-empty rescan means the app doesn't expose an injectable node at all,
+ * not a transient focus race, so there's no point looping.
+ */
+fun shouldRetryEmptyScan(candidateCount: Int): Boolean = candidateCount == 0

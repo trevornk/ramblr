@@ -66,4 +66,15 @@ class InjectionRecoveryTest {
     @Test fun `right at the window boundary raw retry is still offered`() {
         assertEquals(true, canRetryRaw(ageMs = 10_000, windowMs = 10_000, rawText = "raw", injectedText = "Cleaned."))
     }
+
+    // --- shouldRetryEmptyScan ---
+
+    @Test fun `retries when the first scan finds no candidates`() {
+        assertEquals(true, shouldRetryEmptyScan(candidateCount = 0))
+    }
+
+    @Test fun `does not retry once the scan finds at least one candidate`() {
+        assertEquals(false, shouldRetryEmptyScan(candidateCount = 1))
+        assertEquals(false, shouldRetryEmptyScan(candidateCount = 5))
+    }
 }

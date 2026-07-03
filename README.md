@@ -193,7 +193,23 @@ To add a new prompt variant to the comparison, add it to the `PROMPT_REGISTRY` m
 
 Phone Whisper works best in apps that use standard Android text fields.
 Some apps use custom text surfaces or terminal-style views, which may not support direct accessibility paste.
-When insertion is not possible, Phone Whisper falls back to copying the transcript to the clipboard.
+When insertion is not possible, Phone Whisper falls back to copying the transcript to the clipboard, and the
+feedback bubble stays up longer and is tappable to re-copy so a failed insertion is hard to miss (see below).
+
+If the very first scan for an insertable field comes up empty — which can happen for a moment right after the
+overlay button is tapped, since the tap itself briefly steals focus — Phone Whisper waits ~200ms and scans once
+more before giving up and falling back to the clipboard. This is a narrow fix for that specific transient race,
+not a general compatibility improvement.
+
+There is no compatibility table of tested apps (e.g. Gmail, Slack, Signal, Chrome, Discord, a Compose-based
+messaging app, WebView-based inputs) in this README. Building one requires exercising each app on a real device
+and recording which strategy succeeds, which hasn't been done — see [#5](https://github.com/trevornk/ramblr/issues/5)
+for that as tracked follow-up work. Don't treat the absence of an app from this doc as either "supported" or
+"unsupported."
+
+Phone Whisper intentionally does not implement a full IME (replacement keyboard). It only acts once, after an
+explicit tap on the overlay button, and never intercepts normal typing — becoming a keyboard is a different,
+much larger feature and is out of scope.
 
 ### Termux
 
