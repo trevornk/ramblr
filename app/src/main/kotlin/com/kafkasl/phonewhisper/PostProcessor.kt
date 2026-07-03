@@ -214,7 +214,14 @@ explanations, headers, or comments about your edits.
         }
     }
 
-    /** Builds the chat-completions request body, defaulting a blank model to [DEFAULT_MODEL]. */
+    /**
+     * Builds the chat-completions request body, defaulting a blank model to [DEFAULT_MODEL].
+     * Always sets "stream": false explicitly — most OpenAI-compatible servers already default
+     * to non-streaming when the field is absent, but OmniRoute (see ADR-0001 /
+     * docs/adr/0001-cleanup-waterfall.md) streams by default, and this keeps every provider on
+     * the same flat-JSON response shape [parseResponse] expects instead of adding a second
+     * SSE-parsing code path.
+     */
     fun buildRequestBody(text: String, prompt: String, model: String): JSONObject {
         val messages = JSONArray().apply {
             put(JSONObject().apply {
@@ -231,6 +238,7 @@ explanations, headers, or comments about your edits.
             put("model", model.ifBlank { DEFAULT_MODEL })
             put("messages", messages)
             put("temperature", 0.0)
+            put("stream", false)
         }
     }
 
