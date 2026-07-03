@@ -249,7 +249,19 @@ class MainActivity : AppCompatActivity() {
         refresh()
     }
 
-    override fun onResume() { super.onResume(); refresh(); advanceOnboarding() }
+    override fun onResume() {
+        super.onResume()
+        // The floating overlay must not cover this screen's own switches (#35).
+        WhisperAccessibilityService.setMainActivityForeground(true)
+        refresh()
+        advanceOnboarding()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        WhisperAccessibilityService.setMainActivityForeground(false)
+    }
+
     override fun onRequestPermissionsResult(c: Int, p: Array<String>, r: IntArray) {
         super.onRequestPermissionsResult(c, p, r); refresh(); advanceOnboarding()
     }

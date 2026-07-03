@@ -73,6 +73,21 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     companion object {
         var instance: WhisperAccessibilityService? = null
+
+        /** Whether Ramblr's own MainActivity is currently foregrounded (#35), kept as a static flag
+         *  rather than only reacting when [instance] is non-null -- so a service that connects while
+         *  MainActivity is already open (e.g. right after the user enables Accessibility from
+         *  Settings and returns) still starts with the overlay hidden instead of covering the
+         *  Settings switches it was just enabled from. */
+        @Volatile private var mainActivityForeground = false
+
+        /** Called from MainActivity's onResume/onPause so the floating overlay never covers its own
+         *  Settings switches (#35). Safe to call whether or not the service is currently connected. */
+        fun setMainActivityForeground(foreground: Boolean) {
+            mainActivityForeground = foreground
+            instance?.let { service -> service.handler.post { service.applyOverlayVisibility() } }
+        }
+
         private const val TAG = "PhoneWhisper"
         private const val SAMPLE_RATE = 16000
         private const val BTN_DP = 44
@@ -395,6 +410,36 @@ class WhisperAccessibilityService : AccessibilityService() {
         feedbackLayoutParams = feedbackParams
         cleanupToggleLayoutParams = cleanupToggleParams
         updateCleanupToggleAppearance()
+        applyOverlayVisibility()
+    }
+
+    /**
+     * Applies [overlayShouldBeVisible] to the live overlay views (#35): hides the ring and cleanup
+     * badge (draw + touch) and dismisses the feedback bubble while MainActivity is foregrounded.
+     * This only toggles presentation -- [layoutParams], [feedbackLayoutParams] and
+     * [cleanupToggleLayoutParams] stay non-null throughout, so drag-to-reposition and the cleanup
+     * badge's position tracking (#34) are untouched, and the overlay reappears exactly where it
+     * was left. Recording/transcription state is never touched here.
+     */
+    private fun applyOverlayVisibility() {
+        val visible = overlayShouldBeVisible(mainActivityForeground)
+        setOverlayTouchable(visible)
+        overlayView?.visibility = if (visible) View.VISIBLE else View.GONE
+        cleanupToggleView?.visibility = if (visible) View.VISIBLE else View.GONE
+        if (!visible) handler.post(hideFeedback)
+    }
+
+    /** Adds/removes FLAG_NOT_TOUCHABLE on the ring and cleanup badge windows so a hidden overlay
+     *  (#35) lets touches fall through to whatever's underneath -- e.g. MainActivity's Settings
+     *  switches -- instead of the window silently swallowing them despite its view being GONE. */
+    private fun setOverlayTouchable(touchable: Boolean) {
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        fun WindowManager.LayoutParams.applyTouchable() {
+            flags = if (touchable) flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            else flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        layoutParams?.let { it.applyTouchable(); overlayView?.let { v -> wm.updateViewLayout(v, it) } }
+        cleanupToggleLayoutParams?.let { it.applyTouchable(); cleanupToggleView?.let { v -> wm.updateViewLayout(v, it) } }
     }
 
     private fun removeOverlay() {
