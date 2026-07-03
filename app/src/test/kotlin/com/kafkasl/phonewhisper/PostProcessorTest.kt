@@ -7,6 +7,11 @@ import org.junit.Test
 class PostProcessorTest {
 
     @Test
+    fun destinationHostMatchesEndpoint() {
+        assertEquals("api.openai.com", PostProcessor.DESTINATION_HOST)
+    }
+
+    @Test
     fun parseSuccess() {
         val json = """
         {

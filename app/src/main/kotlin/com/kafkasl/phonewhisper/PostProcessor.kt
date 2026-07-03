@@ -12,6 +12,11 @@ object PostProcessor {
 
     private val client = NetworkClients.shared
 
+    const val ENDPOINT_URL = "https://api.openai.com/v1/chat/completions"
+
+    /** Host cleanup requests are actually sent to, for use in UI copy. See #23. */
+    val DESTINATION_HOST: String = java.net.URI(ENDPOINT_URL).host
+
     const val SIMPLE_PROMPT = "Clean up this speech-to-text transcript. Fix punctuation, capitalization, and obvious speech-to-text errors. Keep the original meaning. Return only the cleaned text."
 
     const val DEV_PROMPT = """<task>A text is provided which is a draft transcription from a speech to text model.
@@ -172,7 +177,7 @@ explanations, headers, or comments about your edits.
         val body = bodyJson.toString().toRequestBody("application/json".toMediaType())
 
         val request = Request.Builder()
-            .url("https://api.openai.com/v1/chat/completions")
+            .url(ENDPOINT_URL)
             .header("Authorization", "Bearer $apiKey")
             .post(body)
             .build()

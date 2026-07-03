@@ -10,6 +10,8 @@ Phone Whisper supports two transcription modes.
 
 In local mode, audio is processed on-device using local speech recognition models. Audio does not leave the device.
 
+If optional cleanup is also enabled while local mode is selected, the transcribed *text* (not audio) is sent from the device to OpenAI's chat API to fix grammar, punctuation, and clarity. The app shows a one-time confirmation before this combination is first enabled, and the cleanup setting always names the destination host it sends text to.
+
 ### Cloud mode
 
 In cloud mode, recorded audio is sent directly from the device to OpenAI's transcription API to generate text.
