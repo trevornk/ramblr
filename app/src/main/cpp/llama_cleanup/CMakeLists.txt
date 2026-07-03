@@ -35,6 +35,17 @@ project("llama_cleanup")
 # on as a cache variable so llama.cpp's own option() call (which only sets a default, and
 # leaves an already-set cache variable alone) picks this up.
 set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
+
+# 16KB ELF alignment (#44): NDK r27 (pinned via android.ndkVersion) doesn't default to 16KB
+# page-size-aligned LOAD segments -- only r28+ does. Setting these here, before
+# add_subdirectory(), makes them ordinary (non-cache) CMake variables in this directory scope,
+# which CMake propagates into every subdirectory scope added below (llama.cpp/ggml/common)
+# unless a child CMakeLists.txt overrides them -- verified none of them do. That covers every
+# SHARED target the compatibility dialog flagged (llama, llama-common, ggml, ggml-base,
+# ggml-cpu), plus llama-cleanup-jni itself since it's added after this point too.
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
+
 add_subdirectory(../../../../../llama.cpp llama.cpp)
 set(LLAMA_DIR_RELATIVE "../../../../../llama.cpp")
 get_filename_component(LLAMA_DIR ${LLAMA_DIR_RELATIVE} ABSOLUTE)
