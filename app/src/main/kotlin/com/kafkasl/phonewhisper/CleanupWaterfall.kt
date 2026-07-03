@@ -11,8 +11,15 @@ package com.kafkasl.phonewhisper
  * [ApiKeyStore]/[PostProcessor] single-key fields (issue #4's pre-waterfall config) so a fresh
  * install or an unmigrated user sees zero behavior change, while OPENAI_DIRECT reads from the
  * new [CleanupCredentialStore] slot a user explicitly configures as part of a real waterfall.
+ *
+ * LOCAL_LLM (#37) is the odd one out: it isn't a network host group at all -- it runs cleanup
+ * on-device via llama.cpp (see [LocalCleanupProvider]/[LlamaCppInference]) against the one
+ * curated model in [LOCAL_CLEANUP_MODEL_CATALOG]. It needs no credential ([CleanupStep
+ * .credentialSlot] returns null, same as LEGACY) and never fails at the "host unreachable"
+ * level, so grouping it with other steps is harmless but pointless -- it either succeeds or
+ * fails as a single step regardless of neighbors.
  */
-enum class CleanupStepGroup { LEGACY, OMNIROUTE, OPENAI_DIRECT, ANTHROPIC_DIRECT }
+enum class CleanupStepGroup { LEGACY, OMNIROUTE, OPENAI_DIRECT, ANTHROPIC_DIRECT, LOCAL_LLM }
 
 /**
  * One entry in the user-configured cleanup waterfall. [group] determines which credential and
@@ -29,12 +36,14 @@ data class CleanupStep(
     val model: String,
     val baseUrlOverride: String? = null,
 ) {
-    /** Null for LEGACY steps, which authenticate via [ApiKeyStore] instead. */
+    /** Null for LEGACY steps, which authenticate via [ApiKeyStore] instead, and for LOCAL_LLM
+     *  steps, which run on-device and have nothing to authenticate against (#37). */
     fun credentialSlot(): CleanupCredentialSlot? = when (group) {
         CleanupStepGroup.LEGACY -> null
         CleanupStepGroup.OMNIROUTE -> CleanupCredentialSlot.OMNIROUTE
         CleanupStepGroup.OPENAI_DIRECT -> CleanupCredentialSlot.OPENAI_DIRECT
         CleanupStepGroup.ANTHROPIC_DIRECT -> CleanupCredentialSlot.ANTHROPIC_DIRECT
+        CleanupStepGroup.LOCAL_LLM -> null
     }
 }
 

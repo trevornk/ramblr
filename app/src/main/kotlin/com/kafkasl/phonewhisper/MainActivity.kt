@@ -921,6 +921,7 @@ class MainActivity : AppCompatActivity() {
         CleanupStepGroup.OMNIROUTE -> "OmniRoute"
         CleanupStepGroup.OPENAI_DIRECT -> "Direct OpenAI"
         CleanupStepGroup.ANTHROPIC_DIRECT -> "Direct Anthropic"
+        CleanupStepGroup.LOCAL_LLM -> "Local (on-device)"
     }
 
     private fun colorForHealth(health: CleanupStepHealth) = when (health) {
@@ -963,6 +964,7 @@ class MainActivity : AppCompatActivity() {
             CleanupStepGroup.OMNIROUTE to "OmniRoute",
             CleanupStepGroup.OPENAI_DIRECT to "Direct OpenAI",
             CleanupStepGroup.ANTHROPIC_DIRECT to "Direct Anthropic",
+            CleanupStepGroup.LOCAL_LLM to "Local (on-device, offline, no API key)",
         )
 
         val container = vertical(dp(24), dp(8))
@@ -978,11 +980,29 @@ class MainActivity : AppCompatActivity() {
         radioButtons.forEach { radioGroup.addView(it) }
         container.addView(radioGroup)
 
+        // The LOCAL_LLM group ships exactly one curated model (#37 non-goals: no arbitrary
+        // user-supplied GGUF support), so its model field is fixed and non-editable rather than
+        // free text like the cloud groups.
         val modelInput = EditText(this).apply {
             hint = "Model, e.g. claude/claude-sonnet-4-6"
             setText(existing?.model ?: "")
         }
         container.addView(modelInput)
+        val offlineCaption = TextView(this).apply {
+            text = "Runs fully offline on this device — no network call, no API key required."
+            textSize = 12f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            visibility = if ((existing?.group ?: CleanupStepGroup.OMNIROUTE) == CleanupStepGroup.LOCAL_LLM) View.VISIBLE else View.GONE
+            setPadding(0, 0, 0, dp(4))
+        }
+        container.addView(offlineCaption)
+        radioGroup.setOnCheckedChangeListener { _, checkedId ->
+            val checkedGroup = groupOptions.getOrNull(radioButtons.indexOfFirst { it.id == checkedId })?.first
+            val isLocal = checkedGroup == CleanupStepGroup.LOCAL_LLM
+            offlineCaption.visibility = if (isLocal) View.VISIBLE else View.GONE
+            modelInput.isEnabled = !isLocal
+            if (isLocal) modelInput.setText(LocalCleanupProvider.MODEL.archive)
+        }
 
         val baseUrlInput = EditText(this).apply {
             hint = "Base URL override (Direct OpenAI only)"

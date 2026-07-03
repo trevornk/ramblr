@@ -33,6 +33,20 @@ data class Model(
      * but aren't compatible with the OfflineRecognizer graph shapes.
      */
     val isStreaming: Boolean = false,
+    /**
+     * True for the single curated on-device cleanup GGUF model (#37), as opposed to the
+     * tar.bz2 ASR archives above. Installed under its own `cleanup_models/` directory (see
+     * [ModelDownloader.modelDir]) -- separate from both `models/` and `streaming_models/`, and
+     * never scanned by [LocalTranscriber]. Unlike the ASR archives, a local-cleanup model is
+     * downloaded from Hugging Face ([sourceUrl]) as a single `.gguf` file rather than extracted
+     * from a tar.bz2 -- see [ModelDownloader.download]/[ModelDownloader.installSingleFile].
+     */
+    val isLocalCleanup: Boolean = false,
+    /** Full download URL, overriding the default sherpa-onnx-release URL pattern. Required when
+     *  [isLocalCleanup] is true, since those models are hosted on Hugging Face, not GitHub Releases. */
+    val sourceUrl: String? = null,
+    /** File name the downloaded single file is installed as. Required when [isLocalCleanup] is true. */
+    val fileName: String? = null,
 )
 
 val MODEL_CATALOG = listOf(
@@ -64,6 +78,30 @@ val STREAMING_MODEL = Model("Streaming Zipformer (EN)", "sherpa-onnx-streaming-z
     isStreaming = true)
 
 val STREAMING_MODEL_CATALOG = listOf(STREAMING_MODEL)
+
+/**
+ * The one curated on-device cleanup model shipped for #37 -- no arbitrary user-supplied GGUF
+ * support in this pass (see the issue's non-goals). Qwen2.5-0.5B-Instruct is small enough to run
+ * acceptably CPU-only on modest Android hardware while still following cleanup instructions
+ * well; Q4_K_M is the standard "good quality, small size" quantization used throughout the GGUF
+ * ecosystem. Sourced from the real, verifiable `Qwen/Qwen2.5-0.5B-Instruct-GGUF` Hugging Face
+ * repo (Apache-2.0 license) on 2026-07-03; [sha256] was computed by downloading the exact file
+ * and hashing it locally (`shasum -a 256`), the same verification approach used for the sherpa-
+ * onnx ASR models above -- not copied from a webpage.
+ */
+val LOCAL_CLEANUP_MODEL = Model(
+    name = "Qwen2.5 0.5B Instruct (Q4_K_M)",
+    archive = "qwen2.5-0.5b-instruct-q4_k_m",
+    sizeMb = 492,
+    quality = "★★☆ On-device cleanup",
+    recommended = true,
+    sha256 = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+    isLocalCleanup = true,
+    sourceUrl = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    fileName = "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+)
+
+val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL)
 
 sealed class DownloadState {
     data class Downloading(val progress: Float) : DownloadState()
@@ -106,10 +144,23 @@ object ModelDownloader {
     fun hasEnoughSpace(availableBytes: Long, sizeMb: Int): Boolean =
         availableBytes >= requiredSpaceBytes(sizeMb)
 
-    /** "models" for a batch/offline model, "streaming_models" for a streaming one (#29) — kept
-     *  out of files/models/ entirely so it's structurally impossible for
-     *  [LocalTranscriber.availableModels]'s directory scan to ever see it. */
-    private fun kindDir(model: Model) = if (model.isStreaming) "streaming_models" else "models"
+    /** "models" for a batch/offline model, "streaming_models" for a streaming one (#29), or
+     *  "cleanup_models" for the on-device cleanup GGUF model (#37) — kept out of files/models/
+     *  entirely so it's structurally impossible for [LocalTranscriber.availableModels]'s
+     *  directory scan to ever see it. */
+    private fun kindDir(model: Model) = when {
+        model.isLocalCleanup -> "cleanup_models"
+        model.isStreaming -> "streaming_models"
+        else -> "models"
+    }
+
+    /** The installed GGUF file for a local-cleanup [model], or null if it isn't fully installed.
+     *  Only meaningful for [Model.isLocalCleanup] models. */
+    fun localCleanupModelFile(ctx: Context, model: Model): File? {
+        val dir = modelDir(ctx, model)
+        if (!isInstalledDir(dir)) return null
+        return File(dir, model.fileName ?: model.archive)
+    }
 
     /** Pure path computation, exposed separately from [modelDir] so it's testable without a real
      *  Android [Context]. */
@@ -144,8 +195,8 @@ object ModelDownloader {
      * (WorkManager unique work), not here.
      */
     fun download(ctx: Context, model: Model, onState: (DownloadState) -> Unit) {
-        val url = "$BASE_URL/${model.archive}.tar.bz2"
-        val tmpFile = File(ctx.cacheDir, "${model.archive}.tar.bz2")
+        val url = model.sourceUrl ?: "$BASE_URL/${model.archive}.tar.bz2"
+        val tmpFile = File(ctx.cacheDir, model.fileName ?: "${model.archive}.tar.bz2")
         val staging = stagingDir(ctx, model)
         val finalDir = modelDir(ctx, model)
 
@@ -164,8 +215,13 @@ object ModelDownloader {
             val expected = model.sha256
                 ?: throw IOException("No checksum configured for ${model.archive}; refusing to install unverified")
             verifyChecksum(tmpFile, expected)
-            onState(DownloadState.Extracting)
-            extractAndInstall(tmpFile, staging, finalDir, model.archive)
+            if (model.isLocalCleanup) {
+                onState(DownloadState.Extracting) // no real extraction, but keeps the UI phase consistent
+                installSingleFile(tmpFile, finalDir, model.fileName ?: model.archive)
+            } else {
+                onState(DownloadState.Extracting)
+                extractAndInstall(tmpFile, staging, finalDir, model.archive)
+            }
             onState(DownloadState.Done)
         } catch (e: Exception) {
             onState(DownloadState.Error(e.message ?: "Unknown error"))
@@ -234,6 +290,28 @@ object ModelDownloader {
             }
         } finally {
             staging.deleteRecursively()
+        }
+    }
+
+    /**
+     * Installs a single downloaded file (e.g. a `.gguf`) directly into [finalDir] under
+     * [fileName], with no extraction step -- the local-cleanup-model counterpart to
+     * [extractAndInstall] (#37). Same atomic-move-then-mark-complete shape: any prior contents of
+     * [finalDir] are replaced only once the new file is in place, and the completion marker is
+     * written last so a half-installed model never reads as installed.
+     */
+    fun installSingleFile(file: File, finalDir: File, fileName: String) {
+        finalDir.parentFile?.mkdirs()
+        finalDir.deleteRecursively()
+        finalDir.mkdirs()
+        val dest = File(finalDir, fileName)
+        // renameTo is atomic when cacheDir and filesDir share a filesystem (the normal case for
+        // app-private storage); fall back to copy+delete for the rare cross-filesystem case.
+        if (!file.renameTo(dest)) {
+            file.copyTo(dest, overwrite = true)
+        }
+        if (!completeMarker(finalDir).createNewFile()) {
+            throw IOException("Failed to write completion marker")
         }
     }
 

@@ -93,6 +93,76 @@ class ModelDownloaderTest {
         }
     }
 
+    // -- local cleanup model catalog (#37) --
+
+    @Test fun `local cleanup catalog has exactly the one curated model, marked and checksummed`() {
+        assertEquals(1, LOCAL_CLEANUP_MODEL_CATALOG.size)
+        assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.isLocalCleanup })
+        assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256 != null })
+        assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256!!.matches(Regex("[0-9a-f]{64}")) })
+        assertEquals(LOCAL_CLEANUP_MODEL, LOCAL_CLEANUP_MODEL_CATALOG.single())
+    }
+
+    @Test fun `local cleanup model is sourced from a real Hugging Face URL, not the sherpa-onnx release host`() {
+        assertTrue(LOCAL_CLEANUP_MODEL.sourceUrl!!.startsWith("https://huggingface.co/"))
+        assertTrue(LOCAL_CLEANUP_MODEL.sourceUrl!!.endsWith(".gguf"))
+        assertEquals(LOCAL_CLEANUP_MODEL.fileName, "qwen2.5-0.5b-instruct-q4_k_m.gguf")
+    }
+
+    @Test fun `local cleanup model archive name never collides with the offline or streaming catalogs`() {
+        val otherArchives = (MODEL_CATALOG + STREAMING_MODEL_CATALOG).map { it.archive }.toSet()
+        assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.none { it.archive in otherArchives })
+    }
+
+    @Test fun `local cleanup model installs under its own cleanup_models directory`() {
+        withTempDir { tmp ->
+            val dir = ModelDownloader.modelDirPath(tmp, LOCAL_CLEANUP_MODEL)
+            assertTrue(dir.path.contains("/cleanup_models/"))
+            assertFalse(dir.path.contains("/models/"))
+            assertFalse(dir.path.contains("/streaming_models/"))
+        }
+    }
+
+    // -- installSingleFile (#37): local-cleanup counterpart to extractAndInstall --
+
+    @Test fun `installSingleFile moves the file into finalDir under fileName and marks it complete`() {
+        withTempDir { tmp ->
+            val downloaded = File(tmp, "download.tmp").apply { writeText("fake-gguf-bytes") }
+            val finalDir = File(tmp, "cleanup_models/qwen2.5-0.5b-instruct-q4_k_m")
+
+            ModelDownloader.installSingleFile(downloaded, finalDir, "qwen2.5-0.5b-instruct-q4_k_m.gguf")
+
+            assertTrue(ModelDownloader.isInstalledDir(finalDir))
+            assertEquals("fake-gguf-bytes", File(finalDir, "qwen2.5-0.5b-instruct-q4_k_m.gguf").readText())
+            assertFalse(downloaded.exists()) // moved, not copied-and-left-behind
+        }
+    }
+
+    @Test fun `installSingleFile replaces a prior corrupt install only after the new file is in place`() {
+        withTempDir { tmp ->
+            val downloaded = File(tmp, "download.tmp").apply { writeText("fresh-bytes") }
+            val finalDir = File(tmp, "cleanup_models/mymodel").apply { mkdirs() }
+            File(finalDir, "mymodel.gguf").writeText("stale-partial")
+            // no .complete marker -- simulates a corrupt leftover install
+
+            ModelDownloader.installSingleFile(downloaded, finalDir, "mymodel.gguf")
+
+            assertTrue(ModelDownloader.isInstalledDir(finalDir))
+            assertEquals("fresh-bytes", File(finalDir, "mymodel.gguf").readText())
+        }
+    }
+
+    @Test fun `installSingleFile at the real local-cleanup model path reads as installed`() {
+        withTempDir { tmp ->
+            val downloaded = File(tmp, "download.tmp").apply { writeText("bytes") }
+            val finalDir = ModelDownloader.modelDirPath(tmp, LOCAL_CLEANUP_MODEL)
+            ModelDownloader.installSingleFile(downloaded, finalDir, LOCAL_CLEANUP_MODEL.fileName!!)
+
+            assertTrue(ModelDownloader.isInstalledDir(finalDir))
+            assertTrue(File(finalDir, LOCAL_CLEANUP_MODEL.fileName!!).isFile)
+        }
+    }
+
     // -- isInstalledDir / completion marker --
 
     @Test fun `isInstalledDir is false when directory is missing`() {

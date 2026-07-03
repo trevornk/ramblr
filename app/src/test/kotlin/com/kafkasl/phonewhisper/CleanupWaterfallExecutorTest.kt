@@ -143,6 +143,19 @@ private class FakeCleanupHttpTransport(private val outcomes: MutableList<Cleanup
 private fun okOutcome(text: String): CleanupHttpOutcome =
     CleanupHttpOutcome.Ok("""{"choices":[{"message":{"content":"$text"}}]}""")
 
+/** Fakes on-device inference (see [LocalInferenceEngine]) so LOCAL_LLM step-sequencing logic is
+ *  testable with no native code involved -- see #37: real llama.cpp inference cannot be exercised
+ *  in a JVM unit test, only this seam's plumbing can. */
+private class FakeLocalInferenceEngine(private val outcomes: MutableList<LocalInferenceResult>) : LocalInferenceEngine {
+    val calls = mutableListOf<Triple<String, String, String>>()
+
+    override fun complete(systemPrompt: String, userText: String, modelPath: String): LocalInferenceResult {
+        calls.add(Triple(systemPrompt, userText, modelPath))
+        check(outcomes.isNotEmpty()) { "FakeLocalInferenceEngine ran out of queued outcomes" }
+        return outcomes.removeAt(0)
+    }
+}
+
 class CleanupWaterfallExecutorTest {
     private val cancelHolder = InFlightCall()
 
@@ -155,6 +168,8 @@ class CleanupWaterfallExecutorTest {
             CleanupCredentialSlot.OPENAI_DIRECT to "openai-key",
             CleanupCredentialSlot.ANTHROPIC_DIRECT to "anthropic-key",
         ),
+        localInference: LocalInferenceEngine = LocalInferenceEngine { _, _, _ -> error("no local step expected") },
+        localModelPath: () -> String? = { null },
     ): PostProcessor.Result {
         var captured: PostProcessor.Result? = null
         CleanupWaterfallExecutor.execute(
@@ -167,6 +182,8 @@ class CleanupWaterfallExecutorTest {
             legacyBaseUrl = PostProcessor.DEFAULT_BASE_URL,
             credentialLookup = { slot -> credentials[slot] ?: "" },
             transport = transport,
+            localInference = localInference,
+            localModelPath = localModelPath,
             callback = { captured = it },
         )
         return captured ?: error("callback never fired")
@@ -282,6 +299,103 @@ class CleanupWaterfallExecutorTest {
         val result = execute(waterfall, transport)
         assertEquals("anthropic result", result.text)
         assertEquals(AnthropicCleanupProvider.ENDPOINT_URL, transport.requestedUrls.single())
+    }
+}
+
+/** LOCAL_LLM step-sequencing behavior (#37) -- exercises the executor's fakeable seam over
+ *  native inference ([LocalInferenceEngine]), never real llama.cpp/JNI code. See
+ *  app/src/main/cpp/llama_cleanup/README.md for why real on-device inference can't be exercised
+ *  in a JVM unit test; only this seam's plumbing (routing, credential bypass, fallthrough) is
+ *  covered here. */
+class LocalLlmWaterfallStepTest {
+    private val cancelHolder = InFlightCall()
+
+    private fun execute(
+        waterfall: CleanupWaterfall,
+        transport: CleanupHttpTransport,
+        localInference: LocalInferenceEngine,
+        localModelPath: () -> String?,
+        legacyApiKey: String = "",
+        credentialLookup: (CleanupCredentialSlot) -> String = { "" },
+    ): PostProcessor.Result {
+        var captured: PostProcessor.Result? = null
+        CleanupWaterfallExecutor.execute(
+            text = "raw transcript",
+            prompt = "clean it up",
+            waterfall = waterfall,
+            cursor = CleanupWaterfallCursor(),
+            cancelHolder = cancelHolder,
+            legacyApiKey = legacyApiKey,
+            legacyBaseUrl = PostProcessor.DEFAULT_BASE_URL,
+            credentialLookup = credentialLookup,
+            transport = transport,
+            localInference = localInference,
+            localModelPath = localModelPath,
+            callback = { captured = it },
+        )
+        return captured ?: error("callback never fired")
+    }
+
+    @Test fun `a local step succeeds with no credential and no legacy api key configured`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf()) // never touched
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned locally")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+
+        val result = execute(waterfall, transport, engine, localModelPath = { "/data/data/app/files/cleanup_models/model.gguf" })
+
+        assertEquals("cleaned locally", result.text)
+        assertEquals(0, transport.requestedUrls.size) // no network call at all
+        assertEquals(1, engine.calls.size)
+    }
+
+    @Test fun `the local step passes the waterfall prompt and text through unchanged as system+user`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf())
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+
+        execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
+
+        val (systemPrompt, userText, modelPath) = engine.calls.single()
+        assertEquals("clean it up", systemPrompt) // the `prompt` arg passed to execute()
+        assertEquals("raw transcript", userText) // the `text` arg passed to execute()
+        assertEquals("/path/to/model.gguf", modelPath)
+    }
+
+    @Test fun `a local step fails without ever calling the engine when the model isn't downloaded`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf())
+        val engine = FakeLocalInferenceEngine(mutableListOf())
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+
+        val result = execute(waterfall, transport, engine, localModelPath = { null })
+
+        // Single-step waterfall: the executor's generic "All cleanup steps failed" message
+        // (see CleanupWaterfallExecutor.attempt) subsumes this step's specific failure reason --
+        // same behavior the existing missing-credential test works around with a 2-step
+        // waterfall. What matters here is that it fails without ever touching the engine.
+        assertNull(result.text)
+        assertTrue(result.error != null)
+        assertEquals(0, engine.calls.size)
+        assertEquals(0, transport.requestedUrls.size)
+    }
+
+    @Test fun `a local inference failure falls through to the next configured step`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned via fallback")))
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Failure("context size reached")))
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+
+        val result = execute(
+            waterfall, transport, engine,
+            localModelPath = { "/path/to/model.gguf" },
+            credentialLookup = { slot -> if (slot == CleanupCredentialSlot.OPENAI_DIRECT) "openai-key" else "" },
+        )
+
+        assertEquals("cleaned via fallback", result.text)
+        assertEquals(1, transport.requestedUrls.size)
     }
 }
 
