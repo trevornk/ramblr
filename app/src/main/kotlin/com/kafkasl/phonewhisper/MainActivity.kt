@@ -78,7 +78,7 @@ class MainActivity : AppCompatActivity() {
 
         // Top large header (like "Connected devices")
         val header = TextView(this).apply {
-            text = "Phone Whisper"
+            text = "Ramblr"
             textSize = 32f
             setPadding(dp(24), dp(64), dp(24), dp(24))
         }
@@ -680,9 +680,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun showOnboardingIntro() {
         onboardingDialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Welcome to Phone Whisper")
+            .setTitle("Welcome to Ramblr")
             .setMessage(
-                "Phone Whisper lets you dictate into any text field: tap the floating button, " +
+                "Ramblr lets you dictate into any text field: tap the floating button, " +
                     "speak, tap again, and your words are inserted where you were typing.\n\n" +
                     "It needs two things to do that:\n" +
                     "• Microphone — to record what you say\n" +
@@ -699,7 +699,7 @@ class MainActivity : AppCompatActivity() {
     private fun showOnboardingMicStep() {
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Microphone access")
-            .setMessage("Phone Whisper needs the microphone to record what you say before transcribing it.")
+            .setMessage("Ramblr needs the microphone to record what you say before transcribing it.")
             .setCancelable(false)
             .setPositiveButton("Continue") { _, _ ->
                 dismissOnboarding()
@@ -713,10 +713,10 @@ class MainActivity : AppCompatActivity() {
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Turn on Accessibility")
             .setMessage(
-                "Phone Whisper uses Android's Accessibility service for one narrow reason: to insert " +
+                "Ramblr uses Android's Accessibility service for one narrow reason: to insert " +
                     "dictated text into whatever text field is currently focused. It doesn't replace your " +
                     "keyboard and doesn't run background automation.\n\n" +
-                    "On the next screen, look for \"Phone Whisper\" (may be listed as \"Ramblr\") in the list and turn it on."
+                    "On the next screen, look for \"Ramblr\" in the list and turn it on."
             )
             .setCancelable(false)
             .setPositiveButton("Open Accessibility Settings") { _, _ ->

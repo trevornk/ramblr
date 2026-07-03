@@ -456,7 +456,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun startRecording() {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
             != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            toast("Grant audio permission in Phone Whisper app"); return
+            toast("Grant audio permission in Ramblr app"); return
         }
 
         val engine = RecordingEngine(cacheDir, stateMachine)
@@ -601,7 +601,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun transcribeApi(pcm: ByteArray, token: Int) {
         val wav = WavWriter.encode(pcm)
         val apiKey = ApiKeyStore.getApiKey(this)
-        if (apiKey.isBlank()) { reset("Set API key in Phone Whisper app"); return }
+        if (apiKey.isBlank()) { reset("Set API key in Ramblr app"); return }
 
         TranscriberClient.transcribe(wav, apiKey, inFlightCall) { result ->
             if (result.text != null && result.text.isNotBlank()) {
