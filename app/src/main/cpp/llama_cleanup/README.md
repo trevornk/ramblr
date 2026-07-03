@@ -1,8 +1,9 @@
 # llama_cleanup native module (#37)
 
-Native side of the LOCAL_LLM cleanup waterfall step. **Not currently compiled or packaged by the
-Gradle build** -- see "Status" below. This directory exists so the actual native-build wiring is
-a config/task change on top of real, cited source, not a from-scratch write.
+Native side of the LOCAL_LLM cleanup waterfall step. **Now compiled and packaged by the Gradle
+build** via `externalNativeBuild`/CMake, built from source against a pinned `llama.cpp` git
+submodule (option 2 from this file's prior "next step" list, matching SmolChat-Android's own
+approach).
 
 ## What's here
 
@@ -17,48 +18,65 @@ a config/task change on top of real, cited source, not a from-scratch write.
 All source was fetched live from the real upstream repository (`curl`/GitHub API against
 `raw.githubusercontent.com` and `api.github.com`) during this work, not reproduced from memory.
 
-## Status: NOT wired into the Gradle build
+## Status: wired into the Gradle build, native build passing
 
-Confirmed during this work: this development sandbox has the Android SDK
-(`$ANDROID_HOME/Library/Android/sdk`) but **no NDK** (`$ANDROID_HOME/ndk` doesn't exist, and
-`ndk-build` isn't on `PATH`). Compiling any of the C++ above -- whether a full from-source
-llama.cpp build or just this small JNI shim -- requires the NDK's CMake/Clang toolchain, which
-this environment cannot provide. Per the #37 scope-down instructions, this is documented as a
-known gap rather than forced through a build that can't actually be exercised or verified here.
+Confirmed working on a machine with the Android NDK (`27.2.12479018`) and a system `cmake`/`ninja`
+(installed via Homebrew; the Android SDK had no bundled `cmake` package until the build itself
+triggered `sdkmanager` to fetch CMake 3.22.1 into `$ANDROID_HOME/cmake/3.22.1`):
 
-Consequences of NOT wiring this up:
-- `app/build.gradle.kts` has **no** `externalNativeBuild`/CMake block referencing this directory,
-  so `make build`/`assembleDebug` never attempts to compile it (and can't fail because of it).
-- No `libllama-cleanup-jni.so` is ever produced or packaged into the APK.
-- `LlamaCppInference`'s `System.loadLibrary("llama-cleanup-jni")` will throw
-  `UnsatisfiedLinkError` on a real device today. `RealLocalInferenceEngine` (see
-  `CleanupWaterfallExecutor.kt`) catches this and reports it as an ordinary
-  `LocalInferenceResult.Failure`, so a LOCAL_LLM waterfall step fails cleanly (falls through to
-  the next step, or to raw-text injection) instead of crashing -- but **this has not been
-  exercised on a real device**, only reasoned about from the code.
+- `app/build.gradle.kts` sets `android.ndkVersion = "27.2.12479018"` and a real
+  `externalNativeBuild { cmake { path = file("src/main/cpp/llama_cleanup/CMakeLists.txt") } }`
+  block (plus `defaultConfig.externalNativeBuild.cmake.abiFilters += "arm64-v8a"`), so
+  `./gradlew assembleDebug` genuinely invokes CMake/NDK and compiles this shim + llama.cpp from
+  source.
+- `libllama-cleanup-jni.so` (52KB), `libllama.so`, `libllama-common.so`, and the `libggml*.so`
+  set are all produced and packaged into `app-debug.apk`'s `lib/arm64-v8a/` -- confirmed via
+  `unzip -l app-debug.apk | grep -i llama`.
+- The old `fetchLlamaCppNativeLibs` Gradle stub (which always threw, documenting the missing-NDK
+  gap) has been removed now that the real build path works.
+- `make test` (JVM unit tests) passes unaffected.
 
-## Concrete next step (two viable options, in order of effort)
+### Setup that made it work
 
-1. **Compile just this JNI shim against llama.cpp's own official prebuilt Android release**
-   (lower effort, recommended first): llama.cpp's GitHub Releases publish a real
-   `llama-b<N>-bin-android-arm64.tar.gz` asset (confirmed present, e.g. release `b9867`,
-   containing `libllama.so`/`libggml*.so`/`libggml-base.so`). Fetch that tarball plus llama.cpp's
-   public headers (`include/llama.h`, `common/common.h`, `common/chat.h`) for the *same* pinned
-   release tag, add a real `externalNativeBuild`/CMake block to `app/build.gradle.kts` that links
-   `LLMInference.cpp`/`llama_cleanup_jni.cpp` against those prebuilt `.so`s (no llama.cpp source
-   compilation needed), and add a `fetchLlamaCppNativeLibs` Gradle task mirroring
-   `fetchSherpaOnnxNativeLibs`'s shape to provision them. Requires a machine with the Android NDK
-   installed to write and verify the CMake linking step once.
-2. **Full from-source build** (matches SmolChat-Android's own approach exactly): add llama.cpp as
-   a pinned git submodule (as SmolChat-Android does), wire `externalNativeBuild` to this
-   `CMakeLists.txt` as-is (it already expects `../../../../../llama.cpp`), and let Gradle's
-   `externalNativeBuild` invoke CMake/NDK to compile llama.cpp + this shim together. Higher
-   effort and slower CI/build times, but the most battle-tested path since it's exactly what the
-   real, shipping SmolChat-Android app does.
+1. **`llama.cpp` git submodule**: added at the repo root (`/llama.cpp`, i.e. a sibling of `app/`),
+   pinned to release tag `b9867` -- this matches `CMakeLists.txt`'s pre-existing
+   `add_subdirectory(../../../../../llama.cpp llama.cpp)` line exactly (5 `../` from
+   `app/src/main/cpp/llama_cleanup/` lands at the repo root), so no path changes were needed in
+   `CMakeLists.txt` itself, only the submodule's location.
+2. **`LLAMA_BUILD_COMMON` cache override**: llama.cpp's own `CMakeLists.txt` only
+   `add_subdirectory(common)` (which defines the `llama-common` target this shim links against for
+   chat templating/sampling helpers) when `LLAMA_BUILD_COMMON` is on, which itself defaults to on
+   only when llama.cpp is the top-level CMake project (`LLAMA_STANDALONE`) -- not true here, since
+   we pull it in via `add_subdirectory`. `CMakeLists.txt` now does
+   `set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)` immediately before the `add_subdirectory` call
+   so llama.cpp's own `option()` call (which leaves an already-set cache variable alone) picks it
+   up.
+3. **Target name mismatch**: the SmolChat-Android-derived `CMakeLists.txt` linked against a target
+   literally named `common` -- true in older llama.cpp versions, but at `b9867` the library was
+   split into `llama-common-base` + `llama-common`. `target_link_libraries` now references
+   `llama-common`.
+4. **Vendored `nlohmann/json` include path**: `common/chat.h` (transitively included by
+   `LLMInference.h`) pulls in `common/peg-parser.h`, which includes
+   `<nlohmann/json_fwd.hpp>` from llama.cpp's `vendor/nlohmann/` directory. `llama-common`
+   declares this as a `PUBLIC` include directory, but that usage requirement didn't propagate
+   through to this shim's target as expected (even after fixing the target name above) -- so
+   `CMakeLists.txt` now adds `${LLAMA_DIR}/vendor` directly to `llama-cleanup-jni`'s own
+   `target_include_directories` as a defense against relying on transitive propagation here.
 
-Either way, whoever picks this up needs a machine with the Android NDK (this sandbox doesn't have
-one) to actually compile and, critically, **run on a real device** before trusting it -- see #36
-for why "compiles and passes JVM-only tests" is not sufficient proof for native/JNI surfaces.
+None of this required changing `LLMInference.cpp`, `LLMInference.h`, or `llama_cleanup_jni.cpp`
+themselves -- the vendored/adapted JNI shim's actual C++ logic compiled against `b9867`'s API
+surface unmodified; every fix needed was in `CMakeLists.txt`'s build wiring.
+
+### What's still NOT verified
+
+**Compiling is necessary but not sufficient.** There is currently no way to verify actual LLM
+inference correctness (does the model load, does a real cleanup pass produce sane output, does it
+crash on a real device) in this environment -- no physical or emulated Android device was
+available during this work. See #36 for exactly why "compiles and passes JVM-only tests" is not
+sufficient proof for native/JNI surfaces: a stale/mismatched native binding there caused an
+on-device crash that passed all Kotlin-only tests. On-device verification of this native build
+(installing the APK, triggering the LOCAL_LLM cleanup step, confirming `LlamaCppInference` loads
+the model and returns real output without crashing) is a separate, later step.
 
 ## Related model
 

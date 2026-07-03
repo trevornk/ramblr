@@ -28,6 +28,13 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("llama_cleanup")
 
+# llama.cpp's own CMakeLists.txt only builds its `common`/`llama-common` library (which
+# LLMInference.cpp/llama_cleanup_jni.cpp need for chat templating and sampling helpers) when
+# LLAMA_BUILD_COMMON is on -- which defaults to on only when llama.cpp is the top-level CMake
+# project (LLAMA_STANDALONE), not when pulled in via add_subdirectory as we do here. Force it
+# on as a cache variable so llama.cpp's own option() call (which only sets a default, and
+# leaves an already-set cache variable alone) picks this up.
+set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
 add_subdirectory(../../../../../llama.cpp llama.cpp)
 set(LLAMA_DIR_RELATIVE "../../../../../llama.cpp")
 get_filename_component(LLAMA_DIR ${LLAMA_DIR_RELATIVE} ABSOLUTE)
@@ -45,6 +52,7 @@ target_include_directories(
         llama-cleanup-jni
         PUBLIC
         ${COMMON_DIR}
+        ${LLAMA_DIR}/vendor
         ${GGML_DIR}/include
         ${LLAMA_DIR}/include
 )
@@ -57,7 +65,7 @@ target_compile_options(
 )
 target_link_libraries(
         llama-cleanup-jni
-        android log llama common
+        android log llama llama-common
 )
 target_link_options(
         llama-cleanup-jni
