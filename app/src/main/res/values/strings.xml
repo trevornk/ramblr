@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Ramblr</string>
-    <string name="accessibility_description">Dictation: records audio, transcribes, and inserts text into focused fields.</string>
+    <string name="accessibility_description">Dictation: records audio, transcribes, and inserts text into focused fields. Note: Android may also show its own system Accessibility Button shortcut for Ramblr in Settings > Accessibility -- that\'s a separate OS-level shortcut, not Ramblr\'s own floating mic button.</string>
 </resources>
