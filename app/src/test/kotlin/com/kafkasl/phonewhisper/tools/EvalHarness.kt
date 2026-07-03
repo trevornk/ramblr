@@ -28,10 +28,11 @@ import kotlin.system.exitProcess
  */
 
 /** Known prompt variants, by name, that [main] can run. Add new PostProcessor prompt constants
- *  here as they're introduced — e.g. STRUCTURED_PROMPT once issue #1 lands. */
+ *  here as they're introduced. */
 private val PROMPT_REGISTRY: Map<String, String> = mapOf(
     "SIMPLE_PROMPT" to PostProcessor.SIMPLE_PROMPT,
     "DEV_PROMPT" to PostProcessor.DEV_PROMPT,
+    "STRUCTURED_PROMPT" to PostProcessor.STRUCTURED_PROMPT,
 )
 
 private const val DEFAULT_MODEL = "gpt-4o-mini"

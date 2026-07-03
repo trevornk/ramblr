@@ -333,7 +333,8 @@ class MainActivity : AppCompatActivity() {
         val views = promptRows[preset.key] ?: return
         val current = currentPrompt()
         val active = when (preset.key) {
-            "custom" -> current != PostProcessor.DEV_PROMPT && current != PostProcessor.SIMPLE_PROMPT
+            "custom" -> current != PostProcessor.DEV_PROMPT && current != PostProcessor.SIMPLE_PROMPT &&
+                current != PostProcessor.STRUCTURED_PROMPT
             else -> current == preset.prompt
         }
         views.radio.isChecked = active
@@ -504,6 +505,12 @@ class MainActivity : AppCompatActivity() {
             title = "Simple cleanup",
             subtitle = "Grammar, punctuation, and light cleanup",
             prompt = PostProcessor.SIMPLE_PROMPT
+        ),
+        PromptPreset(
+            key = "structured",
+            title = "Structured rewrite",
+            subtitle = "Removes filler, resolves self-corrections, turns rambling into lists",
+            prompt = PostProcessor.STRUCTURED_PROMPT
         ),
         PromptPreset(
             key = "custom",
