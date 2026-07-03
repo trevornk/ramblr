@@ -43,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var postProcessRowSub: TextView
     private lateinit var previewBeforeInjectSwitch: MaterialSwitch
     private lateinit var historyEnabledSwitch: MaterialSwitch
+    private lateinit var debugVisibilitySwitch: MaterialSwitch
 
     // Tier 2 (#38) — everything below the top-level cleanup toggle, shown/hidden as one unit
     // instead of each row separately, since none of it matters while cleanup is off.
@@ -345,6 +346,24 @@ class MainActivity : AppCompatActivity() {
         root.addView(historyToggleRow)
 
         root.addView(settingsRow("Dictation history", "Recover past transcripts, tap to copy") { showHistory() })
+
+        // Debug/visibility toggle (#33): off by default, so it doesn't clutter the common case.
+        // Currently the only thing it gates is dictation history's "paid fallback" badge, but it's
+        // named generically so future debug-ish affordances can share it (see ADR-0001).
+        debugVisibilitySwitch = MaterialSwitch(this).apply {
+            isChecked = DebugVisibilityToggle.isEnabled(this@MainActivity)
+            isClickable = false
+        }
+        val debugVisibilityRow = settingsRow(
+            "Debug / visibility",
+            "Shows extra under-the-hood detail, like which dictations used a paid cleanup fallback",
+            debugVisibilitySwitch
+        ) {
+            val newVal = !debugVisibilitySwitch.isChecked
+            DebugVisibilityToggle.setEnabled(this, newVal)
+            debugVisibilitySwitch.isChecked = newVal
+        }
+        root.addView(debugVisibilityRow)
 
         // --- Streaming live preview (#29) ---
         root.addView(sectionHeader("Streaming live preview"))
@@ -847,6 +866,7 @@ class MainActivity : AppCompatActivity() {
         postProcessRowSub.text = cleanupSubtitle()
         previewBeforeInjectSwitch.isChecked = PreviewBeforeInjectToggle.isEnabled(this)
         historyEnabledSwitch.isChecked = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
+        debugVisibilitySwitch.isChecked = DebugVisibilityToggle.isEnabled(this)
 
         streamingPreviewSwitch.isChecked = shouldUseStreamingPreview(
             settingEnabled = prefs().getBoolean(KEY_STREAMING_PREVIEW, false),
@@ -1371,7 +1391,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun historyRow(store: DictationHistoryStore, entry: DictationHistoryEntry, onDeleted: () -> Unit): View {
         val text = entry.cleanedText ?: entry.rawText
-        val row = settingsRow(historyTimestampFormat.format(java.util.Date(entry.timestamp)), text) {
+        val badge = paidFallbackBadgeOrNull(entry)
+        val row = settingsRow(historyTimestampFormat.format(java.util.Date(entry.timestamp)), text, badge) {
             ClipboardUtil.copy(this, text)
             toast("Copied to clipboard")
         }
@@ -1383,6 +1404,24 @@ class MainActivity : AppCompatActivity() {
         subtitle.maxLines = 2
         subtitle.ellipsize = android.text.TextUtils.TruncateAt.END
         return row
+    }
+
+    /** Small "paid fallback" pill for a history row (#33) -- null (rendering nothing) unless the
+     *  debug/visibility toggle is on and this entry was actually served by a paid group; see
+     *  [shouldShowPaidFallbackBadge]. */
+    private fun paidFallbackBadgeOrNull(entry: DictationHistoryEntry): TextView? {
+        if (!shouldShowPaidFallbackBadge(DebugVisibilityToggle.isEnabled(this), entry)) return null
+        val group = entry.paidFallbackGroup ?: return null
+        return TextView(this).apply {
+            text = "Paid fallback · ${groupLabel(group)}"
+            textSize = 11f
+            setTextColor(0xFFFFFFFF.toInt())
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(0xFFB05A00.toInt())
+            }
+        }
     }
 
     private fun confirmDeleteHistoryEntry(store: DictationHistoryStore, entry: DictationHistoryEntry, onDeleted: () -> Unit) {

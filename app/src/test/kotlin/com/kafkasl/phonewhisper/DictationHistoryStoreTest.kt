@@ -127,4 +127,47 @@ class DictationHistoryStoreTest {
         assertEquals(tricky, readBack.rawText)
         assertEquals(tricky, readBack.cleanedText)
     }
+
+    // --- paidFallbackGroup (#33) ---
+
+    @Test fun `round-trips a paidFallbackGroup value`() {
+        val store = DictationHistoryStore(tempFile())
+        store.add(entry(1, "raw", "cleaned").copy(paidFallbackGroup = CleanupStepGroup.ANTHROPIC_DIRECT))
+
+        assertEquals(CleanupStepGroup.ANTHROPIC_DIRECT, store.all().single().paidFallbackGroup)
+    }
+
+    @Test fun `defaults paidFallbackGroup to null when not set`() {
+        val store = DictationHistoryStore(tempFile())
+        store.add(entry(1))
+
+        assertNull(store.all().single().paidFallbackGroup)
+    }
+
+    @Test fun `parses an old-format line with no paidFallbackGroup key as null instead of throwing`() {
+        val file = tempFile()
+        // Simulates a history line written before #33 added the field.
+        file.appendText("""{"timestamp":1,"rawText":"raw","cleanedText":"cleaned"}""" + "\n")
+
+        val readBack = DictationHistoryStore(file).all().single()
+        assertEquals("raw", readBack.rawText)
+        assertNull(readBack.paidFallbackGroup)
+    }
+}
+
+class ShouldShowPaidFallbackBadgeTest {
+    private fun entry(paidFallbackGroup: CleanupStepGroup?) =
+        DictationHistoryEntry(timestamp = 1, rawText = "raw", cleanedText = "cleaned", paidFallbackGroup = paidFallbackGroup)
+
+    @Test fun `hidden when the debug toggle is off, even for a paid-fallback entry`() {
+        assertFalse(shouldShowPaidFallbackBadge(debugVisibilityEnabled = false, entry(CleanupStepGroup.OPENAI_DIRECT)))
+    }
+
+    @Test fun `hidden when the debug toggle is on but the entry has no paid fallback group`() {
+        assertFalse(shouldShowPaidFallbackBadge(debugVisibilityEnabled = true, entry(null)))
+    }
+
+    @Test fun `shown only when the debug toggle is on and the entry has a paid fallback group`() {
+        assertTrue(shouldShowPaidFallbackBadge(debugVisibilityEnabled = true, entry(CleanupStepGroup.ANTHROPIC_DIRECT)))
+    }
 }

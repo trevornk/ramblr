@@ -1,6 +1,8 @@
 package com.kafkasl.phonewhisper
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Pure-logic coverage for [CleanupCredentialStore] that doesn't need Android/Keystore. */
@@ -51,5 +53,24 @@ class CleanupStepTest {
         assertEquals(1, waterfall.steps.size)
         assertEquals(CleanupStepGroup.LEGACY, waterfall.steps[0].group)
         assertEquals(PostProcessor.DEFAULT_MODEL, waterfall.steps[0].model)
+    }
+}
+
+/** Pure classification for the dictation-history "paid fallback" badge (#33): only the two
+ *  direct-provider groups are pay-per-token from the user's own wallet. */
+class CleanupStepGroupIsPaidFallbackTest {
+
+    @Test fun `direct OpenAI and direct Anthropic are paid fallback groups`() {
+        assertTrue(CleanupStepGroup.OPENAI_DIRECT.isPaidFallback())
+        assertTrue(CleanupStepGroup.ANTHROPIC_DIRECT.isPaidFallback())
+    }
+
+    @Test fun `OmniRoute is not a paid fallback group despite being a network fallback, since it is subscription-billed`() {
+        assertFalse(CleanupStepGroup.OMNIROUTE.isPaidFallback())
+    }
+
+    @Test fun `legacy and local groups are not paid fallback groups`() {
+        assertFalse(CleanupStepGroup.LEGACY.isPaidFallback())
+        assertFalse(CleanupStepGroup.LOCAL_LLM.isPaidFallback())
     }
 }
