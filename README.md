@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="docs/logo.svg" width="128" height="128" alt="Phone Whisper Logo">
+  <img src="docs/logo.svg" width="128" height="128" alt="Ramblr Logo">
 </p>
 
-# Phone Whisper
+# Ramblr
 
 Push-to-talk dictation for Android.
 
-Phone Whisper lets you speak into most apps without switching keyboards. Tap the floating button, speak, tap again, and your text is inserted into the currently focused text field when the app exposes a standard Android input field.\
+Ramblr lets you speak into most apps without switching keyboards. Tap the floating button, speak, tap again, and your text is inserted into the currently focused text field when the app exposes a standard Android input field.\
 
 It supports:
 
@@ -14,7 +14,7 @@ It supports:
 - **Cloud transcription** with OpenAI Whisper
 - **Optional cleanup** with OpenAI to fix punctuation and grammar
 
-If you try it and it genuinely saves you time, consider [sponsoring](https://github.com/sponsors/kafkasl)
+Ramblr is a private fork of [kafkasl/phone-whisper](https://github.com/kafkasl/phone-whisper).
 
 
 ## Why I built this
@@ -29,7 +29,7 @@ If you try it and it genuinely saves you time, consider [sponsoring](https://git
 
 ### Easiest: download the APK
 
-Grab the latest APK from [GitHub Releases](https://github.com/kafkasl/phone-whisper/releases).
+Grab the latest APK from [GitHub Releases](https://github.com/trevornk/ramblr/releases).
 
 Open it on your phone, install it, then launch the app once to finish setup.
 
@@ -38,7 +38,7 @@ Open it on your phone, install it, then launch the app once to finish setup.
 Requires JDK 17 and Android SDK.
 
 ```bash
-git clone https://github.com/kafkasl/phone-whisper.git && cd phone-whisper
+git clone https://github.com/trevornk/ramblr.git && cd ramblr
 make build
 ```
 
@@ -67,7 +67,7 @@ make adb-install
 
 ### First-time setup
 
-1. Open **Phone Whisper**
+1. Open **Ramblr**
 2. Grant the **audio recording** permission
 3. Enable the **Accessibility Service**
 4. Choose your transcription mode:
@@ -78,13 +78,13 @@ Once setup is done, the floating button is ready.
 
 ## Why does it need Accessibility?
 
-Phone Whisper uses Android Accessibility Service for one narrow reason: to insert dictated text into the currently focused text field across apps.
+Ramblr uses Android Accessibility Service for one narrow reason: to insert dictated text into the currently focused text field across apps.
 
 It does **not** replace your keyboard. It does **not** run background automation. It only acts after you explicitly tap the overlay button.
 
 ## Privacy
 
-Phone Whisper supports two modes:
+Ramblr supports two modes:
 
 - **Local mode**: audio stays on-device
 - **Cloud mode**: audio is sent directly from your device to OpenAI's transcription API
@@ -136,7 +136,7 @@ All three built-in presets are defined as prompt constants in `PostProcessor.kt`
 (`DEV_PROMPT`, `SIMPLE_PROMPT`, `STRUCTURED_PROMPT`) so you can read or fork them directly.
 
 **Settings → Personal vocabulary** lets you edit the list of project names and jargon (one per
-line) that cleanup should recognize instead of mis-hearing, seeded with Phone Whisper's own
+line) that cleanup should recognize instead of mis-hearing, seeded with Ramblr's own
 defaults on first run. Built-in prompts interpolate this list at send time via a `{{vocabulary}}`
 placeholder; a fully custom prompt can opt in to the same behavior by including that placeholder
 itself (see #26).
@@ -191,13 +191,13 @@ To add a new prompt variant to the comparison, add it to the `PROMPT_REGISTRY` m
 
 ## App compatibility
 
-Phone Whisper works best in apps that use standard Android text fields.
+Ramblr works best in apps that use standard Android text fields.
 Some apps use custom text surfaces or terminal-style views, which may not support direct accessibility paste.
-When insertion is not possible, Phone Whisper falls back to copying the transcript to the clipboard, and the
+When insertion is not possible, Ramblr falls back to copying the transcript to the clipboard, and the
 feedback bubble stays up longer and is tappable to re-copy so a failed insertion is hard to miss (see below).
 
 If the very first scan for an insertable field comes up empty — which can happen for a moment right after the
-overlay button is tapped, since the tap itself briefly steals focus — Phone Whisper waits ~200ms and scans once
+overlay button is tapped, since the tap itself briefly steals focus — Ramblr waits ~200ms and scans once
 more before giving up and falling back to the clipboard. This is a narrow fix for that specific transient race,
 not a general compatibility improvement.
 
@@ -207,7 +207,7 @@ and recording which strategy succeeds, which hasn't been done — see [#5](https
 for that as tracked follow-up work. Don't treat the absence of an app from this doc as either "supported" or
 "unsupported."
 
-Phone Whisper intentionally does not implement a full IME (replacement keyboard). It only acts once, after an
+Ramblr intentionally does not implement a full IME (replacement keyboard). It only acts once, after an
 explicit tap on the overlay button, and never intercepts normal typing — becoming a keyboard is a different,
 much larger feature and is out of scope.
 
@@ -215,7 +215,7 @@ much larger feature and is out of scope.
 
 Termux's main terminal area is not a standard Android text field, so direct insertion may not work there.
 
-To use Phone Whisper in Termux:
+To use Ramblr in Termux:
 
 1. Focus Termux
 2. Swipe the extra keys row (`ESC`, `CTRL`, `ALT`, arrows, etc.) left or right
@@ -232,11 +232,9 @@ Once text is inserted into the native input box, Termux sends it to the terminal
 - Local models are large
 - Cloud mode requires your own OpenAI API key
 
-## Support the project
+## Attribution
 
-If Phone Whisper saves you time, you can sponsor the project on GitHub:
-
-- https://github.com/sponsors/kafkasl
+Ramblr is a private fork of [kafkasl/phone-whisper](https://github.com/kafkasl/phone-whisper), which this project is built on top of.
 
 ## License
 

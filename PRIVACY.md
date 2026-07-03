@@ -1,10 +1,10 @@
-# Privacy Policy for Phone Whisper
+# Privacy Policy for Ramblr
 
-Phone Whisper is an Android dictation app that records speech, transcribes it, and inserts the result into text fields across apps.
+Ramblr is an Android dictation app that records speech, transcribes it, and inserts the result into text fields across apps. Ramblr is a private fork of [kafkasl/phone-whisper](https://github.com/kafkasl/phone-whisper).
 
 ## Data handling
 
-Phone Whisper supports two transcription modes.
+Ramblr supports two transcription modes.
 
 ### Local mode
 
@@ -37,13 +37,13 @@ raw transcript is used instead — no request is sent elsewhere as a fallback.
 
 ## Accessibility Service
 
-Phone Whisper uses Android Accessibility Service only to identify the currently focused text field and insert dictated text after you explicitly interact with the floating overlay button.
+Ramblr uses Android Accessibility Service only to identify the currently focused text field and insert dictated text after you explicitly interact with the floating overlay button.
 
-Phone Whisper is not designed to monitor browsing, collect screen content for analytics, or perform background automation.
+Ramblr is not designed to monitor browsing, collect screen content for analytics, or perform background automation.
 
 ## Data collection
 
-I do not run a backend for Phone Whisper and do not collect user accounts, analytics, or uploaded recordings myself.
+I do not run a backend for Ramblr and do not collect user accounts, analytics, or uploaded recordings myself.
 
 Third-party services you choose to use, such as OpenAI, may process data according to their own terms and privacy policies.
 
