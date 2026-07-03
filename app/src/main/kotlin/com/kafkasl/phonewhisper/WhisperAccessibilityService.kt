@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
@@ -150,6 +151,11 @@ class WhisperAccessibilityService : AccessibilityService() {
     private var layoutParams: WindowManager.LayoutParams? = null
     private var feedbackLayoutParams: WindowManager.LayoutParams? = null
     private var cleanupToggleLayoutParams: WindowManager.LayoutParams? = null
+    // screenW/screenH as of the last time the ring's position was computed (#41) -- the baseline
+    // handleScreenSizeChange() diffs against to detect a fold/unfold. Set alongside layoutParams
+    // in showOverlay() and kept in sync every time it repositions the ring.
+    private var lastScreenW = 0
+    private var lastScreenH = 0
     @Volatile private var recordingEngine: RecordingEngine? = null
     private val guard = TranscriptionGuard()
     private val inFlightCall = InFlightCall()
@@ -234,6 +240,17 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
+
+    /**
+     * Fires reliably on a Pixel Fold fold/unfold (verified on-device: delivered to this
+     * AccessibilityService in both directions, with [screenW]/[screenH] already reflecting the
+     * new size) as well as on an ordinary rotation. [handleScreenSizeChange] tells the two apart
+     * so rotation -- never repositioned before this fix -- stays a no-op.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        handleScreenSizeChange()
+    }
 
     override fun onDestroy() {
         instance = null
@@ -347,6 +364,8 @@ class WhisperAccessibilityService : AccessibilityService() {
             x = screenW - ringSize - margin
             y = screenH / 2 - ringSize / 2
         }
+        lastScreenW = screenW
+        lastScreenH = screenH
 
         var startX = 0; var startY = 0
         var touchX = 0f; var touchY = 0f
@@ -481,6 +500,46 @@ class WhisperAccessibilityService : AccessibilityService() {
         // plain-dictation user who's never touched cleanup gets no badge at all, not even hidden.
         applyCleanupBadgeVisibility()
         applyOverlayVisibility()
+    }
+
+    /**
+     * Reacts to a screen-size change delivered via [onConfigurationChanged] -- on a Pixel Fold
+     * this fires for both a fold/unfold and an ordinary rotation, so [isFoldSizeChange] is used to
+     * ignore a plain width/height swap (rotation has never repositioned the overlay, and this fix
+     * (#41) is scoped to fold/unfold only). On a genuine fold-driven size change, the ring is
+     * re-snapped to whichever edge it was already closest to and its y position is preserved
+     * proportionally (rather than fought back to center) using the same [snappedXForScreenChange]/
+     * [proportionalYForScreenChange] logic covered by unit tests -- then the feedback bubble and
+     * #34 cleanup badge are re-derived from the ring's new params exactly as drag-to-reposition
+     * already does, via [positionFeedback]/[positionCleanupToggle].
+     */
+    private fun handleScreenSizeChange() {
+        val params = layoutParams ?: return
+        val newScreenW = screenW
+        val newScreenH = screenH
+        if (!isFoldSizeChange(lastScreenW, lastScreenH, newScreenW, newScreenH)) {
+            lastScreenW = newScreenW
+            lastScreenH = newScreenH
+            return
+        }
+
+        val ringSize = params.width
+        val margin = (MARGIN_DP * dp).toInt()
+        params.x = snappedXForScreenChange(params.x, lastScreenW, newScreenW, ringSize, margin)
+        params.y = proportionalYForScreenChange(params.y, lastScreenH, newScreenH, ringSize, margin)
+        lastScreenW = newScreenW
+        lastScreenH = newScreenH
+
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        overlayView?.let { wm.updateViewLayout(it, params) }
+        feedbackLayoutParams?.let {
+            positionFeedback(it, params)
+            wm.updateViewLayout(feedbackView, it)
+        }
+        cleanupToggleLayoutParams?.let {
+            positionCleanupToggle(it, params, ringSize)
+            if (cleanupToggleAdded) wm.updateViewLayout(cleanupToggleView, it)
+        }
     }
 
     /**
