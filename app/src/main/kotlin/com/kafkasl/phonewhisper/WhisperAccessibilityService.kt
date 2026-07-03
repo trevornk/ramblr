@@ -1099,7 +1099,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         val session = streamingSession
         if (session == null) {
             val candidate = findDirectInjectionCandidate() ?: return
-            val current = candidate.text?.toString().orEmpty()
+            val current = resolveRealText(candidate.text?.toString(), candidate.isShowingHintText)
             val insertionStart = resolveInsertionStart(candidate.textSelectionStart, candidate.textSelectionEnd, current.length)
             val displayText = smartCapitalize(text)
             if (!setNodeText(candidate, replacePartialInField(current, insertionStart, 0, displayText))) {
@@ -1113,7 +1113,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (!shouldInjectPartial(text, session.lastInjectedText, session.lastInjectedAtMs, now, STREAMING_PARTIAL_MIN_INTERVAL_MS)) return
         if (!refreshNode(session.node)) { endStreamingSession(); return }
 
-        val current = session.node.text?.toString().orEmpty()
+        val current = resolveRealText(session.node.text?.toString(), session.node.isShowingHintText)
         val displayText = smartCapitalize(text)
         val updated = replacePartialInField(current, session.insertionStart, session.lastPartialLength, displayText)
         if (!setNodeText(session.node, updated)) { endStreamingSession(); return }
@@ -1501,7 +1501,7 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  than left concatenated alongside the final transcript. */
     private fun tryCloseStreamingSpan(node: AccessibilityNodeInfo, session: StreamingPreviewSession, text: String): InjectAttempt {
         if (!refreshNode(node)) return InjectAttempt(InjectMethod.NONE)
-        val current = node.text?.toString().orEmpty()
+        val current = resolveRealText(node.text?.toString(), node.isShowingHintText)
         val updated = reconcileStreamingSpan(
             current, StreamingSpan(session.insertionStart, session.lastPartialLength), text, isFinalInjectionTarget = true
         ) ?: return InjectAttempt(InjectMethod.NONE)
@@ -1514,7 +1514,7 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  gone stale by now just has nothing left to revert. */
     private fun clearStreamingLeftover(session: StreamingPreviewSession) {
         if (!refreshNode(session.node)) return
-        val current = session.node.text?.toString().orEmpty()
+        val current = resolveRealText(session.node.text?.toString(), session.node.isShowingHintText)
         val cleared = reconcileStreamingSpan(
             current, StreamingSpan(session.insertionStart, session.lastPartialLength), finalText = "", isFinalInjectionTarget = false
         ) ?: return
@@ -1537,7 +1537,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (pasteOk) return InjectAttempt(InjectMethod.FROM_CLIPBOARD)
 
         if (node.isEditable || node.className?.toString()?.contains("EditText") == true) {
-            val current = node.text?.toString().orEmpty()
+            val current = resolveRealText(node.text?.toString(), node.isShowingHintText)
             val start = if (node.textSelectionStart >= 0) node.textSelectionStart else current.length
             val end = if (node.textSelectionEnd >= 0) node.textSelectionEnd else start
             val replacementStart = minOf(start, end)

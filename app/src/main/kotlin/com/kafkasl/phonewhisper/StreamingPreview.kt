@@ -106,6 +106,17 @@ fun reconcileStreamingSpan(
 }
 
 /**
+ * Resolves a node's real text content, treating placeholder/hint text as empty (#47). When a field
+ * is empty and displaying its hint (e.g. "RCS message"), `AccessibilityNodeInfo.getText()` returns
+ * the hint string itself, not an empty string -- so every call site that reads "what's currently in
+ * this field" to insert relative to must check `isShowingHintText()` first, or the hint gets glued
+ * onto the front of the dictated text with no separating space. Single shared choke point for that
+ * check so it can't be missed at a new call site.
+ */
+fun resolveRealText(rawText: String?, isShowingHintText: Boolean): String =
+    if (isShowingHintText) "" else rawText.orEmpty()
+
+/**
  * Decides where the very first partial of a recording should be inserted (#42). Many Android
  * EditText/keyboard implementations don't reliably report selection state via
  * `AccessibilityNodeInfo` until a real selection-changed event has fired for that field, and can
