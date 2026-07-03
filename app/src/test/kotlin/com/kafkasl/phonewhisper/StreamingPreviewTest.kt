@@ -149,6 +149,20 @@ class StreamingPreviewTest {
         assertEquals("Hello world this is a tes", smartCapitalize("HELLO WORLD THIS IS A TES"))
     }
 
+    // --- resolveRealText (hint-text-is-not-content, #47) ---
+
+    @Test fun `hint text showing is treated as empty, not the hint string itself`() {
+        assertEquals("", resolveRealText(rawText = "RCS message", isShowingHintText = true))
+    }
+
+    @Test fun `real typed text is returned unchanged when hint isn't showing`() {
+        assertEquals("already typed", resolveRealText(rawText = "already typed", isShowingHintText = false))
+    }
+
+    @Test fun `null text with hint not showing resolves to empty`() {
+        assertEquals("", resolveRealText(rawText = null, isShowingHintText = false))
+    }
+
     // --- resolveInsertionStart (first-partial insertion point, #42) ---
 
     @Test fun `negative selection falls back to the end of the existing text`() {
