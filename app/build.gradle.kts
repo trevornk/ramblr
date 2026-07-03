@@ -1,3 +1,6 @@
+import java.net.URI
+import java.util.zip.ZipFile
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -56,4 +59,56 @@ tasks.register<JavaExec>("runEvalHarness") {
     dependsOn("compileDebugUnitTestKotlin")
     mainClass.set("com.kafkasl.phonewhisper.tools.EvalHarnessKt")
     classpath = tasks.named<Test>("testDebugUnitTest").get().classpath
+}
+
+// libsherpa-onnx-jni.so and libonnxruntime.so are required at runtime by the vendored
+// com.k2fsa.sherpa.onnx.* Kotlin bindings (app/src/main/kotlin/com/k2fsa/sherpa/), but that
+// groupId isn't published on Maven Central -- the only working source is the prebuilt aar on
+// GitHub Releases. Fetched here instead of committed, since app/.gitignore already excludes
+// jniLibs/ to keep ~50-60MB of binary out of git (see issue #36).
+val sherpaOnnxVersion = "1.13.3"
+val sherpaOnnxAarUrl =
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaOnnxVersion/sherpa-onnx-$sherpaOnnxVersion.aar"
+val sherpaOnnxJniLibsDir = layout.projectDirectory.dir("src/main/jniLibs/arm64-v8a")
+val sherpaOnnxNativeLibs = listOf("libsherpa-onnx-jni.so", "libonnxruntime.so")
+
+tasks.register("fetchSherpaOnnxNativeLibs") {
+    description = "Downloads the sherpa-onnx $sherpaOnnxVersion release aar and extracts the " +
+        "arm64-v8a native libs into src/main/jniLibs/ (see issue #36)."
+    val outputDir = sherpaOnnxJniLibsDir.asFile
+    // Kept outside jniLibs/ so only the .so files themselves live in the dir Android packages.
+    val versionMarker = layout.buildDirectory.file("sherpaOnnx/.sherpa-onnx-version").get().asFile
+
+    onlyIf("native libs for sherpa-onnx $sherpaOnnxVersion already present") {
+        !(versionMarker.exists() && versionMarker.readText().trim() == sherpaOnnxVersion &&
+            sherpaOnnxNativeLibs.all { File(outputDir, it).exists() })
+    }
+
+    doLast {
+        outputDir.mkdirs()
+        versionMarker.parentFile.mkdirs()
+        val aarFile = File(temporaryDir, "sherpa-onnx-$sherpaOnnxVersion.aar")
+        logger.lifecycle("Fetching sherpa-onnx $sherpaOnnxVersion native libs from $sherpaOnnxAarUrl")
+        URI(sherpaOnnxAarUrl).toURL().openStream().use { input ->
+            aarFile.outputStream().use { output -> input.copyTo(output) }
+        }
+
+        ZipFile(aarFile).use { zip ->
+            sherpaOnnxNativeLibs.forEach { libName ->
+                val entryPath = "jni/arm64-v8a/$libName"
+                val entry = zip.getEntry(entryPath)
+                    ?: error("$entryPath not found in $aarFile -- sherpa-onnx aar layout may have changed")
+                zip.getInputStream(entry).use { input ->
+                    File(outputDir, libName).outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+        }
+        versionMarker.writeText(sherpaOnnxVersion)
+    }
+}
+
+// Hooked onto each variant's JNI-lib-merge step (not preBuild) so it only runs for
+// assembleDebug/assembleRelease packaging, not testDebugUnitTest, which never touches jniLibs/.
+tasks.matching { it.name.matches(Regex("merge[A-Za-z]+JniLibFolders")) }.configureEach {
+    dependsOn("fetchSherpaOnnxNativeLibs")
 }
