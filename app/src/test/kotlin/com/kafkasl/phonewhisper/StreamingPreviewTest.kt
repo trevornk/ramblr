@@ -86,4 +86,50 @@ class StreamingPreviewTest {
     @Test fun `streaming preview is off when neither the setting nor the model are present`() {
         assertFalse(shouldUseStreamingPreview(settingEnabled = false, streamingModelInstalled = false))
     }
+
+    // --- smartCapitalize (display-only sentence case, #42) ---
+
+    @Test fun `empty string stays empty`() {
+        assertEquals("", smartCapitalize(""))
+    }
+
+    @Test fun `single sentence gets only its first letter capitalized`() {
+        assertEquals("Hello world", smartCapitalize("HELLO WORLD"))
+    }
+
+    @Test fun `multiple sentences are capitalized after period, exclamation and question mark`() {
+        assertEquals(
+            "Hello world. How are you! Fine then? Great",
+            smartCapitalize("HELLO WORLD. HOW ARE YOU! FINE THEN? GREAT")
+        )
+    }
+
+    @Test fun `all-caps input produces correctly cased output throughout, not just the first word`() {
+        assertEquals("This is a longer sentence with many words", smartCapitalize("THIS IS A LONGER SENTENCE WITH MANY WORDS"))
+    }
+
+    @Test fun `a trailing partial word with no sentence terminator is left as a normal lowercase continuation`() {
+        // Streaming hypotheses are incomplete -- the last word may be a mid-utterance fragment.
+        assertEquals("Hello world this is a tes", smartCapitalize("HELLO WORLD THIS IS A TES"))
+    }
+
+    // --- resolveInsertionStart (first-partial insertion point, #42) ---
+
+    @Test fun `negative selection falls back to the end of the existing text`() {
+        assertEquals(12, resolveInsertionStart(selStart = -1, selEnd = -1, currentTextLength = 12))
+    }
+
+    @Test fun `a genuine non-zero selection is trusted as intentional cursor placement`() {
+        assertEquals(3, resolveInsertionStart(selStart = 3, selEnd = 7, currentTextLength = 20))
+    }
+
+    @Test fun `an ambiguous (0, 0) report against non-empty existing text falls back to the end`() {
+        // Many EditText/keyboard implementations report a stale (0, 0) selection before any real
+        // selection-changed event has fired for the field -- not a genuine cursor-at-start.
+        assertEquals(9, resolveInsertionStart(selStart = 0, selEnd = 0, currentTextLength = 9))
+    }
+
+    @Test fun `a genuine (0, 0) report against empty existing text is trusted`() {
+        assertEquals(0, resolveInsertionStart(selStart = 0, selEnd = 0, currentTextLength = 0))
+    }
 }

@@ -1073,7 +1073,10 @@ class WhisperAccessibilityService : AccessibilityService() {
      * a specific span replaced in place, so preview is silently skipped there and only the final
      * batch injection (unaffected by any of this) will land in that field. Subsequent partials
      * reuse the same node rather than rescanning, both for cost and to avoid re-resolving focus
-     * mid-dictation.
+     * mid-dictation. The insertion point uses [resolveInsertionStart] rather than trusting a raw
+     * `(0, 0)` selection report (#42), and the text actually written to the field is run through
+     * [smartCapitalize] for display only — the raw model hypothesis is still what's compared/stored
+     * for throttling purposes.
      */
     private fun maybeInjectPartial(text: String) {
         if (!stateMachine.isRecording()) return // stale post after stop/cancel raced this
@@ -1084,14 +1087,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (session == null) {
             val candidate = findDirectInjectionCandidate() ?: return
             val current = candidate.text?.toString().orEmpty()
-            val selStart = if (candidate.textSelectionStart >= 0) candidate.textSelectionStart else current.length
-            val selEnd = if (candidate.textSelectionEnd >= 0) candidate.textSelectionEnd else selStart
-            val insertionStart = minOf(selStart, selEnd)
-            if (!setNodeText(candidate, replacePartialInField(current, insertionStart, 0, text))) {
+            val insertionStart = resolveInsertionStart(candidate.textSelectionStart, candidate.textSelectionEnd, current.length)
+            val displayText = smartCapitalize(text)
+            if (!setNodeText(candidate, replacePartialInField(current, insertionStart, 0, displayText))) {
                 candidate.recycle()
                 return
             }
-            streamingSession = StreamingPreviewSession(candidate, insertionStart, text.length, text, now)
+            streamingSession = StreamingPreviewSession(candidate, insertionStart, displayText.length, text, now)
             return
         }
 
@@ -1099,9 +1101,10 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (!refreshNode(session.node)) { endStreamingSession(); return }
 
         val current = session.node.text?.toString().orEmpty()
-        val updated = replacePartialInField(current, session.insertionStart, session.lastPartialLength, text)
+        val displayText = smartCapitalize(text)
+        val updated = replacePartialInField(current, session.insertionStart, session.lastPartialLength, displayText)
         if (!setNodeText(session.node, updated)) { endStreamingSession(); return }
-        session.lastPartialLength = text.length
+        session.lastPartialLength = displayText.length
         session.lastInjectedText = text
         session.lastInjectedAtMs = now
     }

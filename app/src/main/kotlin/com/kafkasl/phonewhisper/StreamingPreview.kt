@@ -43,3 +43,46 @@ fun replacePartialInField(current: String, insertionStart: Int, previousLength: 
  */
 fun shouldUseStreamingPreview(settingEnabled: Boolean, streamingModelInstalled: Boolean): Boolean =
     settingEnabled && streamingModelInstalled
+
+/**
+ * Formats a raw partial hypothesis for display only (#42). The bundled streaming model
+ * (`sherpa-onnx-streaming-zipformer-en-20M-2023-02-17`, see [StreamingTranscriber]) is trained
+ * purely on LibriSpeech, whose recipes commonly use an uppercase-only, unpunctuated token
+ * vocabulary -- so raw partials come back as unbroken ALL CAPS. This lowercases everything, then
+ * capitalizes the first letter of the string and of each sentence following ". "/"! "/"? ". Purely
+ * a display transform for the live-preview string: never re-fed into the recognizer, never applied
+ * to the final batch-injected transcript. Kept allocation-light since it runs on every throttled
+ * partial update.
+ */
+fun smartCapitalize(text: String): String {
+    if (text.isEmpty()) return text
+    val chars = text.lowercase().toCharArray()
+    var capitalizeNext = true
+    for (i in chars.indices) {
+        val c = chars[i]
+        if (capitalizeNext && c.isLetter()) {
+            chars[i] = c.uppercaseChar()
+            capitalizeNext = false
+        }
+        if ((c == '.' || c == '!' || c == '?') && i + 1 < chars.size && chars[i + 1] == ' ') {
+            capitalizeNext = true
+        }
+    }
+    return String(chars)
+}
+
+/**
+ * Decides where the very first partial of a recording should be inserted (#42). Many Android
+ * EditText/keyboard implementations don't reliably report selection state via
+ * `AccessibilityNodeInfo` until a real selection-changed event has fired for that field, and can
+ * report `(0, 0)` even when the visible cursor is actually at the end of existing text -- the
+ * common case of tapping the mic to continue dictating after an existing draft. A negative
+ * [selStart]/[selEnd] (unreported) and an exact `(0, 0)` report against non-empty existing text are
+ * both treated as unreliable and fall back to [currentTextLength] (end of the field); any other
+ * selection is trusted as a genuine, explicit cursor placement and used as-is.
+ */
+fun resolveInsertionStart(selStart: Int, selEnd: Int, currentTextLength: Int): Int {
+    if (selStart < 0 || selEnd < 0) return currentTextLength
+    if (selStart == 0 && selEnd == 0 && currentTextLength > 0) return currentTextLength
+    return minOf(selStart, selEnd)
+}
