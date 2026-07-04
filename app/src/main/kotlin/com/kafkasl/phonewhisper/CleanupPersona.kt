@@ -79,4 +79,14 @@ object CleanupPersonas {
     fun resolvePrompt(persona: CleanupPersona, customPrompt: String?): String =
         if (!customPrompt.isNullOrBlank() && customPrompt != PostProcessor.DEFAULT_PROMPT) customPrompt
         else persona.prompt
+
+    /**
+     * The prompt to save when the user explicitly taps a built-in persona row in Settings (#48).
+     * Unlike [resolvePrompt] -- whose "custom prompt always wins" rule exists for the Edit-prompt
+     * dialog and upgrade-path persona inference -- a deliberate tap on a specific persona must
+     * always take effect, even when a custom prompt is saved from an earlier, unrelated edit.
+     * [MainActivity.selectPrompt] previously called [resolvePrompt] here instead, so any saved
+     * custom prompt silently overrode every persona selection.
+     */
+    fun promptForExplicitSelection(persona: CleanupPersona): String = persona.prompt
 }

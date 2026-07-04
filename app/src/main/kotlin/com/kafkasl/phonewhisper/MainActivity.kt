@@ -826,10 +826,9 @@ class MainActivity : AppCompatActivity() {
             prefs().edit().putString("post_processing_prompt", customPrompt()).apply()
         } else {
             val persona = CleanupPersonas.fromKey(key)
-            val resolved = CleanupPersonas.resolvePrompt(persona, customPrompt())
             prefs().edit()
                 .putString("cleanup_style", persona.key)
-                .putString("post_processing_prompt", resolved)
+                .putString("post_processing_prompt", CleanupPersonas.promptForExplicitSelection(persona))
                 .apply()
         }
         refreshPromptRows(); refresh()
