@@ -92,6 +92,9 @@ class MainActivity : AppCompatActivity() {
     // refreshSimpleCleanupChoice().
     private lateinit var cleanupLocalGroup: View
     private lateinit var cleanupCloudGroup: View
+    // Lets a tap on "Local" reveal cleanupLocalGroup even with no model installed yet (#55) -- see
+    // displayedCleanupChoice(). In-memory only, same pattern as advancedExpanded below.
+    private var pendingLocalCleanupSelection = false
     private val cleanupModelRows = mutableMapOf<String, ModelRowViews>()
     private val cleanupModelDownloadState = mutableMapOf<String, WorkInfo.State>()
     private val cleanupModelDownloadAcked = mutableSetOf<String>()
@@ -1069,23 +1072,34 @@ class MainActivity : AppCompatActivity() {
             SimpleCleanupChoice.LOCAL -> {
                 val model = selectedCleanupModel()
                 if (!ModelDownloader.isInstalled(this, model)) {
-                    toast("Download the local cleanup model first")
+                    // Don't write a LOCAL_LLM waterfall step pointing at a missing file, but do let
+                    // the radio/model list visually switch to Local (#55) so a download button is
+                    // reachable -- otherwise a user who deleted their only model can never get back
+                    // to one, since refreshSimpleCleanupChoice() below would stay on Cloud forever.
+                    pendingLocalCleanupSelection = true
+                    toast("Download a local cleanup model below to finish switching")
+                    refreshSimpleCleanupChoice()
                     return
                 }
+                pendingLocalCleanupSelection = false
                 saveWaterfallSteps(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, model.archive)))
             }
-            SimpleCleanupChoice.CLOUD ->
+            SimpleCleanupChoice.CLOUD -> {
+                pendingLocalCleanupSelection = false
                 saveWaterfallSteps(listOf(CleanupStep(CleanupStepGroup.LEGACY, PostProcessor.DEFAULT_MODEL)))
+            }
             SimpleCleanupChoice.CUSTOM -> return
         }
         refreshSimpleCleanupChoice()
     }
 
     private fun refreshSimpleCleanupChoice() {
-        val choice = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this))
+        val persistedChoice = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this))
+        if (persistedChoice == SimpleCleanupChoice.LOCAL) pendingLocalCleanupSelection = false
+        val choice = displayedCleanupChoice(persistedChoice, pendingLocalCleanupSelection)
         cleanupLocalRadio.isChecked = choice == SimpleCleanupChoice.LOCAL
         cleanupCloudRadio.isChecked = choice == SimpleCleanupChoice.CLOUD
-        cleanupChoiceCaption.visibility = if (choice == SimpleCleanupChoice.CUSTOM) View.VISIBLE else View.GONE
+        cleanupChoiceCaption.visibility = if (persistedChoice == SimpleCleanupChoice.CUSTOM) View.VISIBLE else View.GONE
         // Collapse to only the selected mode's sub-fields (#49), same pattern as Transcription's
         // local/cloud collapse -- neither is shown for CUSTOM, since the caption above already
         // points power users at their real config under Advanced.
