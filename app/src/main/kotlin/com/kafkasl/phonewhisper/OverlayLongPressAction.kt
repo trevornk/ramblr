@@ -30,3 +30,15 @@ fun overlayLongPressActionFor(
         if (hasPendingInjection) OverlayLongPressAction.UNDO_INJECTION else OverlayLongPressAction.SHOW_STYLE_MENU
     RecordingStateMachine.State.RECORDING -> OverlayLongPressAction.NONE
 }
+
+/**
+ * Whether the long-press timer firing with [action] already decided should actually take effect
+ * given how far the touch has moved since ACTION_DOWN (real feedback from Trevor's Pixel 10 Pro
+ * Fold, #57): holding the ring to drag it is far more common than holding it stationary to open
+ * the style menu, and a drag that's underway reads as "moved past the tap/drag threshold" well
+ * before ACTION_UP -- so [SHOW_STYLE_MENU] must not fire once that's true, letting the touch
+ * continue as a plain drag-to-reposition instead. [CANCEL_TRANSCRIPTION]/[UNDO_INJECTION] are
+ * instant one-shot actions rather than a persistent overlay, so movement doesn't gate them.
+ */
+fun shouldFireLongPress(action: OverlayLongPressAction, movedPastThreshold: Boolean): Boolean =
+    action != OverlayLongPressAction.SHOW_STYLE_MENU || !movedPastThreshold
