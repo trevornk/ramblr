@@ -54,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cleanupModelSub: TextView
     private lateinit var cleanupModelProgress: LinearProgressIndicator
     private lateinit var cleanupModelDlBtn: MaterialButton
+    private lateinit var cleanupModelDeleteBtn: MaterialButton
     private var cleanupModelDownloadState: WorkInfo.State? = null
     private var cleanupModelDownloadAcked = false
 
@@ -70,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var streamingModelSub: TextView
     private lateinit var streamingModelProgress: LinearProgressIndicator
     private lateinit var streamingModelDlBtn: MaterialButton
+    private lateinit var streamingModelDeleteBtn: MaterialButton
     private var streamingModelDownloadState: WorkInfo.State? = null
     private var streamingModelDownloadAcked = false
 
@@ -101,7 +103,8 @@ class MainActivity : AppCompatActivity() {
         val radio: MaterialRadioButton,
         val progress: LinearProgressIndicator,
         val subtitle: TextView,
-        val dlBtn: MaterialButton
+        val dlBtn: MaterialButton,
+        val deleteBtn: MaterialButton
     )
 
     private data class PromptRowViews(
@@ -432,8 +435,14 @@ class MainActivity : AppCompatActivity() {
             text = "↓"
             textSize = 18f
             setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
+            setOnClickListener { onModelAction(model) }
         }
-        
+        val deleteBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
+            text = "🗑"
+            textSize = 16f
+            setOnClickListener { confirmDeleteModel(model) }
+        }
+
         val progress = LinearProgressIndicator(this).apply {
             visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(4)).apply {
@@ -445,6 +454,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(dlBtn)
+            addView(deleteBtn)
             addView(radio)
         }
 
@@ -455,12 +465,12 @@ class MainActivity : AppCompatActivity() {
         ) {
             onModelAction(model)
         }
-        
+
         val textContainer = row.getChildAt(0) as LinearLayout
         textContainer.addView(progress)
-        
+
         modelRows[model.archive] = ModelRowViews(
-            radio, progress, textContainer.findViewWithTag("subtitle"), dlBtn
+            radio, progress, textContainer.findViewWithTag("subtitle"), dlBtn, deleteBtn
         )
         refreshCard(model)
         observeDownload(model)
@@ -543,15 +553,46 @@ class MainActivity : AppCompatActivity() {
         refreshAllCards(); refresh()
     }
 
+    /** Confirms before uninstalling [model] (#51) -- a large download is easy to lose to a stray
+     *  tap otherwise. Names the currently-selected model explicitly so deleting it isn't a surprise. */
+    private fun confirmDeleteModel(model: Model) {
+        val isActive = prefs().getString("model_name", "") == model.archive
+        val activeNote = if (isActive) " This is your currently selected model." else ""
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Delete ${model.name}?")
+            .setMessage("This frees ${model.sizeMb} MB of storage.$activeNote You can download it again later.")
+            .setPositiveButton("Delete") { _, _ -> deleteModel(model) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Removes [model]'s files via [ModelDownloader] and, if it was the selected offline model,
+     *  falls back to another installed model or clears the selection (#51) -- see
+     *  [ModelDownloader.resolveSelectionAfterDelete]. */
+    private fun deleteModel(model: Model) {
+        ModelDownloader.delete(this, model)
+        val remaining = MODEL_CATALOG
+            .filter { it.archive != model.archive && ModelDownloader.isInstalled(this, it) }
+            .map { it.archive }
+        val newSelection = ModelDownloader.resolveSelectionAfterDelete(
+            prefs().getString("model_name", "") ?: "", model.archive, remaining
+        )
+        prefs().edit().putString("model_name", newSelection).apply()
+        WhisperAccessibilityService.instance?.reloadModel()
+        toast("${model.name} deleted")
+        refreshAllCards(); refresh()
+    }
+
     private fun refreshCard(model: Model) {
         val views = modelRows[model.archive] ?: return
         val active = prefs().getString("model_name", "") == model.archive
         val installed = ModelDownloader.isInstalled(this, model)
-        
+
         views.radio.isChecked = active
         views.radio.visibility = if (installed) View.VISIBLE else View.GONE
         views.dlBtn.visibility = if (installed) View.GONE else View.VISIBLE
-        
+        views.deleteBtn.visibility = if (installed) View.VISIBLE else View.GONE
+
         if (views.progress.visibility == View.GONE) {
             views.subtitle.text = "${model.quality} · ${model.sizeMb} MB"
         }
@@ -566,19 +607,32 @@ class MainActivity : AppCompatActivity() {
             text = "↓"
             textSize = 18f
             setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
+            setOnClickListener { onStreamingModelAction() }
+        }
+        val deleteBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
+            text = "🗑"
+            textSize = 16f
+            setOnClickListener { confirmDeleteStreamingModel() }
+        }
+        val rightContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(dlBtn)
+            addView(deleteBtn)
         }
         val progress = LinearProgressIndicator(this).apply {
             visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(4)).apply { topMargin = dp(8) }
         }
 
-        val row = settingsRow(STREAMING_MODEL.name, streamingModelSubtitle(), dlBtn) { onStreamingModelAction() }
+        val row = settingsRow(STREAMING_MODEL.name, streamingModelSubtitle(), rightContainer) { onStreamingModelAction() }
         val textContainer = row.getChildAt(0) as LinearLayout
         textContainer.addView(progress)
 
         streamingModelSub = textContainer.findViewWithTag("subtitle")
         streamingModelProgress = progress
         streamingModelDlBtn = dlBtn
+        streamingModelDeleteBtn = deleteBtn
 
         observeStreamingDownload()
         refreshStreamingModelRow()
@@ -589,6 +643,28 @@ class MainActivity : AppCompatActivity() {
         if (ModelDownloader.isInstalled(this, STREAMING_MODEL)) return
         if (ModelDownloadWorker.isInFlight(streamingModelDownloadState)) return
         ModelDownloadWorker.enqueue(this, STREAMING_MODEL)
+    }
+
+    /** Confirms before uninstalling the streaming model (#51); deleting it turns off live preview
+     *  automatically the next time [shouldUseStreamingPreview] is checked, since that gate always
+     *  re-reads install state fresh -- no separate "selection" to fall back here. */
+    private fun confirmDeleteStreamingModel() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Delete ${STREAMING_MODEL.name}?")
+            .setMessage(
+                "This frees ${STREAMING_MODEL.sizeMb} MB of storage and turns off streaming live " +
+                    "preview. You can download it again later."
+            )
+            .setPositiveButton("Delete") { _, _ -> deleteStreamingModel() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun deleteStreamingModel() {
+        ModelDownloader.delete(this, STREAMING_MODEL)
+        WhisperAccessibilityService.instance?.reloadStreamingModel()
+        toast("${STREAMING_MODEL.name} deleted")
+        refreshStreamingModelRow(); refresh()
     }
 
     private fun observeStreamingDownload() {
@@ -645,6 +721,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshStreamingModelRow() {
         val installed = ModelDownloader.isInstalled(this, STREAMING_MODEL)
         streamingModelDlBtn.visibility = if (installed) View.GONE else View.VISIBLE
+        streamingModelDeleteBtn.visibility = if (installed) View.VISIBLE else View.GONE
         if (streamingModelProgress.visibility == View.GONE) {
             streamingModelSub.text = streamingModelSubtitle()
         }
@@ -679,19 +756,32 @@ class MainActivity : AppCompatActivity() {
             text = "↓"
             textSize = 18f
             setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
+            setOnClickListener { onCleanupModelAction() }
+        }
+        val deleteBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
+            text = "🗑"
+            textSize = 16f
+            setOnClickListener { confirmDeleteCleanupModel() }
+        }
+        val rightContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(dlBtn)
+            addView(deleteBtn)
         }
         val progress = LinearProgressIndicator(this).apply {
             visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(4)).apply { topMargin = dp(8) }
         }
 
-        val row = settingsRow(LOCAL_CLEANUP_MODEL.name, cleanupModelSubtitle(), dlBtn) { onCleanupModelAction() }
+        val row = settingsRow(LOCAL_CLEANUP_MODEL.name, cleanupModelSubtitle(), rightContainer) { onCleanupModelAction() }
         val textContainer = row.getChildAt(0) as LinearLayout
         textContainer.addView(progress)
 
         cleanupModelSub = textContainer.findViewWithTag("subtitle")
         cleanupModelProgress = progress
         cleanupModelDlBtn = dlBtn
+        cleanupModelDeleteBtn = deleteBtn
 
         observeCleanupModelDownload()
         refreshCleanupModelRow()
@@ -702,6 +792,32 @@ class MainActivity : AppCompatActivity() {
         if (ModelDownloader.isInstalled(this, LOCAL_CLEANUP_MODEL)) return
         if (ModelDownloadWorker.isInFlight(cleanupModelDownloadState)) return
         ModelDownloadWorker.enqueue(this, LOCAL_CLEANUP_MODEL)
+    }
+
+    /** Confirms before uninstalling the local cleanup model (#51), warning when it backs the
+     *  active "Local" cleanup choice since deleting it reverts that choice back to Cloud below. */
+    private fun confirmDeleteCleanupModel() {
+        val isActive = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this)) == SimpleCleanupChoice.LOCAL
+        val activeNote = if (isActive) " Cleanup will switch back to Cloud." else ""
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Delete ${LOCAL_CLEANUP_MODEL.name}?")
+            .setMessage("This frees ${LOCAL_CLEANUP_MODEL.sizeMb} MB of storage.$activeNote You can download it again later.")
+            .setPositiveButton("Delete") { _, _ -> deleteCleanupModel() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Removes the local cleanup model via [ModelDownloader] and, if it backed the active "Local"
+     *  simple cleanup choice, falls back to Cloud (#51) via the same path a user tapping "Cloud"
+     *  would take -- rather than leaving the waterfall's one step pointing at a deleted file (the
+     *  executor already fails that gracefully per step, but a stale-but-unusable "Local" selection
+     *  isn't a state worth leaving the user in). */
+    private fun deleteCleanupModel() {
+        val wasActive = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this)) == SimpleCleanupChoice.LOCAL
+        ModelDownloader.delete(this, LOCAL_CLEANUP_MODEL)
+        if (wasActive) onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
+        toast("${LOCAL_CLEANUP_MODEL.name} deleted")
+        refreshCleanupModelRow(); refresh()
     }
 
     private fun observeCleanupModelDownload() {
@@ -757,6 +873,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshCleanupModelRow() {
         val installed = ModelDownloader.isInstalled(this, LOCAL_CLEANUP_MODEL)
         cleanupModelDlBtn.visibility = if (installed) View.GONE else View.VISIBLE
+        cleanupModelDeleteBtn.visibility = if (installed) View.VISIBLE else View.GONE
         if (cleanupModelProgress.visibility == View.GONE) {
             cleanupModelSub.text = cleanupModelSubtitle()
         }
