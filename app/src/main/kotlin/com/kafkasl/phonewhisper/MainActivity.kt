@@ -154,8 +154,9 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(header)
 
-        // Status row
-        val statusRow = settingsRow("Status", "Checking...")
+        // Status row -- tapping it (re-)launches the setup walkthrough when setup isn't done yet
+        // (#52); once ready it's just informational, same as before.
+        val statusRow = settingsRow("Status", "Checking...") { onStatusRowTapped() }
         statusSubtitle = statusRow.findViewWithTag("subtitle")
         root.addView(statusRow)
 
@@ -175,6 +176,11 @@ class MainActivity : AppCompatActivity() {
         }
         accRowSub = accRow.findViewWithTag("subtitle")
         root.addView(accRow)
+
+        root.addView(settingsRow(
+            "Redo setup walkthrough",
+            "Re-run the guide for permissions, transcription, cleanup, and streaming preview"
+        ) { startWalkthrough() })
 
         // ============================================================
         // Tier 1 -- Transcription (#38): required, but has a working default. Local needs no
@@ -1230,13 +1236,16 @@ class MainActivity : AppCompatActivity() {
                 ?.let { selectModel(it.archive) }
         }
 
-        // Ready logic
-        val localReady = useLocal && hasModel
-        val cloudReady = !useLocal && hasKey
-        val postReady = !usePostProcessing || hasKey
-        val ready = audio && acc && (localReady || cloudReady) && postReady
+        // Ready logic -- see OnboardingWizard.isSetupComplete for what "ready" means (#52).
+        val ready = OnboardingWizard.isSetupComplete(
+            audioGranted = audio,
+            accessibilityEnabled = acc,
+            transcriptionLocal = useLocal,
+            hasLocalModel = hasModel,
+            hasApiKey = hasKey,
+        )
 
-        statusSubtitle.text = if (ready) "Ready — tap the overlay dot to dictate" else "Setup required"
+        statusSubtitle.text = if (ready) "Ready — tap the overlay dot to dictate" else "Setup required — tap to finish setup"
         statusSubtitle.setTextColor(if (ready) attrColor(com.google.android.material.R.attr.colorPrimary) else attrColor(android.R.attr.textColorSecondary))
         
         refreshAllCards()
@@ -1773,11 +1782,22 @@ class MainActivity : AppCompatActivity() {
      *  a dialog is already up or [OnboardingWizard] says setup is already done. Called from every
      *  point the Activity resumes control (onResume, permission results) so a step that requires
      *  leaving the app (mic prompt, Accessibility settings) picks back up automatically. */
-    private fun advanceOnboarding() {
+    private fun advanceOnboarding() = advanceOnboardingStep(force = false)
+
+    /** Re-enters the walkthrough on demand (#52) -- from the Status row when setup isn't fully
+     *  done, or the explicit "Redo setup walkthrough" Settings row -- always starting from the
+     *  intro, same as a fresh install, though steps already satisfied (permissions already
+     *  granted) are skipped as usual by [advanceOnboardingStep]'s own `when`. */
+    private fun startWalkthrough() {
+        onboardingIntroShown = false
+        advanceOnboardingStep(force = true)
+    }
+
+    private fun advanceOnboardingStep(force: Boolean) {
         if (onboardingDialog?.isShowing == true) return
         val accessibilityEnabled = WhisperAccessibilityService.instance != null
         val complete = prefs().getBoolean(KEY_ONBOARDING_COMPLETE, false)
-        if (!OnboardingWizard.shouldShow(accessibilityEnabled, complete)) return
+        if (!OnboardingWizard.shouldAdvance(onboardingIntroShown, force, accessibilityEnabled, complete)) return
 
         when {
             !onboardingIntroShown -> {
@@ -1788,6 +1808,19 @@ class MainActivity : AppCompatActivity() {
             !accessibilityEnabled -> showOnboardingAccessibilityStep()
             else -> showOnboardingModeStep()
         }
+    }
+
+    /** Whether the Status row's "tap to finish setup" affordance should do anything (#52) --
+     *  mirrors [refresh]'s own ready computation so tapping Status while "Ready" is a no-op. */
+    private fun onStatusRowTapped() {
+        val ready = OnboardingWizard.isSetupComplete(
+            audioGranted = hasPerm(Manifest.permission.RECORD_AUDIO),
+            accessibilityEnabled = WhisperAccessibilityService.instance != null,
+            transcriptionLocal = prefs().getBoolean("use_local", true),
+            hasLocalModel = LocalTranscriber.availableModels(this).isNotEmpty(),
+            hasApiKey = ApiKeyStore.getApiKey(this).isNotBlank(),
+        )
+        if (!ready) startWalkthrough()
     }
 
     private fun dismissOnboarding() { onboardingDialog = null }
@@ -1867,36 +1900,135 @@ class MainActivity : AppCompatActivity() {
                     toast("Downloading ${recommended.name}...")
                 }
                 refresh()
-                showOnboardingTryStep()
+                showOnboardingCleanupStep()
             }
             .setNegativeButton("Use cloud (needs API key)") { _, _ ->
                 dismissOnboarding()
                 prefs().edit().putBoolean("use_local", false).apply()
                 refresh()
-                promptOnboardingApiKey()
+                promptOnboardingApiKey { showOnboardingCleanupStep() }
             }
             .setNeutralButton("Not now") { _, _ -> dismissOnboarding() }
             .show()
     }
 
-    private fun promptOnboardingApiKey() {
+    /** Shared cloud-API-key entry point for both the Transcription and Cleanup onboarding steps
+     *  (#52) -- both ultimately read [ApiKeyStore]'s one key (see the "Shared by cloud
+     *  transcription above and cloud cleanup below" comment on the Settings key row), so a user
+     *  who already entered it for one isn't asked again for the other. */
+    private fun promptOnboardingApiKey(onDone: () -> Unit) {
+        if (ApiKeyStore.getApiKey(this).isNotBlank()) {
+            onDone()
+            return
+        }
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             hint = "sk-..."
         }
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("OpenAI API Key")
-            .setMessage("Used only to call OpenAI's transcription API directly from your phone — billed pay-per-use to your own account.")
+            .setMessage("Used only to call OpenAI's API directly from your phone — billed pay-per-use to your own account.")
             .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
             .setCancelable(false)
             .setPositiveButton("Save") { _, _ ->
                 val entered = input.text.toString().trim()
                 if (entered.isNotBlank()) ApiKeyStore.setApiKey(this, entered)
                 refresh()
+                onDone()
+            }
+            .setNegativeButton("Skip") { _, _ -> dismissOnboarding(); onDone() }
+            .show()
+    }
+
+    /** Cleanup onboarding step (#52): optional, off by default, same Local/Cloud shape as
+     *  Transcription. Picking Local eagerly selects the recommended tier and downloads it in the
+     *  background, mirroring [showOnboardingModeStep]'s Local path -- unlike [onSelectSimpleCleanup]'s
+     *  Settings-screen version, which refuses until a model is already installed. */
+    private fun showOnboardingCleanupStep() {
+        val recommended = LOCAL_CLEANUP_MODEL_CATALOG.firstOrNull { it.recommended } ?: LOCAL_CLEANUP_MODEL_CATALOG.first()
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Clean up dictation with AI? (optional)")
+            .setMessage(
+                "Cleanup rewrites your raw dictation to fix grammar, punctuation, and filler words — " +
+                    "off by default.\n\nOn-device (recommended): downloads \"${recommended.name}\" and " +
+                    "keeps the text on this phone.\n\nCloud: uses your own API key — no download, but the " +
+                    "text leaves your device and usage is billed to you."
+            )
+            .setCancelable(false)
+            .setPositiveButton("Use on-device (recommended)") { _, _ ->
+                dismissOnboarding()
+                enableOnboardingCleanupLocal(recommended)
+                showOnboardingStreamingStep()
+            }
+            .setNegativeButton("Use cloud (needs API key)") { _, _ ->
+                dismissOnboarding()
+                enableOnboardingCleanupCloud()
+                promptOnboardingApiKey { showOnboardingStreamingStep() }
+            }
+            .setNeutralButton("Skip (leave off)") { _, _ -> dismissOnboarding(); showOnboardingStreamingStep() }
+            .show()
+    }
+
+    private fun enableOnboardingCleanupLocal(model: Model) {
+        prefs().edit()
+            .putBoolean("use_post_processing", true)
+            .putString(KEY_LOCAL_CLEANUP_MODEL_NAME, model.archive)
+            .apply()
+        saveWaterfallSteps(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, model.archive)))
+        if (!ModelDownloader.isInstalled(this, model)) {
+            ModelDownloadWorker.enqueue(this, model)
+            toast("Downloading ${model.name}...")
+        }
+        refresh()
+    }
+
+    /** The dialog in [showOnboardingCleanupStep] already explains that Cloud cleanup sends text
+     *  off-device even when transcription stays local, so this also marks that one-time consent
+     *  (#23) satisfied -- otherwise Settings' own toggle would show the same warning again right
+     *  after onboarding finishes. */
+    private fun enableOnboardingCleanupCloud() {
+        prefs().edit()
+            .putBoolean("use_post_processing", true)
+            .putBoolean(KEY_LOCAL_CLEANUP_CONSENT, true)
+            .apply()
+        onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
+        refresh()
+    }
+
+    /** Streaming live-preview onboarding step (#52): a plain on/off toggle, not a Local/Cloud
+     *  choice -- the streaming path is always on-device (#29), there is no cloud option to offer. */
+    private fun showOnboardingStreamingStep() {
+        val recommended = STREAMING_MODEL_CATALOG.firstOrNull { it.recommended } ?: STREAMING_MODEL_CATALOG.first()
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Show live text while you speak? (optional)")
+            .setMessage(
+                "Streaming preview shows your words appearing in the field as you talk, using a small " +
+                    "on-device model — always local, nothing is ever sent anywhere for this. The final " +
+                    "text after you stop recording still comes from your Transcription + Cleanup " +
+                    "settings above; this only changes what's shown while recording.\n\n" +
+                    "Turning this on downloads \"${recommended.name}\" now."
+            )
+            .setCancelable(false)
+            .setPositiveButton("Turn on") { _, _ ->
+                dismissOnboarding()
+                enableOnboardingStreaming(recommended)
                 showOnboardingTryStep()
             }
-            .setNegativeButton("Skip") { _, _ -> dismissOnboarding(); showOnboardingTryStep() }
+            .setNegativeButton("Skip (leave off)") { _, _ -> dismissOnboarding(); showOnboardingTryStep() }
             .show()
+    }
+
+    private fun enableOnboardingStreaming(model: Model) {
+        prefs().edit()
+            .putBoolean(KEY_STREAMING_PREVIEW, true)
+            .putString(KEY_STREAMING_MODEL_NAME, model.archive)
+            .apply()
+        if (!ModelDownloader.isInstalled(this, model)) {
+            ModelDownloadWorker.enqueue(this, model)
+            toast("Downloading ${model.name}...")
+        }
+        WhisperAccessibilityService.instance?.reloadStreamingModel()
+        refresh()
     }
 
     private fun showOnboardingTryStep() {
