@@ -26,6 +26,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Same llama.cpp submodule dependency as ci.yml -- see that file's comment.
+          submodules: recursive
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
