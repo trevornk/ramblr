@@ -377,6 +377,52 @@ class ModelDownloaderTest {
         assertEquals(-1L, ModelDownloader.computeTotalBytes(offset = 0, contentLength = -1, contentRange = null))
     }
 
+    // -- resolveSelectionAfterDelete (#51: uninstall-fallback logic) --
+
+    @Test fun `resolveSelectionAfterDelete leaves an unrelated selection untouched`() {
+        assertEquals(
+            "sherpa-onnx-whisper-base.en",
+            ModelDownloader.resolveSelectionAfterDelete(
+                currentArchive = "sherpa-onnx-whisper-base.en",
+                deletedArchive = "sherpa-onnx-moonshine-tiny-en-int8",
+                remainingInstalled = listOf("sherpa-onnx-whisper-base.en"),
+            )
+        )
+    }
+
+    @Test fun `resolveSelectionAfterDelete falls back to another installed model when the selected one is deleted`() {
+        assertEquals(
+            "sherpa-onnx-whisper-base.en",
+            ModelDownloader.resolveSelectionAfterDelete(
+                currentArchive = "sherpa-onnx-moonshine-tiny-en-int8",
+                deletedArchive = "sherpa-onnx-moonshine-tiny-en-int8",
+                remainingInstalled = listOf("sherpa-onnx-whisper-base.en"),
+            )
+        )
+    }
+
+    @Test fun `resolveSelectionAfterDelete clears the selection when no other model remains installed`() {
+        assertEquals(
+            "",
+            ModelDownloader.resolveSelectionAfterDelete(
+                currentArchive = "sherpa-onnx-moonshine-tiny-en-int8",
+                deletedArchive = "sherpa-onnx-moonshine-tiny-en-int8",
+                remainingInstalled = emptyList(),
+            )
+        )
+    }
+
+    @Test fun `resolveSelectionAfterDelete is a no-op when nothing was ever selected`() {
+        assertEquals(
+            "",
+            ModelDownloader.resolveSelectionAfterDelete(
+                currentArchive = "",
+                deletedArchive = "sherpa-onnx-moonshine-tiny-en-int8",
+                remainingInstalled = listOf("sherpa-onnx-whisper-base.en"),
+            )
+        )
+    }
+
     // -- helpers --
 
     private fun withTempDir(block: (File) -> Unit) {

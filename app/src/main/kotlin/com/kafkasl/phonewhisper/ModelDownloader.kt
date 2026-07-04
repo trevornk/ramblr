@@ -238,6 +238,23 @@ object ModelDownloader {
         stagingDir(ctx, model).deleteRecursively()
     }
 
+    /**
+     * What the "model_name" preference (the offline-model selection, #51) should become after
+     * [deletedArchive] is uninstalled, given [currentArchive] ("" if nothing was selected) and
+     * [remainingInstalled] (archives from [MODEL_CATALOG] still installed after the delete). Left
+     * untouched if the deleted model wasn't the selected one. Otherwise falls back to another
+     * installed model when one exists, or "" ("no model selected") so a stale reference to
+     * now-deleted files is never left behind.
+     */
+    fun resolveSelectionAfterDelete(
+        currentArchive: String,
+        deletedArchive: String,
+        remainingInstalled: List<String>,
+    ): String {
+        if (currentArchive != deletedArchive) return currentArchive
+        return remainingInstalled.firstOrNull() ?: ""
+    }
+
     /** SHA-256 of [file] as lowercase hex. */
     fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
