@@ -77,4 +77,46 @@ class InjectionRecoveryTest {
         assertEquals(false, shouldRetryEmptyScan(candidateCount = 1))
         assertEquals(false, shouldRetryEmptyScan(candidateCount = 5))
     }
+
+    // --- clipboardRestoreOutcomeFor ---
+
+    @Test fun `restores the user's prior clipboard once the injected text is no longer needed`() {
+        val outcome = clipboardRestoreOutcomeFor(
+            currentClipboard = "dictated text",
+            injectedText = "dictated text",
+            priorClipboard = "phone number the user had copied"
+        )
+
+        assertEquals(ClipboardRestoreOutcome.Restore("phone number the user had copied"), outcome)
+    }
+
+    @Test fun `clears the clipboard when the user had nothing copied beforehand`() {
+        val outcome = clipboardRestoreOutcomeFor(
+            currentClipboard = "dictated text",
+            injectedText = "dictated text",
+            priorClipboard = null
+        )
+
+        assertEquals(ClipboardRestoreOutcome.Clear, outcome)
+    }
+
+    @Test fun `leaves the clipboard alone if something else has taken it over since`() {
+        val outcome = clipboardRestoreOutcomeFor(
+            currentClipboard = "something the user just copied",
+            injectedText = "dictated text",
+            priorClipboard = "old clipboard contents"
+        )
+
+        assertEquals(ClipboardRestoreOutcome.LeaveAlone, outcome)
+    }
+
+    @Test fun `leaves the clipboard alone when it was emptied out from under the injection`() {
+        val outcome = clipboardRestoreOutcomeFor(
+            currentClipboard = null,
+            injectedText = "dictated text",
+            priorClipboard = "old clipboard contents"
+        )
+
+        assertEquals(ClipboardRestoreOutcome.LeaveAlone, outcome)
+    }
 }
