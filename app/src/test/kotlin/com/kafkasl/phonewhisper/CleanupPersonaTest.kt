@@ -129,4 +129,29 @@ class CleanupPersonaTest {
             assertEquals(staleCustomPrompt, CleanupPersonas.resolvePrompt(persona, staleCustomPrompt))
         }
     }
+
+    // --- currentPersona (#53): shared by MainActivity's Settings picker and the overlay's
+    // long-press style menu, so both surfaces always agree on what's "currently selected".
+
+    @Test fun `currentPersona uses the saved key when present`() {
+        assertSame(CleanupPersonas.GANGSTER, CleanupPersonas.currentPersona("gangster", currentPrompt = "irrelevant"))
+    }
+
+    @Test fun `currentPersona falls back to the default for an unrecognized saved key`() {
+        assertSame(CleanupPersonas.DEFAULT, CleanupPersonas.currentPersona("nonsense", currentPrompt = "irrelevant"))
+    }
+
+    @Test fun `currentPersona infers from the active prompt when no key is saved`() {
+        assertSame(
+            CleanupPersonas.NOTES,
+            CleanupPersonas.currentPersona(savedKey = null, currentPrompt = CleanupPersonas.NOTES.prompt)
+        )
+    }
+
+    @Test fun `currentPersona falls back to the default when no key is saved and no prompt matches`() {
+        assertSame(
+            CleanupPersonas.DEFAULT,
+            CleanupPersonas.currentPersona(savedKey = null, currentPrompt = "a fully custom, unmatched prompt")
+        )
+    }
 }
