@@ -106,4 +106,27 @@ class CleanupPersonaTest {
             assertEquals(custom, CleanupPersonas.resolvePrompt(persona, custom))
         }
     }
+
+    // --- Regression guard for #48: selecting a built-in persona had no effect on real output ---
+    // MainActivity.selectPrompt used to route an explicit persona tap through resolvePrompt, so a
+    // custom prompt saved from an earlier, unrelated "Edit current prompt" edit silently overrode
+    // every subsequent persona selection -- "cleanup_style" was saved correctly, but the actual
+    // "post_processing_prompt" sent to the model never changed. promptForExplicitSelection is what
+    // selectPrompt now calls instead, and must ignore any custom prompt unconditionally.
+
+    @Test fun `promptForExplicitSelection always returns the persona's own prompt`() {
+        for (persona in CleanupPersonas.BUILT_IN) {
+            assertEquals(persona.prompt, CleanupPersonas.promptForExplicitSelection(persona))
+        }
+    }
+
+    @Test fun `promptForExplicitSelection ignores a stale custom prompt unlike resolvePrompt`() {
+        // Same scenario as "an explicit custom prompt always wins" above, but this is the
+        // function an explicit persona tap must use -- the opposite outcome from resolvePrompt.
+        val staleCustomPrompt = "Always write in pirate speak."
+        for (persona in CleanupPersonas.BUILT_IN) {
+            assertEquals(persona.prompt, CleanupPersonas.promptForExplicitSelection(persona))
+            assertEquals(staleCustomPrompt, CleanupPersonas.resolvePrompt(persona, staleCustomPrompt))
+        }
+    }
 }
