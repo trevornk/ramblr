@@ -54,7 +54,14 @@ data class Model(
     val streamingModelType: String = "zipformer",
 )
 
+// Listed best-quality-first (#54-followup): Trevor asked for models to read in that order at a
+// glance rather than requiring a mental sort by the inline quality label. The two non-tiered
+// "alternative architecture" entries (Whisper Base, Moonshine Tiny) are interleaved by their own
+// real quality standing, not pinned to the bottom just because they predate the 3-tier scheme.
 val MODEL_CATALOG = listOf(
+    Model("Parakeet 0.6B", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+        465, "★★★★ Best quality",
+        sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf"),
     Model("Parakeet 110M", "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
         100, "★★★ Best value", recommended = true,
         sha256 = "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479cefcabd06cf5703630b"),
@@ -64,9 +71,6 @@ val MODEL_CATALOG = listOf(
     Model("Whisper Base", "sherpa-onnx-whisper-base.en",
         199, "★★★ Alternative (Whisper architecture)",
         sha256 = "475bc7052ce299c007f6d5d5407ba8601f819a2867f6eecee510ed17df581542"),
-    Model("Parakeet 0.6B", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
-        465, "★★★★ Best quality",
-        sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf"),
     // Also same size class as Parakeet 110M (~100-108MB) despite the "Tiny" name -- kept as a fast
     // alternative, not the small tier (#50).
     Model("Moonshine Tiny", "sherpa-onnx-moonshine-tiny-en-int8",
