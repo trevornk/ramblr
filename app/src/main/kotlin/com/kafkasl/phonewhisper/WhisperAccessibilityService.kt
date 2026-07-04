@@ -323,11 +323,13 @@ class WhisperAccessibilityService : AccessibilityService() {
      * when either changes, mirroring [reloadModel]'s pattern for the offline model.
      */
     private fun initStreamingModel() {
+        val archive = prefs().getString("streaming_model_name", STREAMING_MODEL.archive) ?: STREAMING_MODEL.archive
+        val model = ModelDownloader.resolveActiveModel(STREAMING_MODEL_CATALOG, archive)
         val enabled = shouldUseStreamingPreview(
             settingEnabled = prefs().getBoolean("streaming_preview_enabled", false),
-            streamingModelInstalled = StreamingTranscriber.isAvailable(this)
+            streamingModelInstalled = StreamingTranscriber.isAvailable(this, model)
         )
-        val newTranscriber = if (enabled) StreamingTranscriber.create(this) else null
+        val newTranscriber = if (enabled) StreamingTranscriber.create(this, model) else null
         streamingTranscriberSlot.replace(newTranscriber)
         Log.i(TAG, if (newTranscriber != null) "Streaming preview ready" else "Streaming preview unavailable")
     }

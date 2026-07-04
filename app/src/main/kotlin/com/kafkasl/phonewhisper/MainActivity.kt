@@ -51,12 +51,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cleanupLocalRadio: MaterialRadioButton
     private lateinit var cleanupCloudRadio: MaterialRadioButton
     private lateinit var cleanupChoiceCaption: TextView
-    private lateinit var cleanupModelSub: TextView
-    private lateinit var cleanupModelProgress: LinearProgressIndicator
-    private lateinit var cleanupModelDlBtn: MaterialButton
-    private lateinit var cleanupModelDeleteBtn: MaterialButton
-    private var cleanupModelDownloadState: WorkInfo.State? = null
-    private var cleanupModelDownloadAcked = false
+    private val cleanupModelRows = mutableMapOf<String, ModelRowViews>()
+    private val cleanupModelDownloadState = mutableMapOf<String, WorkInfo.State>()
+    private val cleanupModelDownloadAcked = mutableSetOf<String>()
 
     // "Advanced" waterfall disclosure (#38) — genuinely collapsed by default; the full #32/#37
     // editor underneath is untouched, just not front-and-center for a first-time user.
@@ -68,12 +65,9 @@ class MainActivity : AppCompatActivity() {
     // its model row never touch "model_name" (the offline model selection).
     private lateinit var streamingPreviewSwitch: MaterialSwitch
     private lateinit var streamingPreviewRowSub: TextView
-    private lateinit var streamingModelSub: TextView
-    private lateinit var streamingModelProgress: LinearProgressIndicator
-    private lateinit var streamingModelDlBtn: MaterialButton
-    private lateinit var streamingModelDeleteBtn: MaterialButton
-    private var streamingModelDownloadState: WorkInfo.State? = null
-    private var streamingModelDownloadAcked = false
+    private val streamingModelRows = mutableMapOf<String, ModelRowViews>()
+    private val streamingModelDownloadState = mutableMapOf<String, WorkInfo.State>()
+    private val streamingModelDownloadAcked = mutableSetOf<String>()
 
     // Cleanup waterfall (#32) — credential rows + the reorderable step list container.
     private lateinit var omnirouteKeyRowSub: TextView
@@ -230,7 +224,7 @@ class MainActivity : AppCompatActivity() {
                 onSelectSimpleCleanup(SimpleCleanupChoice.LOCAL)
             }
         )
-        cleanupDetailContainer.addView(buildCleanupModelRow())
+        for (m in LOCAL_CLEANUP_MODEL_CATALOG) cleanupDetailContainer.addView(buildCleanupModelRow(m))
 
         cleanupCloudRadio = MaterialRadioButton(this).apply {
             isClickable = false
@@ -387,7 +381,7 @@ class MainActivity : AppCompatActivity() {
         streamingPreviewRowSub = streamingPreviewRow.findViewWithTag("subtitle")
         root.addView(streamingPreviewRow)
 
-        root.addView(buildStreamingModelRow())
+        for (m in STREAMING_MODEL_CATALOG) root.addView(buildStreamingModelRow(m))
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -602,145 +596,167 @@ class MainActivity : AppCompatActivity() {
 
     // --- Streaming live preview (#29) ---
 
-    private fun buildStreamingModelRow(): View {
+    /** The streaming-model tier the user has picked (#50), read from [KEY_STREAMING_MODEL_NAME] --
+     *  falling back to the catalog's recommended entry when unset or when the named archive is no
+     *  longer in the catalog. See [ModelDownloader.resolveActiveModel]. */
+    private fun selectedStreamingModel(): Model =
+        ModelDownloader.resolveActiveModel(STREAMING_MODEL_CATALOG, prefs().getString(KEY_STREAMING_MODEL_NAME, "") ?: "")
+
+    private fun buildStreamingModelRow(model: Model): View {
+        val radio = MaterialRadioButton(this).apply {
+            isClickable = false
+            buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
+        }
         val dlBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
             text = "↓"
             textSize = 18f
             setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
-            setOnClickListener { onStreamingModelAction() }
+            setOnClickListener { onStreamingModelAction(model) }
         }
         val deleteBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
             text = "🗑"
             textSize = 16f
-            setOnClickListener { confirmDeleteStreamingModel() }
+            setOnClickListener { confirmDeleteStreamingModel(model) }
         }
         val rightContainer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(dlBtn)
             addView(deleteBtn)
+            addView(radio)
         }
         val progress = LinearProgressIndicator(this).apply {
             visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(4)).apply { topMargin = dp(8) }
         }
 
-        val row = settingsRow(STREAMING_MODEL.name, streamingModelSubtitle(), rightContainer) { onStreamingModelAction() }
+        val row = settingsRow(model.name, "${model.quality} · ${model.sizeMb} MB", rightContainer) {
+            onStreamingModelAction(model)
+        }
         val textContainer = row.getChildAt(0) as LinearLayout
         textContainer.addView(progress)
 
-        streamingModelSub = textContainer.findViewWithTag("subtitle")
-        streamingModelProgress = progress
-        streamingModelDlBtn = dlBtn
-        streamingModelDeleteBtn = deleteBtn
-
-        observeStreamingDownload()
-        refreshStreamingModelRow()
+        streamingModelRows[model.archive] = ModelRowViews(
+            radio, progress, textContainer.findViewWithTag("subtitle"), dlBtn, deleteBtn
+        )
+        observeStreamingDownload(model)
+        refreshStreamingModelRow(model)
         return row
     }
 
-    private fun onStreamingModelAction() {
-        if (ModelDownloader.isInstalled(this, STREAMING_MODEL)) return
-        if (ModelDownloadWorker.isInFlight(streamingModelDownloadState)) return
-        ModelDownloadWorker.enqueue(this, STREAMING_MODEL)
+    private fun onStreamingModelAction(model: Model) {
+        if (ModelDownloader.isInstalled(this, model)) {
+            selectStreamingModel(model.archive)
+            return
+        }
+        if (ModelDownloadWorker.isInFlight(streamingModelDownloadState[model.archive])) return
+        ModelDownloadWorker.enqueue(this, model)
     }
 
-    /** Confirms before uninstalling the streaming model (#51); deleting it turns off live preview
-     *  automatically the next time [shouldUseStreamingPreview] is checked, since that gate always
-     *  re-reads install state fresh -- no separate "selection" to fall back here. */
-    private fun confirmDeleteStreamingModel() {
+    private fun selectStreamingModel(archive: String) {
+        prefs().edit().putString(KEY_STREAMING_MODEL_NAME, archive).apply()
+        WhisperAccessibilityService.instance?.reloadStreamingModel()
+        refreshAllStreamingRows(); refresh()
+    }
+
+    /** Confirms before uninstalling [model] (#51); deleting the currently-selected tier turns off
+     *  live preview automatically the next time [shouldUseStreamingPreview] is checked, since that
+     *  gate always re-reads install state fresh. */
+    private fun confirmDeleteStreamingModel(model: Model) {
+        val isActive = selectedStreamingModel().archive == model.archive
+        val activeNote = if (isActive) " This turns off streaming live preview until you pick another downloaded model." else ""
         android.app.AlertDialog.Builder(this)
-            .setTitle("Delete ${STREAMING_MODEL.name}?")
-            .setMessage(
-                "This frees ${STREAMING_MODEL.sizeMb} MB of storage and turns off streaming live " +
-                    "preview. You can download it again later."
-            )
-            .setPositiveButton("Delete") { _, _ -> deleteStreamingModel() }
+            .setTitle("Delete ${model.name}?")
+            .setMessage("This frees ${model.sizeMb} MB of storage.$activeNote You can download it again later.")
+            .setPositiveButton("Delete") { _, _ -> deleteStreamingModel(model) }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun deleteStreamingModel() {
-        ModelDownloader.delete(this, STREAMING_MODEL)
+    private fun deleteStreamingModel(model: Model) {
+        ModelDownloader.delete(this, model)
         WhisperAccessibilityService.instance?.reloadStreamingModel()
-        toast("${STREAMING_MODEL.name} deleted")
-        refreshStreamingModelRow(); refresh()
+        toast("${model.name} deleted")
+        refreshAllStreamingRows(); refresh()
     }
 
-    private fun observeStreamingDownload() {
+    private fun observeStreamingDownload(model: Model) {
         WorkManager.getInstance(this)
-            .getWorkInfosForUniqueWorkLiveData(ModelDownloadWorker.workName(STREAMING_MODEL.archive))
-            .observe(this) { infos -> onStreamingWorkInfos(infos) }
+            .getWorkInfosForUniqueWorkLiveData(ModelDownloadWorker.workName(model.archive))
+            .observe(this) { infos -> onStreamingWorkInfos(model, infos) }
     }
 
-    private fun onStreamingWorkInfos(infos: List<WorkInfo>) {
+    private fun onStreamingWorkInfos(model: Model, infos: List<WorkInfo>) {
+        val views = streamingModelRows[model.archive] ?: return
         val info = infos.firstOrNull { !it.state.isFinished } ?: infos.firstOrNull()
-        streamingModelDownloadState = info?.state
+        streamingModelDownloadState[model.archive] = info?.state ?: WorkInfo.State.CANCELLED
 
         when (info?.state) {
             WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> {
-                streamingModelDlBtn.isEnabled = false
-                streamingModelProgress.visibility = View.VISIBLE
+                views.dlBtn.isEnabled = false
+                views.progress.visibility = View.VISIBLE
                 val phase = info.progress.getString(ModelDownloadWorker.KEY_PHASE)
                 if (phase == ModelDownloadWorker.PHASE_EXTRACTING) {
-                    streamingModelProgress.isIndeterminate = true
-                    streamingModelSub.text = "Extracting..."
+                    views.progress.isIndeterminate = true
+                    views.subtitle.text = "Extracting..."
                 } else {
                     val pct = info.progress.getFloat(ModelDownloadWorker.KEY_PROGRESS, 0f)
-                    streamingModelProgress.isIndeterminate = false
-                    streamingModelProgress.progress = (pct * 100).toInt()
-                    streamingModelSub.text =
+                    views.progress.isIndeterminate = false
+                    views.progress.progress = (pct * 100).toInt()
+                    views.subtitle.text =
                         if (info.state == WorkInfo.State.ENQUEUED) "Starting download..."
                         else "Downloading: ${(pct * 100).toInt()}%"
                 }
             }
             WorkInfo.State.SUCCEEDED -> {
-                streamingModelProgress.visibility = View.GONE
-                streamingModelDlBtn.isEnabled = true
-                if (!streamingModelDownloadAcked) {
-                    streamingModelDownloadAcked = true
-                    toast("${STREAMING_MODEL.name} ready — enable streaming live preview above")
-                    WhisperAccessibilityService.instance?.reloadStreamingModel()
+                views.progress.visibility = View.GONE
+                views.dlBtn.isEnabled = true
+                if (streamingModelDownloadAcked.add(model.archive)) {
+                    selectStreamingModel(model.archive)
+                    toast("${model.name} ready — enable streaming live preview above")
                 }
-                refreshStreamingModelRow()
+                refreshStreamingModelRow(model)
             }
             WorkInfo.State.FAILED -> {
-                streamingModelProgress.visibility = View.GONE
-                streamingModelDlBtn.isEnabled = true
+                views.progress.visibility = View.GONE
+                views.dlBtn.isEnabled = true
                 val err = info.outputData.getString(ModelDownloadWorker.KEY_ERROR) ?: "Unknown error"
-                streamingModelSub.text = "Error: $err"
+                views.subtitle.text = "Error: $err"
             }
             else -> {
-                streamingModelProgress.visibility = View.GONE
-                streamingModelDlBtn.isEnabled = true
-                refreshStreamingModelRow()
+                views.progress.visibility = View.GONE
+                views.dlBtn.isEnabled = true
+                refreshStreamingModelRow(model)
             }
         }
     }
 
-    private fun refreshStreamingModelRow() {
-        val installed = ModelDownloader.isInstalled(this, STREAMING_MODEL)
-        streamingModelDlBtn.visibility = if (installed) View.GONE else View.VISIBLE
-        streamingModelDeleteBtn.visibility = if (installed) View.VISIBLE else View.GONE
-        if (streamingModelProgress.visibility == View.GONE) {
-            streamingModelSub.text = streamingModelSubtitle()
+    private fun refreshStreamingModelRow(model: Model) {
+        val views = streamingModelRows[model.archive] ?: return
+        val active = selectedStreamingModel().archive == model.archive
+        val installed = ModelDownloader.isInstalled(this, model)
+
+        views.radio.isChecked = active
+        views.radio.visibility = if (installed) View.VISIBLE else View.GONE
+        views.dlBtn.visibility = if (installed) View.GONE else View.VISIBLE
+        views.deleteBtn.visibility = if (installed) View.VISIBLE else View.GONE
+
+        if (views.progress.visibility == View.GONE) {
+            views.subtitle.text = "${model.quality} · ${model.sizeMb} MB"
         }
     }
 
-    private fun streamingModelSubtitle(): String {
-        val base = "${STREAMING_MODEL.quality} · ${STREAMING_MODEL.sizeMb} MB"
-        return if (ModelDownloader.isInstalled(this, STREAMING_MODEL)) "$base · Installed" else base
-    }
+    private fun refreshAllStreamingRows() = STREAMING_MODEL_CATALOG.forEach { refreshStreamingModelRow(it) }
 
     private fun streamingPreviewSubtitle(): String =
-        if (!ModelDownloader.isInstalled(this, STREAMING_MODEL)) "Download the streaming model below first"
+        if (!ModelDownloader.isInstalled(this, selectedStreamingModel())) "Download the streaming model below first"
         else "Shows live partial results in the field as you speak"
 
-    /** Flips the opt-in streaming-preview setting (#29). Enabling while the streaming model isn't
-     *  installed is refused with a nudge toward the download row below, rather than silently
-     *  leaving the switch on with nothing to back it (see [shouldUseStreamingPreview]). */
+    /** Flips the opt-in streaming-preview setting (#29). Enabling while the selected streaming
+     *  model isn't installed is refused with a nudge toward the download row below, rather than
+     *  silently leaving the switch on with nothing to back it (see [shouldUseStreamingPreview]). */
     private fun onStreamingPreviewToggle(enabling: Boolean) {
-        if (enabling && !ModelDownloader.isInstalled(this, STREAMING_MODEL)) {
+        if (enabling && !ModelDownloader.isInstalled(this, selectedStreamingModel())) {
             toast("Download the streaming model first")
             return
         }
@@ -751,138 +767,164 @@ class MainActivity : AppCompatActivity() {
 
     // --- Simple Local/Cloud cleanup choice (#38) ---
 
-    private fun buildCleanupModelRow(): View {
+    /** The local-cleanup tier the user has picked (#50), read from [KEY_LOCAL_CLEANUP_MODEL_NAME]
+     *  -- falling back to the catalog's recommended entry when unset or when the named archive is
+     *  no longer in the catalog. See [ModelDownloader.resolveActiveModel]. */
+    private fun selectedCleanupModel(): Model =
+        ModelDownloader.resolveActiveModel(LOCAL_CLEANUP_MODEL_CATALOG, prefs().getString(KEY_LOCAL_CLEANUP_MODEL_NAME, "") ?: "")
+
+    private fun buildCleanupModelRow(model: Model): View {
+        val radio = MaterialRadioButton(this).apply {
+            isClickable = false
+            buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
+        }
         val dlBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
             text = "↓"
             textSize = 18f
             setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
-            setOnClickListener { onCleanupModelAction() }
+            setOnClickListener { onCleanupModelAction(model) }
         }
         val deleteBtn = MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
             text = "🗑"
             textSize = 16f
-            setOnClickListener { confirmDeleteCleanupModel() }
+            setOnClickListener { confirmDeleteCleanupModel(model) }
         }
         val rightContainer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(dlBtn)
             addView(deleteBtn)
+            addView(radio)
         }
         val progress = LinearProgressIndicator(this).apply {
             visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(4)).apply { topMargin = dp(8) }
         }
 
-        val row = settingsRow(LOCAL_CLEANUP_MODEL.name, cleanupModelSubtitle(), rightContainer) { onCleanupModelAction() }
+        val row = settingsRow(model.name, "${model.quality} · ${model.sizeMb} MB", rightContainer) {
+            onCleanupModelAction(model)
+        }
         val textContainer = row.getChildAt(0) as LinearLayout
         textContainer.addView(progress)
 
-        cleanupModelSub = textContainer.findViewWithTag("subtitle")
-        cleanupModelProgress = progress
-        cleanupModelDlBtn = dlBtn
-        cleanupModelDeleteBtn = deleteBtn
-
-        observeCleanupModelDownload()
-        refreshCleanupModelRow()
+        cleanupModelRows[model.archive] = ModelRowViews(
+            radio, progress, textContainer.findViewWithTag("subtitle"), dlBtn, deleteBtn
+        )
+        observeCleanupModelDownload(model)
+        refreshCleanupModelRow(model)
         return row
     }
 
-    private fun onCleanupModelAction() {
-        if (ModelDownloader.isInstalled(this, LOCAL_CLEANUP_MODEL)) return
-        if (ModelDownloadWorker.isInFlight(cleanupModelDownloadState)) return
-        ModelDownloadWorker.enqueue(this, LOCAL_CLEANUP_MODEL)
+    private fun onCleanupModelAction(model: Model) {
+        if (ModelDownloader.isInstalled(this, model)) {
+            selectCleanupModel(model.archive)
+            return
+        }
+        if (ModelDownloadWorker.isInFlight(cleanupModelDownloadState[model.archive])) return
+        ModelDownloadWorker.enqueue(this, model)
     }
 
-    /** Confirms before uninstalling the local cleanup model (#51), warning when it backs the
-     *  active "Local" cleanup choice since deleting it reverts that choice back to Cloud below. */
-    private fun confirmDeleteCleanupModel() {
-        val isActive = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this)) == SimpleCleanupChoice.LOCAL
+    private fun selectCleanupModel(archive: String) {
+        prefs().edit().putString(KEY_LOCAL_CLEANUP_MODEL_NAME, archive).apply()
+        refreshAllCleanupRows(); refresh()
+    }
+
+    /** Confirms before uninstalling [model] (#51), warning when it's both the currently-selected
+     *  tier and backs the active "Local" cleanup choice, since deleting it reverts that choice
+     *  back to Cloud below. */
+    private fun confirmDeleteCleanupModel(model: Model) {
+        val isActive = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this)) == SimpleCleanupChoice.LOCAL &&
+            selectedCleanupModel().archive == model.archive
         val activeNote = if (isActive) " Cleanup will switch back to Cloud." else ""
         android.app.AlertDialog.Builder(this)
-            .setTitle("Delete ${LOCAL_CLEANUP_MODEL.name}?")
-            .setMessage("This frees ${LOCAL_CLEANUP_MODEL.sizeMb} MB of storage.$activeNote You can download it again later.")
-            .setPositiveButton("Delete") { _, _ -> deleteCleanupModel() }
+            .setTitle("Delete ${model.name}?")
+            .setMessage("This frees ${model.sizeMb} MB of storage.$activeNote You can download it again later.")
+            .setPositiveButton("Delete") { _, _ -> deleteCleanupModel(model) }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    /** Removes the local cleanup model via [ModelDownloader] and, if it backed the active "Local"
-     *  simple cleanup choice, falls back to Cloud (#51) via the same path a user tapping "Cloud"
-     *  would take -- rather than leaving the waterfall's one step pointing at a deleted file (the
-     *  executor already fails that gracefully per step, but a stale-but-unusable "Local" selection
-     *  isn't a state worth leaving the user in). */
-    private fun deleteCleanupModel() {
-        val wasActive = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this)) == SimpleCleanupChoice.LOCAL
-        ModelDownloader.delete(this, LOCAL_CLEANUP_MODEL)
+    /** Removes [model] via [ModelDownloader] and, if it was the selected tier backing the active
+     *  "Local" simple cleanup choice, falls back to Cloud (#51) via the same path a user tapping
+     *  "Cloud" would take -- rather than leaving the waterfall's one step pointing at a deleted
+     *  file (the executor already fails that gracefully per step, but a stale-but-unusable "Local"
+     *  selection isn't a state worth leaving the user in). */
+    private fun deleteCleanupModel(model: Model) {
+        val wasActive = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this)) == SimpleCleanupChoice.LOCAL &&
+            selectedCleanupModel().archive == model.archive
+        ModelDownloader.delete(this, model)
         if (wasActive) onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
-        toast("${LOCAL_CLEANUP_MODEL.name} deleted")
-        refreshCleanupModelRow(); refresh()
+        toast("${model.name} deleted")
+        refreshAllCleanupRows(); refresh()
     }
 
-    private fun observeCleanupModelDownload() {
+    private fun observeCleanupModelDownload(model: Model) {
         WorkManager.getInstance(this)
-            .getWorkInfosForUniqueWorkLiveData(ModelDownloadWorker.workName(LOCAL_CLEANUP_MODEL.archive))
-            .observe(this) { infos -> onCleanupModelWorkInfos(infos) }
+            .getWorkInfosForUniqueWorkLiveData(ModelDownloadWorker.workName(model.archive))
+            .observe(this) { infos -> onCleanupModelWorkInfos(model, infos) }
     }
 
-    private fun onCleanupModelWorkInfos(infos: List<WorkInfo>) {
+    private fun onCleanupModelWorkInfos(model: Model, infos: List<WorkInfo>) {
+        val views = cleanupModelRows[model.archive] ?: return
         val info = infos.firstOrNull { !it.state.isFinished } ?: infos.firstOrNull()
-        cleanupModelDownloadState = info?.state
+        cleanupModelDownloadState[model.archive] = info?.state ?: WorkInfo.State.CANCELLED
 
         when (info?.state) {
             WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> {
-                cleanupModelDlBtn.isEnabled = false
-                cleanupModelProgress.visibility = View.VISIBLE
+                views.dlBtn.isEnabled = false
+                views.progress.visibility = View.VISIBLE
                 val phase = info.progress.getString(ModelDownloadWorker.KEY_PHASE)
                 if (phase == ModelDownloadWorker.PHASE_EXTRACTING) {
-                    cleanupModelProgress.isIndeterminate = true
-                    cleanupModelSub.text = "Installing..."
+                    views.progress.isIndeterminate = true
+                    views.subtitle.text = "Installing..."
                 } else {
                     val pct = info.progress.getFloat(ModelDownloadWorker.KEY_PROGRESS, 0f)
-                    cleanupModelProgress.isIndeterminate = false
-                    cleanupModelProgress.progress = (pct * 100).toInt()
-                    cleanupModelSub.text =
+                    views.progress.isIndeterminate = false
+                    views.progress.progress = (pct * 100).toInt()
+                    views.subtitle.text =
                         if (info.state == WorkInfo.State.ENQUEUED) "Starting download..."
                         else "Downloading: ${(pct * 100).toInt()}%"
                 }
             }
             WorkInfo.State.SUCCEEDED -> {
-                cleanupModelProgress.visibility = View.GONE
-                cleanupModelDlBtn.isEnabled = true
-                if (!cleanupModelDownloadAcked) {
-                    cleanupModelDownloadAcked = true
-                    toast("${LOCAL_CLEANUP_MODEL.name} ready — tap Local above to use it for cleanup")
+                views.progress.visibility = View.GONE
+                views.dlBtn.isEnabled = true
+                if (cleanupModelDownloadAcked.add(model.archive)) {
+                    selectCleanupModel(model.archive)
+                    toast("${model.name} ready — tap Local above to use it for cleanup")
                 }
-                refreshCleanupModelRow()
+                refreshCleanupModelRow(model)
             }
             WorkInfo.State.FAILED -> {
-                cleanupModelProgress.visibility = View.GONE
-                cleanupModelDlBtn.isEnabled = true
+                views.progress.visibility = View.GONE
+                views.dlBtn.isEnabled = true
                 val err = info.outputData.getString(ModelDownloadWorker.KEY_ERROR) ?: "Unknown error"
-                cleanupModelSub.text = "Error: $err"
+                views.subtitle.text = "Error: $err"
             }
             else -> {
-                cleanupModelProgress.visibility = View.GONE
-                cleanupModelDlBtn.isEnabled = true
-                refreshCleanupModelRow()
+                views.progress.visibility = View.GONE
+                views.dlBtn.isEnabled = true
+                refreshCleanupModelRow(model)
             }
         }
     }
 
-    private fun refreshCleanupModelRow() {
-        val installed = ModelDownloader.isInstalled(this, LOCAL_CLEANUP_MODEL)
-        cleanupModelDlBtn.visibility = if (installed) View.GONE else View.VISIBLE
-        cleanupModelDeleteBtn.visibility = if (installed) View.VISIBLE else View.GONE
-        if (cleanupModelProgress.visibility == View.GONE) {
-            cleanupModelSub.text = cleanupModelSubtitle()
+    private fun refreshCleanupModelRow(model: Model) {
+        val views = cleanupModelRows[model.archive] ?: return
+        val active = selectedCleanupModel().archive == model.archive
+        val installed = ModelDownloader.isInstalled(this, model)
+
+        views.radio.isChecked = active
+        views.radio.visibility = if (installed) View.VISIBLE else View.GONE
+        views.dlBtn.visibility = if (installed) View.GONE else View.VISIBLE
+        views.deleteBtn.visibility = if (installed) View.VISIBLE else View.GONE
+
+        if (views.progress.visibility == View.GONE) {
+            views.subtitle.text = "${model.quality} · ${model.sizeMb} MB"
         }
     }
 
-    private fun cleanupModelSubtitle(): String {
-        val base = "${LOCAL_CLEANUP_MODEL.quality} · ${LOCAL_CLEANUP_MODEL.sizeMb} MB"
-        return if (ModelDownloader.isInstalled(this, LOCAL_CLEANUP_MODEL)) "$base · Installed" else base
-    }
+    private fun refreshAllCleanupRows() = LOCAL_CLEANUP_MODEL_CATALOG.forEach { refreshCleanupModelRow(it) }
 
     /** Applies the user's tap on the simple Local/Cloud cleanup radio (#38) by replacing the
      *  waterfall with the single matching step -- see [simpleCleanupChoiceFor] for how the choice
@@ -891,11 +933,12 @@ class MainActivity : AppCompatActivity() {
     private fun onSelectSimpleCleanup(choice: SimpleCleanupChoice) {
         when (choice) {
             SimpleCleanupChoice.LOCAL -> {
-                if (!ModelDownloader.isInstalled(this, LOCAL_CLEANUP_MODEL)) {
+                val model = selectedCleanupModel()
+                if (!ModelDownloader.isInstalled(this, model)) {
                     toast("Download the local cleanup model first")
                     return
                 }
-                saveWaterfallSteps(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+                saveWaterfallSteps(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, model.archive)))
             }
             SimpleCleanupChoice.CLOUD ->
                 saveWaterfallSteps(listOf(CleanupStep(CleanupStepGroup.LEGACY, PostProcessor.DEFAULT_MODEL)))
@@ -986,10 +1029,10 @@ class MainActivity : AppCompatActivity() {
 
         streamingPreviewSwitch.isChecked = shouldUseStreamingPreview(
             settingEnabled = prefs().getBoolean(KEY_STREAMING_PREVIEW, false),
-            streamingModelInstalled = ModelDownloader.isInstalled(this, STREAMING_MODEL)
+            streamingModelInstalled = ModelDownloader.isInstalled(this, selectedStreamingModel())
         )
         streamingPreviewRowSub.text = streamingPreviewSubtitle()
-        refreshStreamingModelRow()
+        refreshAllStreamingRows()
 
         modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
         cleanupDetailContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
@@ -1005,7 +1048,7 @@ class MainActivity : AppCompatActivity() {
         anthropicDirectKeyRowSub.text = credentialSubtitle(CleanupCredentialSlot.ANTHROPIC_DIRECT)
         refreshWaterfallSteps()
         refreshSimpleCleanupChoice()
-        refreshCleanupModelRow()
+        refreshAllCleanupRows()
 
         val prompt = currentPrompt()
         promptRowSub.text = prompt
@@ -1817,5 +1860,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
         private const val KEY_HISTORY_ENABLED = "dictation_history_enabled"
         private const val KEY_STREAMING_PREVIEW = "streaming_preview_enabled"
+        private const val KEY_STREAMING_MODEL_NAME = "streaming_model_name"
+        private const val KEY_LOCAL_CLEANUP_MODEL_NAME = "local_cleanup_model_name"
     }
 }
