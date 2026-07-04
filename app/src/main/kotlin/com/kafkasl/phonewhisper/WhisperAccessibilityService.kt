@@ -204,6 +204,10 @@ class WhisperAccessibilityService : AccessibilityService() {
     // copy again" affordance. Null whenever the last injection wasn't a fallback.
     private var fallbackClipboardText: String? = null
 
+    // Scheduled post-injection clipboard restore (#5) — at most one in flight, cancelled if a new
+    // injection starts or the service tears down first. See clipboardRestoreOutcomeFor.
+    private var pendingClipboardRestore: Runnable? = null
+
     // Local transcription engine (loaded lazily)
     private val transcriberSlot = TranscriberSlot<LocalTranscriber> { it.release() }
 
@@ -281,6 +285,10 @@ class WhisperAccessibilityService : AccessibilityService() {
         pendingInjection = null
         pendingInjectionRetry?.let { handler.removeCallbacks(it) }
         pendingInjectionRetry = null
+        // pendingClipboardRestore is deliberately left scheduled: it only touches ClipboardManager
+        // (no AccessibilityNodeInfo), so it's still safe to run on the main Looper after the
+        // service component itself is destroyed, and skipping it would leave the user's clipboard
+        // holding the just-dictated text instead of their prior content (#5).
         handler.removeCallbacks(previewTimeoutRunnable)
         pendingPreview = null
         dismissStyleMenu()
@@ -1330,8 +1338,6 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     // --- Text injection ---
 
-    private val clearClipboard = Runnable { clearPrimaryClip() }
-
     private fun injectText(
         text: String,
         rawText: String? = null,
@@ -1339,7 +1345,8 @@ class WhisperAccessibilityService : AccessibilityService() {
         feedbackDurationMs: Long = 2000,
         paidFallbackGroup: CleanupStepGroup? = null
     ) {
-        handler.removeCallbacks(clearClipboard)
+        pendingClipboardRestore?.let { handler.removeCallbacks(it) }
+        pendingClipboardRestore = null
         pendingInjectionRetry?.let { handler.removeCallbacks(it) }
         pendingInjectionRetry = null
         recordHistory(rawText ?: text, cleanedText = if (rawText != null) text else null, paidFallbackGroup = paidFallbackGroup)
@@ -1449,9 +1456,27 @@ class WhisperAccessibilityService : AccessibilityService() {
         feedback?.let { showFeedback(it + suffix, duration, touchable = retryRawOffered || isFallback, isFallback = isFallback) }
 
         when (val action = clipboardClearActionFor(method, CLIPBOARD_CLEAR_DELAY_MS)) {
-            ClipboardClearAction.Immediate -> clearPrimaryClip()
-            is ClipboardClearAction.Delayed -> handler.postDelayed(clearClipboard, action.delayMs)
+            ClipboardClearAction.Immediate -> restoreClipboardAfterInjection(text, priorClipboard)
+            is ClipboardClearAction.Delayed -> {
+                val restore = Runnable {
+                    pendingClipboardRestore = null
+                    restoreClipboardAfterInjection(text, priorClipboard)
+                }
+                pendingClipboardRestore = restore
+                handler.postDelayed(restore, action.delayMs)
+            }
             ClipboardClearAction.None -> {}
+        }
+    }
+
+    /** Hands the clipboard back to whatever the user had copied before this dictation (#5) instead
+     *  of wiping it to empty — see [clipboardRestoreOutcomeFor] for the compare-and-swap guard
+     *  against clobbering something copied since. */
+    private fun restoreClipboardAfterInjection(injectedText: String, priorClipboard: String?) {
+        when (val outcome = clipboardRestoreOutcomeFor(currentClipboardText(), injectedText, priorClipboard)) {
+            ClipboardRestoreOutcome.LeaveAlone -> {}
+            ClipboardRestoreOutcome.Clear -> clearPrimaryClip()
+            is ClipboardRestoreOutcome.Restore -> ClipboardUtil.copy(this, outcome.priorClipboard)
         }
     }
 

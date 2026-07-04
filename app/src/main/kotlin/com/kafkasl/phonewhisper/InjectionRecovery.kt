@@ -50,3 +50,36 @@ fun canRetryRaw(ageMs: Long, windowMs: Long, rawText: String, injectedText: Stri
  * not a transient focus race, so there's no point looping.
  */
 fun shouldRetryEmptyScan(candidateCount: Int): Boolean = candidateCount == 0
+
+/** What a scheduled post-injection clipboard cleanup should actually do (see #5). */
+sealed class ClipboardRestoreOutcome {
+    /** Something else now owns the clipboard (the user copied something new, or another app did) —
+     *  touching it would clobber that, so this injection's cleanup is a no-op. */
+    object LeaveAlone : ClipboardRestoreOutcome()
+    /** The user had nothing worth keeping copied before this injection; clear the clipboard. */
+    object Clear : ClipboardRestoreOutcome()
+    /** The user had something copied before this injection; hand it back exactly as it was. */
+    data class Restore(val priorClipboard: String) : ClipboardRestoreOutcome()
+}
+
+/**
+ * Injection copies the dictated text to the clipboard as either the actual payload a paste-based
+ * strategy reads, or (for a DIRECT/ACTION_SET_TEXT injection) just a byproduct of always copying
+ * first. Either way, once it's no longer needed the *user's own prior clipboard contents* should
+ * come back — wiping it to empty instead would silently throw away whatever they had copied before
+ * dictating, which is a quietly infuriating side effect of using dictation at all.
+ *
+ * [currentClipboard] is re-read at the moment cleanup actually runs (immediately for a DIRECT
+ * injection, after a grace delay for a paste-based one) and compared against [injectedText]: if
+ * they no longer match, something else has taken ownership of the clipboard since (a fresh copy by
+ * the user, or another app) and clobbering that would be worse than leaving it alone.
+ */
+fun clipboardRestoreOutcomeFor(
+    currentClipboard: String?,
+    injectedText: String,
+    priorClipboard: String?
+): ClipboardRestoreOutcome = when {
+    currentClipboard != injectedText -> ClipboardRestoreOutcome.LeaveAlone
+    priorClipboard != null -> ClipboardRestoreOutcome.Restore(priorClipboard)
+    else -> ClipboardRestoreOutcome.Clear
+}
