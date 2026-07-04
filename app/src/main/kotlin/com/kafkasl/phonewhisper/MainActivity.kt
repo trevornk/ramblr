@@ -7,6 +7,7 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -533,6 +534,12 @@ class MainActivity : AppCompatActivity() {
         )
         if (alreadyOnboarded && !hasPerm(Manifest.permission.RECORD_AUDIO)) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
+        }
+        // Independent of the mic grant above: needed for model-download progress/result
+        // notifications (#56) to actually display on API 33+. Never blocks a download if
+        // declined -- see DownloadNotifications.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPerm(Manifest.permission.POST_NOTIFICATIONS)) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
 
         refresh()
