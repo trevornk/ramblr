@@ -72,6 +72,18 @@ object CleanupPersonas {
     fun fromKey(key: String?): CleanupPersona = BUILT_IN.firstOrNull { it.key == key } ?: DEFAULT
 
     /**
+     * Currently selected persona: the saved key wins if present, otherwise it's inferred from
+     * whichever built-in prompt matches the active prompt (e.g. an install that predates #40's
+     * "cleanup_style" key), falling back to [DEFAULT]. Shared by MainActivity's Settings picker
+     * and the overlay's long-press style menu (#53) so both surfaces always agree on what's
+     * "currently selected" instead of drifting apart with two separate inference copies.
+     */
+    fun currentPersona(savedKey: String?, currentPrompt: String): CleanupPersona {
+        if (savedKey != null) return fromKey(savedKey)
+        return BUILT_IN.firstOrNull { it.prompt == currentPrompt } ?: DEFAULT
+    }
+
+    /**
      * Resolves the prompt that should actually be sent to the cleanup model. An explicit
      * custom prompt always wins over the persona selector, so users who already customized
      * their prompt see no behavior change from the addition of personas (#3, #40).

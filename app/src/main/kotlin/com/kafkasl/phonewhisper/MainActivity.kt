@@ -10,10 +10,15 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.*
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -23,6 +28,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.radiobutton.MaterialRadioButton
+import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
@@ -44,6 +50,35 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewBeforeInjectSwitch: MaterialSwitch
     private lateinit var historyEnabledSwitch: MaterialSwitch
     private lateinit var debugVisibilitySwitch: MaterialSwitch
+
+    // Overlay appearance (#43/#53) -- rows read fresh from OverlayAppearancePrefs/OverlayIconStore
+    // on every refreshOverlayAppearanceRows() call rather than caching values on these fields.
+    private lateinit var overlaySizeRow: LinearLayout
+    private lateinit var overlayBorderColorRow: LinearLayout
+    private lateinit var overlayFillColorRow: LinearLayout
+    private lateinit var overlayGlyphColorRow: LinearLayout
+    private lateinit var overlayCustomIconRow: LinearLayout
+    private lateinit var overlayRemoveCustomIconRow: LinearLayout
+
+    // Modern Photo Picker (#43): falls back to ACTION_OPEN_DOCUMENT/ACTION_GET_CONTENT
+    // automatically on API levels/devices where the system picker isn't available -- see
+    // ActivityResultContracts.PickVisualMedia's own isPhotoPickerAvailable() check. Must be
+    // registered unconditionally during field init (before onCreate), per the Activity Result API.
+    private val pickOverlayIcon = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        thread {
+            val saved = OverlayIconStore.save(this, uri)
+            runOnUiThread {
+                if (saved) {
+                    OverlayAppearancePrefs.setHasCustomIcon(this, true)
+                    onOverlayAppearanceChanged()
+                    toast("Custom icon set")
+                } else {
+                    toast("Couldn't load that image")
+                }
+            }
+        }
+    }
 
     // Tier 2 (#38) — everything below the top-level cleanup toggle, shown/hidden as one unit
     // instead of each row separately, since none of it matters while cleanup is off.
@@ -361,6 +396,57 @@ class MainActivity : AppCompatActivity() {
             debugVisibilitySwitch.isChecked = newVal
         }
         root.addView(debugVisibilityRow)
+
+        // --- Overlay appearance (#43/#53) ---
+        root.addView(sectionHeader("Overlay appearance"))
+        root.addView(TextView(this).apply {
+            text = "Customize how the floating mic button looks. A custom icon image replaces " +
+                "the built-in circle entirely, so border/fill colors stop applying once one is set."
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(8))
+        })
+
+        overlaySizeRow = settingsRow("Icon size", "") { promptOverlaySize() }
+        root.addView(overlaySizeRow)
+
+        overlayBorderColorRow = settingsRow("Border color", "") {
+            pickOverlayColor("Border color", OverlayAppearancePrefs.load(this).borderColor) { color ->
+                OverlayAppearancePrefs.setBorderColor(this, color)
+                onOverlayAppearanceChanged()
+            }
+        }
+        root.addView(overlayBorderColorRow)
+
+        overlayFillColorRow = settingsRow("Fill color (idle only)", "") {
+            pickOverlayColor("Fill color", OverlayAppearancePrefs.load(this).fillColor) { color ->
+                OverlayAppearancePrefs.setFillColor(this, color)
+                onOverlayAppearanceChanged()
+            }
+        }
+        root.addView(overlayFillColorRow)
+
+        overlayGlyphColorRow = settingsRow("Microphone icon color", "") {
+            pickOverlayColor("Microphone icon color", OverlayAppearancePrefs.load(this).glyphColor) { color ->
+                OverlayAppearancePrefs.setGlyphColor(this, color)
+                onOverlayAppearanceChanged()
+            }
+        }
+        root.addView(overlayGlyphColorRow)
+
+        overlayCustomIconRow = settingsRow("Custom icon image", "") {
+            pickOverlayIcon.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
+        root.addView(overlayCustomIconRow)
+
+        overlayRemoveCustomIconRow = settingsRow("Remove custom icon", "Go back to the default mic icon") {
+            OverlayIconStore.delete(this)
+            OverlayAppearancePrefs.setHasCustomIcon(this, false)
+            onOverlayAppearanceChanged()
+        }
+        root.addView(overlayRemoveCustomIconRow)
+
+        refreshOverlayAppearanceRows()
 
         // --- Streaming live preview (#29) ---
         root.addView(sectionHeader("Streaming live preview"))
@@ -1007,6 +1093,90 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshPromptRows() = promptPresets().forEach { refreshPromptRow(it) }
 
+    // --- Overlay appearance (#43/#53) ---
+
+    private val overlaySizePresets = listOf("Small" to 44, "Medium (default)" to 56, "Large" to 76)
+
+    private val overlayColorSwatches: List<Pair<String, Int?>> = listOf(
+        "Default" to null,
+        "White" to 0xFFFFFFFF.toInt(),
+        "Black" to 0xFF000000.toInt(),
+        "Emerald" to 0xFF34D399.toInt(),
+        "Sky blue" to 0xFF38BDF8.toInt(),
+        "Violet" to 0xFF8B5CF6.toInt(),
+        "Amber" to 0xFFF59E0B.toInt(),
+        "Rose" to 0xFFF43F5E.toInt(),
+        "Slate" to 0xFF64748B.toInt(),
+    )
+
+    private fun colorSummary(color: Int?): String =
+        if (color == null) "Default" else String.format("#%06X", 0xFFFFFF and color)
+
+    private fun overlaySizeSummary(ringSizeDp: Int): String =
+        overlaySizePresets.firstOrNull { it.second == ringSizeDp }?.first ?: "Custom (${ringSizeDp}dp)"
+
+    private fun onOverlayAppearanceChanged() {
+        WhisperAccessibilityService.instance?.applyOverlayAppearance()
+        refreshOverlayAppearanceRows()
+    }
+
+    /** Border/fill/glyph color rows have no effect while a custom icon image is set (#53's
+     *  documented decision that a custom image replaces the ring's whole look), so they're
+     *  greyed out and disabled rather than left clickable with silently-ignored taps. */
+    private fun refreshOverlayAppearanceRows() {
+        val appearance = OverlayAppearancePrefs.load(this)
+        val hasCustomIcon = appearance.hasCustomIcon && OverlayIconStore.exists(this)
+
+        overlaySizeRow.findViewWithTag<TextView>("subtitle").text = overlaySizeSummary(appearance.ringSizeDp)
+
+        setOverlayColorRowState(overlayBorderColorRow, appearance.borderColor, hasCustomIcon)
+        setOverlayColorRowState(overlayFillColorRow, appearance.fillColor, hasCustomIcon)
+        setOverlayColorRowState(overlayGlyphColorRow, appearance.glyphColor, hasCustomIcon)
+
+        overlayCustomIconRow.findViewWithTag<TextView>("subtitle").text =
+            if (hasCustomIcon) "Custom image set" else "Not set — using the default mic icon"
+        overlayRemoveCustomIconRow.visibility = if (hasCustomIcon) View.VISIBLE else View.GONE
+    }
+
+    private fun setOverlayColorRowState(row: LinearLayout, color: Int?, disabledByCustomIcon: Boolean) {
+        row.isEnabled = !disabledByCustomIcon
+        row.alpha = if (disabledByCustomIcon) 0.4f else 1f
+        row.findViewWithTag<TextView>("subtitle").text =
+            if (disabledByCustomIcon) "Not used while a custom icon image is set" else colorSummary(color)
+    }
+
+    private fun promptOverlaySize() {
+        val current = OverlayAppearancePrefs.load(this).ringSizeDp
+        val checked = overlaySizePresets.indexOfFirst { it.second == current }.let { if (it < 0) 1 else it }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Icon size")
+            .setSingleChoiceItems(overlaySizePresets.map { it.first }.toTypedArray(), checked) { dialog, which ->
+                OverlayAppearancePrefs.setRingSizeDp(this, overlaySizePresets[which].second)
+                onOverlayAppearanceChanged()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Curated swatch list rather than a full HSV picker -- no new UI dependency, and a colored
+     *  bullet in a plain [android.app.AlertDialog.Builder.setItems] list is enough to pick a
+     *  clearly-legible overlay color without building/maintaining a custom picker view. */
+    private fun pickOverlayColor(title: String, current: Int?, onPick: (Int?) -> Unit) {
+        val items = overlayColorSwatches.map { (label, color) ->
+            SpannableString("●  $label").apply {
+                setSpan(
+                    ForegroundColorSpan(color ?: attrColor(android.R.attr.textColorSecondary)),
+                    0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setItems(items.toTypedArray()) { _, which -> onPick(overlayColorSwatches[which].second) }
+            .show()
+    }
+
     // --- State Updates ---
 
     private fun refresh() {
@@ -1093,7 +1263,6 @@ class MainActivity : AppCompatActivity() {
     private fun applyLocalCleanupChange(useLocal: Boolean, usePostProcessing: Boolean) {
         val hasConsented = prefs().getBoolean(KEY_LOCAL_CLEANUP_CONSENT, false)
         if (!LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing, hasConsented)) {
-            if (usePostProcessing) CleanupBadgeVisibility.markConfigured(this)
             prefs().edit()
                 .putBoolean("use_local", useLocal)
                 .putBoolean("use_post_processing", usePostProcessing)
@@ -1118,7 +1287,6 @@ class MainActivity : AppCompatActivity() {
                     "grammar and punctuation. Enable cleanup anyway?"
             )
             .setPositiveButton("Enable cleanup") { _, _ ->
-                CleanupBadgeVisibility.markConfigured(this)
                 prefs().edit()
                     .putBoolean("use_local", useLocal)
                     .putBoolean("use_post_processing", true)
@@ -1836,11 +2004,8 @@ class MainActivity : AppCompatActivity() {
     /** Currently selected persona, inferring one from the active prompt if none was saved yet
      *  (e.g. on upgrade) so existing users keep their prompt instead of resetting to the
      *  default persona (#3, #40). */
-    private fun currentPersona(): CleanupPersona {
-        val saved = prefs().getString("cleanup_style", null)
-        if (saved != null) return CleanupPersonas.fromKey(saved)
-        return CleanupPersonas.BUILT_IN.firstOrNull { it.prompt == currentPrompt() } ?: CleanupPersonas.DEFAULT
-    }
+    private fun currentPersona(): CleanupPersona =
+        CleanupPersonas.currentPersona(prefs().getString("cleanup_style", null), currentPrompt())
 
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun hasPerm(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED

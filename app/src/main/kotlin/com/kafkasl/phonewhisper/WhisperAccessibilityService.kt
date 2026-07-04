@@ -3,10 +3,12 @@ package com.kafkasl.phonewhisper
 import android.accessibilityservice.AccessibilityService
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.Outline
 import android.graphics.PixelFormat
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
@@ -15,11 +17,13 @@ import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -95,12 +99,12 @@ class WhisperAccessibilityService : AccessibilityService() {
         private const val PAD_DP = 10
         private const val MARGIN_DP = 8
         private const val TAP_THRESHOLD_DP = 10
-        private const val RING_DP = 56
+        /** Default/reference ring diameter that [BTN_DP]/[PAD_DP] are proportioned against; the
+         *  actual on-screen size comes from [OverlayAppearancePrefs] (#43/#53) and is scaled by
+         *  the same ratio, so an unconfigured install looks pixel-identical to before that setting
+         *  existed and a customized size keeps the glyph/padding proportions consistent. */
+        private const val RING_DP = OverlayAppearancePrefs.DEFAULT_RING_DP
         private const val FEEDBACK_OFFSET_DP = 64
-        /** Small badge overlapping the ring's top-right corner (#34): shows/toggles the cleanup gate.
-         *  Sized and bordered for at-a-glance visibility even in its OFF/grey state (Trevor found the
-         *  original 20dp unbordered dot too easy to miss against the ring/background in practice). */
-        private const val CLEANUP_BADGE_DP = 28
 
         /** Hold the button this long while TRANSCRIBING to cancel (see overlay.setOnTouchListener). */
         private const val LONG_PRESS_CANCEL_MS = 500L
@@ -137,9 +141,20 @@ class WhisperAccessibilityService : AccessibilityService() {
          *  from a routine success bubble instead of looking identical. */
         private const val COLOR_FEEDBACK_FALLBACK_BG = 0xEEB45309.toInt()
         private const val COLOR_RING = 0xFFE8EAED.toInt()
-        /** Cleanup-toggle badge (#34): emerald when cleanup will run, neutral grey when it's off. */
+        /** Style menu's cleanup row icon (#34, #53): emerald when cleanup will run, neutral grey
+         *  when it's off -- the same colors the old always-visible badge used. */
         private const val COLOR_CLEANUP_ON = 0xFF34D399.toInt()
         private const val COLOR_CLEANUP_OFF = 0xFF6B7280.toInt()
+        /** The mic glyph's original hardcoded color (see ic_mic.xml) -- used when the user hasn't
+         *  picked a custom glyph color (#43), so an unconfigured install renders identically. */
+        private const val COLOR_GLYPH_DEFAULT = 0xFFFFFFFF.toInt()
+
+        /** Anonymous [ViewOutlineProvider]s can't be `const`, but this one never varies per-view,
+         *  so a single shared instance is used to clip a custom icon image (#43) into a circle
+         *  matching its own bounds, whatever size the ring is currently configured to. */
+        private val OVAL_OUTLINE_PROVIDER = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) = outline.setOval(0, 0, view.width, view.height)
+        }
     }
 
     private val stateMachine = RecordingStateMachine()
@@ -147,10 +162,8 @@ class WhisperAccessibilityService : AccessibilityService() {
     private var button: ImageView? = null
     private var spinner: ProgressBar? = null
     private var feedbackView: TextView? = null
-    private var cleanupToggleView: ImageView? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var feedbackLayoutParams: WindowManager.LayoutParams? = null
-    private var cleanupToggleLayoutParams: WindowManager.LayoutParams? = null
     // screenW/screenH as of the last time the ring's position was computed (#41) -- the baseline
     // handleScreenSizeChange() diffs against to detect a fold/unfold. Set alongside layoutParams
     // in showOverlay() and kept in sync every time it repositions the ring.
@@ -169,21 +182,11 @@ class WhisperAccessibilityService : AccessibilityService() {
         }?.start()
     }
 
-    // Keeps the cleanup-toggle badge (#34) in sync the instant the toggle changes from anywhere
-    // else -- e.g. MainActivity's Settings switch -- not just taps on the badge itself. Also
-    // reacts to the "ever configured" flag (#38) flipping, since that's what brings the badge
-    // into existence the first time cleanup is turned on.
-    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == PostProcessingToggle.KEY || key == CleanupBadgeVisibility.KEY_EVER_CONFIGURED) {
-            handler.post { applyCleanupBadgeVisibility() }
-        }
-    }
-
-    // Whether the cleanup badge window is currently added to the WindowManager (#38). The badge
-    // View/LayoutParams are always constructed in showOverlay(), but only actually attached once
-    // shouldShowBadge() is true -- see applyCleanupBadgeVisibility() -- so a plain-dictation user
-    // who's never touched cleanup never has an (even grey/off) badge added at all.
-    private var cleanupToggleAdded = false
+    // Long-press style/cleanup menu (#53) -- a scrim (catches an outside tap to dismiss) plus the
+    // menu content itself, both added to the WindowManager only while the menu is open; neither
+    // field is ever non-null unless the other is too. See showStyleMenu()/dismissStyleMenu().
+    private var styleMenuScrim: View? = null
+    private var styleMenuView: View? = null
 
     // Undo / retry-raw state (#27) — last injection only, cleared on use or expiry.
     private var pendingInjection: PendingInjection? = null
@@ -239,7 +242,6 @@ class WhisperAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         showOverlay()
-        prefs().registerOnSharedPreferenceChangeListener(prefsListener)
         thread { cleanupOrphanedRecordings() }
         // Try to load local model in background
         thread { initLocalModel() }
@@ -270,7 +272,6 @@ class WhisperAccessibilityService : AccessibilityService() {
             engine.awaitTeardown()
             recordingEngine = null
         }
-        prefs().unregisterOnSharedPreferenceChangeListener(prefsListener)
         guard.cancel()
         inFlightCall.cancel()
         teardownStreamingPreview()
@@ -282,6 +283,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         pendingInjectionRetry = null
         handler.removeCallbacks(previewTimeoutRunnable)
         pendingPreview = null
+        dismissStyleMenu()
         removeOverlay()
         super.onDestroy()
     }
@@ -342,9 +344,10 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     private fun showOverlay() {
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        val buttonSize = (BTN_DP * dp).toInt()
-        val ringSize = (RING_DP * dp).toInt()
-        val pad = (PAD_DP * dp).toInt()
+        val ringSizeDp = OverlayAppearancePrefs.load(this).ringSizeDp
+        val buttonSize = (dpScaledToRing(BTN_DP, ringSizeDp) * dp).toInt()
+        val ringSize = (ringSizeDp * dp).toInt()
+        val pad = (dpScaledToRing(PAD_DP, ringSizeDp) * dp).toInt()
         val margin = (MARGIN_DP * dp).toInt()
 
         val ring = ProgressBar(this).apply {
@@ -354,10 +357,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
 
         val img = ImageView(this).apply {
-            setImageResource(R.drawable.ic_mic)
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(pad, pad, pad, pad)
-            background = circle(COLOR_IDLE)
         }
 
         val overlay = FrameLayout(this).apply {
@@ -380,18 +380,18 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         var startX = 0; var startY = 0
         var touchX = 0f; var touchY = 0f
-        // While TRANSCRIBING, holding the button for LONG_PRESS_CANCEL_MS cancels instead of
-        // waiting for ACTION_UP; this can't collide with tap/drag handling since a plain tap or
-        // drag never leaves the button down that long. The same hold also doubles as "undo last
-        // insertion" (#27) when IDLE with a pending injection — the two never overlap since one
-        // requires TRANSCRIBING and the other requires IDLE (RECORDING taps/drags are unaffected).
+        // Long-press behavior is entirely state-driven -- see overlayLongPressActionFor's doc for
+        // the full state -> action map (cancel while TRANSCRIBING, undo while IDLE with a pending
+        // injection (#27), or the #53 style/cleanup menu in the one remaining reachable state:
+        // IDLE with nothing pending). RECORDING never arms the timer at all, exactly as before.
         var longPressFired = false
         val longPressAction = Runnable {
             longPressFired = true
-            if (stateMachine.current() == RecordingStateMachine.State.TRANSCRIBING) {
-                cancelTranscription()
-            } else if (pendingInjection != null) {
-                undoLastInjection()
+            when (overlayLongPressActionFor(stateMachine.current(), hasPendingInjection = pendingInjection != null)) {
+                OverlayLongPressAction.CANCEL_TRANSCRIPTION -> cancelTranscription()
+                OverlayLongPressAction.UNDO_INJECTION -> undoLastInjection()
+                OverlayLongPressAction.SHOW_STYLE_MENU -> showStyleMenu()
+                OverlayLongPressAction.NONE -> longPressFired = false
             }
         }
 
@@ -401,7 +401,8 @@ class WhisperAccessibilityService : AccessibilityService() {
                     startX = params.x; startY = params.y
                     touchX = ev.rawX; touchY = ev.rawY
                     longPressFired = false
-                    if (stateMachine.current() == RecordingStateMachine.State.TRANSCRIBING || pendingInjection != null) {
+                    val pendingAction = overlayLongPressActionFor(stateMachine.current(), hasPendingInjection = pendingInjection != null)
+                    if (pendingAction != OverlayLongPressAction.NONE) {
                         handler.postDelayed(longPressAction, LONG_PRESS_CANCEL_MS)
                     }
                     true
@@ -413,10 +414,6 @@ class WhisperAccessibilityService : AccessibilityService() {
                     feedbackLayoutParams?.let {
                         positionFeedback(it, params)
                         wm.updateViewLayout(feedbackView, it)
-                    }
-                    cleanupToggleLayoutParams?.let {
-                        positionCleanupToggle(it, params, ringSize)
-                        if (cleanupToggleAdded) wm.updateViewLayout(cleanupToggleView, it)
                     }
                     true
                 }
@@ -433,10 +430,6 @@ class WhisperAccessibilityService : AccessibilityService() {
                         feedbackLayoutParams?.let {
                             positionFeedback(it, params)
                             wm.updateViewLayout(feedbackView, it)
-                        }
-                        cleanupToggleLayoutParams?.let {
-                            positionCleanupToggle(it, params, ringSize)
-                            if (cleanupToggleAdded) wm.updateViewLayout(cleanupToggleView, it)
                         }
                     }
                     true
@@ -474,44 +467,22 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
         positionFeedback(feedbackParams, params)
 
-        // 1-tap cleanup on/off badge (#34): a small always-touchable dot overlapping the ring's
-        // top-right corner, so flipping the global cleanup gate never requires leaving whatever
-        // app is being dictated into, or even letting go of the drag-to-reposition affordance.
-        val cleanupToggle = ImageView(this).apply {
-            setImageResource(R.drawable.ic_cleanup)
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
-            val badgePad = (3 * dp).toInt()
-            setPadding(badgePad, badgePad, badgePad, badgePad)
-            isClickable = true
-            setOnClickListener { onCleanupToggleTapped() }
-        }
-
-        val cleanupToggleSize = (CLEANUP_BADGE_DP * dp).toInt()
-        val cleanupToggleParams = WindowManager.LayoutParams(
-            cleanupToggleSize, cleanupToggleSize,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-        }
-        positionCleanupToggle(cleanupToggleParams, params, ringSize)
-
         wm.addView(overlay, params)
         wm.addView(feedback, feedbackParams)
         overlayView = overlay
         button = img
         spinner = ring
         feedbackView = feedback
-        cleanupToggleView = cleanupToggle
         layoutParams = params
         feedbackLayoutParams = feedbackParams
-        cleanupToggleLayoutParams = cleanupToggleParams
-        // Attaches the badge window only if shouldShowBadge() says it should exist yet (#38); a
-        // plain-dictation user who's never touched cleanup gets no badge at all, not even hidden.
-        applyCleanupBadgeVisibility()
+        applyButtonAppearance(COLOR_IDLE)
         applyOverlayVisibility()
     }
+
+    /** Scales [valueDp] (one of [BTN_DP]/[PAD_DP], defined against the [RING_DP] reference size)
+     *  to whatever ring size the user has actually configured (#43), so the mic glyph and its
+     *  padding stay in the same proportion to the ring regardless of its dp size. */
+    private fun dpScaledToRing(valueDp: Int, ringSizeDp: Int): Int = valueDp * ringSizeDp / RING_DP
 
     /**
      * Reacts to a screen-size change delivered via [onConfigurationChanged] -- on a Pixel Fold
@@ -520,11 +491,13 @@ class WhisperAccessibilityService : AccessibilityService() {
      * (#41) is scoped to fold/unfold only). On a genuine fold-driven size change, the ring is
      * re-snapped to whichever edge it was already closest to and its y position is preserved
      * proportionally (rather than fought back to center) using the same [snappedXForScreenChange]/
-     * [proportionalYForScreenChange] logic covered by unit tests -- then the feedback bubble and
-     * #34 cleanup badge are re-derived from the ring's new params exactly as drag-to-reposition
-     * already does, via [positionFeedback]/[positionCleanupToggle].
+     * [proportionalYForScreenChange] logic covered by unit tests -- then the feedback bubble is
+     * re-derived from the ring's new params exactly as drag-to-reposition already does, via
+     * [positionFeedback]. Any open style menu (#53) is dismissed rather than repositioned, since
+     * its anchor math would otherwise go stale mid-fold.
      */
     private fun handleScreenSizeChange() {
+        dismissStyleMenu()
         val params = layoutParams ?: return
         val newScreenW = screenW
         val newScreenH = screenH
@@ -547,56 +520,28 @@ class WhisperAccessibilityService : AccessibilityService() {
             positionFeedback(it, params)
             wm.updateViewLayout(feedbackView, it)
         }
-        cleanupToggleLayoutParams?.let {
-            positionCleanupToggle(it, params, ringSize)
-            if (cleanupToggleAdded) wm.updateViewLayout(cleanupToggleView, it)
-        }
     }
 
     /**
-     * Adds or removes the cleanup badge's WindowManager window based on
-     * [CleanupBadgeVisibility.shouldShowBadge] (#38), so the badge simply doesn't exist for a
-     * user who has never turned cleanup on -- not merely hidden/grey. Safe to call at any time;
-     * a no-op if the badge's already in the desired state. [updateCleanupToggleAppearance] is
-     * only meaningful once the badge is actually attached, so it's called after ensuring that.
-     */
-    private fun applyCleanupBadgeVisibility() {
-        val view = cleanupToggleView ?: return
-        val params = cleanupToggleLayoutParams ?: return
-        val shouldShow = CleanupBadgeVisibility.shouldShowBadge(
-            everConfigured = CleanupBadgeVisibility.hasEverConfigured(this),
-            currentlyEnabled = PostProcessingToggle.isEnabled(this)
-        )
-        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        if (shouldShow && !cleanupToggleAdded) {
-            wm.addView(view, params)
-            cleanupToggleAdded = true
-        } else if (!shouldShow && cleanupToggleAdded) {
-            wm.removeView(view)
-            cleanupToggleAdded = false
-        }
-        if (cleanupToggleAdded) updateCleanupToggleAppearance()
-    }
-
-    /**
-     * Applies [overlayShouldBeVisible] to the live overlay views (#35): hides the ring and cleanup
-     * badge (draw + touch) and dismisses the feedback bubble while MainActivity is foregrounded.
-     * This only toggles presentation -- [layoutParams], [feedbackLayoutParams] and
-     * [cleanupToggleLayoutParams] stay non-null throughout, so drag-to-reposition and the cleanup
-     * badge's position tracking (#34) are untouched, and the overlay reappears exactly where it
-     * was left. Recording/transcription state is never touched here.
+     * Applies [overlayShouldBeVisible] to the live overlay views (#35): hides the ring (draw +
+     * touch) and dismisses the feedback bubble and any open style menu (#53) while MainActivity is
+     * foregrounded. This only toggles presentation -- [layoutParams] and [feedbackLayoutParams]
+     * stay non-null throughout, so drag-to-reposition is untouched and the overlay reappears
+     * exactly where it was left. Recording/transcription state is never touched here.
      */
     private fun applyOverlayVisibility() {
         val visible = overlayShouldBeVisible(mainActivityForeground)
         setOverlayTouchable(visible)
         overlayView?.visibility = if (visible) View.VISIBLE else View.GONE
-        cleanupToggleView?.visibility = if (visible) View.VISIBLE else View.GONE
-        if (!visible) handler.post(hideFeedback)
+        if (!visible) {
+            handler.post(hideFeedback)
+            dismissStyleMenu()
+        }
     }
 
-    /** Adds/removes FLAG_NOT_TOUCHABLE on the ring and cleanup badge windows so a hidden overlay
-     *  (#35) lets touches fall through to whatever's underneath -- e.g. MainActivity's Settings
-     *  switches -- instead of the window silently swallowing them despite its view being GONE. */
+    /** Adds/removes FLAG_NOT_TOUCHABLE on the ring window so a hidden overlay (#35) lets touches
+     *  fall through to whatever's underneath -- e.g. MainActivity's Settings switches -- instead
+     *  of the window silently swallowing them despite its view being GONE. */
     private fun setOverlayTouchable(touchable: Boolean) {
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         fun WindowManager.LayoutParams.applyTouchable() {
@@ -604,10 +549,6 @@ class WhisperAccessibilityService : AccessibilityService() {
             else flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         }
         layoutParams?.let { it.applyTouchable(); overlayView?.let { v -> wm.updateViewLayout(v, it) } }
-        cleanupToggleLayoutParams?.let {
-            it.applyTouchable()
-            if (cleanupToggleAdded) cleanupToggleView?.let { v -> wm.updateViewLayout(v, it) }
-        }
     }
 
     private fun removeOverlay() {
@@ -620,26 +561,19 @@ class WhisperAccessibilityService : AccessibilityService() {
             wm.removeView(it)
             feedbackView = null
         }
-        if (cleanupToggleAdded) cleanupToggleView?.let { wm.removeView(it) }
-        cleanupToggleAdded = false
-        cleanupToggleView = null
         button = null
         spinner = null
         layoutParams = null
         feedbackLayoutParams = null
-        cleanupToggleLayoutParams = null
     }
 
-    private fun circle(color: Int) = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL; setColor(color)
-    }
-
-    /** Same as [circle] but with a white border, used for small badges (the #34 cleanup toggle)
-     *  that need to read clearly against both the dark ring and whatever's behind it on-screen. */
-    private fun circleWithBorder(color: Int) = GradientDrawable().apply {
+    /** [fillColor] transparent means "no border" -- [GradientDrawable.setStroke] is skipped
+     *  entirely rather than drawn at zero alpha, since a customized ring size means the stroke
+     *  width would otherwise still consume visible space in the drawable's bounds. */
+    private fun circleWithBorder(fillColor: Int, borderColor: Int) = GradientDrawable().apply {
         shape = GradientDrawable.OVAL
-        setColor(color)
-        setStroke((2 * dp).toInt(), 0xFFFFFFFF.toInt())
+        setColor(fillColor)
+        if (borderColor != Color.TRANSPARENT) setStroke((2 * dp).toInt(), borderColor)
     }
 
     private fun pill(color: Int) = GradientDrawable().apply {
@@ -648,8 +582,83 @@ class WhisperAccessibilityService : AccessibilityService() {
         setColor(color)
     }
 
+    /** Single entry point for the button's look, covering both a state-color change (recording,
+     *  transcribing, back to idle) and a live appearance-settings change (#43/#53, see
+     *  [applyOverlayAppearance]) -- so the two can never race each other into an inconsistent
+     *  half-applied state. See [OverlayAppearance]'s own doc for the custom-icon-vs-color-controls
+     *  and idle-only-fill-override product decisions this implements. */
+    private fun applyButtonAppearance(stateColor: Int) {
+        val btn = button ?: return
+        val appearance = OverlayAppearancePrefs.load(this)
+
+        if (appearance.hasCustomIcon) {
+            val bitmap = OverlayIconStore.load(this)
+            if (bitmap != null) {
+                btn.background = null
+                btn.scaleType = ImageView.ScaleType.CENTER_CROP
+                btn.imageTintList = null
+                btn.setImageBitmap(bitmap)
+                btn.clipToOutline = true
+                btn.outlineProvider = OVAL_OUTLINE_PROVIDER
+                return
+            }
+            // Stored file missing/corrupt: fall through to the built-in glyph (#43's documented
+            // fallback) instead of leaving the button with no image at all.
+        }
+
+        btn.clipToOutline = false
+        btn.outlineProvider = null
+        btn.scaleType = ImageView.ScaleType.CENTER_INSIDE
+        btn.setImageResource(R.drawable.ic_mic)
+        btn.imageTintList = ColorStateList.valueOf(appearance.glyphColor ?: COLOR_GLYPH_DEFAULT)
+        val fill = if (stateColor == COLOR_IDLE) (appearance.fillColor ?: COLOR_IDLE) else stateColor
+        btn.background = circleWithBorder(fill, appearance.borderColor ?: Color.TRANSPARENT)
+    }
+
     private fun setAppearance(color: Int) {
-        handler.post { button?.background = circle(color) }
+        handler.post { applyButtonAppearance(color) }
+    }
+
+    /**
+     * Re-applies the overlay's appearance settings (#43/#53) to the already-showing overlay in
+     * place -- resizing the ring/button/padding and redrawing colors/icon -- without tearing down
+     * and re-adding the WindowManager windows, so the ring's dragged position is never disturbed
+     * by a Settings change. Called from MainActivity right after a color/size/custom-icon change,
+     * mirroring the existing reloadModel()/reloadStreamingModel() pattern. A no-op if the overlay
+     * isn't currently showing (e.g. Accessibility isn't enabled).
+     */
+    fun applyOverlayAppearance() {
+        handler.post {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val overlay = overlayView ?: return@post
+            val params = layoutParams ?: return@post
+            val btn = button ?: return@post
+            val ring = spinner ?: return@post
+
+            val ringSizeDp = OverlayAppearancePrefs.load(this).ringSizeDp
+            val ringSize = (ringSizeDp * dp).toInt()
+            val buttonSize = (dpScaledToRing(BTN_DP, ringSizeDp) * dp).toInt()
+            val pad = (dpScaledToRing(PAD_DP, ringSizeDp) * dp).toInt()
+
+            params.width = ringSize
+            params.height = ringSize
+            wm.updateViewLayout(overlay, params)
+
+            (ring.layoutParams as FrameLayout.LayoutParams).apply { width = ringSize; height = ringSize }
+            ring.requestLayout()
+            (btn.layoutParams as FrameLayout.LayoutParams).apply { width = buttonSize; height = buttonSize }
+            btn.setPadding(pad, pad, pad, pad)
+            btn.requestLayout()
+
+            val stateColor = when (stateMachine.current()) {
+                RecordingStateMachine.State.IDLE -> COLOR_IDLE
+                RecordingStateMachine.State.RECORDING -> COLOR_RECORDING
+                RecordingStateMachine.State.TRANSCRIBING -> COLOR_BUSY
+            }
+            applyButtonAppearance(stateColor)
+
+            feedbackLayoutParams?.let { positionFeedback(it, params); wm.updateViewLayout(feedbackView, it) }
+        }
     }
 
     private fun setBusy(visible: Boolean) {
@@ -706,50 +715,198 @@ class WhisperAccessibilityService : AccessibilityService() {
         (getSystemService(WINDOW_SERVICE) as WindowManager).updateViewLayout(view, params)
     }
 
-    /** Keeps the cleanup badge (#34) glued to the ring's top-right corner as the bubble is dragged. */
-    private fun positionCleanupToggle(
-        toggleParams: WindowManager.LayoutParams,
-        bubbleParams: WindowManager.LayoutParams,
-        ringSize: Int
-    ) {
-        val badgeSize = (CLEANUP_BADGE_DP * dp).toInt()
-        val margin = (MARGIN_DP * dp).toInt()
-        toggleParams.x = (bubbleParams.x + ringSize - badgeSize * 3 / 4)
-            .coerceIn(margin, screenW - badgeSize - margin)
-        toggleParams.y = (bubbleParams.y - badgeSize / 3).coerceIn(margin, screenH - badgeSize - margin)
+    // --- Long-press style/cleanup menu (#53) ---
+
+    /**
+     * Opens the long-press menu (see overlayLongPressActionFor's state map) letting the user
+     * toggle cleanup on/off and pick a cleanup persona (#40) without leaving whatever app they're
+     * dictating into. Implemented as two plain WindowManager-added views -- a full-screen
+     * touchable scrim (dismisses on an outside tap) plus the menu content on top -- rather than a
+     * PopupMenu/PopupWindow: those are anchored to a real Activity/View's window token, which an
+     * AccessibilityService's floating overlay doesn't have, so they can't reliably anchor to (or
+     * even show above) this service's own TYPE_ACCESSIBILITY_OVERLAY windows.
+     */
+    private fun showStyleMenu() {
+        dismissStyleMenu()
+        val ringParams = layoutParams ?: return
+        val ringSize = ringParams.width
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+
+        val scrim = FrameLayout(this).apply { setOnClickListener { dismissStyleMenu() } }
+        val scrimParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+
+        val menu = buildStyleMenuContent()
+        val menuParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            // Provisional anchor until the real size is known post-layout, below.
+            x = ringParams.x
+            y = ringParams.y
+        }
+
+        wm.addView(scrim, scrimParams)
+        wm.addView(menu, menuParams)
+        styleMenuScrim = scrim
+        styleMenuView = menu
+
+        // WRAP_CONTENT's real size isn't known until after the first layout pass, so the anchor
+        // math runs once more here rather than trying to pre-compute the menu's height.
+        menu.post {
+            if (styleMenuView !== menu) return@post // dismissed already
+            positionStyleMenu(menuParams, ringParams, ringSize, menu.width, menu.height)
+            wm.updateViewLayout(menu, menuParams)
+        }
     }
 
-    /** Reflects the current [PostProcessingToggle] state on the badge: green when cleanup will run
-     *  on the next dictation, grey when it's off. A white border keeps it visible against both the
-     *  dark ring and light backgrounds in either state -- alpha is no longer used to signal OFF
-     *  (color contrast alone does that job) since a dimmed badge was too easy to overlook. */
-    private fun updateCleanupToggleAppearance() {
-        val view = cleanupToggleView ?: return
-        val enabled = PostProcessingToggle.isEnabled(this)
-        view.background = circleWithBorder(if (enabled) COLOR_CLEANUP_ON else COLOR_CLEANUP_OFF)
-        view.alpha = 1f
+    private fun dismissStyleMenu() {
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        styleMenuView?.let { wm.removeView(it) }
+        styleMenuScrim?.let { wm.removeView(it) }
+        styleMenuView = null
+        styleMenuScrim = null
+    }
+
+    /** Anchors the menu just above the ring, on whichever side has more horizontal room, then
+     *  clamps fully on-screen -- the menu is taller than the ring/feedback bubble, so it opens
+     *  upward rather than risking running off the bottom of the screen. */
+    private fun positionStyleMenu(
+        menuParams: WindowManager.LayoutParams,
+        ringParams: WindowManager.LayoutParams,
+        ringSize: Int,
+        menuWidth: Int,
+        menuHeight: Int
+    ) {
+        val margin = (MARGIN_DP * dp).toInt()
+        menuParams.x = if (ringParams.x + ringSize / 2 > screenW / 2) {
+            (ringParams.x + ringSize - menuWidth).coerceAtLeast(margin)
+        } else {
+            ringParams.x.coerceAtMost(screenW - menuWidth - margin)
+        }
+        menuParams.y = (ringParams.y - menuHeight - margin).coerceIn(margin, screenH - menuHeight - margin)
+    }
+
+    private fun buildStyleMenuContent(): LinearLayout {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            minimumWidth = (220 * dp).toInt()
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 12 * dp
+                setColor(COLOR_FEEDBACK_BG)
+            }
+            setPadding((6 * dp).toInt(), (6 * dp).toInt(), (6 * dp).toInt(), (6 * dp).toInt())
+        }
+
+        val cleanupEnabled = PostProcessingToggle.isEnabled(this)
+        val cleanupIcon = getDrawable(R.drawable.ic_cleanup)?.mutate()?.apply {
+            setTint(if (cleanupEnabled) COLOR_CLEANUP_ON else COLOR_CLEANUP_OFF)
+        }
+        container.addView(
+            styleMenuRow(
+                cleanupIcon,
+                title = if (cleanupEnabled) "Cleanup: On" else "Cleanup: Off",
+                subtitle = "Tap to turn cleanup " + if (cleanupEnabled) "off" else "on"
+            ) { onStyleMenuCleanupToggleTapped() }
+        )
+
+        container.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (1 * dp).toInt()).apply {
+                topMargin = (4 * dp).toInt(); bottomMargin = (4 * dp).toInt()
+            }
+            setBackgroundColor(0x33FFFFFF)
+        })
+
+        val current = CleanupPersonas.currentPersona(
+            prefs().getString("cleanup_style", null),
+            prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+        )
+        for (persona in CleanupPersonas.BUILT_IN) {
+            val title = if (persona == current) "✓ ${persona.title}" else persona.title
+            container.addView(styleMenuRow(icon = null, title = title, subtitle = persona.subtitle) {
+                onStyleMenuPersonaTapped(persona)
+            })
+        }
+
+        return container
+    }
+
+    private fun styleMenuRow(icon: Drawable?, title: String, subtitle: String, onClick: () -> Unit): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            setPadding((14 * dp).toInt(), (10 * dp).toInt(), (14 * dp).toInt(), (10 * dp).toInt())
+            setOnClickListener { onClick() }
+        }
+        if (icon != null) {
+            row.addView(ImageView(this).apply {
+                setImageDrawable(icon)
+                layoutParams = LinearLayout.LayoutParams((20 * dp).toInt(), (20 * dp).toInt()).apply {
+                    marginEnd = (10 * dp).toInt()
+                }
+            })
+        }
+        row.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@WhisperAccessibilityService).apply {
+                text = title
+                textSize = 15f
+                setTextColor(0xFFFFFFFF.toInt())
+            })
+            addView(TextView(this@WhisperAccessibilityService).apply {
+                text = subtitle
+                textSize = 12f
+                setTextColor(0xFFB0B0B0.toInt())
+                setPadding(0, (2 * dp).toInt(), 0, 0)
+            })
+        })
+        return row
     }
 
     /**
-     * 1-tap flip of the global cleanup gate (#34). Turning it OFF is always instant. Turning it ON
-     * respects the existing local-transcription + cleanup consent gate (#23) instead of silently
-     * bypassing it -- if consent hasn't been given yet, this sends the user to Settings once rather
-     * than starting to send local transcripts off-device without the warning they'd get there.
+     * Cleanup on/off from the style menu (#53) -- replaces the old always-visible badge's tap
+     * (#34). Turning it OFF is always instant. Turning it ON respects the existing
+     * local-transcription + cleanup consent gate (#23) instead of silently bypassing it -- if
+     * consent hasn't been given yet, this sends the user to Settings once rather than starting to
+     * send local transcripts off-device without the warning they'd get there.
      */
-    private fun onCleanupToggleTapped() {
+    private fun onStyleMenuCleanupToggleTapped() {
         val enabling = !PostProcessingToggle.isEnabled(this)
         if (enabling) {
             val useLocal = prefs().getBoolean("use_local", true)
             val hasConsented = prefs().getBoolean("local_cleanup_consent_seen", false)
             if (LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing = true, hasConsented = hasConsented)) {
+                dismissStyleMenu()
                 toast("Enable cleanup once in Ramblr settings first")
                 return
             }
         }
-        if (enabling) CleanupBadgeVisibility.markConfigured(this)
         PostProcessingToggle.setEnabled(this, enabling)
-        updateCleanupToggleAppearance()
+        dismissStyleMenu()
         showFeedback(if (enabling) "Cleanup on" else "Cleanup off", durationMs = 1200)
+    }
+
+    /** Persona/style switch from the style menu (#40, #53) -- the overlay-based counterpart to
+     *  MainActivity's Settings persona picker (see MainActivity.selectPrompt), writing the exact
+     *  same two prefs so both surfaces always agree on what's selected. */
+    private fun onStyleMenuPersonaTapped(persona: CleanupPersona) {
+        prefs().edit()
+            .putString("cleanup_style", persona.key)
+            .putString("post_processing_prompt", CleanupPersonas.promptForExplicitSelection(persona))
+            .apply()
+        dismissStyleMenu()
+        showFeedback("Style: ${persona.title}", durationMs = 1200)
     }
 
     private fun startPulse() {
