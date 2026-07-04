@@ -61,15 +61,16 @@ class StreamingTranscriber private constructor(private val recognizer: OnlineRec
     companion object {
         private const val TAG = "StreamingTranscriber"
 
-        /** True if the bundled streaming model (#29) is fully installed. */
-        fun isAvailable(ctx: Context): Boolean = ModelDownloader.isInstalled(ctx, STREAMING_MODEL)
+        /** True if [model] (one of [STREAMING_MODEL_CATALOG], #50) is fully installed. */
+        fun isAvailable(ctx: Context, model: Model): Boolean = ModelDownloader.isInstalled(ctx, model)
 
-        /** Loads the bundled streaming model. Returns null if it isn't installed or fails to load
-         *  -- callers treat that as "no live preview this session", never a fatal error, since this
-         *  path is additive to the always-available batch transcription. */
-        fun create(ctx: Context): StreamingTranscriber? {
-            if (!isAvailable(ctx)) return null
-            val modelDir = ModelDownloader.modelDir(ctx, STREAMING_MODEL).absolutePath
+        /** Loads [model] (one of [STREAMING_MODEL_CATALOG], #50). Returns null if it isn't
+         *  installed or fails to load -- callers treat that as "no live preview this session",
+         *  never a fatal error, since this path is additive to the always-available batch
+         *  transcription. */
+        fun create(ctx: Context, model: Model): StreamingTranscriber? {
+            if (!isAvailable(ctx, model)) return null
+            val modelDir = ModelDownloader.modelDir(ctx, model).absolutePath
 
             val encoder = LocalTranscriber.findFile(modelDir, "encoder")
             val decoder = LocalTranscriber.findFile(modelDir, "decoder")
@@ -89,13 +90,13 @@ class StreamingTranscriber private constructor(private val recognizer: OnlineRec
                     ),
                     tokens = tokens,
                     numThreads = 2,
-                    modelType = "zipformer",
+                    modelType = model.streamingModelType,
                 ),
             )
 
             return try {
                 val recognizer = OnlineRecognizer(assetManager = null, config = config)
-                Log.i(TAG, "Loaded streaming model: ${STREAMING_MODEL.archive}")
+                Log.i(TAG, "Loaded streaming model: ${model.archive}")
                 StreamingTranscriber(recognizer)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load streaming model: ${e.message}")

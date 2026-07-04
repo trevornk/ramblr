@@ -1,5 +1,7 @@
 package com.kafkasl.phonewhisper
 
+import android.content.Context
+
 /**
  * The LOCAL_LLM waterfall step (#37): cleanup executed on-device via llama.cpp instead of over
  * HTTP. Mirrors the shape of [OmniRoute]/[AnthropicCleanupProvider] -- a small object owning the
@@ -13,9 +15,18 @@ package com.kafkasl.phonewhisper
  * to the `messages` array [PostProcessor.buildRequestBody] sends, just executed locally.
  */
 object LocalCleanupProvider {
-    /** The one curated local-cleanup model shipped for v1 (see [LOCAL_CLEANUP_MODEL_CATALOG] in
-     *  ModelDownloader.kt) -- no arbitrary user-supplied GGUF support in this pass (#37 non-goals). */
+    /** The recommended/default local-cleanup catalog entry (see [LOCAL_CLEANUP_MODEL_CATALOG] in
+     *  ModelDownloader.kt, #50) -- the "Local" simple-choice default when nothing else is selected. */
     val MODEL: Model = LOCAL_CLEANUP_MODEL
+
+    /** The catalog entry the user has actually picked for "Local" cleanup (#50), read from the
+     *  "local_cleanup_model_name" preference -- falling back to [MODEL] when unset or when the
+     *  named archive is no longer in the catalog. See [ModelDownloader.resolveActiveModel]. */
+    fun selectedModel(ctx: Context): Model {
+        val prefs = ctx.getSharedPreferences("phonewhisper", Context.MODE_PRIVATE)
+        val archive = prefs.getString("local_cleanup_model_name", MODEL.archive) ?: MODEL.archive
+        return ModelDownloader.resolveActiveModel(LOCAL_CLEANUP_MODEL_CATALOG, archive)
+    }
 
     /**
      * Runs one cleanup completion through [engine] and translates the result into the same

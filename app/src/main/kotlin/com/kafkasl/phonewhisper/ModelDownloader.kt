@@ -47,21 +47,38 @@ data class Model(
     val sourceUrl: String? = null,
     /** File name the downloaded single file is installed as. Required when [isLocalCleanup] is true. */
     val fileName: String? = null,
+    /** sherpa-onnx `OnlineModelConfig.modelType` for a streaming model (#29/#50) -- "zipformer" and
+     *  "zipformer2" are distinct architectures with incompatible graphs, so this must match what
+     *  the model was actually exported as (see sherpa-onnx's own bundled recognizer configs) rather
+     *  than being hardcoded per catalog. Meaningless when [isStreaming] is false. */
+    val streamingModelType: String = "zipformer",
 )
 
 val MODEL_CATALOG = listOf(
     Model("Parakeet 110M", "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
         100, "★★★ Best value", recommended = true,
         sha256 = "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479cefcabd06cf5703630b"),
+    // Same size/quality class as Parakeet 110M above (not a "smaller" tier -- see
+    // sherpa-onnx-nemo-ctc-en-conformer-small below for the genuine small tier, #50) -- kept as an
+    // alternative architecture for users who prefer Whisper's behavior, not part of the 3-tier set.
     Model("Whisper Base", "sherpa-onnx-whisper-base.en",
-        199, "★★★",
+        199, "★★★ Alternative (Whisper architecture)",
         sha256 = "475bc7052ce299c007f6d5d5407ba8601f819a2867f6eecee510ed17df581542"),
     Model("Parakeet 0.6B", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
         465, "★★★★ Best quality",
         sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf"),
+    // Also same size class as Parakeet 110M (~100-108MB) despite the "Tiny" name -- kept as a fast
+    // alternative, not the small tier (#50).
     Model("Moonshine Tiny", "sherpa-onnx-moonshine-tiny-en-int8",
-        103, "★★☆ Fast",
+        103, "★★★ Fast alternative",
         sha256 = "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2"),
+    // The genuine smallest-still-good tier (#50): NVIDIA NeMo's stt_en_conformer_ctc_small,
+    // converted by sherpa-onnx -- real, verifiably smaller (76MB) than every other entry above.
+    // URL/sha256 verified 2026-07-04 by downloading the exact asset and hashing it locally
+    // (`shasum -a 256`), same discipline as every other entry in this file.
+    Model("NeMo Conformer CTC Small", "sherpa-onnx-nemo-ctc-en-conformer-small",
+        76, "★★☆ Smallest, still good",
+        sha256 = "83dcb462aece5bef4e8072c267419389f0b8d1f91152d8851765f284ff664caa"),
 )
 
 /**
@@ -70,14 +87,41 @@ val MODEL_CATALOG = listOf(
  * unchanged. Kept in its own catalog/list rather than appended to [MODEL_CATALOG] so it's never
  * offered as a selectable *offline* model. Archive size and SHA-256 verified against `checksum.txt`
  * published alongside the sherpa-onnx `asr-models` GitHub release (and independently re-hashed from
- * the downloaded asset) on 2026-07-03.
+ * the downloaded asset) on 2026-07-03. The best-value/default tier (#50): small enough for
+ * low-latency live preview, decent accuracy.
  */
 val STREAMING_MODEL = Model("Streaming Zipformer (EN)", "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
-    128, "★★☆ Live preview",
+    128, "★★★ Best value · Live preview", recommended = true,
     sha256 = "9c559283e8498d3fe95913c79ca1cb454bb26281ac2b102b41306c7d752765d9",
     isStreaming = true)
 
-val STREAMING_MODEL_CATALOG = listOf(STREAMING_MODEL)
+/**
+ * Best-quality streaming tier (#50): a newer, larger zipformer2 transducer trained on LibriSpeech,
+ * noticeably more accurate than [STREAMING_MODEL] for users willing to spend the extra download/
+ * install size. Uses `modelType = "zipformer2"`, NOT "zipformer" -- confirmed against sherpa-onnx's
+ * own bundled example recognizer config for this exact archive (`OnlineRecognizer.kt` in this
+ * repo's vendored sherpa-onnx sources), since the two architectures aren't interchangeable. URL/
+ * sha256 verified 2026-07-04 by downloading the exact asset and hashing it locally.
+ */
+val STREAMING_MODEL_QUALITY = Model("Streaming Zipformer2 (EN, high accuracy)",
+    "sherpa-onnx-streaming-zipformer-en-2023-06-26",
+    310, "★★★★ Best quality · Live preview",
+    sha256 = "639e25b578e9e997131402199419c13a941f8e4e198e2da1ce57dbf5cf401282",
+    isStreaming = true, streamingModelType = "zipformer2")
+
+/**
+ * Smallest-still-good streaming tier (#50): a compact zipformer2 transducer from the Kroko English
+ * release, genuinely smaller than [STREAMING_MODEL] (57MB vs. 128MB compressed). Also
+ * `modelType = "zipformer2"` -- see [STREAMING_MODEL_QUALITY]'s note. URL/sha256 verified
+ * 2026-07-04 by downloading the exact asset and hashing it locally.
+ */
+val STREAMING_MODEL_SMALL = Model("Streaming Zipformer2 (EN, compact)",
+    "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06",
+    57, "★★☆ Smallest, still good · Live preview",
+    sha256 = "c8676e5ff9ac2a85296e53ee0fd4d5fb1db6770e7a7647166eeafe349ade6834",
+    isStreaming = true, streamingModelType = "zipformer2")
+
+val STREAMING_MODEL_CATALOG = listOf(STREAMING_MODEL_QUALITY, STREAMING_MODEL, STREAMING_MODEL_SMALL)
 
 /**
  * The one curated on-device cleanup model shipped for #37 -- no arbitrary user-supplied GGUF
@@ -93,7 +137,7 @@ val LOCAL_CLEANUP_MODEL = Model(
     name = "Qwen2.5 0.5B Instruct (Q4_K_M)",
     archive = "qwen2.5-0.5b-instruct-q4_k_m",
     sizeMb = 492,
-    quality = "★★☆ On-device cleanup",
+    quality = "★★★ Best value · On-device cleanup",
     recommended = true,
     sha256 = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
     isLocalCleanup = true,
@@ -101,7 +145,43 @@ val LOCAL_CLEANUP_MODEL = Model(
     fileName = "qwen2.5-0.5b-instruct-q4_k_m.gguf",
 )
 
-val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL)
+/**
+ * Best-quality on-device cleanup tier (#50): the same Qwen2.5-Instruct family as
+ * [LOCAL_CLEANUP_MODEL], scaled up to 1.5B for noticeably better instruction-following at the cost
+ * of a ~1.1GB download. Sourced from the real `Qwen/Qwen2.5-1.5B-Instruct-GGUF` Hugging Face repo
+ * (Apache-2.0), Q4_K_M quantization to match the existing entry's convention. [sha256] verified
+ * 2026-07-04 by downloading the exact file and hashing it locally (`shasum -a 256`) -- not copied
+ * from a webpage.
+ */
+val LOCAL_CLEANUP_MODEL_QUALITY = Model(
+    name = "Qwen2.5 1.5B Instruct (Q4_K_M)",
+    archive = "qwen2.5-1.5b-instruct-q4_k_m",
+    sizeMb = 1117,
+    quality = "★★★★ Best quality · On-device cleanup",
+    sha256 = "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+    isLocalCleanup = true,
+    sourceUrl = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    fileName = "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+)
+
+/**
+ * Smallest-still-good on-device cleanup tier (#50): HuggingFaceTB's SmolLM2-360M-Instruct,
+ * genuinely smaller than [LOCAL_CLEANUP_MODEL] (~271MB vs. ~492MB) while still instruction-tuned.
+ * Sourced from `bartowski/SmolLM2-360M-Instruct-GGUF` (Apache-2.0), Q4_K_M quantization. [sha256]
+ * verified 2026-07-04 by downloading the exact file and hashing it locally.
+ */
+val LOCAL_CLEANUP_MODEL_SMALL = Model(
+    name = "SmolLM2 360M Instruct (Q4_K_M)",
+    archive = "smollm2-360m-instruct-q4_k_m",
+    sizeMb = 271,
+    quality = "★★☆ Smallest, still good · On-device cleanup",
+    sha256 = "2fa3f013dcdd7b99f9b237717fa0b12d75bbb89984cc1274be1471a465bac9c2",
+    isLocalCleanup = true,
+    sourceUrl = "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf",
+    fileName = "smollm2-360m-instruct-q4_k_m.gguf",
+)
+
+val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL_QUALITY, LOCAL_CLEANUP_MODEL, LOCAL_CLEANUP_MODEL_SMALL)
 
 sealed class DownloadState {
     data class Downloading(val progress: Float) : DownloadState()
@@ -254,6 +334,19 @@ object ModelDownloader {
         if (currentArchive != deletedArchive) return currentArchive
         return remainingInstalled.firstOrNull() ?: ""
     }
+
+    /**
+     * Resolves the "active" entry of a multi-tier catalog ([STREAMING_MODEL_CATALOG] or
+     * [LOCAL_CLEANUP_MODEL_CATALOG], #50) given the archive persisted in that catalog's
+     * "*_model_name" preference: the entry whose archive matches, or the catalog's `recommended`
+     * entry if nothing matches (preference never set, or names an archive no longer in the
+     * catalog) -- mirroring the offline model selection's existing fallback-to-installed/first
+     * behavior in MainActivity, just pure and testable here.
+     */
+    fun resolveActiveModel(catalog: List<Model>, selectedArchive: String): Model =
+        catalog.firstOrNull { it.archive == selectedArchive }
+            ?: catalog.firstOrNull { it.recommended }
+            ?: catalog.first()
 
     /** SHA-256 of [file] as lowercase hex. */
     fun sha256(file: File): String {

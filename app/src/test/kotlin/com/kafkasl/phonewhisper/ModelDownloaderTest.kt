@@ -42,7 +42,7 @@ class ModelDownloaderTest {
     }
 
     @Test fun `catalog has expected structure`() {
-        assertEquals(4, MODEL_CATALOG.size)
+        assertEquals(5, MODEL_CATALOG.size)
         assertTrue(MODEL_CATALOG.any { it.recommended })
         assertTrue(MODEL_CATALOG.all { it.archive.startsWith("sherpa-onnx-") })
         assertTrue(MODEL_CATALOG.all { it.sizeMb > 0 })
@@ -65,12 +65,13 @@ class ModelDownloaderTest {
 
     // -- streaming model catalog (#29) --
 
-    @Test fun `streaming catalog has exactly the one streaming model, marked and checksummed`() {
-        assertEquals(1, STREAMING_MODEL_CATALOG.size)
+    @Test fun `streaming catalog has three tiers, all marked and checksummed`() {
+        assertEquals(3, STREAMING_MODEL_CATALOG.size)
         assertTrue(STREAMING_MODEL_CATALOG.all { it.isStreaming })
         assertTrue(STREAMING_MODEL_CATALOG.all { it.sha256 != null })
         assertTrue(STREAMING_MODEL_CATALOG.all { it.sha256!!.matches(Regex("[0-9a-f]{64}")) })
-        assertEquals(STREAMING_MODEL, STREAMING_MODEL_CATALOG.single())
+        assertTrue(STREAMING_MODEL_CATALOG.contains(STREAMING_MODEL))
+        assertEquals(1, STREAMING_MODEL_CATALOG.count { it.recommended })
     }
 
     @Test fun `streaming and offline model archive names never collide`() {
@@ -95,12 +96,13 @@ class ModelDownloaderTest {
 
     // -- local cleanup model catalog (#37) --
 
-    @Test fun `local cleanup catalog has exactly the one curated model, marked and checksummed`() {
-        assertEquals(1, LOCAL_CLEANUP_MODEL_CATALOG.size)
+    @Test fun `local cleanup catalog has three tiers, all marked and checksummed`() {
+        assertEquals(3, LOCAL_CLEANUP_MODEL_CATALOG.size)
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.isLocalCleanup })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256 != null })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256!!.matches(Regex("[0-9a-f]{64}")) })
-        assertEquals(LOCAL_CLEANUP_MODEL, LOCAL_CLEANUP_MODEL_CATALOG.single())
+        assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.contains(LOCAL_CLEANUP_MODEL))
+        assertEquals(1, LOCAL_CLEANUP_MODEL_CATALOG.count { it.recommended })
     }
 
     @Test fun `local cleanup model is sourced from a real Hugging Face URL, not the sherpa-onnx release host`() {
