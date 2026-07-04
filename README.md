@@ -159,9 +159,12 @@ make clean       # clean build artifacts
 prompts (`SIMPLE_PROMPT`, `DEV_PROMPT`, `STRUCTURED_PROMPT`, or future variants) side by side,
 there's a manual eval harness:
 
-- Sample transcripts live in `app/src/test/resources/eval_samples/` — ~20 synthetic but
+- Sample transcripts live in `app/src/test/resources/eval_samples/` — 23 synthetic but
   realistic dictation samples covering rambling brainstorms, self-corrected sentences,
-  technical jargon, spoken lists, and quick notes.
+  technical jargon, spoken lists, quick notes, and two edge cases (a very short two-word
+  command, and a dictation that's already clean and needs no restructuring).
+  `eval_samples/NOTES.md` is a human-reference companion (not read by the harness) noting what a
+  *good* cleanup output should preserve or fix for each sample — use it when judging a report.
 - The harness itself is `app/src/test/kotlin/com/kafkasl/phonewhisper/tools/EvalHarness.kt`, a
   standalone `main()` — **not** a JUnit test. It compiles as part of `make test`'s Kotlin
   compilation (so it's checked for compile errors), but JUnit never discovers or runs it, so it
@@ -174,6 +177,7 @@ own key:
 export OPENAI_API_KEY=sk-...   # your own key — never commit this, no .env is read by the tool
 ./gradlew runEvalHarness                                              # compares SIMPLE_PROMPT vs DEV_PROMPT
 ./gradlew runEvalHarness --args="SIMPLE_PROMPT,DEV_PROMPT,STRUCTURED_PROMPT"   # explicit prompt list
+./gradlew runEvalHarness --args="SIMPLE_PROMPT,DEV_PROMPT,STRUCTURED_PROMPT,GANGSTER_PROMPT,SMART_PROMPT,TEACHER_PROMPT"  # include tone personas (#40)
 ```
 
 Optional overrides:

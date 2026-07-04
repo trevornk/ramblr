@@ -31,11 +31,19 @@ import kotlin.system.exitProcess
 /** Known prompt variants, by name, that [main] can run. Add new PostProcessor prompt constants
  *  here as they're introduced. Each is interpolated with [VocabularyTerms.DEFAULTS] — the same
  *  seed used for a fresh install — so the report reflects real output instead of a dangling
- *  `{{vocabulary}}` placeholder (see #26). */
+ *  `{{vocabulary}}` placeholder (see #26).
+ *
+ *  The FORMAL/CASUAL/NOTES personas (#40) reuse DEV_PROMPT/SIMPLE_PROMPT/STRUCTURED_PROMPT
+ *  byte-for-byte, so they're already covered above under those names — only the tone-filter
+ *  personas with genuinely distinct prompt text (GANGSTER/SMART/TEACHER) are registered
+ *  separately. */
 private val PROMPT_REGISTRY: Map<String, String> = mapOf(
     "SIMPLE_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.SIMPLE_PROMPT, VocabularyTerms.DEFAULTS),
     "DEV_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.DEV_PROMPT, VocabularyTerms.DEFAULTS),
     "STRUCTURED_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.STRUCTURED_PROMPT, VocabularyTerms.DEFAULTS),
+    "GANGSTER_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.GANGSTER_PROMPT, VocabularyTerms.DEFAULTS),
+    "SMART_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.SMART_PROMPT, VocabularyTerms.DEFAULTS),
+    "TEACHER_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.TEACHER_PROMPT, VocabularyTerms.DEFAULTS),
 )
 
 private const val DEFAULT_MODEL = "gpt-4o-mini"
