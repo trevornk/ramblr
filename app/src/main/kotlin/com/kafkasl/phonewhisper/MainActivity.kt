@@ -42,7 +42,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var promptRow: LinearLayout
     private lateinit var vocabularyRowSub: TextView
     private lateinit var vocabularyRow: LinearLayout
-    private lateinit var modelContainer: LinearLayout
+    private lateinit var modelContainer: View
+    private lateinit var openAiKeyGroup: View
     private lateinit var promptContainer: LinearLayout
     private lateinit var cloudSwitch: MaterialSwitch
     private lateinit var postProcessSwitch: MaterialSwitch
@@ -86,6 +87,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cleanupLocalRadio: MaterialRadioButton
     private lateinit var cleanupCloudRadio: MaterialRadioButton
     private lateinit var cleanupChoiceCaption: TextView
+    // Collapse-to-selected-mode (#49): only the currently-selected Local/Cloud sub-fields are
+    // shown at a time, matching Transcription's existing local/cloud collapse -- see
+    // refreshSimpleCleanupChoice().
+    private lateinit var cleanupLocalGroup: View
+    private lateinit var cleanupCloudGroup: View
     private val cleanupModelRows = mutableMapOf<String, ModelRowViews>()
     private val cleanupModelDownloadState = mutableMapOf<String, WorkInfo.State>()
     private val cleanupModelDownloadAcked = mutableSetOf<String>()
@@ -177,11 +183,6 @@ class MainActivity : AppCompatActivity() {
         accRowSub = accRow.findViewWithTag("subtitle")
         root.addView(accRow)
 
-        root.addView(settingsRow(
-            "Redo setup walkthrough",
-            "Re-run the guide for permissions, transcription, cleanup, and streaming preview"
-        ) { startWalkthrough() })
-
         // ============================================================
         // Tier 1 -- Transcription (#38): required, but has a working default. Local needs no
         // download beyond picking a model size below, and nothing here auto-downloads anything.
@@ -208,16 +209,23 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(cloudRow)
 
-        // Local Models section
-        modelContainer = vertical(0)
-        modelContainer.addView(sectionHeader("Local models"))
-        for (m in MODEL_CATALOG) modelContainer.addView(buildModelRow(m))
+        // Local models -- a SUBSECTION of Transcription (#49), not its own top-level area: nested
+        // and indented directly under the switch above, shown only while Local is selected.
+        val localModelsGroup = nestedGroup()
+        localModelsGroup.content.addView(subsectionHeader("Local models", indent = 0))
+        for (m in MODEL_CATALOG) localModelsGroup.content.addView(buildModelRow(m))
+        modelContainer = localModelsGroup.outer
         root.addView(modelContainer)
 
-        // Shared by cloud transcription above and cloud cleanup below -- one key, one place to set it.
-        val keyRow = settingsRow("OpenAI API Key", "Tap to set") { promptApiKey() }
+        // Shared by cloud transcription above and cloud cleanup below (#49) -- one key, one place
+        // to set it, nested under Transcription but shown whenever *either* consumer needs it
+        // (see shouldShowOpenAiKeyRow), not just while Transcription itself is set to Cloud.
+        val keyGroup = nestedGroup()
+        val keyRow = settingsRow("OpenAI API Key", "Tap to set", indent = 0) { promptApiKey() }
         keyRowSub = keyRow.findViewWithTag("subtitle")
-        root.addView(keyRow)
+        keyGroup.content.addView(keyRow)
+        openAiKeyGroup = keyGroup.outer
+        root.addView(openAiKeyGroup)
 
         // ============================================================
         // Tier 2 -- Cleanup / Post-Processing (#38): fully optional, off by default. No model
@@ -241,10 +249,11 @@ class MainActivity : AppCompatActivity() {
         // Everything below only matters once cleanup is on -- shown/hidden as one unit in refresh().
         cleanupDetailContainer = vertical(0)
 
-        promptContainer = vertical(0)
-        promptContainer.addView(sectionHeader("Style"))
-        for (preset in promptPresets()) promptContainer.addView(buildPromptRow(preset))
-        cleanupDetailContainer.addView(promptContainer)
+        val promptGroup = nestedGroup()
+        promptGroup.content.addView(subsectionHeader("Style", indent = 0))
+        for (preset in promptPresets()) promptGroup.content.addView(buildPromptRow(preset))
+        promptContainer = promptGroup.content
+        cleanupDetailContainer.addView(promptGroup.outer)
 
         promptRow = settingsRow("Edit current prompt", currentPrompt()) { promptPostProcessing() }
         promptRowSub = promptRow.findViewWithTag("subtitle")
@@ -253,8 +262,10 @@ class MainActivity : AppCompatActivity() {
         cleanupDetailContainer.addView(promptRow)
 
         // Simple primary choice (#38): Local vs Cloud, standing in front of the full waterfall
-        // editor under Advanced below. See simpleCleanupChoiceFor().
-        cleanupDetailContainer.addView(sectionHeader("How cleanup runs"))
+        // editor under Advanced. Only the selected mode's sub-fields are nested/shown below its
+        // radio (#49) -- matching Transcription's local/cloud collapse instead of showing both
+        // Local and Cloud config simultaneously. See simpleCleanupChoiceFor()/refreshSimpleCleanupChoice().
+        cleanupDetailContainer.addView(subsectionHeader("How cleanup runs", indent = 0))
 
         cleanupLocalRadio = MaterialRadioButton(this).apply {
             isClickable = false
@@ -265,25 +276,31 @@ class MainActivity : AppCompatActivity() {
                 onSelectSimpleCleanup(SimpleCleanupChoice.LOCAL)
             }
         )
-        for (m in LOCAL_CLEANUP_MODEL_CATALOG) cleanupDetailContainer.addView(buildCleanupModelRow(m))
+        val cleanupLocalNested = nestedGroup()
+        for (m in LOCAL_CLEANUP_MODEL_CATALOG) cleanupLocalNested.content.addView(buildCleanupModelRow(m))
+        cleanupLocalGroup = cleanupLocalNested.outer
+        cleanupDetailContainer.addView(cleanupLocalGroup)
 
         cleanupCloudRadio = MaterialRadioButton(this).apply {
             isClickable = false
             buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
         }
         cleanupDetailContainer.addView(
-            settingsRow("Cloud", "Uses your OpenAI API key, billed pay-per-use", cleanupCloudRadio) {
+            settingsRow("Cloud", "Uses your OpenAI API key by default, billed pay-per-use — Anthropic or OmniRoute available under Advanced", cleanupCloudRadio) {
                 onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
             }
         )
 
-        val baseUrlRow = settingsRow("Cleanup API base URL", cleanupBaseUrl()) { promptCleanupBaseUrl() }
+        val cleanupCloudNested = nestedGroup()
+        val baseUrlRow = settingsRow("Cleanup API base URL", cleanupBaseUrl(), indent = 0) { promptCleanupBaseUrl() }
         baseUrlRowSub = baseUrlRow.findViewWithTag("subtitle")
-        cleanupDetailContainer.addView(baseUrlRow)
+        cleanupCloudNested.content.addView(baseUrlRow)
 
-        val modelRow = settingsRow("Cleanup model name", cleanupModel()) { promptCleanupModel() }
+        val modelRow = settingsRow("Cleanup model name", cleanupModel(), indent = 0) { promptCleanupModel() }
         modelRowSub = modelRow.findViewWithTag("subtitle")
-        cleanupDetailContainer.addView(modelRow)
+        cleanupCloudNested.content.addView(modelRow)
+        cleanupCloudGroup = cleanupCloudNested.outer
+        cleanupDetailContainer.addView(cleanupCloudGroup)
 
         cleanupChoiceCaption = TextView(this).apply {
             text = "Doesn't match a simple choice — your existing configuration is preserved under Advanced below."
@@ -310,55 +327,6 @@ class MainActivity : AppCompatActivity() {
             previewBeforeInjectSwitch.isChecked = newVal
         }
         cleanupDetailContainer.addView(previewBeforeInjectRow)
-
-        // --- Advanced: full cleanup waterfall (#32/#37) — genuinely collapsed by default (#38).
-        // Additive and off by default: the simple choice above keeps working unchanged until the
-        // user adds at least one waterfall step here (see ADR-0001's "zero behavior change").
-        advancedChevron = TextView(this).apply {
-            text = "▸"
-            textSize = 18f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-        }
-        cleanupDetailContainer.addView(
-            settingsRow("Advanced", "Multi-step waterfall, credentials, fallback order (power users)", advancedChevron) {
-                toggleAdvanced()
-            }
-        )
-
-        advancedContainer = vertical(0).apply { visibility = View.GONE }
-        advancedContainer.addView(TextView(this).apply {
-            text = "Try multiple cleanup providers in order, falling through on failure. Leave empty to keep using the simple choice above."
-            textSize = 14f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(8))
-        })
-
-        val omnirouteKeyRow = settingsRow("OmniRoute key", credentialSubtitle(CleanupCredentialSlot.OMNIROUTE)) {
-            promptCleanupCredential(CleanupCredentialSlot.OMNIROUTE, "OmniRoute key")
-        }
-        omnirouteKeyRowSub = omnirouteKeyRow.findViewWithTag("subtitle")
-        advancedContainer.addView(omnirouteKeyRow)
-
-        val openaiDirectKeyRow = settingsRow("Direct OpenAI key (cleanup)", credentialSubtitle(CleanupCredentialSlot.OPENAI_DIRECT)) {
-            promptCleanupCredential(CleanupCredentialSlot.OPENAI_DIRECT, "Direct OpenAI key")
-        }
-        openaiDirectKeyRowSub = openaiDirectKeyRow.findViewWithTag("subtitle")
-        advancedContainer.addView(openaiDirectKeyRow)
-
-        val anthropicDirectKeyRow = settingsRow("Direct Anthropic key", credentialSubtitle(CleanupCredentialSlot.ANTHROPIC_DIRECT)) {
-            promptCleanupCredential(CleanupCredentialSlot.ANTHROPIC_DIRECT, "Direct Anthropic key")
-        }
-        anthropicDirectKeyRowSub = anthropicDirectKeyRow.findViewWithTag("subtitle")
-        advancedContainer.addView(anthropicDirectKeyRow)
-
-        waterfallStepsContainer = vertical(0)
-        advancedContainer.addView(waterfallStepsContainer)
-
-        advancedContainer.addView(settingsRow("Add waterfall step", "OmniRoute / Direct OpenAI / Direct Anthropic / Local") {
-            promptAddOrEditStep(null) { newStep -> saveWaterfallSteps(waterfallSteps() + newStep) }
-        })
-
-        cleanupDetailContainer.addView(advancedContainer)
         root.addView(cleanupDetailContainer)
 
         // ============================================================
@@ -383,25 +351,11 @@ class MainActivity : AppCompatActivity() {
         ) { onHistoryToggle(!historyEnabledSwitch.isChecked) }
         root.addView(historyToggleRow)
 
-        root.addView(settingsRow("Dictation history", "Recover past transcripts, tap to copy") { showHistory() })
-
-        // Debug/visibility toggle (#33): off by default, so it doesn't clutter the common case.
-        // Currently the only thing it gates is dictation history's "paid fallback" badge, but it's
-        // named generically so future debug-ish affordances can share it (see ADR-0001).
-        debugVisibilitySwitch = MaterialSwitch(this).apply {
-            isChecked = DebugVisibilityToggle.isEnabled(this@MainActivity)
-            isClickable = false
-        }
-        val debugVisibilityRow = settingsRow(
-            "Debug / visibility",
-            "Shows extra under-the-hood detail, like which dictations used a paid cleanup fallback",
-            debugVisibilitySwitch
-        ) {
-            val newVal = !debugVisibilitySwitch.isChecked
-            DebugVisibilityToggle.setEnabled(this, newVal)
-            debugVisibilitySwitch.isChecked = newVal
-        }
-        root.addView(debugVisibilityRow)
+        val historyGroup = nestedGroup()
+        historyGroup.content.addView(
+            settingsRow("Dictation history", "Recover past transcripts, tap to copy", indent = 0) { showHistory() }
+        )
+        root.addView(historyGroup.outer)
 
         // --- Overlay appearance (#43/#53) ---
         root.addView(sectionHeader("Overlay appearance"))
@@ -473,7 +427,95 @@ class MainActivity : AppCompatActivity() {
         streamingPreviewRowSub = streamingPreviewRow.findViewWithTag("subtitle")
         root.addView(streamingPreviewRow)
 
-        for (m in STREAMING_MODEL_CATALOG) root.addView(buildStreamingModelRow(m))
+        // Streaming's model choice nested under its enable switch (#49), same pattern as
+        // Transcription's "Local models" -- always local, so no local/cloud collapse is needed here.
+        val streamingModelGroup = nestedGroup()
+        streamingModelGroup.content.addView(subsectionHeader("Streaming preview model", indent = 0))
+        for (m in STREAMING_MODEL_CATALOG) streamingModelGroup.content.addView(buildStreamingModelRow(m))
+        root.addView(streamingModelGroup.outer)
+
+        // ============================================================
+        // Advanced (#49): everything power-user/rarely-touched, tucked behind one collapsed-by-
+        // default section so it doesn't visually compete with the required/optional choices above
+        // it -- redo-onboarding, debug/visibility, and the full cleanup waterfall editor
+        // (#32/#37/#38), which only has any effect while "Improve my dictation with AI" above is on.
+        // ============================================================
+        root.addView(sectionHeader("Advanced"))
+
+        root.addView(settingsRow(
+            "Redo setup walkthrough",
+            "Re-run the guide for permissions, transcription, cleanup, and streaming preview"
+        ) { startWalkthrough() })
+
+        // Debug/visibility toggle (#33): off by default, so it doesn't clutter the common case.
+        // Currently the only thing it gates is dictation history's "paid fallback" badge, but it's
+        // named generically so future debug-ish affordances can share it (see ADR-0001).
+        debugVisibilitySwitch = MaterialSwitch(this).apply {
+            isChecked = DebugVisibilityToggle.isEnabled(this@MainActivity)
+            isClickable = false
+        }
+        val debugVisibilityRow = settingsRow(
+            "Debug / visibility",
+            "Shows extra under-the-hood detail, like which dictations used a paid cleanup fallback",
+            debugVisibilitySwitch
+        ) {
+            val newVal = !debugVisibilitySwitch.isChecked
+            DebugVisibilityToggle.setEnabled(this, newVal)
+            debugVisibilitySwitch.isChecked = newVal
+        }
+        root.addView(debugVisibilityRow)
+
+        // --- Cleanup waterfall (#32/#37) — genuinely collapsed by default (#38). Additive and off
+        // by default: the simple Local/Cloud choice under Cleanup above keeps working unchanged
+        // until the user adds at least one waterfall step here (see ADR-0001's "zero behavior
+        // change"). Only takes effect while "Improve my dictation with AI" is turned on above.
+        advancedChevron = TextView(this).apply {
+            text = "▸"
+            textSize = 18f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+        }
+        root.addView(
+            settingsRow("Cleanup waterfall", "Multi-step fallback order, credentials (power users)", advancedChevron) {
+                toggleAdvanced()
+            }
+        )
+
+        advancedContainer = vertical(0).apply { visibility = View.GONE }
+        advancedContainer.addView(TextView(this).apply {
+            text = "Try multiple cleanup providers in order, falling through on failure. Leave empty " +
+                "to keep using the simple Local/Cloud choice under Cleanup above. Only used while " +
+                "\"Improve my dictation with AI\" is turned on."
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(8))
+        })
+
+        val omnirouteKeyRow = settingsRow("OmniRoute key", credentialSubtitle(CleanupCredentialSlot.OMNIROUTE), indent = 0) {
+            promptCleanupCredential(CleanupCredentialSlot.OMNIROUTE, "OmniRoute key")
+        }
+        omnirouteKeyRowSub = omnirouteKeyRow.findViewWithTag("subtitle")
+        advancedContainer.addView(omnirouteKeyRow)
+
+        val openaiDirectKeyRow = settingsRow("Direct OpenAI key (cleanup)", credentialSubtitle(CleanupCredentialSlot.OPENAI_DIRECT), indent = 0) {
+            promptCleanupCredential(CleanupCredentialSlot.OPENAI_DIRECT, "Direct OpenAI key")
+        }
+        openaiDirectKeyRowSub = openaiDirectKeyRow.findViewWithTag("subtitle")
+        advancedContainer.addView(openaiDirectKeyRow)
+
+        val anthropicDirectKeyRow = settingsRow("Direct Anthropic key", credentialSubtitle(CleanupCredentialSlot.ANTHROPIC_DIRECT), indent = 0) {
+            promptCleanupCredential(CleanupCredentialSlot.ANTHROPIC_DIRECT, "Direct Anthropic key")
+        }
+        anthropicDirectKeyRowSub = anthropicDirectKeyRow.findViewWithTag("subtitle")
+        advancedContainer.addView(anthropicDirectKeyRow)
+
+        waterfallStepsContainer = vertical(0)
+        advancedContainer.addView(waterfallStepsContainer)
+
+        advancedContainer.addView(settingsRow("Add waterfall step", "OmniRoute / Direct OpenAI / Direct Anthropic / Local", indent = 0) {
+            promptAddOrEditStep(null) { newStep -> saveWaterfallSteps(waterfallSteps() + newStep) }
+        })
+
+        root.addView(advancedContainer)
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -1044,6 +1086,11 @@ class MainActivity : AppCompatActivity() {
         cleanupLocalRadio.isChecked = choice == SimpleCleanupChoice.LOCAL
         cleanupCloudRadio.isChecked = choice == SimpleCleanupChoice.CLOUD
         cleanupChoiceCaption.visibility = if (choice == SimpleCleanupChoice.CUSTOM) View.VISIBLE else View.GONE
+        // Collapse to only the selected mode's sub-fields (#49), same pattern as Transcription's
+        // local/cloud collapse -- neither is shown for CUSTOM, since the caption above already
+        // points power users at their real config under Advanced.
+        cleanupLocalGroup.visibility = if (choice == SimpleCleanupChoice.LOCAL) View.VISIBLE else View.GONE
+        cleanupCloudGroup.visibility = if (choice == SimpleCleanupChoice.CLOUD) View.VISIBLE else View.GONE
     }
 
     /** Expands/collapses the Advanced waterfall editor (#38); always starts collapsed each time
@@ -1216,6 +1263,9 @@ class MainActivity : AppCompatActivity() {
 
         val apiKey = ApiKeyStore.getApiKey(this)
         keyRowSub.text = if (apiKey.isBlank()) "Tap to set" else ApiKeyStore.maskForDisplay(apiKey)
+        openAiKeyGroup.visibility = if (
+            shouldShowOpenAiKeyRow(useLocalTranscription = useLocal, cleanupEnabled = usePostProcessing, cleanupChoice = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this)))
+        ) View.VISIBLE else View.GONE
         baseUrlRowSub.text = cleanupBaseUrl()
         modelRowSub.text = cleanupModel()
 
@@ -2050,11 +2100,11 @@ class MainActivity : AppCompatActivity() {
 
     // --- UI Helpers ---
 
-    private fun settingsRow(title: String, subtitle: String, widget: View? = null, onClick: (() -> Unit)? = null): LinearLayout {
+    private fun settingsRow(title: String, subtitle: String, widget: View? = null, indent: Int = 0, onClick: (() -> Unit)? = null): LinearLayout {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(24), dp(16), dp(24), dp(16))
+            setPadding(dp(24) + dp(INDENT_STEP_DP) * indent, dp(16), dp(24), dp(16))
             isClickable = onClick != null
             isFocusable = onClick != null
             if (onClick != null) {
@@ -2096,6 +2146,44 @@ class MainActivity : AppCompatActivity() {
         setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary)) // Neutral Android-like blue
         setPadding(dp(24), dp(24), dp(24), dp(8))
     }
+
+    /** A smaller, indented label for a subsection nested inside a top-level feature (#49) -- e.g.
+     *  "Local models" under Transcription -- visually distinct from [sectionHeader] so it never
+     *  reads as another same-level top-level area. */
+    private fun subsectionHeader(title: String, indent: Int = 1) = TextView(this).apply {
+        text = title
+        textSize = 13f
+        setTypeface(typeface, Typeface.BOLD)
+        setTextColor(attrColor(android.R.attr.textColorSecondary))
+        setPadding(dp(24) + dp(INDENT_STEP_DP) * indent, dp(16), dp(24), dp(4))
+    }
+
+    /** The single consistent "this is a sub-item of the section above it" mechanism used
+     *  everywhere in Settings (#49): a thin tinted accent bar to the left of an indented content
+     *  column. Returns the outer view to add/remove from the parent for show/hide, and the inner
+     *  content column that callers add their nested rows to. */
+    private data class NestedGroup(val outer: View, val content: LinearLayout)
+
+    private fun nestedGroup(): NestedGroup {
+        val content = vertical(0)
+        // The accent bar sits inside the same left gutter every settingsRow/subsectionHeader
+        // already leaves before its dp(24)-inset text, so nested rows land a modest, consistent
+        // step further right than their parent's own text -- not stacked on top of it.
+        val accent = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(3), LP_MATCH).apply { marginStart = dp(12) }
+            setBackgroundColor(withAlpha(attrColor(com.google.android.material.R.attr.colorPrimary), 0x33))
+        }
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(accent)
+            addView(content.apply {
+                layoutParams = LinearLayout.LayoutParams(0, LP_WRAP, 1f)
+            })
+        }
+        return NestedGroup(outer, content)
+    }
+
+    private fun withAlpha(color: Int, alpha: Int): Int = (color and 0x00FFFFFF) or (alpha shl 24)
 
     private fun vertical(padH: Int, padV: Int = padH) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -2153,6 +2241,8 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val LP_MATCH = LinearLayout.LayoutParams.MATCH_PARENT
         private const val LP_WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
+        // Consistent nesting indent step (#49) -- see nestedGroup()/subsectionHeader()/settingsRow's indent param.
+        private const val INDENT_STEP_DP = 16
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
         private const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
         private const val KEY_HISTORY_ENABLED = "dictation_history_enabled"
