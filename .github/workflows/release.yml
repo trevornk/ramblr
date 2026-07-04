@@ -1,0 +1,75 @@
+name: Release
+
+# Runs after every push to main: builds a debug APK and publishes it as a GitHub Release so
+# Trevor can grab a direct download link from his phone without needing anyone to build/attach
+# it by hand. Debug/unsigned build (same as CI's own artifact) -- sideload only, not Play Store.
+#
+# Deliberately a separate workflow from ci.yml rather than a job appended to it: this needs
+# `contents: write` to create releases, and keeping that permission scoped to its own workflow
+# (rather than the PR-triggered CI workflow) avoids ever granting write access to a PR build.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  # Only the latest push to main needs a release; superseding an in-flight build for an older
+  # commit is fine and avoids two workflow runs racing to create overlapping releases.
+  group: release-main
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Compute release tag
+        id: tag
+        run: |
+          SHORT_SHA=$(git rev-parse --short=7 HEAD)
+          VERSION_NAME=$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
+          TAG="v${VERSION_NAME}-dev.$(date -u +%Y%m%d%H%M).${SHORT_SHA}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Safe from the workflow-injection risk this trigger type usually carries: every
+        # interpolated value here is either computed from trusted internal state (steps.tag's
+        # outputs, derived from `git rev-parse`/gradle's versionName) or github.sha itself (an
+        # immutable commit hash, not attacker-controlled free text like a PR title/body). This
+        # workflow only runs on push to main, never on pull_request/issue_comment/etc., so there's
+        # no untrusted external text anywhere in scope to interpolate in the first place.
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            app/build/outputs/apk/debug/app-debug.apk \
+            --title "Ramblr ${{ steps.tag.outputs.tag }} (debug build)" \
+            --notes "Automated debug sideload build from \`${{ steps.tag.outputs.short_sha }}\` on main.
+
+          **Unsigned debug build** — enable \"install unknown apps\" for whatever app you use to open the downloaded APK. Not from the Play Store.
+
+          Commit: ${{ github.sha }}
+          [Compare with previous release](../../commits/main)"
