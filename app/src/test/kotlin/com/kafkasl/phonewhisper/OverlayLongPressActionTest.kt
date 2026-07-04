@@ -1,6 +1,8 @@
 package com.kafkasl.phonewhisper
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OverlayLongPressActionTest {
@@ -39,5 +41,25 @@ class OverlayLongPressActionTest {
             OverlayLongPressAction.NONE,
             overlayLongPressActionFor(RecordingStateMachine.State.RECORDING, hasPendingInjection = true)
         )
+    }
+
+    @Test fun `stationary long-press still opens the style menu`() {
+        assertTrue(shouldFireLongPress(OverlayLongPressAction.SHOW_STYLE_MENU, movedPastThreshold = false))
+    }
+
+    @Test fun `a long-press that turned into a drag does not open the style menu`() {
+        assertFalse(shouldFireLongPress(OverlayLongPressAction.SHOW_STYLE_MENU, movedPastThreshold = true))
+    }
+
+    @Test fun `movement never gates cancel-transcription`() {
+        assertTrue(shouldFireLongPress(OverlayLongPressAction.CANCEL_TRANSCRIPTION, movedPastThreshold = true))
+    }
+
+    @Test fun `movement never gates undo-injection`() {
+        assertTrue(shouldFireLongPress(OverlayLongPressAction.UNDO_INJECTION, movedPastThreshold = true))
+    }
+
+    @Test fun `movement never gates none`() {
+        assertTrue(shouldFireLongPress(OverlayLongPressAction.NONE, movedPastThreshold = true))
     }
 }

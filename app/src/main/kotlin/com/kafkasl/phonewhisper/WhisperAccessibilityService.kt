@@ -3,6 +3,7 @@ package com.kafkasl.phonewhisper
 import android.accessibilityservice.AccessibilityService
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
@@ -388,17 +389,25 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         var startX = 0; var startY = 0
         var touchX = 0f; var touchY = 0f
+        var lastRawX = 0f; var lastRawY = 0f
         // Long-press behavior is entirely state-driven -- see overlayLongPressActionFor's doc for
         // the full state -> action map (cancel while TRANSCRIBING, undo while IDLE with a pending
         // injection (#27), or the #53 style/cleanup menu in the one remaining reachable state:
         // IDLE with nothing pending). RECORDING never arms the timer at all, exactly as before.
         var longPressFired = false
+        // Set only when this gesture's long-press actually opened the style menu (#57) -- lets
+        // ACTION_MOVE single out "the menu I just opened" from cancel-transcription/undo already
+        // having fired, neither of which is a persistent overlay that needs dismissing on drag.
+        var styleMenuOpenedByLongPress = false
         val longPressAction = Runnable {
+            val action = overlayLongPressActionFor(stateMachine.current(), hasPendingInjection = pendingInjection != null)
+            val moved = abs(lastRawX - touchX) + abs(lastRawY - touchY)
+            if (!shouldFireLongPress(action, movedPastThreshold = moved >= TAP_THRESHOLD_DP * dp)) return@Runnable
             longPressFired = true
-            when (overlayLongPressActionFor(stateMachine.current(), hasPendingInjection = pendingInjection != null)) {
+            when (action) {
                 OverlayLongPressAction.CANCEL_TRANSCRIPTION -> cancelTranscription()
                 OverlayLongPressAction.UNDO_INJECTION -> undoLastInjection()
-                OverlayLongPressAction.SHOW_STYLE_MENU -> showStyleMenu()
+                OverlayLongPressAction.SHOW_STYLE_MENU -> { showStyleMenu(); styleMenuOpenedByLongPress = true }
                 OverlayLongPressAction.NONE -> longPressFired = false
             }
         }
@@ -408,7 +417,9 @@ class WhisperAccessibilityService : AccessibilityService() {
                 MotionEvent.ACTION_DOWN -> {
                     startX = params.x; startY = params.y
                     touchX = ev.rawX; touchY = ev.rawY
+                    lastRawX = ev.rawX; lastRawY = ev.rawY
                     longPressFired = false
+                    styleMenuOpenedByLongPress = false
                     val pendingAction = overlayLongPressActionFor(stateMachine.current(), hasPendingInjection = pendingInjection != null)
                     if (pendingAction != OverlayLongPressAction.NONE) {
                         handler.postDelayed(longPressAction, LONG_PRESS_CANCEL_MS)
@@ -416,12 +427,21 @@ class WhisperAccessibilityService : AccessibilityService() {
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    lastRawX = ev.rawX; lastRawY = ev.rawY
                     params.x = startX + (ev.rawX - touchX).toInt()
                     params.y = startY + (ev.rawY - touchY).toInt()
                     wm.updateViewLayout(v, params)
                     feedbackLayoutParams?.let {
                         positionFeedback(it, params)
                         wm.updateViewLayout(feedbackView, it)
+                    }
+                    // The hold that opened the style menu (#57) has turned into a drag -- dismiss
+                    // the now-unwanted menu and fall back to plain drag-to-reposition; ACTION_UP's
+                    // existing moved-based branch takes it from here exactly as an ordinary drag.
+                    if (styleMenuOpenedByLongPress && abs(ev.rawX - touchX) + abs(ev.rawY - touchY) >= TAP_THRESHOLD_DP * dp) {
+                        dismissStyleMenu()
+                        styleMenuOpenedByLongPress = false
+                        longPressFired = false
                     }
                     true
                 }
@@ -828,12 +848,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             ) { onStyleMenuCleanupToggleTapped() }
         )
 
-        container.addView(View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (1 * dp).toInt()).apply {
-                topMargin = (4 * dp).toInt(); bottomMargin = (4 * dp).toInt()
-            }
-            setBackgroundColor(0x33FFFFFF)
-        })
+        container.addView(styleMenuDivider())
 
         val current = CleanupPersonas.currentPersona(
             prefs().getString("cleanup_style", null),
@@ -846,7 +861,34 @@ class WhisperAccessibilityService : AccessibilityService() {
             })
         }
 
+        container.addView(styleMenuDivider())
+
+        val streamingEnabled = prefs().getBoolean("streaming_preview_enabled", false)
+        container.addView(
+            styleMenuRow(
+                icon = null,
+                title = if (streamingEnabled) "Live preview: On" else "Live preview: Off",
+                subtitle = "Tap to turn live preview " + if (streamingEnabled) "off" else "on"
+            ) { onStyleMenuStreamingToggleTapped() }
+        )
+
+        container.addView(styleMenuDivider())
+
+        container.addView(
+            styleMenuRow(icon = null, title = "Open Ramblr Settings", subtitle = "Full settings, models, history") {
+                onStyleMenuOpenSettingsTapped()
+            }
+        )
+
         return container
+    }
+
+    /** Thin horizontal rule separating style menu row groups (#53/#57). */
+    private fun styleMenuDivider(): View = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (1 * dp).toInt()).apply {
+            topMargin = (4 * dp).toInt(); bottomMargin = (4 * dp).toInt()
+        }
+        setBackgroundColor(0x33FFFFFF)
     }
 
     private fun styleMenuRow(icon: Drawable?, title: String, subtitle: String, onClick: () -> Unit): View {
@@ -891,30 +933,80 @@ class WhisperAccessibilityService : AccessibilityService() {
      */
     private fun onStyleMenuCleanupToggleTapped() {
         val enabling = !PostProcessingToggle.isEnabled(this)
-        if (enabling) {
-            val useLocal = prefs().getBoolean("use_local", true)
-            val hasConsented = prefs().getBoolean("local_cleanup_consent_seen", false)
-            if (LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing = true, hasConsented = hasConsented)) {
-                dismissStyleMenu()
-                toast("Enable cleanup once in Ramblr settings first")
-                return
-            }
+        if (enabling && !ensureCleanupEnabled()) {
+            dismissStyleMenu()
+            toast("Enable cleanup once in Ramblr settings first")
+            return
         }
-        PostProcessingToggle.setEnabled(this, enabling)
+        if (!enabling) PostProcessingToggle.setEnabled(this, false)
         dismissStyleMenu()
         showFeedback(if (enabling) "Cleanup on" else "Cleanup off", durationMs = 1200)
     }
 
-    /** Persona/style switch from the style menu (#40, #53) -- the overlay-based counterpart to
-     *  MainActivity's Settings persona picker (see MainActivity.selectPrompt), writing the exact
-     *  same two prefs so both surfaces always agree on what's selected. */
+    /** Turns cleanup on if it isn't already, respecting the same local-cleanup consent gate (#23)
+     *  [onStyleMenuCleanupToggleTapped] enforces. Returns whether cleanup ended up enabled --
+     *  true if it was already on or turning it on just succeeded, false if blocked on consent. */
+    private fun ensureCleanupEnabled(): Boolean {
+        if (PostProcessingToggle.isEnabled(this)) return true
+        val useLocal = prefs().getBoolean("use_local", true)
+        val hasConsented = prefs().getBoolean("local_cleanup_consent_seen", false)
+        if (LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing = true, hasConsented = hasConsented)) return false
+        PostProcessingToggle.setEnabled(this, true)
+        return true
+    }
+
+    /**
+     * Persona/style switch from the style menu (#40, #53, #57) -- the overlay-based counterpart to
+     * MainActivity's Settings persona picker (see MainActivity.selectPrompt), writing the exact
+     * same two prefs so both surfaces always agree on what's selected. Picking a persona is also
+     * a request to hear it, so this always ensures cleanup is enabled too (#57, Trevor's
+     * always-on-behavior request) rather than requiring a separate tap on the cleanup row first --
+     * unless the consent gate blocks it, in which case the persona is still selected (it takes
+     * effect the moment cleanup is turned on) but the feedback bubble says so instead of claiming
+     * cleanup is now running.
+     */
     private fun onStyleMenuPersonaTapped(persona: CleanupPersona) {
         prefs().edit()
             .putString("cleanup_style", persona.key)
             .putString("post_processing_prompt", CleanupPersonas.promptForExplicitSelection(persona))
             .apply()
+        val cleanupEnabled = ensureCleanupEnabled()
         dismissStyleMenu()
-        showFeedback("Style: ${persona.title}", durationMs = 1200)
+        showFeedback(
+            if (cleanupEnabled) "Style: ${persona.title}" else "Style: ${persona.title} (enable cleanup in Settings)",
+            durationMs = 1200
+        )
+    }
+
+    /** Streaming live-preview on/off from the style menu (#57) -- reads/writes the exact same
+     *  "streaming_preview_enabled" pref MainActivity's Settings toggle uses (see
+     *  MainActivity.onStreamingPreviewToggle), including the same "model must be installed"
+     *  gate, so both surfaces always agree on state and neither can turn on a live preview with
+     *  nothing installed to back it. */
+    private fun onStyleMenuStreamingToggleTapped() {
+        val enabling = !prefs().getBoolean("streaming_preview_enabled", false)
+        if (enabling && !ModelDownloader.isInstalled(this, selectedStreamingModel())) {
+            dismissStyleMenu()
+            toast("Download the streaming model in Ramblr settings first")
+            return
+        }
+        prefs().edit().putBoolean("streaming_preview_enabled", enabling).apply()
+        reloadStreamingModel()
+        dismissStyleMenu()
+        showFeedback(if (enabling) "Live preview on" else "Live preview off", durationMs = 1200)
+    }
+
+    private fun selectedStreamingModel(): Model = ModelDownloader.resolveActiveModel(
+        STREAMING_MODEL_CATALOG,
+        prefs().getString("streaming_model_name", STREAMING_MODEL.archive) ?: STREAMING_MODEL.archive
+    )
+
+    /** Opens MainActivity (#57) directly from the overlay -- FLAG_ACTIVITY_NEW_TASK is required
+     *  since this call comes from a Service context, not an Activity. The menu is dismissed first
+     *  so it doesn't linger as a stale overlay window on top of MainActivity. */
+    private fun onStyleMenuOpenSettingsTapped() {
+        dismissStyleMenu()
+        startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     private fun startPulse() {
