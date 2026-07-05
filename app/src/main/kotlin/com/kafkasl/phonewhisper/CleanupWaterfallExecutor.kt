@@ -509,11 +509,23 @@ object CleanupWaterfallExecutor {
             return
         }
 
+        if (step.group == CleanupStepGroup.GEMINI_DIRECT) {
+            transport.send(
+                GeminiCleanupProvider.endpointUrl(step.model, apiKey),
+                emptyMap(),
+                GeminiCleanupProvider.buildRequestBody(text, prompt).toString(),
+                CleanupStepTimeouts.DEFAULT,
+                cancelHolder,
+            ) { httpOutcome -> callback(toStepOutcome(httpOutcome, GeminiCleanupProvider::parseResponse)) }
+            return
+        }
+
         val baseUrl = when (step.group) {
             CleanupStepGroup.LEGACY -> legacyBaseUrl
             CleanupStepGroup.OMNIROUTE -> OmniRoute.BASE_URL
             CleanupStepGroup.OPENAI_DIRECT -> step.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL
             CleanupStepGroup.ANTHROPIC_DIRECT -> "" // unreachable, handled above
+            CleanupStepGroup.GEMINI_DIRECT -> "" // unreachable, handled above
             CleanupStepGroup.LOCAL_LLM -> "" // unreachable, handled above
         }
         transport.send(

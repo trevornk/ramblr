@@ -11,9 +11,8 @@ package com.kafkasl.phonewhisper
  *
  * Capability facts (verified against provider docs, see the Phase 1 architecture task):
  *  - OPENAI: dedicated ASR (Whisper/gpt-4o-transcribe) AND chat completions -- both capabilities.
- *  - GEMINI: multimodal audio-in (no streaming) AND chat completions -- both capabilities. Not
- *    yet wired into any call site as of Phase 1 (OmniRoute has no Gemini credential connected);
- *    included here so the data model is ready ahead of that wiring.
+ *  - GEMINI: multimodal audio-in (no streaming) AND chat completions -- both capabilities, wired
+ *    into live HTTP transports (see GeminiCleanupProvider / GeminiTranscriberClient, #96).
  *  - ANTHROPIC: chat completions only. Claude has no audio-input capability at all, so it can
  *    never satisfy a transcription request.
  *  - OMNIROUTE: Trevor's self-hosted OpenAI-compatible gateway proxying Claude/OpenAI models

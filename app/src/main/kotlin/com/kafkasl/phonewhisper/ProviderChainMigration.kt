@@ -30,6 +30,7 @@ object ProviderChainMigration {
             CleanupStepGroup.OMNIROUTE -> ProviderKind.OMNIROUTE
             CleanupStepGroup.OPENAI_DIRECT -> ProviderKind.OPENAI
             CleanupStepGroup.ANTHROPIC_DIRECT -> ProviderKind.ANTHROPIC
+            CleanupStepGroup.GEMINI_DIRECT -> ProviderKind.GEMINI
             CleanupStepGroup.LOCAL_LLM -> ProviderKind.LOCAL
         }
         return ProviderChainEntry(kind, step.model, step.baseUrlOverride)

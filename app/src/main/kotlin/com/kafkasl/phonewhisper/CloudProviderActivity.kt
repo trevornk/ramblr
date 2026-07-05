@@ -32,12 +32,6 @@ import com.google.android.material.radiobutton.MaterialRadioButton
  * concern -- giving it a dedicated top-level MainActivity category row matches the #94 restructure's
  * existing Activity-per-category convention and is the most direct expression of "one Cloud
  * screen, not scattered per-feature bits".
- *
- * GEMINI is deliberately excluded from "Add provider": [ProviderChainRuntime] models its
- * capabilities but has no live HTTP transport for either feature yet
- * (cleanupKindsNotImplemented/transcriptionKindsNotImplemented both contain it), so offering it
- * here would let a user configure a dead-end entry that silently never fires. It can be added to
- * the picker the moment a future phase wires up real Gemini calls.
  */
 class CloudProviderActivity : BaseSettingsActivity() {
 
@@ -49,8 +43,8 @@ class CloudProviderActivity : BaseSettingsActivity() {
     private lateinit var cloudCleanupRowSub: TextView
 
     /** Provider kinds a user can manually add here. LOCAL is the implicit floor (never a
-     *  manually-added row); GEMINI is excluded until a real transport exists -- see class kdoc. */
-    private val addableKinds = listOf(ProviderKind.OPENAI, ProviderKind.ANTHROPIC, ProviderKind.OMNIROUTE)
+     *  manually-added row). */
+    private val addableKinds = listOf(ProviderKind.OPENAI, ProviderKind.ANTHROPIC, ProviderKind.GEMINI, ProviderKind.OMNIROUTE)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,7 +79,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         }
         root.addView(emptyStateView)
 
-        root.addView(settingsRow("Add provider", "OpenAI / Anthropic / OmniRoute", indent = 0) {
+        root.addView(settingsRow("Add provider", "OpenAI / Anthropic / Gemini / OmniRoute", indent = 0) {
             promptAddOrEditEntry(null) { newEntry -> saveChain(currentChain().entries + newEntry) }
         })
 
