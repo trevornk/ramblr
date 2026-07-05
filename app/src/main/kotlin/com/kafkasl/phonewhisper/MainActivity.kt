@@ -1644,7 +1644,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveWaterfallSteps(steps: List<CleanupStep>) {
         CleanupWaterfallStore.save(this, CleanupWaterfall(steps))
-        refreshWaterfallSteps()
+        // Full refresh, not just refreshWaterfallSteps(): a waterfall edit changes the effective
+        // simple choice, and with it the radios, the cleanup subtitle, and the OpenAI-key row's
+        // visibility -- refreshing only the step list left Cloud selectable with its required key
+        // row still hidden until the next onResume (#81). refresh() is idempotent and cheap
+        // relative to a Settings tap (encrypted prefs are cached since #79).
+        refresh()
     }
 
     private fun refreshWaterfallSteps() {
