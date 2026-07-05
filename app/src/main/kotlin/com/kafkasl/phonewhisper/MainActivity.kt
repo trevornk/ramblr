@@ -33,6 +33,7 @@ class MainActivity : BaseSettingsActivity() {
     private lateinit var transcriptionRowSub: TextView
     private lateinit var cleanupRowSub: TextView
     private lateinit var livePreviewRowSub: TextView
+    private lateinit var cloudRowSub: TextView
 
     // First-run wizard state (#6). Tracked in-memory so a dialog already on screen is never
     // duplicated by a stray onResume, and reset per Activity instance so a fresh launch always
@@ -90,6 +91,12 @@ class MainActivity : BaseSettingsActivity() {
         }
         livePreviewRowSub = livePreviewRow.findViewWithTag("subtitle")
         root.addView(livePreviewRow)
+
+        val cloudRow = settingsRow("Cloud", "Checking...") {
+            startActivity(Intent(this, CloudProviderActivity::class.java))
+        }
+        cloudRowSub = cloudRow.findViewWithTag("subtitle")
+        root.addView(cloudRow)
 
         root.addView(settingsRow("Advanced", AdvancedActivity.subtitle(this)) {
             startActivity(Intent(this, AdvancedActivity::class.java))
@@ -169,6 +176,7 @@ class MainActivity : BaseSettingsActivity() {
         transcriptionRowSub.text = TranscriptionActivity.subtitle(this)
         cleanupRowSub.text = CleanupActivity.subtitle(this)
         livePreviewRowSub.text = LivePreviewActivity.subtitle(this)
+        cloudRowSub.text = CloudProviderActivity.subtitle(this)
 
         // Ready logic -- see OnboardingWizard.isSetupComplete for what "ready" means (#52).
         val ready = OnboardingWizard.isSetupComplete(

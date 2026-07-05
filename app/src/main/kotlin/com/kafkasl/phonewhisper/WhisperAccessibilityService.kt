@@ -1442,7 +1442,14 @@ class WhisperAccessibilityService : AccessibilityService() {
         val usePostProcessing = PostProcessingToggle.shouldRunCleanup(PostProcessingToggle.isEnabled(this))
 
         if (usePostProcessing) {
-            val providerChain = ProviderChainStore.load(this)
+            // Phase 3 (#95): "Use cloud for Cleanup" toggle on the new unified Cloud screen --
+            // applied here as a pure filter ahead of cleanup resolution so this call site is the
+            // only place that needs to know about it; everything downstream (cleanupWaterfallFor,
+            // shouldUseCleanupExecutor, processProviderChain) keeps operating on a plain
+            // ProviderChain exactly as Phase 2 verified.
+            val providerChain = ProviderChainRuntime.effectiveChainForCleanup(
+                ProviderChainStore.load(this), CloudFeatureToggle.cleanupEnabled(this)
+            )
             val cleanupWaterfall = ProviderChainRuntime.cleanupWaterfallFor(providerChain)
             val skipped = providerChain.capableEntriesFor(needsTranscription = false)
                 .filter { it.kind in ProviderChainRuntime.cleanupKindsNotImplemented }
