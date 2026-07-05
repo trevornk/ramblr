@@ -1300,10 +1300,22 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         val useLocal = prefs().getBoolean("use_local", true)
 
-        if (useLocal && transcriberSlot.get() != null) {
-            transcribeLocal(file, token)
-        } else {
-            transcribeApi(file, token)
+        when {
+            useLocal && transcriberSlot.get() != null -> transcribeLocal(file, token)
+            // #98 UX follow-up: previously this fell straight through to transcribeApi() whenever
+            // the local model wasn't loaded yet, regardless of *why* -- including the real-world
+            // case of a fresh install where onboarding's model download is still in progress.
+            // Since a local-mode user typically never entered a cloud API key, that produced a
+            // confusing "Set API key in Ramblr app" error with no connection to the actual cause,
+            // making the whole dictation feature look silently broken during exactly the moment
+            // (onboarding's "Try it out" step) a new user is forming their first impression.
+            // Give an honest, specific message instead of misrouting to a path that was never
+            // configured.
+            useLocal -> {
+                file.delete()
+                reset("Local model still downloading -- try again once it finishes")
+            }
+            else -> transcribeApi(file, token)
         }
     }
 
