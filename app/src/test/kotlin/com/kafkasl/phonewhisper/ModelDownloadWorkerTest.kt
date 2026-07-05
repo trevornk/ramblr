@@ -58,4 +58,32 @@ class ModelDownloadWorkerTest {
             if (ModelDownloadWorker.isInFlight(state)) assertFalse(state.isFinished)
         }
     }
+
+    // -- retry classification (#86) --
+
+    @Test fun `transient IO failures retry while attempts remain`() {
+        assertTrue(ModelDownloadWorker.shouldRetry(java.io.IOException("HTTP 503"), runAttemptCount = 0))
+        assertTrue(ModelDownloadWorker.shouldRetry(java.io.IOException("unexpected end of stream"), runAttemptCount = 1))
+    }
+
+    @Test fun `retries stop at the attempt cap even for transient failures`() {
+        assertFalse(
+            ModelDownloadWorker.shouldRetry(
+                java.io.IOException("HTTP 503"),
+                runAttemptCount = ModelDownloadWorker.MAX_ATTEMPTS - 1,
+            )
+        )
+    }
+
+    @Test fun `checksum mismatch and not-enough-space are terminal despite being IOExceptions`() {
+        // Complete-but-wrong bytes and a full disk can't be fixed by re-running the download.
+        assertFalse(ModelDownloadWorker.shouldRetry(ChecksumMismatchException("aa", "bb"), runAttemptCount = 0))
+        assertFalse(ModelDownloadWorker.shouldRetry(NotEnoughSpaceException(2_000_000L, 1_000_000L), runAttemptCount = 0))
+    }
+
+    @Test fun `non-IO failures and unknown causes are terminal`() {
+        assertFalse(ModelDownloadWorker.shouldRetry(IllegalStateException("No checksum configured"), runAttemptCount = 0))
+        assertFalse(ModelDownloadWorker.shouldRetry(IllegalArgumentException("Path traversal"), runAttemptCount = 0))
+        assertFalse(ModelDownloadWorker.shouldRetry(null, runAttemptCount = 0))
+    }
 }

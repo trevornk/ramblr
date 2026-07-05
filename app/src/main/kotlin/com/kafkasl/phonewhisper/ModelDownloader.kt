@@ -191,7 +191,9 @@ sealed class DownloadState {
     data class Downloading(val progress: Float) : DownloadState()
     object Extracting : DownloadState()
     object Done : DownloadState()
-    data class Error(val message: String) : DownloadState()
+    /** [cause] carries the original exception so [ModelDownloadWorker] can tell transient
+     *  network failures (worth a WorkManager retry, #86) from terminal ones. */
+    data class Error(val message: String, val cause: Exception? = null) : DownloadState()
 }
 
 /** Thrown when there isn't enough free space to safely download and extract a
@@ -200,6 +202,13 @@ sealed class DownloadState {
 class NotEnoughSpaceException(requiredBytes: Long, availableBytes: Long) : IOException(
     "Not enough free space: need ~${requiredBytes / 1_000_000} MB, " +
         "have ~${availableBytes / 1_000_000} MB available"
+)
+
+/** Thrown when the downloaded archive's SHA-256 doesn't match the catalog's pinned hash. A
+ *  distinct type (not a bare IOException) because it's a *terminal* failure: the bytes on disk
+ *  are complete-but-wrong, so retrying the download can't help until upstream changes (#86). */
+class ChecksumMismatchException(expected: String, actual: String) : IOException(
+    "Checksum mismatch: expected $expected, got $actual"
 )
 
 object ModelDownloader {
@@ -317,8 +326,10 @@ object ModelDownloader {
             }
             downloadFile(url, tmpFile, onState)
             downloadComplete = true
+            // IllegalStateException, not IOException: a missing pinned hash is a catalog bug,
+            // terminal for retry-classification purposes (#86), not a network condition.
             val expected = model.sha256
-                ?: throw IOException("No checksum configured for ${model.archive}; refusing to install unverified")
+                ?: throw IllegalStateException("No checksum configured for ${model.archive}; refusing to install unverified")
             verifyChecksum(tmpFile, expected)
             if (model.isLocalCleanup) {
                 onState(DownloadState.Extracting) // no real extraction, but keeps the UI phase consistent
@@ -329,7 +340,7 @@ object ModelDownloader {
             }
             onState(DownloadState.Done)
         } catch (e: Exception) {
-            onState(DownloadState.Error(e.message ?: "Unknown error"))
+            onState(DownloadState.Error(e.message ?: "Unknown error", e))
         } finally {
             // A checksum mismatch also lands here with downloadComplete == true:
             // the archive is fully present but wrong, so resuming it wouldn't
@@ -388,7 +399,7 @@ object ModelDownloader {
     fun verifyChecksum(file: File, expectedSha256: String) {
         val actual = sha256(file)
         if (!actual.equals(expectedSha256, ignoreCase = true)) {
-            throw IOException("Checksum mismatch: expected $expectedSha256, got $actual")
+            throw ChecksumMismatchException(expectedSha256, actual)
         }
     }
 
