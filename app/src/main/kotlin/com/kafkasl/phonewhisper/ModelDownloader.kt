@@ -443,6 +443,16 @@ object ModelDownloader {
         if (existingLength > 0 && responseCode == 206) ResumePlan(offset = existingLength, append = true)
         else ResumePlan(offset = 0L, append = false)
 
+    /** True when a resume attempt got 416 Range Not Satisfiable for a Range we actually sent:
+     *  the partial file on disk is at/past the asset's full length (process death after the
+     *  download completed but before checksum/install, or the asset changed upstream). Resuming
+     *  that file can never succeed — every retry would 416 forever — so the partial must be
+     *  deleted and the download restarted from byte 0 (#68). False when no Range was sent
+     *  ([existingLength] == 0): a 416 with no Range is just a broken server response, and
+     *  restarting on it would loop. */
+    fun shouldRestartAfterRangeNotSatisfiable(existingLength: Long, responseCode: Int): Boolean =
+        existingLength > 0 && responseCode == 416
+
     data class ResumePlan(val offset: Long, val append: Boolean)
 
     /** Total size of the full download, combining [offset] (bytes already on
@@ -462,6 +472,14 @@ object ModelDownloader {
         rangeHeaderFor(existingLength)?.let { requestBuilder.header("Range", it) }
 
         val response = client.newCall(requestBuilder.build()).execute()
+        if (shouldRestartAfterRangeNotSatisfiable(existingLength, response.code)) {
+            // Without this, download()'s keep-partial-for-resume logic retains the stale file
+            // forever and every future attempt fails with "HTTP 416" (#68).
+            response.close()
+            dest.delete()
+            downloadFile(url, dest, onState) // recurses at most once: no partial -> no Range header
+            return
+        }
         if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
         val body = response.body ?: throw IOException("Empty response")
 

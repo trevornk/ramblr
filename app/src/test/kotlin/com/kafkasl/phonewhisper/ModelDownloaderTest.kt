@@ -361,6 +361,22 @@ class ModelDownloaderTest {
         assertFalse(plan.append)
     }
 
+    // -- resume: 416 Range Not Satisfiable (#68) --
+
+    @Test fun `a 416 for a range we sent means the stale partial must be deleted and restarted`() {
+        assertTrue(ModelDownloader.shouldRestartAfterRangeNotSatisfiable(existingLength = 1000, responseCode = 416))
+    }
+
+    @Test fun `a 416 with no partial on disk is a plain server error, not a restart loop`() {
+        assertFalse(ModelDownloader.shouldRestartAfterRangeNotSatisfiable(existingLength = 0, responseCode = 416))
+    }
+
+    @Test fun `non-416 codes never trigger the stale-partial restart`() {
+        assertFalse(ModelDownloader.shouldRestartAfterRangeNotSatisfiable(existingLength = 1000, responseCode = 206))
+        assertFalse(ModelDownloader.shouldRestartAfterRangeNotSatisfiable(existingLength = 1000, responseCode = 200))
+        assertFalse(ModelDownloader.shouldRestartAfterRangeNotSatisfiable(existingLength = 1000, responseCode = 500))
+    }
+
     // -- resume: total size computation --
 
     @Test fun `computeTotalBytes prefers the authoritative total from Content-Range`() {
