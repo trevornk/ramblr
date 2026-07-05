@@ -29,11 +29,18 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
     companion object {
         private const val TAG = "LocalTranscriber"
 
-        /** Find available model dirs under the app's files/models/ dir */
+        /** Find fully-installed model dirs under the app's files/models/ dir. Filters on the
+         *  same `.complete` marker [ModelDownloader.isInstalledDir] requires (#88): a marker-less
+         *  partial dir (e.g. from an interrupted copy fallback) was rejected by isInstalled()
+         *  but still listed here -- and auto-selected by initLocalModel's blank-pref detection,
+         *  which then failed to load and silently fell back to the cloud API. */
         fun availableModels(ctx: Context): List<String> {
             val modelsDir = File(ctx.filesDir, "models")
             if (!modelsDir.exists()) return emptyList()
-            return modelsDir.listFiles()?.filter { it.isDirectory }?.map { it.name } ?: emptyList()
+            return modelsDir.listFiles()
+                ?.filter { ModelDownloader.isInstalledDir(it) }
+                ?.map { it.name }
+                ?: emptyList()
         }
 
         /** Create a LocalTranscriber for the given model directory name. Returns null on failure. */

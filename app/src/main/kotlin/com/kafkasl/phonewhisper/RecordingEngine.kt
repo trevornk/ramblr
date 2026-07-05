@@ -48,6 +48,13 @@ class RecordingEngine(
 
     @Volatile private var readerThread: Thread? = null
 
+    /** Monotonic id of the current recording session (#88 item 6). The reader loop re-checks the
+     *  *shared* state machine, so an old reader stalled in onChunk across a stop->cancel->new-tap
+     *  sequence could observe the NEW session's RECORDING state and keep feeding audio
+     *  concurrently with the new reader. Each loop iteration also checks that its own session is
+     *  still the latest, so a resurrected reader exits at its next iteration instead. */
+    private val sessionGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+
     /**
      * Validates the mic and starts the reader thread synchronously. Returns false with no side
      * effects if the AudioRecord could not be acquired (mic busy, permission race, bad
@@ -115,6 +122,7 @@ class RecordingEngine(
             return false
         }
 
+        val myGeneration = sessionGeneration.incrementAndGet()
         readerThread = thread(name = "RecordingEngine-reader") {
             var stopReason = StopReason.USER
             var errorMessage: String? = null
@@ -140,7 +148,7 @@ class RecordingEngine(
 
             val result = fileBuffer.use { buffer ->
                 try {
-                    while (stateMachine.isRecording()) {
+                    while (stateMachine.isRecording() && sessionGeneration.get() == myGeneration) {
                         if (RecordingDurationCap.exceeded(startedAt, System.currentTimeMillis(), MAX_DURATION_MS)) {
                             stopReason = StopReason.MAX_DURATION
                             break

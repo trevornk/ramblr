@@ -218,15 +218,32 @@ object ModelDownloader {
      *  headroom without being wasteful. */
     const val SPACE_HEADROOM_MULTIPLIER = 3L
 
-    /** Bytes required to safely download and extract a model whose compressed
-     *  archive is [sizeMb] megabytes. */
-    fun requiredSpaceBytes(sizeMb: Int): Long =
-        sizeMb.toLong() * 1_000_000L * SPACE_HEADROOM_MULTIPLIER
+    /** Headroom for single-file (GGUF) installs, in percent (#88): they are renamed in place,
+     *  never extracted, so demanding 3x was a false NotEnoughSpaceException on phones that
+     *  genuinely had room -- the 1117 MB Qwen 1.5B demanded ~3.35 GB free. 120% covers the file
+     *  itself plus filesystem slack. */
+    const val SINGLE_FILE_HEADROOM_PERCENT = 120L
 
-    /** True if [availableBytes] covers [sizeMb] of compressed archive plus
-     *  extraction headroom (see [SPACE_HEADROOM_MULTIPLIER]). */
-    fun hasEnoughSpace(availableBytes: Long, sizeMb: Int): Boolean =
-        availableBytes >= requiredSpaceBytes(sizeMb)
+    /**
+     * Bytes still required to safely finish downloading and installing a model whose compressed
+     * size is [sizeMb] megabytes. [singleFile] selects the rename-in-place headroom over the
+     * extraction headroom, and [alreadyDownloadedBytes] credits a resumable partial file on disk
+     * (previously a 90%-downloaded model still demanded the full multiple, #88).
+     */
+    fun requiredSpaceBytes(sizeMb: Int, singleFile: Boolean = false, alreadyDownloadedBytes: Long = 0L): Long {
+        val base = sizeMb.toLong() * 1_000_000L
+        val withHeadroom = if (singleFile) base * SINGLE_FILE_HEADROOM_PERCENT / 100L
+        else base * SPACE_HEADROOM_MULTIPLIER
+        return (withHeadroom - alreadyDownloadedBytes).coerceAtLeast(0L)
+    }
+
+    /** True if [availableBytes] covers what [requiredSpaceBytes] says is still needed. */
+    fun hasEnoughSpace(
+        availableBytes: Long,
+        sizeMb: Int,
+        singleFile: Boolean = false,
+        alreadyDownloadedBytes: Long = 0L,
+    ): Boolean = availableBytes >= requiredSpaceBytes(sizeMb, singleFile, alreadyDownloadedBytes)
 
     /** "models" for a batch/offline model, "streaming_models" for a streaming one (#29), or
      *  "cleanup_models" for the on-device cleanup GGUF model (#37) — kept out of files/models/
@@ -291,8 +308,12 @@ object ModelDownloader {
         var downloadComplete = false
         try {
             val availableBytes = minOf(ctx.cacheDir.usableSpace, ctx.filesDir.usableSpace)
-            if (!hasEnoughSpace(availableBytes, model.sizeMb)) {
-                throw NotEnoughSpaceException(requiredSpaceBytes(model.sizeMb), availableBytes)
+            val resumedBytes = if (tmpFile.isFile) tmpFile.length() else 0L
+            if (!hasEnoughSpace(availableBytes, model.sizeMb, model.isLocalCleanup, resumedBytes)) {
+                throw NotEnoughSpaceException(
+                    requiredSpaceBytes(model.sizeMb, model.isLocalCleanup, resumedBytes),
+                    availableBytes,
+                )
             }
             downloadFile(url, tmpFile, onState)
             downloadComplete = true
@@ -391,19 +412,54 @@ object ModelDownloader {
             }
 
             finalDir.parentFile?.mkdirs()
-            finalDir.deleteRecursively()
-            // renameTo is atomic when staging/ and files/models/ share a filesystem
-            // (the normal case for app-private storage); fall back to copy+delete
-            // for the rare cross-filesystem case.
-            if (!extractedRoot.renameTo(finalDir)) {
-                extractedRoot.copyRecursively(finalDir, overwrite = true)
-                extractedRoot.deleteRecursively()
-            }
-            if (!completeMarker(finalDir).createNewFile()) {
-                throw IOException("Failed to write completion marker")
+            installOverPrevious(finalDir) {
+                // renameTo is atomic when staging/ and files/models/ share a filesystem
+                // (the normal case for app-private storage); fall back to copy+delete
+                // for the rare cross-filesystem case.
+                if (!extractedRoot.renameTo(finalDir)) {
+                    extractedRoot.copyRecursively(finalDir, overwrite = true)
+                    extractedRoot.deleteRecursively()
+                }
             }
         } finally {
             staging.deleteRecursively()
+        }
+    }
+
+    /**
+     * Swap-preserving install (#88): moves any existing [finalDir] aside (marker removed first
+     * so it can never read as installed), runs [placeNewInstall] to put the new content at
+     * [finalDir], writes the completion marker, and only then discards the old install. If
+     * placing the new install throws (disk full mid-copy, cross-filesystem fallback failure),
+     * the previous good install is restored -- previously it had already been deleted, so a
+     * failed upgrade destroyed a working model.
+     */
+    private fun installOverPrevious(finalDir: File, placeNewInstall: () -> Unit) {
+        val previous = File(finalDir.parentFile, ".previous-${finalDir.name}")
+        previous.deleteRecursively()
+        val previousWasComplete = isInstalledDir(finalDir)
+        if (finalDir.isDirectory) {
+            completeMarker(finalDir).delete()
+            if (!finalDir.renameTo(previous)) {
+                // Can't move it aside (odd filesystem state) -- fall back to the old
+                // delete-first behavior rather than failing the install outright.
+                finalDir.deleteRecursively()
+            }
+        }
+        try {
+            placeNewInstall()
+            if (!completeMarker(finalDir).createNewFile()) {
+                throw IOException("Failed to write completion marker")
+            }
+            previous.deleteRecursively()
+        } catch (e: Exception) {
+            finalDir.deleteRecursively()
+            if (previous.isDirectory && previous.renameTo(finalDir) && previousWasComplete) {
+                // Reinstate the marker only for an install that was genuinely complete before --
+                // restoring it for a corrupt leftover would upgrade garbage to "installed".
+                completeMarker(finalDir).createNewFile()
+            }
+            throw e
         }
     }
 
@@ -416,16 +472,15 @@ object ModelDownloader {
      */
     fun installSingleFile(file: File, finalDir: File, fileName: String) {
         finalDir.parentFile?.mkdirs()
-        finalDir.deleteRecursively()
-        finalDir.mkdirs()
-        val dest = File(finalDir, fileName)
-        // renameTo is atomic when cacheDir and filesDir share a filesystem (the normal case for
-        // app-private storage); fall back to copy+delete for the rare cross-filesystem case.
-        if (!file.renameTo(dest)) {
-            file.copyTo(dest, overwrite = true)
-        }
-        if (!completeMarker(finalDir).createNewFile()) {
-            throw IOException("Failed to write completion marker")
+        installOverPrevious(finalDir) {
+            finalDir.mkdirs()
+            val dest = File(finalDir, fileName)
+            // renameTo is atomic when cacheDir and filesDir share a filesystem (the normal case
+            // for app-private storage); fall back to copy+delete for the rare cross-filesystem
+            // case.
+            if (!file.renameTo(dest)) {
+                file.copyTo(dest, overwrite = true)
+            }
         }
     }
 
@@ -471,31 +526,35 @@ object ModelDownloader {
         val requestBuilder = Request.Builder().url(url)
         rangeHeaderFor(existingLength)?.let { requestBuilder.header("Range", it) }
 
-        val response = client.newCall(requestBuilder.build()).execute()
-        if (shouldRestartAfterRangeNotSatisfiable(existingLength, response.code)) {
-            // Without this, download()'s keep-partial-for-resume logic retains the stale file
-            // forever and every future attempt fails with "HTTP 416" (#68).
-            response.close()
-            dest.delete()
-            downloadFile(url, dest, onState) // recurses at most once: no partial -> no Range header
-            return
-        }
-        if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-        val body = response.body ?: throw IOException("Empty response")
+        // use{} guarantees the response is closed on every exit, including the HTTP-error and
+        // empty-body throws below -- those paths leaked the connection before (#88), which
+        // combined with the (since-fixed) 416 wedge to leak one connection per retry tap.
+        client.newCall(requestBuilder.build()).execute().use { response ->
+            if (shouldRestartAfterRangeNotSatisfiable(existingLength, response.code)) {
+                // Without this, download()'s keep-partial-for-resume logic retains the stale file
+                // forever and every future attempt fails with "HTTP 416" (#68).
+                response.close()
+                dest.delete()
+                downloadFile(url, dest, onState) // recurses at most once: no partial -> no Range header
+                return
+            }
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+            val body = response.body ?: throw IOException("Empty response")
 
-        val plan = planResume(existingLength, response.code)
-        val total = computeTotalBytes(plan.offset, body.contentLength(), response.header("Content-Range"))
-        var downloaded = plan.offset
+            val plan = planResume(existingLength, response.code)
+            val total = computeTotalBytes(plan.offset, body.contentLength(), response.header("Content-Range"))
+            var downloaded = plan.offset
 
-        body.byteStream().use { src ->
-            FileOutputStream(dest, plan.append).use { dst ->
-                val buf = ByteArray(16384)
-                var n: Int
-                while (src.read(buf).also { n = it } != -1) {
-                    dst.write(buf, 0, n)
-                    downloaded += n
-                    if (total > 0)
-                        onState(DownloadState.Downloading(downloaded.toFloat() / total))
+            body.byteStream().use { src ->
+                FileOutputStream(dest, plan.append).use { dst ->
+                    val buf = ByteArray(16384)
+                    var n: Int
+                    while (src.read(buf).also { n = it } != -1) {
+                        dst.write(buf, 0, n)
+                        downloaded += n
+                        if (total > 0)
+                            onState(DownloadState.Downloading(downloaded.toFloat() / total))
+                    }
                 }
             }
         }
@@ -504,17 +563,26 @@ object ModelDownloader {
     /** Extract tar.bz2 to outDir. Validates paths to prevent traversal. */
     fun extractTarBz2(archive: File, outDir: File) {
         outDir.mkdirs()
-        val bzIn = BZip2CompressorInputStream(BufferedInputStream(FileInputStream(archive)))
-        TarArchiveInputStream(bzIn).use { tar ->
-            generateSequence { tar.nextEntry }.forEach { entry ->
-                val dest = File(outDir, entry.name)
-                require(dest.canonicalPath.startsWith(outDir.canonicalPath)) {
-                    "Path traversal: ${entry.name}"
-                }
-                if (entry.isDirectory) dest.mkdirs()
-                else {
-                    dest.parentFile?.mkdirs()
-                    FileOutputStream(dest).use { tar.copyTo(it) }
+        // The outer FileInputStream is in its own use{} so it still closes if the BZip2
+        // constructor throws on a corrupt file (#88) -- previously only `tar` was managed.
+        FileInputStream(archive).use { fileIn ->
+            TarArchiveInputStream(BZip2CompressorInputStream(BufferedInputStream(fileIn))).use { tar ->
+                // Compare against the canonical path *with* a trailing separator: a bare
+                // startsWith let an entry canonicalizing to a sibling directory whose name
+                // merely starts with outDir's string pass (#88; defense-in-depth -- catalog
+                // downloads are SHA-256-pinned before extraction).
+                val outRoot = outDir.canonicalPath + File.separator
+                generateSequence { tar.nextEntry }.forEach { entry ->
+                    val dest = File(outDir, entry.name)
+                    val destPath = dest.canonicalPath
+                    require(destPath == outDir.canonicalPath || destPath.startsWith(outRoot)) {
+                        "Path traversal: ${entry.name}"
+                    }
+                    if (entry.isDirectory) dest.mkdirs()
+                    else {
+                        dest.parentFile?.mkdirs()
+                        FileOutputStream(dest).use { tar.copyTo(it) }
+                    }
                 }
             }
         }

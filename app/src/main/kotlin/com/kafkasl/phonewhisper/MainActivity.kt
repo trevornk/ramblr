@@ -1600,7 +1600,14 @@ class MainActivity : AppCompatActivity() {
                 }
                 val normalized = PostProcessor.normalizeBaseUrl(entered)
                 if (normalized == null) {
-                    toast("Invalid URL — must start with http:// or https://")
+                    toast("Invalid URL — must start with https://")
+                    return@setPositiveButton
+                }
+                if (normalized.startsWith("http://")) {
+                    // Would pass validation but die at runtime: the app blocks cleartext
+                    // traffic (no usesCleartextTraffic / network-security-config), so an
+                    // http:// endpoint fails every request with a generic network error (#88).
+                    toast("http:// endpoints are blocked by Android's cleartext policy — use https://")
                     return@setPositiveButton
                 }
                 prefs().edit().putString("cleanup_base_url", normalized).apply()
