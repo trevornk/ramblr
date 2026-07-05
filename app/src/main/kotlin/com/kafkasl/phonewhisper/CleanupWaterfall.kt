@@ -71,6 +71,13 @@ data class CleanupWaterfall(val steps: List<CleanupStep>) {
     fun isLocalOnly(): Boolean =
         steps.isNotEmpty() && steps.all { it.group == CleanupStepGroup.LOCAL_LLM }
 
+    /** True when at least one configured step would run through [CleanupStepGroup.LOCAL_LLM]
+     *  (#95) -- used to decide whether pre-warming the local model at recording-start is worth
+     *  doing at all. A waterfall can be a mix of local and cloud steps, so this is deliberately
+     *  weaker than [isLocalOnly]: even one LOCAL_LLM step justifies paying the warm-up cost. */
+    fun usesLocalLlm(): Boolean =
+        steps.any { it.group == CleanupStepGroup.LOCAL_LLM }
+
     companion object {
         /**
          * Default out-of-box waterfall for a fresh install or anyone who hasn't configured the

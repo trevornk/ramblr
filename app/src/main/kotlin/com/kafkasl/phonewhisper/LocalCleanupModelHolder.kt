@@ -126,6 +126,30 @@ object LocalCleanupModelHolder {
     }
 
     /**
+     * Pre-warms [modelPath] on [scheduler]'s background thread (#95), so a later real
+     * [withInference] call during cleanup finds the model already resident instead of paying a
+     * cold GGUF load (mmap + first-touch page faults on a several-hundred-MB file) out of the
+     * cleanup waterfall's own [CLEANUP_WATERFALL_HARD_CAP_MS] time budget -- on a phone, that
+     * cold load alone was observed to consume the *entire* budget, leaving no time for actual
+     * generation and making every first-dictation-after-launch (or first dictation after the
+     * 5-minute idle unload) fail even though [BoundedBlockingCall] (#83) correctly bounded it.
+     *
+     * Call this speculatively as soon as recording starts (see
+     * [WhisperAccessibilityService.warmUpLocalCleanupModelIfNeeded]) so the load overlaps with
+     * the user still talking + transcription, instead of starting only once cleanup itself runs.
+     * Safe to call even when a matching model is already loaded -- [withInference] no-ops via
+     * [LocalCleanupModelSlot.needsReload] under its own lock, so this never double-loads or blocks
+     * a concurrent real completion for longer than the load itself takes. Any load failure here
+     * is silently swallowed: the real attempt (and its real, user-visible error) still happens
+     * inside [withInference] when cleanup actually runs.
+     */
+    fun warmUpAsync(modelPath: String) {
+        scheduler.execute {
+            runCatching { withInference(modelPath) { /* no-op body: load only, don't generate */ } }
+        }
+    }
+
+    /**
      * [release], but off-thread. For main-thread callers (service destroy, onTrimMemory):
      * closing must wait for any in-flight completion, which can take seconds, so the wait
      * happens on the holder's own daemon thread instead of stalling the main Looper. The
