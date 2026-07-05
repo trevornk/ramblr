@@ -71,19 +71,27 @@ class LlamaCppInference : Closeable {
      * Runs one cleanup completion: [systemPrompt] becomes the system message, [userText] the
      * user message -- the same two-message shape [PostProcessor.buildRequestBody] sends to every
      * cloud provider (see [LocalCleanupProvider]) -- and returns the concatenated response text.
+     *
+     * Generation is capped at [MAX_RESPONSE_TOKENS] pieces via [LlamaCompletionAccumulator] (#60)
+     * -- see that object's kdoc for why. [stopCompletion] still runs before the resulting
+     * exception propagates, so the native side tears down cleanly; [RealLocalInferenceEngine]
+     * already converts any thrown exception here into an ordinary [LocalInferenceResult.Failure],
+     * falling through to the next waterfall step (or raw text) exactly like any other
+     * local-inference failure.
      */
     fun complete(systemPrompt: String, userText: String): String {
         check(nativePtr != 0L) { "Model is not loaded. Call load() first." }
         addChatMessage(nativePtr, systemPrompt, "system")
         startCompletion(nativePtr, userText)
-        val response = StringBuilder()
-        var piece = completionLoop(nativePtr)
-        while (piece != END_OF_GENERATION) {
-            response.append(piece)
-            piece = completionLoop(nativePtr)
+        try {
+            return LlamaCompletionAccumulator.accumulate(
+                maxPieces = MAX_RESPONSE_TOKENS,
+                endOfGeneration = END_OF_GENERATION,
+                nextPiece = { completionLoop(nativePtr) },
+            )
+        } finally {
+            stopCompletion(nativePtr)
         }
-        stopCompletion(nativePtr)
-        return response.toString()
     }
 
     override fun close() {
@@ -126,6 +134,12 @@ class LlamaCppInference : Closeable {
         const val DEFAULT_NUM_THREADS = 4
         const val END_OF_GENERATION = "[EOG]"
         const val LIBRARY_NAME = "llama-cleanup-jni"
+
+        /** Hard cap on generated pieces per [complete] call (#60) -- see that method's kdoc for
+         *  why this exists. 512 is comfortably more than a cleaned-up dictation transcript should
+         *  ever need (typical dictations are well under this in raw token count, and cleanup
+         *  should not expand text), while still failing fast instead of running for minutes. */
+        const val MAX_RESPONSE_TOKENS = 512
 
         init {
             // See this class's kdoc "Known gap" section -- this line is expected to throw
