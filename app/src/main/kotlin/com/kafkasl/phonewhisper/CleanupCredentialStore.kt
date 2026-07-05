@@ -2,8 +2,6 @@ package com.kafkasl.phonewhisper
 
 import android.content.Context
 import android.content.SharedPreferences
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 
 /**
  * Which network host/credential a waterfall step authenticates against. See ADR-0001
@@ -28,7 +26,7 @@ object CleanupCredentialStore {
     private const val KEY_OPENAI_DIRECT = "openai_direct_key"
     private const val KEY_ANTHROPIC_DIRECT = "anthropic_direct_key"
 
-    private fun prefKeyFor(slot: CleanupCredentialSlot): String = when (slot) {
+    internal fun prefKeyFor(slot: CleanupCredentialSlot): String = when (slot) {
         CleanupCredentialSlot.OMNIROUTE -> KEY_OMNIROUTE
         CleanupCredentialSlot.OPENAI_DIRECT -> KEY_OPENAI_DIRECT
         CleanupCredentialSlot.ANTHROPIC_DIRECT -> KEY_ANTHROPIC_DIRECT
@@ -51,16 +49,7 @@ object CleanupCredentialStore {
         else -> "***"
     }
 
-    private fun securePrefs(context: Context): SharedPreferences {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        return EncryptedSharedPreferences.create(
-            context,
-            SECURE_PREFS_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        )
-    }
+    /** Cached, crash-loop-proof encrypted prefs -- see [SecurePrefsFactory] (#79). */
+    private fun securePrefs(context: Context): SharedPreferences =
+        SecurePrefsFactory.getOrCreate(context, SECURE_PREFS_NAME)
 }

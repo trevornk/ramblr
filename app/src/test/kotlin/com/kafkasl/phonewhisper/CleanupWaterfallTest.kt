@@ -19,6 +19,14 @@ class CleanupCredentialStoreTest {
     @Test fun `maskForDisplay does not crash on a short value`() {
         assertEquals("***", CleanupCredentialStore.maskForDisplay("ab"))
     }
+
+    @Test fun `each credential slot maps to its own distinct pref key`() {
+        val keys = CleanupCredentialSlot.values().map { CleanupCredentialStore.prefKeyFor(it) }
+        assertEquals(keys.size, keys.toSet().size)
+        assertEquals("omniroute_key", CleanupCredentialStore.prefKeyFor(CleanupCredentialSlot.OMNIROUTE))
+        assertEquals("openai_direct_key", CleanupCredentialStore.prefKeyFor(CleanupCredentialSlot.OPENAI_DIRECT))
+        assertEquals("anthropic_direct_key", CleanupCredentialStore.prefKeyFor(CleanupCredentialSlot.ANTHROPIC_DIRECT))
+    }
 }
 
 class CleanupStepTest {
