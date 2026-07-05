@@ -97,22 +97,32 @@ object LocalCleanupModelHolder {
         if (slot.needsReload(modelPath)) {
             releaseHeld()
             val fresh = LlamaCppInference()
+            val loadStartedAtMs = System.currentTimeMillis()
             try {
                 fresh.load(modelPath)
             } catch (t: Throwable) {
+                android.util.Log.e("LocalCleanupModelHolder", "Model load threw after ${System.currentTimeMillis() - loadStartedAtMs}ms for $modelPath", t)
                 fresh.close()
                 throw t
             }
+            // Real, measured load duration (#97) -- replaces guesswork about whether a cold GGUF
+            // load or the generation step is what's actually consuming the waterfall's time
+            // budget. See CleanupWaterfallExecutor.CLEANUP_WATERFALL_HARD_CAP_MS for the budget
+            // this is being measured against.
+            android.util.Log.i("LocalCleanupModelHolder", "Model load took ${System.currentTimeMillis() - loadStartedAtMs}ms for $modelPath")
             held = fresh
             slot.recordLoaded(modelPath, System.currentTimeMillis())
         }
         val inference = checkNotNull(held)
+        val genStartedAtMs = System.currentTimeMillis()
         val result = try {
             block(inference)
         } catch (t: Throwable) {
+            android.util.Log.e("LocalCleanupModelHolder", "Generation threw after ${System.currentTimeMillis() - genStartedAtMs}ms", t)
             releaseHeld()
             throw t
         }
+        android.util.Log.i("LocalCleanupModelHolder", "Generation took ${System.currentTimeMillis() - genStartedAtMs}ms")
         slot.recordUsed(System.currentTimeMillis())
         scheduleIdleUnload()
         return result
