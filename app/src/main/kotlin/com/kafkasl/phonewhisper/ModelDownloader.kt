@@ -129,24 +129,45 @@ val STREAMING_MODEL_CATALOG = listOf(STREAMING_MODEL_QUALITY, STREAMING_MODEL, S
 
 /**
  * The one curated on-device cleanup model shipped for #37 -- no arbitrary user-supplied GGUF
- * support in this pass (see the issue's non-goals). Qwen2.5-0.5B-Instruct is small enough to run
- * acceptably CPU-only on modest Android hardware while still following cleanup instructions
- * well; Q4_K_M is the standard "good quality, small size" quantization used throughout the GGUF
- * ecosystem. Sourced from the real, verifiable `Qwen/Qwen2.5-0.5B-Instruct-GGUF` Hugging Face
- * repo (Apache-2.0 license) on 2026-07-03; [sha256] was computed by downloading the exact file
- * and hashing it locally (`shasum -a 256`), the same verification approach used for the sherpa-
- * onnx ASR models above -- not copied from a webpage.
+ * support in this pass (see the issue's non-goals).
+ *
+ * Swapped from Qwen2.5-0.5B-Instruct to LFM2.5-350M for #98, following a dedicated Claude
+ * Fable 5 architecture consult after the #92/#95/#96/#97 native-hang investigation: the real
+ * problem was never the engine (llama.cpp is still the right choice on this hardware -- no
+ * third-party NPU/GPU acceleration exists for ANY engine on a Pixel-class Tensor chip as of this
+ * consult) or the timeout plumbing -- it was that Qwen2.5-0.5B is both larger AND measurably
+ * worse at instruction-following than newer small models in its size class. LFM2.5-350M is
+ * Liquid AI's general-purpose instruction-tuned checkpoint (not a separately-named "-Instruct"
+ * variant -- `LiquidAI/LFM2.5-350M` itself is the post-trained model; `-Base` is the separate
+ * pre-trained-only checkpoint) with IFEval 71.7 (instruction-following -- precisely the "output
+ * ONLY the cleaned text" skill this task lives on) vs. Qwen2.5-0.5B's ~31-42, while being
+ * smaller (219MB Q4_0 vs. 492MB Q4_K_M) and reportedly ~2.5x faster to decode on CPU. Uses a
+ * ChatML-like template (`<|im_start|>`/`<|im_end|>`, embedded in the GGUF, same as Qwen2.5 --
+ * [LlamaCppInference]'s `chatTemplate = ""` already falls back to whatever template is embedded,
+ * so no binding change was needed) and [SpecialTokenSanitizer]'s existing ChatML-token sanitizing
+ * (#78) applies unchanged. Sourced from the real, verifiable `LiquidAI/LFM2.5-350M-GGUF` Hugging
+ * Face repo (LFM Open License v1.0 -- free for commercial use under $10M annual revenue, verified
+ * against the license text on 2026-07-05) on 2026-07-05; [sha256] was computed by downloading the
+ * exact file and hashing it locally (`shasum -a 256`), the same verification approach used for
+ * every other catalog entry -- not copied from a webpage.
+ *
+ * ([SpecialTokenSanitizer]'s `<|...|>` shape-based stripping (#78) is model-family-agnostic and
+ * needed no update for this swap.)
+ *
+ * Q4_0 (not Q4_K_M) is deliberately used here, also per the Fable consult: Q4_0 is the quantization
+ * llama.cpp's ARM i8mm/dotprod kernels are specifically optimized for, making it the faster choice
+ * on real Android CPU hardware even though Q4_K_M is nominally higher quality at rest.
  */
 val LOCAL_CLEANUP_MODEL = Model(
-    name = "Qwen2.5 0.5B Instruct (Q4_K_M)",
-    archive = "qwen2.5-0.5b-instruct-q4_k_m",
-    sizeMb = 492,
-    quality = "★★★ Best value · On-device cleanup",
+    name = "LFM2.5 350M (Q4_0)",
+    archive = "lfm2.5-350m-q4_0",
+    sizeMb = 219,
+    quality = "★★★★ Best value · On-device cleanup",
     recommended = true,
-    sha256 = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+    sha256 = "85e32858daafad55b7bcd6b97a1343ee0661188e8036f9862d14d6b563142f50",
     isLocalCleanup = true,
-    sourceUrl = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-    fileName = "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    sourceUrl = "https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/main/LFM2.5-350M-Q4_0.gguf",
+    fileName = "lfm2.5-350m-q4_0.gguf",
 )
 
 /**

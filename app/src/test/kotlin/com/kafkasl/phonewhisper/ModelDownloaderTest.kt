@@ -122,7 +122,7 @@ class ModelDownloaderTest {
     @Test fun `local cleanup model is sourced from a real Hugging Face URL, not the sherpa-onnx release host`() {
         assertTrue(LOCAL_CLEANUP_MODEL.sourceUrl!!.startsWith("https://huggingface.co/"))
         assertTrue(LOCAL_CLEANUP_MODEL.sourceUrl!!.endsWith(".gguf"))
-        assertEquals(LOCAL_CLEANUP_MODEL.fileName, "qwen2.5-0.5b-instruct-q4_k_m.gguf")
+        assertEquals(LOCAL_CLEANUP_MODEL.fileName, "lfm2.5-350m-q4_0.gguf")
     }
 
     @Test fun `local cleanup model archive name never collides with the offline or streaming catalogs`() {
