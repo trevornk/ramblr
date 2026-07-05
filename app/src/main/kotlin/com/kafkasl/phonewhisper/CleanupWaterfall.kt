@@ -63,6 +63,13 @@ data class CleanupStep(
  * (see [CleanupWaterfallExecutor]) treats consecutive same-group steps as one fail-fast unit.
  */
 data class CleanupWaterfall(val steps: List<CleanupStep>) {
+    /** True when every configured step runs on-device (#37/#65) — running this waterfall can
+     *  never send the transcript anywhere, so the off-device consent prompt
+     *  ([LocalCleanupConsent]) is meaningless for it. An empty waterfall is not "local only":
+     *  it can't run at all, and [CleanupWaterfallStore.load] never produces one. */
+    fun isLocalOnly(): Boolean =
+        steps.isNotEmpty() && steps.all { it.group == CleanupStepGroup.LOCAL_LLM }
+
     companion object {
         /**
          * Default out-of-box waterfall for a fresh install or anyone who hasn't configured the
