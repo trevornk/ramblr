@@ -451,7 +451,10 @@ class LocalLlmWaterfallStepTest {
         assertEquals(0, transport.requestedUrls.size)
     }
 
-    @Test fun `the local step receives the waterfall's own wall-clock deadline`() {
+    @Test fun `the local step receives its own tighter step budget, not the full waterfall deadline`() {
+        // #98: the LOCAL_LLM step is bounded by LOCAL_LLM_STEP_BUDGET_MS specifically so a
+        // slow/aborted local attempt can't consume the whole waterfall deadline and starve a
+        // subsequent cloud step of its own timeout window.
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("ok")))
         val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
@@ -461,8 +464,34 @@ class LocalLlmWaterfallStepTest {
         val after = System.currentTimeMillis()
 
         val deadline = engine.deadlines.single()
-        assertTrue(deadline >= before + CLEANUP_WATERFALL_HARD_CAP_MS)
+        assertTrue(deadline >= before + LOCAL_LLM_STEP_BUDGET_MS)
+        assertTrue(deadline <= after + LOCAL_LLM_STEP_BUDGET_MS)
+        // And that tighter budget must never exceed the overall waterfall deadline.
         assertTrue(deadline <= after + CLEANUP_WATERFALL_HARD_CAP_MS)
+    }
+
+    @Test fun `a failed local step still falls through to a following cloud step within the waterfall deadline`() {
+        // #98: the whole point of LOCAL_LLM_STEP_BUDGET_MS being tighter than
+        // CLEANUP_WATERFALL_HARD_CAP_MS is that a fast-failing (or fast-aborted) local attempt
+        // leaves real time for a subsequent cloud step to actually be attempted, instead of the
+        // local step silently consuming the entire waterfall budget.
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned via cloud")))
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Failure("local model produced an empty response")))
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
+            )
+        )
+
+        val result = execute(
+            waterfall, transport, engine,
+            localModelPath = { "/path/to/model.gguf" },
+            credentialLookup = { slot -> if (slot == CleanupCredentialSlot.OMNIROUTE) "omni-key" else "" },
+        )
+
+        assertEquals("cleaned via cloud", result.text)
+        assertEquals(1, transport.requestedUrls.size) // the cloud step really was attempted
     }
 
     @Test fun `each waterfall run clears a stale cancel from the previous dictation`() {

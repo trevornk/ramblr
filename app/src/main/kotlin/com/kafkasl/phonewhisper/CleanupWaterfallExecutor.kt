@@ -24,8 +24,27 @@ data class CleanupStepTimeouts(
     }
 }
 
-/** Hard cap on the whole waterfall, regardless of how many steps remain, before falling back to raw injection. */
+/**
+ * Hard cap on the whole waterfall, regardless of how many steps remain, before falling back to
+ * raw injection. Kept generous (15s) so a multi-step waterfall (e.g. local -> OmniRoute -> direct
+ * fallback) has real room to try more than one step; [LOCAL_LLM_STEP_BUDGET_MS] below is the
+ * actual fix for making a slow/stuck local attempt fail fast without eating this whole budget.
+ */
 const val CLEANUP_WATERFALL_HARD_CAP_MS = 15_000L
+
+/**
+ * Wall-clock budget for the LOCAL_LLM step specifically (#98, Claude Fable 5 consult), separate
+ * from and always <= [CLEANUP_WATERFALL_HARD_CAP_MS]. Before this existed, the LOCAL_LLM step
+ * used the *entire* remaining waterfall deadline -- so on a device under real memory pressure, a
+ * slow/aborted local attempt could consume the whole budget and leave zero time for the cloud
+ * step that should have followed it, defeating the point of having a waterfall at all. With
+ * LFM2.5-350M (see [LOCAL_CLEANUP_MODEL]'s kdoc) a healthy device should complete well under
+ * 1-2s; 4s gives headroom for a loaded device's slower decode while guaranteeing that a genuinely
+ * stuck/slow local attempt aborts (see commit 2212db2's native ggml abort callback, #92) with
+ * enough of [CLEANUP_WATERFALL_HARD_CAP_MS] still left for a subsequent cloud step's own
+ * [CleanupStepTimeouts] to actually run.
+ */
+const val LOCAL_LLM_STEP_BUDGET_MS = 4_000L
 
 /**
  * Pure grouping/ordering logic for [CleanupWaterfall.steps], split out from the network-calling
@@ -444,8 +463,13 @@ object CleanupWaterfallExecutor {
                 callback(CleanupStepOutcome.StepFailed("Local cleanup model not downloaded"))
                 return
             }
+            // Bounded to LOCAL_LLM_STEP_BUDGET_MS (#98), never further than the overall
+            // waterfall deadline -- so a slow/aborted local attempt still leaves real time for a
+            // subsequent cloud step's own CleanupStepTimeouts to run, instead of consuming the
+            // whole waterfall budget the way a single shared deadline previously did.
+            val localDeadlineAtMs = minOf(deadlineAtMs, System.currentTimeMillis() + LOCAL_LLM_STEP_BUDGET_MS)
             callback(
-                when (val result = localInference.complete(prompt, text, modelPath, deadlineAtMs, { cancelHolder.isCancelled })) {
+                when (val result = localInference.complete(prompt, text, modelPath, localDeadlineAtMs, { cancelHolder.isCancelled })) {
                     is LocalInferenceResult.Success -> {
                         // Trim to match what both cloud parsers already do to their model text
                         // (PostProcessor.parseResponse / AnthropicCleanupProvider.parseResponse):
