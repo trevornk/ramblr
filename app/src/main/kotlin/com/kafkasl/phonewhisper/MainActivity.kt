@@ -2124,6 +2124,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun finishOnboarding() {
         prefs().edit().putBoolean(KEY_ONBOARDING_COMPLETE, true).apply()
+        // #98: belt-and-suspenders alongside the OnboardingWizard.shouldAdvance fix -- resetting
+        // this here means even a future logic change to shouldAdvance can't silently reintroduce
+        // the same "wizard state never clears" class of bug.
+        onboardingIntroShown = false
         onboardingDialog = null
         refresh()
     }

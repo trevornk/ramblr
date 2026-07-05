@@ -119,4 +119,16 @@ class OnboardingWizardTest {
             wizardStarted = false, forced = true, accessibilityEnabled = true, onboardingComplete = true,
         ))
     }
+
+    @Test fun `a completed setup never re-advances just because the wizard ran earlier this session`() {
+        // #98 regression: wizardStarted is an in-memory flag that stays true for the rest of the
+        // Activity's lifetime once the wizard has run once -- including across onResume from
+        // switching to another app and back, which does NOT recreate the Activity. Before this
+        // fix, finishing onboarding (onboardingComplete = true) while wizardStarted was still
+        // true from that same session re-triggered the wizard's step logic on every subsequent
+        // onResume, sending a fully-set-up user back through Transcription mode selection etc.
+        assertFalse(OnboardingWizard.shouldAdvance(
+            wizardStarted = true, forced = false, accessibilityEnabled = true, onboardingComplete = true,
+        ))
+    }
 }
