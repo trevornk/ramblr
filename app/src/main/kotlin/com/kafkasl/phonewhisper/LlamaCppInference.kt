@@ -19,19 +19,14 @@ import java.io.FileNotFoundException
  * `benchModel`/CPU-feature-variant library selection. Cleanup is a single system-prompt +
  * user-text completion, not a chat session, so that surface would be unused complexity (YAGNI).
  *
- * ## Known gap (read before relying on this class)
- * There is **no native library to load**: `System.loadLibrary(LIBRARY_NAME)` will throw
- * `UnsatisfiedLinkError` on every real device today. Building it requires the Android NDK (not
- * present in this development sandbox -- confirmed via `$ANDROID_HOME/ndk` being absent) plus
- * either (a) a full from-source llama.cpp build via CMake, mirroring SmolChat-Android's
- * `add_subdirectory(llama.cpp)` + git-submodule approach, or (b) compiling just the JNI shim
- * (`llama_cleanup_jni.cpp`/`LLMInference.cpp`) against llama.cpp's own official prebuilt
- * `android-arm64` release libraries (e.g. `libllama.so`/`libggml*.so` from
- * https://github.com/ggerganov/llama.cpp/releases) plus its public `llama.h`/`common.h` headers.
- * [RealLocalInferenceEngine] catches `UnsatisfiedLinkError` and reports it as an ordinary
- * [LocalInferenceResult.Failure] so this gap fails the LOCAL_LLM waterfall step cleanly (falling
- * through to the next configured step, or raw injection) instead of crashing the app -- but it
- * has NOT been exercised on a real device. See the #37 closing comment for the precise status.
+ * ## Build status
+ * The native library IS built and packaged: app/build.gradle.kts wires
+ * `externalNativeBuild`/CMake against the pinned llama.cpp git submodule, and
+ * `libllama-cleanup-jni.so` (plus the llama.cpp/ggml libraries) lands in the APK's
+ * `lib/arm64-v8a/` -- see app/src/main/cpp/llama_cleanup/README.md for the full setup (#37).
+ * [RealLocalInferenceEngine] still catches `UnsatisfiedLinkError` defensively and reports it as
+ * an ordinary [LocalInferenceResult.Failure], but since the build wiring landed that error
+ * indicates a real packaging regression, not an expected gap (#87 item 5).
  */
 class LlamaCppInference : Closeable {
     private var nativePtr = 0L
@@ -155,8 +150,8 @@ class LlamaCppInference : Closeable {
         const val MAX_RESPONSE_TOKENS = 512
 
         init {
-            // See this class's kdoc "Known gap" section -- this line is expected to throw
-            // UnsatisfiedLinkError until native provisioning (#37) is completed.
+            // The library is built and packaged by the Gradle build (see the kdoc "Build
+            // status" section); an UnsatisfiedLinkError here means a packaging regression.
             System.loadLibrary(LIBRARY_NAME)
         }
     }

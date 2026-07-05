@@ -2,10 +2,9 @@
 # (Apache License 2.0, commit 2b934d8e7da9, 2026-07-03):
 # https://github.com/shubham0204/SmolChat-Android/blob/main/smollm/src/main/cpp/CMakeLists.txt
 #
-# NOT currently wired into the Gradle build (no `externalNativeBuild` block references this file)
-# -- see app/src/main/cpp/llama_cleanup/README.md for exactly why and what's needed to finish
-# wiring it up (#37). Left in the tree so the actual build step is a config change, not a
-# from-scratch write, once a machine with the Android NDK is available.
+# Wired into the Gradle build: app/build.gradle.kts's `externalNativeBuild { cmake { ... } }`
+# block references this file, so `./gradlew assembleDebug` compiles the shim + llama.cpp from
+# source via the NDK (see this directory's README.md for the full setup, #37/#87).
 #
 # Adaptation from the original:
 #   - Builds exactly one shared library ("llama-cleanup-jni", matching

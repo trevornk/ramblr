@@ -15,9 +15,9 @@
 //     unused surface (YAGNI) -- LLMInference.cpp/.h themselves are vendored unmodified, so
 //     restoring them later is a small, low-risk addition to this file alone.
 //
-// See app/src/main/cpp/llama_cleanup/README.md for current build status: this file is NOT
-// currently compiled by the Gradle build (no externalNativeBuild wiring, no NDK in the dev
-// sandbox that authored it) -- see #37.
+// This file IS compiled and packaged by the Gradle build (externalNativeBuild/CMake against the
+// pinned llama.cpp submodule -- see app/build.gradle.kts and this directory's README.md for the
+// full build setup, #37/#87).
 
 #include "LLMInference.h"
 #include <jni.h>

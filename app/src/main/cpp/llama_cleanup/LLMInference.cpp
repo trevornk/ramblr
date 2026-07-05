@@ -1,7 +1,17 @@
-// Vendored verbatim (no logic changes) from shubham0204/SmolChat-Android's `smollm` module
+// Vendored from shubham0204/SmolChat-Android's `smollm` module
 // (Apache License 2.0, commit 8408e1ced09e, 2026-07-03):
 // https://github.com/shubham0204/SmolChat-Android/blob/main/smollm/src/main/cpp/LLMInference.cpp
 // See app/src/main/cpp/llama_cleanup/README.md for build status and what's adapted vs. vendored.
+//
+// Divergences from upstream (#87), all leak/correctness fixes:
+//   - completionLoop's EOG path no longer double-strdups the assistant response (upstream leaked
+//     one copy of the full response text per completion) and honors _storeChats like
+//     stopCompletion does.
+//   - startCompletion deletes the previous _batch before allocating a new one (upstream leaked
+//     it on instance reuse through the exported JNI surface).
+//   - loadModel adds the min-p sampler the minP parameter always promised (upstream accepted,
+//     logged, and silently ignored it), and tracks _chatTemplate ownership so the destructor can
+//     free the strdup'ed case.
 #include "LLMInference.h"
 #include <android/log.h>
 #include <cstring>
@@ -56,6 +66,9 @@ LLMInference::loadModel(const char *model_path, float minP, float temperature, b
     llama_sampler_chain_params sampler_params = llama_sampler_chain_default_params();
     sampler_params.no_perf = true; // disable performance metrics
     _sampler = llama_sampler_chain_init(sampler_params);
+    // min-p first, then temperature, then the final sampler -- the standard llama.cpp chain
+    // order. Upstream accepted and logged minP but never added this sampler (#87 item 4).
+    llama_sampler_chain_add(_sampler, llama_sampler_init_min_p(minP, 1));
     llama_sampler_chain_add(_sampler, llama_sampler_init_temp(temperature));
     llama_sampler_chain_add(_sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
@@ -63,9 +76,11 @@ LLMInference::loadModel(const char *model_path, float minP, float temperature, b
     _messages.clear();
 
     if (chatTemplate == nullptr) {
-        _chatTemplate = llama_model_chat_template(_model, nullptr);
+        _chatTemplate      = llama_model_chat_template(_model, nullptr);
+        _chatTemplateOwned = false; // model-owned memory; must not be freed by us
     } else {
-        _chatTemplate = strdup(chatTemplate);
+        _chatTemplate      = strdup(chatTemplate);
+        _chatTemplateOwned = true;
     }
     this->_storeChats = storeChats;
 }
@@ -127,6 +142,7 @@ LLMInference::startCompletion(const char *query) {
 
     // create a llama_batch containing a single sequence
     // see llama_batch_init for more details
+    delete _batch; // a previous completion's batch would otherwise leak on reuse (#87 item 2)
     _batch = new llama_batch();
     _batch->token = _promptTokens.data();
     _batch->n_tokens = _promptTokens.size();
@@ -191,7 +207,12 @@ LLMInference::completionLoop() {
     // convert the integer token to its corresponding word-piece
     _currToken = llama_sampler_sample(_sampler, _ctx, -1);
     if (llama_vocab_is_eog(llama_model_get_vocab(_model), _currToken)) {
-        addChatMessage(strdup(_response.data()), "assistant");
+        // Upstream passed strdup(_response.data()) here: addChatMessage strdups its argument
+        // again, so the outer copy leaked on every successful completion -- and unlike
+        // stopCompletion, it ignored _storeChats (#87 item 1).
+        if (_storeChats) {
+            addChatMessage(_response.c_str(), "assistant");
+        }
         _response.clear();
         return "[EOG]";
     }
@@ -231,6 +252,9 @@ LLMInference::~LLMInference() {
     for (llama_chat_message &message: _messages) {
         free(const_cast<char *>(message.role));
         free(const_cast<char *>(message.content));
+    }
+    if (_chatTemplateOwned) {
+        free(const_cast<char *>(_chatTemplate)); // strdup'ed in loadModel (#87 item 2)
     }
     llama_free(_ctx);
     llama_model_free(_model);
