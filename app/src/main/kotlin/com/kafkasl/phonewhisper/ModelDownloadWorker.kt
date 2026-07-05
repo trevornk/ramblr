@@ -3,14 +3,19 @@ package com.kafkasl.phonewhisper
 import android.app.Notification
 import android.content.Context
 import android.content.pm.ServiceInfo
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /**
  * Runs [ModelDownloader.download] as WorkManager work instead of a bare
@@ -30,17 +35,23 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
 
         DownloadNotifications.ensureChannel(applicationContext)
         var lastNotifiedPercent = -100
-        var failure: Data? = null
+        var lastProgressPercent = -100
+        var failure: DownloadState.Error? = null
         ModelDownloader.download(applicationContext, model) { state ->
             when (state) {
                 is DownloadState.Downloading -> {
-                    setProgressAsync(
-                        Data.Builder()
-                            .putString(KEY_PHASE, PHASE_DOWNLOADING)
-                            .putFloat(KEY_PROGRESS, state.progress)
-                            .build()
-                    )
                     val percent = (state.progress * 100).toInt().coerceIn(0, 100)
+                    // Same 5%-step throttle the notification uses (#86): unthrottled, this was
+                    // one Room write per 16 KB chunk (~29k writes for a 465 MB model).
+                    if (DownloadNotifications.shouldPostUpdate(lastProgressPercent, percent)) {
+                        lastProgressPercent = percent
+                        setProgressAsync(
+                            Data.Builder()
+                                .putString(KEY_PHASE, PHASE_DOWNLOADING)
+                                .putFloat(KEY_PROGRESS, state.progress)
+                                .build()
+                        )
+                    }
                     if (DownloadNotifications.shouldPostUpdate(lastNotifiedPercent, percent)) {
                         lastNotifiedPercent = percent
                         postForeground(archive, DownloadNotifications.progress(applicationContext, model.name, percent))
@@ -51,15 +62,25 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
                     postForeground(archive, DownloadNotifications.extracting(applicationContext, model.name))
                 }
                 is DownloadState.Done -> {}
-                is DownloadState.Error -> failure = errorData(state.message)
+                is DownloadState.Error -> failure = state
             }
         }
 
-        failure?.let {
-            DownloadNotifications.postFailure(applicationContext, archive, model.name, it.getString(KEY_ERROR) ?: "Unknown error")
-        } ?: DownloadNotifications.postSuccess(applicationContext, archive, model.name)
+        val failed = failure ?: run {
+            DownloadNotifications.postSuccess(applicationContext, archive, model.name)
+            return Result.success()
+        }
 
-        return failure?.let { Result.failure(it) } ?: Result.success()
+        // Transient network trouble is exactly what WorkManager's backoff exists to absorb
+        // (#86) -- and the resume support keeps the bytes already on disk, so a retry is cheap.
+        // Terminal failures (checksum mismatch, not enough space, catalog bugs) fail fast with
+        // a notification as before. Retries stay silent: the foreground notification simply
+        // reappears when the next attempt starts.
+        if (shouldRetry(failed.cause, runAttemptCount)) {
+            return Result.retry()
+        }
+        DownloadNotifications.postFailure(applicationContext, archive, model.name, failed.message)
+        return Result.failure(errorData(failed.message))
     }
 
     /** Promotes this Worker to a foreground service showing [notification], so a download that
@@ -102,9 +123,34 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
         fun isInFlight(state: WorkInfo.State?): Boolean =
             state == WorkInfo.State.ENQUEUED || state == WorkInfo.State.RUNNING
 
+        /** Give up after this many attempts of a transient failure -- bounded so a
+         *  persistently-broken URL (404 reads as an IOException) can't retry forever (#86). */
+        const val MAX_ATTEMPTS = 3
+
+        /**
+         * Pure retry classification (#86): retry only transient, IO-shaped failures, and only
+         * while attempts remain. [ChecksumMismatchException] (complete-but-wrong bytes) and
+         * [NotEnoughSpaceException] are terminal IOExceptions; anything non-IO (catalog bugs,
+         * traversal rejection) is terminal by definition. [runAttemptCount] is 0-based on the
+         * first attempt, matching WorkManager's Worker.getRunAttemptCount.
+         */
+        fun shouldRetry(cause: Exception?, runAttemptCount: Int): Boolean {
+            if (runAttemptCount >= MAX_ATTEMPTS - 1) return false
+            return when (cause) {
+                is ChecksumMismatchException, is NotEnoughSpaceException -> false
+                is IOException -> true
+                else -> false
+            }
+        }
+
         fun enqueue(ctx: Context, model: Model) {
             val request = OneTimeWorkRequestBuilder<ModelDownloadWorker>()
                 .setInputData(Data.Builder().putString(KEY_ARCHIVE, model.archive).build())
+                // Don't start (or restart) a 30s-20min download with no network: enqueued
+                // offline, the worker previously ran immediately, failed in OkHttp, and posted
+                // a terminal failure notification (#86).
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
             WorkManager.getInstance(ctx)
                 .enqueueUniqueWork(workName(model.archive), ExistingWorkPolicy.KEEP, request)
