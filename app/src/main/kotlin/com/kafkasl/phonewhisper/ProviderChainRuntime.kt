@@ -55,4 +55,16 @@ object ProviderChainRuntime {
     fun transcriptionCandidates(chain: ProviderChain): List<ProviderChainEntry> =
         chain.capableEntriesFor(needsTranscription = true)
             .filterNot { it.kind in transcriptionKindsNotImplemented }
+
+    /**
+     * Applies the Phase 3 "Use cloud for Cleanup" toggle ([CloudFeatureToggle.cleanupEnabled|
+     * setCleanupEnabled]) ahead of cleanup resolution: when [cloudEnabled] is false, every
+     * non-LOCAL entry is dropped from the chain before it's handed to [cleanupWaterfallFor],
+     * so cleanup falls back to on-device (if the chain has a LOCAL entry) or is skipped entirely
+     * (empty result -- the existing "no cleanup steps configured" raw-injection path). When
+     * [cloudEnabled] is true (the default), [chain] passes through unchanged -- zero behavior
+     * change for anyone who never touches the new toggle.
+     */
+    fun effectiveChainForCleanup(chain: ProviderChain, cloudEnabled: Boolean): ProviderChain =
+        if (cloudEnabled) chain else ProviderChain(chain.entries.filter { it.kind == ProviderKind.LOCAL })
 }

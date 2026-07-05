@@ -35,6 +35,7 @@
         <activity android:name=".TranscriptionActivity" android:exported="false" />
         <activity android:name=".CleanupActivity" android:exported="false" />
         <activity android:name=".LivePreviewActivity" android:exported="false" />
+        <activity android:name=".CloudProviderActivity" android:exported="false" />
         <activity android:name=".AdvancedActivity" android:exported="false" />
 
         <service
