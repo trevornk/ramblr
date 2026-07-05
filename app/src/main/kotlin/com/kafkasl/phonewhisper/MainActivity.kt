@@ -1167,9 +1167,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun selectPrompt(key: String) {
         if (key == "custom") {
+            val saved = customPrompt()
+            if (CleanupPersonas.BUILT_IN.any { it.prompt == saved }) {
+                // Nothing genuinely custom has been saved yet (the stored value is a built-in
+                // prompt, e.g. the Formal default): activating it would just snap the radio to
+                // that built-in -- a confusing no-op (#89). Open the editor so the explicit
+                // "Custom" pick leads to actually creating a custom prompt.
+                promptPostProcessing()
+                return
+            }
             // Reactivate the saved custom prompt without touching the remembered style, so
             // switching back to a style later still recalls where the user left off.
-            prefs().edit().putString("post_processing_prompt", customPrompt()).apply()
+            prefs().edit().putString("post_processing_prompt", saved).apply()
         } else {
             val persona = CleanupPersonas.fromKey(key)
             prefs().edit()
@@ -1453,6 +1462,10 @@ class MainActivity : AppCompatActivity() {
         refreshWaterfallSteps()
         refreshSimpleCleanupChoice()
         refreshAllCleanupRows()
+        // Included here (not just onCreate) so background work finishing after a fold/rotation
+        // -- e.g. pickOverlayIcon's thread or a waterfall step test -- doesn't leave the new
+        // Activity instance showing stale overlay-appearance rows (#89).
+        refreshOverlayAppearanceRows()
 
         val prompt = currentPrompt()
         promptRowSub.text = prompt
@@ -1574,10 +1587,31 @@ class MainActivity : AppCompatActivity() {
             .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
             .setPositiveButton("Save") { _, _ ->
                 val entered = input.text.toString().trim()
-                if (entered.isNotBlank()) ApiKeyStore.setApiKey(this, entered)
-                refresh()
+                when {
+                    entered.isNotBlank() -> {
+                        ApiKeyStore.setApiKey(this, entered)
+                        refresh()
+                    }
+                    // Saving blank over a stored key is the only way to remove it -- once
+                    // stored, a secret used to stay in encrypted prefs forever (#89).
+                    existingKey.isNotBlank() -> confirmRemoveSecret("OpenAI API key") {
+                        ApiKeyStore.setApiKey(this, "")
+                        refresh()
+                    }
+                    else -> refresh()
+                }
             }
             .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Confirms clearing a stored secret when the user saves a blank value over it (#89). */
+    private fun confirmRemoveSecret(label: String, onConfirm: () -> Unit) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Remove $label?")
+            .setMessage("The saved $label will be deleted from this device.")
+            .setPositiveButton("Remove") { _, _ -> onConfirm() }
+            .setNegativeButton("Keep", null)
             .show()
     }
 
@@ -1656,8 +1690,19 @@ class MainActivity : AppCompatActivity() {
             .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
             .setPositiveButton("Save") { _, _ ->
                 val entered = input.text.toString().trim()
-                if (entered.isNotBlank()) CleanupCredentialStore.set(this, slot, entered)
-                refresh()
+                when {
+                    entered.isNotBlank() -> {
+                        CleanupCredentialStore.set(this, slot, entered)
+                        refresh()
+                    }
+                    // Blank-save over a stored credential removes it (with confirm), same as
+                    // the OpenAI key dialog -- previously secrets were permanent (#89).
+                    existing.isNotBlank() -> confirmRemoveSecret(title) {
+                        CleanupCredentialStore.set(this, slot, "")
+                        refresh()
+                    }
+                    else -> refresh()
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -1828,6 +1873,10 @@ class MainActivity : AppCompatActivity() {
         val modelInput = EditText(this).apply {
             hint = "Model, e.g. claude/claude-sonnet-4-6"
             setText(existing?.model ?: "")
+            // The change listener below only fires on a radio *change* -- a dialog opened
+            // already on LOCAL_LLM (editing an existing local step) needs the same fixed,
+            // non-editable state applied up front, or a bogus archive can be typed in (#89).
+            isEnabled = (existing?.group ?: CleanupStepGroup.OMNIROUTE) != CleanupStepGroup.LOCAL_LLM
         }
         container.addView(modelInput)
         val offlineCaption = TextView(this).apply {
