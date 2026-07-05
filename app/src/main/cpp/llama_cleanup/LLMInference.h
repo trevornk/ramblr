@@ -12,6 +12,7 @@
 #include "chat.h"
 #include "common.h"
 #include "llama.h"
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,19 @@ class LLMInference {
     // length of context window consumed during the conversation
     int _nCtxUsed = 0;
 
+    // Absolute deadline (in the ggml monotonic clock, microseconds) past which an in-flight
+    // llama_decode() aborts itself; 0 means "no deadline" (#92). Set per completion via
+    // setInferenceBudgetMs and read by abortCallback, which ggml invokes between graph nodes
+    // during llama_decode -- the only interruption point a single synchronous decode call has.
+    // atomic because abortCallback runs on the ggml compute thread while the value is written
+    // from the caller thread just before decoding starts.
+    std::atomic<int64_t> _abortAtUs{0};
+
+    // Installed on the llama_context (loadModel) as its ggml abort callback. Returns true to
+    // abort the current llama_decode once _abortAtUs has passed. `data` is the owning
+    // LLMInference*; static so it has C-compatible linkage for the C callback pointer.
+    static bool abortCallback(void* data);
+
     bool _isValidUtf8(const char* response);
 
   public:
@@ -60,6 +74,18 @@ class LLMInference {
     std::string benchModel(int pp, int tg, int pl, int nr);
 
     void addChatMessage(const char* message, const char* role);
+
+    // Arms (or disarms) the wall-clock budget for the completion that follows (#92). A single
+    // llama_decode() is otherwise uninterruptible: the Kotlin-side deadline in
+    // LlamaCompletionAccumulator only runs *between* completionLoop() calls, so one decode that
+    // runs pathologically long (e.g. mmap'd model pages being re-faulted from swap under memory
+    // pressure -- the live-confirmed cause on device) blocks past the whole waterfall budget with
+    // no way out. Arming this makes ggml's abort callback fire mid-decode instead.
+    //   budgetMs  > 0 : abort once this many ms elapse from now.
+    //   budgetMs == 0 : no deadline (default; used by tests / non-deadline callers).
+    //   budgetMs  < 0 : deadline already passed -- abort at the first check (an already-spent
+    //                   waterfall budget maps here, so decoding fails fast instead of starting).
+    void setInferenceBudgetMs(int64_t budgetMs);
 
     float getResponseGenerationTime() const;
 

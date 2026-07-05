@@ -11,6 +11,12 @@
 // LLMInference.cpp, every run should behave like the first: same response for the same input, and
 // a "context used" figure that stays flat across runs instead of accumulating -- a growing figure
 // means prior turns are leaking into later prompts or the KV cache.
+//
+// An optional <budget_ms> argument (default 0 = no deadline) mirrors the native inference budget
+// LlamaCppInference.complete() now arms per completion (#92): a positive value aborts a decode
+// that runs past it, and a negative value ("already expired") aborts at the first check. Pass a
+// negative value to prove the deadline path actually stops a decode (completion should throw
+// "llama_decode() aborted: inference budget exceeded" with zero pieces) instead of hanging.
 #include "LLMInference.h"
 #include <chrono>
 #include <cstdio>
@@ -24,7 +30,7 @@ static const int kMaxPieces = 512;
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: %s <model.gguf> <system_prompt> <user_text> [runs]\n", argv[0]);
+        fprintf(stderr, "usage: %s <model.gguf> <system_prompt> <user_text> [runs] [budget_ms]\n", argv[0]);
         return 1;
     }
     const std::string modelPath = argv[1];
@@ -35,6 +41,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "runs must be >= 1, got %s\n", argv[4]);
         return 1;
     }
+    // 0 (default) = no deadline, matching LlamaCppInference.complete()'s Long.MAX_VALUE case.
+    const long budgetMs = argc > 5 ? atol(argv[5]) : 0;
 
     LLMInference llm;
     fprintf(stderr, "loading model...\n");
@@ -61,6 +69,9 @@ int main(int argc, char** argv) {
         int numPieces = 0;
         try {
             llm.startCompletion(userText.c_str());
+            // Mirrors complete()'s call order: arm the budget after startCompletion, before the
+            // first completionLoop decode it bounds (#92).
+            llm.setInferenceBudgetMs(budgetMs);
             while (true) {
                 std::string piece = llm.completionLoop();
                 if (piece == "[EOG]") break;

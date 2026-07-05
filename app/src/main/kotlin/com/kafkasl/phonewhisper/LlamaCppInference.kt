@@ -93,6 +93,14 @@ class LlamaCppInference : Closeable {
         // become real control tokens and forge turn boundaries (#78).
         addChatMessage(nativePtr, SpecialTokenSanitizer.sanitize(systemPrompt), "system")
         startCompletion(nativePtr, SpecialTokenSanitizer.sanitize(userText))
+        // Arm the native wall-clock budget (#92): a single completionLoop() decode is one
+        // uninterruptible JNI call, so the accumulator's between-piece deadline check below can't
+        // stop a decode that runs pathologically long (mmap page-faults under memory pressure,
+        // thermal throttling). This gives ggml's abort callback the same deadline so it aborts
+        // mid-decode. A budget already in the past (deadline exceeded before we started) maps to a
+        // negative value, which the native side treats as "abort at the first check"; the default
+        // Long.MAX_VALUE deadline maps to 0, meaning "no native deadline" (tests / direct callers).
+        setInferenceBudgetMs(nativePtr, InferenceBudget.budgetMs(deadlineAtMs, System.currentTimeMillis()))
         try {
             return LlamaCompletionAccumulator.accumulate(
                 maxPieces = MAX_RESPONSE_TOKENS,
@@ -129,6 +137,8 @@ class LlamaCppInference : Closeable {
     ): Long
 
     private external fun addChatMessage(modelPtr: Long, message: String, role: String)
+
+    private external fun setInferenceBudgetMs(modelPtr: Long, budgetMs: Long)
 
     private external fun startCompletion(modelPtr: Long, prompt: String)
 
