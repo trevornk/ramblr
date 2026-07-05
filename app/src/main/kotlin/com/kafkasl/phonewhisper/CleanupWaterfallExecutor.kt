@@ -144,6 +144,9 @@ fun interface CleanupHttpTransport {
 sealed class LocalInferenceResult {
     data class Success(val text: String) : LocalInferenceResult()
     data class Failure(val message: String) : LocalInferenceResult()
+    /** The user (or watchdog) cancelled while inference was running (#83) -- like
+     *  [CleanupHttpOutcome.Cancelled], this must stop the whole waterfall, not fall through. */
+    object Cancelled : LocalInferenceResult()
 }
 
 /**
@@ -153,27 +156,46 @@ sealed class LocalInferenceResult {
  * cloud provider groups. [systemPrompt]/[userText] are passed through unchanged from
  * [CleanupWaterfallExecutor.execute]'s `prompt`/`text` -- see [LocalCleanupProvider] for why no
  * translation is needed. [modelPath] is the absolute path to the installed GGUF file.
+ * [deadlineAtMs]/[isCancelled] bound the otherwise-uninterruptible synchronous inference (#83):
+ * generation must stop once the waterfall's wall-clock budget is spent or the user cancelled.
  */
 fun interface LocalInferenceEngine {
-    fun complete(systemPrompt: String, userText: String, modelPath: String): LocalInferenceResult
+    fun complete(
+        systemPrompt: String,
+        userText: String,
+        modelPath: String,
+        deadlineAtMs: Long,
+        isCancelled: () -> Boolean,
+    ): LocalInferenceResult
 }
 
 /** Production [LocalInferenceEngine]: drives the vendored/adapted llama.cpp JNI wrapper. See
  *  [LlamaCppInference] for the native binding itself and its current build-status caveats. */
 object RealLocalInferenceEngine : LocalInferenceEngine {
-    override fun complete(systemPrompt: String, userText: String, modelPath: String): LocalInferenceResult =
+    override fun complete(
+        systemPrompt: String,
+        userText: String,
+        modelPath: String,
+        deadlineAtMs: Long,
+        isCancelled: () -> Boolean,
+    ): LocalInferenceResult =
         try {
-            val text = LlamaCppInference().use { inference ->
-                inference.load(modelPath)
-                inference.complete(systemPrompt, userText)
+            if (isCancelled()) {
+                LocalInferenceResult.Cancelled
+            } else {
+                val text = LlamaCppInference().use { inference ->
+                    inference.load(modelPath)
+                    inference.complete(systemPrompt, userText, deadlineAtMs, isCancelled)
+                }
+                if (text.isNotBlank()) LocalInferenceResult.Success(text)
+                else LocalInferenceResult.Failure("Local model produced an empty response")
             }
-            if (text.isNotBlank()) LocalInferenceResult.Success(text)
-            else LocalInferenceResult.Failure("Local model produced an empty response")
         } catch (e: Throwable) {
             // Broad catch is deliberate: this boundary also absorbs UnsatisfiedLinkError, which
             // is expected (not a bug) until the native provisioning gap documented in #37 is
             // closed -- see LlamaCppInference's kdoc.
-            LocalInferenceResult.Failure(e.message ?: "Local inference failed")
+            if (isCancelled()) LocalInferenceResult.Cancelled
+            else LocalInferenceResult.Failure(e.message ?: "Local inference failed")
         }
 }
 
@@ -276,6 +298,11 @@ object CleanupWaterfallExecutor {
         val groupRanges = groupBoundaries(groups)
         val startedAtMs = System.currentTimeMillis()
         val startIndex = cursor.startIndex(startedAtMs).takeIf { it in steps.indices } ?: 0
+        // One waterfall run = one unit of cancellable work (#83): clear any cancel left over
+        // from a previous dictation, and give the synchronous LOCAL_LLM step the same wall-clock
+        // budget the between-step check below enforces.
+        cancelHolder.beginWork()
+        val deadlineAtMs = startedAtMs + CLEANUP_WATERFALL_HARD_CAP_MS
 
         fun nextGroupStart(index: Int): Int {
             val range = groupRanges.first { index in it }
@@ -292,7 +319,7 @@ object CleanupWaterfallExecutor {
                 return
             }
 
-            performStep(steps[index], text, prompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, localInference, localModelPath, cancelHolder) { outcome ->
+            performStep(steps[index], text, prompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs) { outcome ->
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
                         cursor.recordSuccess(index, System.currentTimeMillis())
@@ -327,6 +354,7 @@ object CleanupWaterfallExecutor {
         localInference: LocalInferenceEngine,
         localModelPath: () -> String?,
         cancelHolder: InFlightCall,
+        deadlineAtMs: Long,
         callback: (CleanupStepOutcome) -> Unit,
     ) {
         // LOCAL_LLM branches before the credential check below: it's the one group with no
@@ -339,7 +367,7 @@ object CleanupWaterfallExecutor {
                 return
             }
             callback(
-                when (val result = localInference.complete(prompt, text, modelPath)) {
+                when (val result = localInference.complete(prompt, text, modelPath, deadlineAtMs, { cancelHolder.isCancelled })) {
                     is LocalInferenceResult.Success -> {
                         // Trim to match what both cloud parsers already do to their model text
                         // (PostProcessor.parseResponse / AnthropicCleanupProvider.parseResponse):
@@ -350,6 +378,7 @@ object CleanupWaterfallExecutor {
                         else CleanupStepOutcome.StepFailed("Local model produced an empty response")
                     }
                     is LocalInferenceResult.Failure -> CleanupStepOutcome.StepFailed(result.message)
+                    is LocalInferenceResult.Cancelled -> CleanupStepOutcome.Cancelled
                 }
             )
             return

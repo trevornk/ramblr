@@ -23,11 +23,32 @@ object LlamaCompletionAccumulator {
      * real on-device CPU inference with no way out except the 400s transcription watchdog --
      * this makes that fail fast instead.
      */
-    fun accumulate(maxPieces: Int, endOfGeneration: String, nextPiece: () -> String): String {
+    fun accumulate(
+        maxPieces: Int,
+        endOfGeneration: String,
+        deadlineAtMs: Long = Long.MAX_VALUE,
+        nowMs: () -> Long = System::currentTimeMillis,
+        isCancelled: () -> Boolean = { false },
+        nextPiece: () -> String,
+    ): String {
         val response = StringBuilder()
-        var piece = nextPiece()
         var pieceCount = 0
-        while (piece != endOfGeneration) {
+        while (true) {
+            // Wall-clock and cancellation bounds (#83): the piece cap bounds the loop count, but
+            // a slow model can take seconds per piece, blocking the waterfall far past its hard
+            // cap with no way for the user's cancel to stop the CPU burn. Checked before every
+            // piece; a tripped bound throws the same way the cap does, so it falls through the
+            // waterfall like any other local failure.
+            if (isCancelled()) {
+                throw IllegalStateException("Local completion cancelled")
+            }
+            if (nowMs() > deadlineAtMs) {
+                throw IllegalStateException("Local completion exceeded its wall-clock deadline")
+            }
+            val piece = nextPiece()
+            if (piece == endOfGeneration) {
+                return response.toString()
+            }
             response.append(piece)
             pieceCount++
             if (pieceCount >= maxPieces) {
@@ -35,8 +56,6 @@ object LlamaCompletionAccumulator {
                     "Local model exceeded max response length ($maxPieces pieces) without emitting an end-of-generation token"
                 )
             }
-            piece = nextPiece()
         }
-        return response.toString()
     }
 }
