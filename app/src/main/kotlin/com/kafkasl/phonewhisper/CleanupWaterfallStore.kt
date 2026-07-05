@@ -28,9 +28,12 @@ object CleanupWaterfallStore {
     }
 
     /**
-     * Returns null -- rather than an empty [CleanupWaterfall] -- if [raw] is blank, malformed, or
-     * parses to zero steps, so [load] can treat all three cases identically as "nothing
-     * configured" and fall back to [CleanupWaterfall.LEGACY_SINGLE_STEP].
+     * Returns null if [raw] is blank (never configured) or malformed, so [load] falls back to
+     * [CleanupWaterfall.LEGACY_SINGLE_STEP]. A **valid empty array is not null**: it means the
+     * user explicitly removed every step, and collapsing that into "never configured" silently
+     * re-activated legacy Cloud cleanup -- a local-only user's next dictation went to
+     * api.openai.com after a single un-warned tap (#82). An explicitly-emptied waterfall now
+     * loads as zero steps, which callers treat as "cleanup disabled" (raw injection).
      */
     fun deserialize(raw: String?): CleanupWaterfall? {
         if (raw.isNullOrBlank()) return null
@@ -44,14 +47,15 @@ object CleanupWaterfallStore {
                     baseUrlOverride = if (obj.isNull("baseUrlOverride")) null else obj.getString("baseUrlOverride"),
                 )
             }
-            if (steps.isEmpty()) null else CleanupWaterfall(steps)
+            CleanupWaterfall(steps)
         } catch (e: Exception) {
             null
         }
     }
 
-    /** The user's configured waterfall, or [CleanupWaterfall.LEGACY_SINGLE_STEP] if nothing
-     *  (valid) has been saved -- zero behavior change for anyone who hasn't touched Settings. */
+    /** The user's configured waterfall; [CleanupWaterfall.LEGACY_SINGLE_STEP] if nothing (valid)
+     *  has ever been saved -- zero behavior change for anyone who hasn't touched Settings -- or a
+     *  zero-step waterfall ("cleanup disabled", #82) if the user explicitly emptied it. */
     fun load(context: Context): CleanupWaterfall = deserialize(prefs(context).getString(KEY_STEPS, null)) ?: CleanupWaterfall.LEGACY_SINGLE_STEP
 
     fun save(context: Context, waterfall: CleanupWaterfall) {

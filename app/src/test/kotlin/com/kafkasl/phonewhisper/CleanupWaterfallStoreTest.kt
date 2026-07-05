@@ -35,8 +35,16 @@ class CleanupWaterfallStoreTest {
         assertNull(CleanupWaterfallStore.deserialize("""[{"group":"BOGUS","model":"m","baseUrlOverride":null}]"""))
     }
 
-    @Test fun `deserialize returns null for zero steps so callers fall back consistently`() {
-        assertNull(CleanupWaterfallStore.deserialize("[]"))
+    @Test fun `an explicitly-emptied waterfall round-trips as zero steps, not as never-configured`() {
+        // Collapsing "[]" into null re-activated legacy Cloud cleanup after the user removed
+        // their last (possibly local-only) step -- a silent privacy regression (#82).
+        val emptied = CleanupWaterfall(emptyList())
+        val parsed = CleanupWaterfallStore.deserialize(CleanupWaterfallStore.serialize(emptied))
+        assertEquals(emptied, parsed)
+    }
+
+    @Test fun `an emptied waterfall is not local-only -- callers must skip cleanup, not run it`() {
+        assertEquals(false, CleanupWaterfall(emptyList()).isLocalOnly())
     }
 
     @Test fun `deserialize preserves a null baseUrlOverride`() {

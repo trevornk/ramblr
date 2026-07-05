@@ -488,9 +488,9 @@ class MainActivity : AppCompatActivity() {
 
         advancedContainer = vertical(0).apply { visibility = View.GONE }
         advancedContainer.addView(TextView(this).apply {
-            text = "Try multiple cleanup providers in order, falling through on failure. Leave empty " +
-                "to keep using the simple Local/Cloud choice under Cleanup above. Only used while " +
-                "\"Improve my dictation with AI\" is turned on."
+            text = "Try multiple cleanup providers in order, falling through on failure. Removing " +
+                "every step disables cleanup entirely (dictations are injected as-is). Only used " +
+                "while \"Improve my dictation with AI\" is turned on."
             textSize = 14f
             setTextColor(attrColor(android.R.attr.textColorSecondary))
             setPadding(dp(24), 0, dp(24), dp(8))
