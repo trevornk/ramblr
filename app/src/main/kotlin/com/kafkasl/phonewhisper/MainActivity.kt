@@ -157,6 +157,13 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // A fold/rotation recreates this Activity mid-wizard; without restoring "the wizard has
+        // started", OnboardingWizard.shouldAdvance stops advancing the moment Accessibility gets
+        // enabled (its shouldShow signal clears) and strands the wizard before the
+        // transcription/cleanup/streaming steps (#80). Fold-posture change while in system
+        // Settings is the *normal* way this happens on a Fold.
+        onboardingIntroShown = savedInstanceState?.getBoolean(STATE_ONBOARDING_INTRO_SHOWN) ?: false
+
         val root = vertical(0, 0)
 
         // Top large header (like "Connected devices")
@@ -559,6 +566,19 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         WhisperAccessibilityService.setMainActivityForeground(false)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_ONBOARDING_INTRO_SHOWN, onboardingIntroShown)
+    }
+
+    override fun onDestroy() {
+        // The wizard dialog would otherwise leak its window on recreation (WindowLeaked) and
+        // vanish; onResume of the new instance re-advances the wizard to the right step (#80).
+        onboardingDialog?.dismiss()
+        onboardingDialog = null
+        super.onDestroy()
     }
 
     override fun onRequestPermissionsResult(c: Int, p: Array<String>, r: IntArray) {
@@ -2416,6 +2436,8 @@ class MainActivity : AppCompatActivity() {
         private const val INDENT_STEP_DP = 16
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
         private const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
+        /** Instance-state key: whether the wizard already started this session (#80). */
+        private const val STATE_ONBOARDING_INTRO_SHOWN = "state_onboarding_intro_shown"
         private const val KEY_HISTORY_ENABLED = "dictation_history_enabled"
         private const val KEY_STREAMING_PREVIEW = "streaming_preview_enabled"
         private const val KEY_STREAMING_MODEL_NAME = "streaming_model_name"
