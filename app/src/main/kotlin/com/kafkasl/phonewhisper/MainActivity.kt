@@ -2328,17 +2328,41 @@ class MainActivity : AppCompatActivity() {
         refresh()
     }
 
+    /**
+     * Whether the currently-selected transcription model is actually ready to use right now
+     * (#98 UX follow-up): true either when cloud transcription is selected (nothing to download)
+     * or the on-device model chosen during onboarding has genuinely finished downloading.
+     * [showOnboardingTryStep] uses this to avoid the false "Setup is done" claim that previously
+     * appeared even while a model download was still in progress -- silently misrouting a test
+     * dictation into the cloud path (see [WhisperAccessibilityService.continueTranscription]'s
+     * comment on the same issue), which then failed with a confusing "Set API key" error that had
+     * nothing to do with the real cause.
+     */
+    private fun onboardingTranscriptionModelReady(): Boolean {
+        if (!prefs().getBoolean("use_local", true)) return true // cloud: nothing to download
+        val archive = prefs().getString("model_name", "") ?: ""
+        val model = MODEL_CATALOG.firstOrNull { it.archive == archive } ?: return false
+        return ModelDownloader.isInstalled(this, model)
+    }
+
     private fun showOnboardingTryStep() {
         val testField = EditText(this).apply {
             hint = "Tap here, then use the floating button to dictate a test phrase"
             setPadding(dp(24), dp(16), dp(24), dp(16))
         }
+        val modelReady = onboardingTranscriptionModelReady()
+        val message = if (modelReady) {
+            "Setup is done. If the floating button is visible, tap it, speak a test phrase, and " +
+                "tap it again to confirm the text lands in the field below."
+        } else {
+            "Setup is done, but your on-device model is still downloading in the background -- " +
+                "dictation won't work until that finishes. Feel free to close this now; the " +
+                "floating button will start working as soon as the download completes, no need " +
+                "to wait here."
+        }
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Try it out (optional)")
-            .setMessage(
-                "Setup is done. If the floating button is visible, tap it, speak a test phrase, and " +
-                    "tap it again to confirm the text lands in the field below."
-            )
+            .setMessage(message)
             .setView(testField)
             .setCancelable(false)
             .setPositiveButton("Finish setup") { _, _ -> finishOnboarding() }
