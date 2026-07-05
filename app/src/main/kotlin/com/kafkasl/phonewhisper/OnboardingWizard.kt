@@ -19,13 +19,23 @@ object OnboardingWizard {
      * accessibility step, before it ever reaches Transcription/Cleanup/Streaming. [forced] is for
      * explicit re-entry (the Status row, or a "Redo setup walkthrough" Settings entry) and always
      * proceeds, even for a fully-configured returning user [shouldShow] would otherwise refuse.
+     *
+     * [onboardingComplete] is checked FIRST and short-circuits everything else except [forced]
+     * (#98 bug fix): [wizardStarted] is an in-memory flag that, before this fix, never reset once
+     * true for the rest of the Activity's lifetime -- including across onResume from switching
+     * to another app and back, which does NOT recreate the Activity. That meant finishing
+     * onboarding once (setting [onboardingComplete] true in prefs, but leaving the in-memory
+     * [wizardStarted] flag true) still re-triggered the wizard's step logic on every subsequent
+     * onResume, landing back on a step like Transcription mode selection even though setup was
+     * genuinely already done. A completed setup must never re-advance except via an explicit
+     * [forced] re-entry.
      */
     fun shouldAdvance(
         wizardStarted: Boolean,
         forced: Boolean,
         accessibilityEnabled: Boolean,
         onboardingComplete: Boolean,
-    ): Boolean = forced || wizardStarted || shouldShow(accessibilityEnabled, onboardingComplete)
+    ): Boolean = forced || (!onboardingComplete && (wizardStarted || shouldShow(accessibilityEnabled, onboardingComplete)))
 
     /**
      * Whether the app is in a genuinely usable state (#52): permissions granted and Transcription
