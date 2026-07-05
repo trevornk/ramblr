@@ -257,12 +257,28 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        ensureProviderChainMigrated()
         showOverlay()
         registerNetworkCallback()
         thread { cleanupOrphanedRecordings() }
         // Try to load local model in background
         thread { initLocalModel() }
         thread { initStreamingModel() }
+    }
+
+    /**
+     * Phase 2 provider-chain unification (#95): the live dictation paths below now read
+     * ProviderChain/ProviderCredentialStore only, so the one-time legacy migration must run before
+     * the first recording can resolve a provider. Kept in the AccessibilityService lifecycle (not
+     * an Activity) because this is the component that owns always-on dictation and may be started
+     * independently of settings UI.
+     */
+    private fun ensureProviderChainMigrated() {
+        try {
+            ProviderChainMigration.migrate(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "Provider chain migration failed; falling back to ProviderChainStore defaults", e)
+        }
     }
 
     /**
@@ -1036,7 +1052,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (PostProcessingToggle.isEnabled(this)) return true
         val useLocal = prefs().getBoolean("use_local", true)
         val hasConsented = prefs().getBoolean("local_cleanup_consent_seen", false)
-        val cleanupIsLocalOnly = CleanupWaterfallStore.load(this).isLocalOnly()
+        val cleanupIsLocalOnly = ProviderChainStore.load(this).isLocalOnly()
         if (LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing = true, hasConsented = hasConsented, cleanupIsLocalOnly = cleanupIsLocalOnly)) return false
         PostProcessingToggle.setEnabled(this, true)
         return true
@@ -1181,8 +1197,8 @@ class WhisperAccessibilityService : AccessibilityService() {
      */
     private fun warmUpLocalCleanupModelIfNeeded() {
         if (!PostProcessingToggle.shouldRunCleanup(PostProcessingToggle.isEnabled(this))) return
-        val waterfall = CleanupWaterfallStore.load(this)
-        if (!waterfall.usesLocalLlm()) return
+        val providerChain = ProviderChainStore.load(this)
+        if (!providerChain.usesLocalLlm()) return
         val modelPath = ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this))?.absolutePath
             ?: return
         LocalCleanupModelHolder.warmUpAsync(modelPath)
@@ -1350,21 +1366,67 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     private fun transcribeApi(file: File, token: Int) {
-        val apiKey = ApiKeyStore.getApiKey(this)
-        if (apiKey.isBlank()) { file.delete(); reset("Set API key in Ramblr app"); return }
+        val chain = ProviderChainStore.load(this)
+        val skipped = chain.capableEntriesFor(needsTranscription = true)
+            .filter { it.kind in ProviderChainRuntime.transcriptionKindsNotImplemented }
+        if (skipped.isNotEmpty()) {
+            Log.w(TAG, "Skipping ${skipped.size} Gemini transcription provider(s): Gemini audio transcription is modeled but not implemented yet (#95 Phase 2)")
+        }
 
-        TranscriberClient.transcribe(file, apiKey, inFlightCall) { result ->
+        val candidates = ProviderChainRuntime.transcriptionCandidates(chain)
+        if (candidates.isEmpty()) {
             file.delete()
-            if (result.text != null && result.text.isNotBlank()) {
-                handleTranscriptionResult(result.text, token)
-            } else {
-                handler.post {
-                    if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
-                    toast("Error: ${result.error ?: "empty transcript"}")
-                    resetToIdle()
+            reset("No transcription provider configured")
+            return
+        }
+
+        fun attempt(index: Int) {
+            if (index >= candidates.size) {
+                file.delete()
+                reset("Set API key in Ramblr app")
+                return
+            }
+            val entry = candidates[index]
+            when (entry.kind) {
+                ProviderKind.OPENAI -> {
+                    val apiKey = ProviderCredentialStore.get(this, ProviderKind.OPENAI)
+                    if (apiKey.isBlank()) {
+                        Log.w(TAG, "Skipping OpenAI transcription provider: no ProviderCredentialStore.OPENAI credential configured")
+                        attempt(index + 1)
+                        return
+                    }
+                    Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (OpenAI audio/transcriptions)")
+                    TranscriberClient.transcribe(file, apiKey, inFlightCall) { result ->
+                        file.delete()
+                        if (result.text != null && result.text.isNotBlank()) {
+                            handleTranscriptionResult(result.text, token)
+                        } else {
+                            handler.post {
+                                if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
+                                toast("Error: ${result.error ?: "empty transcript"}")
+                                resetToIdle()
+                            }
+                        }
+                    }
                 }
+                ProviderKind.LOCAL -> {
+                    if (transcriberSlot.get() != null) {
+                        Log.i(TAG, "Transcription via ProviderChain provider=${entry.kind}")
+                        transcribeLocal(file, token)
+                    } else {
+                        file.delete()
+                        reset("Local model still downloading -- try again once it finishes")
+                    }
+                }
+                ProviderKind.GEMINI -> {
+                    Log.w(TAG, "Skipping Gemini transcription provider: Gemini audio transcription is not implemented yet (#95 Phase 2)")
+                    attempt(index + 1)
+                }
+                ProviderKind.ANTHROPIC, ProviderKind.OMNIROUTE -> attempt(index + 1) // filtered out by capability; defensive only
             }
         }
+
+        attempt(0)
     }
 
     private fun handleTranscriptionResult(text: String?, token: Int) {
@@ -1378,15 +1440,20 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
 
         val usePostProcessing = PostProcessingToggle.shouldRunCleanup(PostProcessingToggle.isEnabled(this))
-        val apiKey = ApiKeyStore.getApiKey(this)
 
         if (usePostProcessing) {
-            val waterfall = CleanupWaterfallStore.load(this)
+            val providerChain = ProviderChainStore.load(this)
+            val cleanupWaterfall = ProviderChainRuntime.cleanupWaterfallFor(providerChain)
+            val skipped = providerChain.capableEntriesFor(needsTranscription = false)
+                .filter { it.kind in ProviderChainRuntime.cleanupKindsNotImplemented }
+            if (skipped.isNotEmpty()) {
+                Log.w(TAG, "Skipping ${skipped.size} Gemini cleanup provider(s): Gemini cleanup is modeled but not implemented yet (#95 Phase 2)")
+            }
 
-            // A zero-step waterfall means the user explicitly removed every step: cleanup is
-            // disabled, so inject raw. Before #82, this case collapsed into the legacy Cloud
-            // default and silently posted the transcript to api.openai.com.
-            if (waterfall.steps.isEmpty()) {
+            // A zero-step provider chain means the user explicitly removed every executable cleanup
+            // step (or only configured currently-unimplemented providers such as Gemini): cleanup is
+            // disabled, so inject raw instead of falling back to any legacy store.
+            if (cleanupWaterfall.steps.isEmpty()) {
                 handler.post {
                     if (!guard.isCurrent(token)) return@post
                     injectText(text)
@@ -1395,12 +1462,12 @@ class WhisperAccessibilityService : AccessibilityService() {
                 return
             }
 
-            // The legacy cloud API key is only required in true legacy single-step mode. Once a
-            // real waterfall is configured (including a LOCAL_LLM-only waterfall), credential
-            // resolution is per-step inside CleanupWaterfallExecutor — which already handles
-            // LOCAL_LLM without needing this key. Gating on it here made local-only cleanup
-            // unreachable whenever no cloud key was set (#58).
-            if (!PostProcessor.shouldUseWaterfallExecutor(waterfall) && apiKey.isBlank()) {
+            // The simple migrated single-OpenAI chain keeps the old LEGACY_SINGLE_STEP behavior:
+            // fail before making a network call if the one required credential is missing. Real
+            // multi-step chains resolve credentials inside CleanupWaterfallExecutor and can fall
+            // through past an unconfigured cloud step to another provider (including LOCAL).
+            if (!ProviderChainRuntime.shouldUseCleanupExecutor(providerChain) &&
+                ProviderCredentialStore.get(this, ProviderKind.OPENAI).isBlank()) {
                 handler.post {
                     if (!guard.isCurrent(token)) return@post
                     toast("Post-processing needs API key. Using raw text.")
@@ -1413,17 +1480,22 @@ class WhisperAccessibilityService : AccessibilityService() {
             val rawPrompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
             val vocabulary = VocabularyTerms.parse(prefs().getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED))
             val prompt = PostProcessor.interpolateVocabulary(rawPrompt, vocabulary)
-            val baseUrl = prefs().getString("cleanup_base_url", PostProcessor.DEFAULT_BASE_URL) ?: PostProcessor.DEFAULT_BASE_URL
-            val model = prefs().getString("cleanup_model", PostProcessor.DEFAULT_MODEL) ?: PostProcessor.DEFAULT_MODEL
 
             if (!guard.isCurrent(token)) return
-            PostProcessor.processWaterfall(
-                this, text, prompt, waterfall, cleanupCursor, inFlightCall, apiKey, baseUrl, model,
+            Log.i(TAG, "Cleanup via ProviderChain entries=${providerChain.entries.map { it.kind }} executableSteps=${cleanupWaterfall.steps.map { it.group }}")
+            PostProcessor.processProviderChain(
+                text = text,
+                prompt = prompt,
+                chain = providerChain,
+                cursor = cleanupCursor,
+                cancelHolder = inFlightCall,
+                credentialLookup = { kind -> ProviderCredentialStore.get(this, kind) },
+                localModelPath = { ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this))?.absolutePath },
             ) { result ->
                 handler.post {
                     if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                     if (result.text != null && result.text.isNotBlank()) {
-                        val servingGroup = recordWaterfallSuccess(waterfall)
+                        val servingGroup = recordProviderChainCleanupSuccess(cleanupWaterfall)
                         val paidFallbackGroup = servingGroup?.takeIf { it.isPaidFallback() }
                         if (PreviewBeforeInjectToggle.isEnabled(this)) {
                             beginPreview(rawText = text, candidateText = result.text, paidFallbackGroup = paidFallbackGroup)
@@ -1453,19 +1525,19 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Marks whichever step of [waterfall] just served this cleanup call as healthy (#32), so the
+    /** Marks whichever provider-chain cleanup step just served this cleanup call as healthy (#32), so the
      *  Settings status dot reflects real usage, not just a Test-button press, and returns that
      *  step's group so callers can attribute the result for dictation history's "paid fallback"
-     *  badge (#33). Which step that was isn't threaded through [PostProcessor.processWaterfall]'s
+     *  badge (#33). Which step that was isn't threaded through [PostProcessor.processProviderChain]'s
      *  callback, so it's inferred from [cleanupCursor]'s last-known-good index instead -- safe to
      *  read immediately after a success since [CleanupWaterfallCursor.recordSuccess] was just
      *  called with "now", well inside the idle-expiry window [CleanupWaterfallCursor.startIndex]
      *  checks. A total-waterfall failure is deliberately not attributed to any one step here,
      *  since several steps may have failed for different reasons -- the Settings "Test" button is
      *  the deterministic way to pin down which. */
-    private fun recordWaterfallSuccess(waterfall: CleanupWaterfall): CleanupStepGroup? {
+    private fun recordProviderChainCleanupSuccess(executableWaterfall: CleanupWaterfall): CleanupStepGroup? {
         val succeededIndex = cleanupCursor.startIndex(System.currentTimeMillis())
-        val step = waterfall.steps.getOrNull(succeededIndex) ?: return null
+        val step = executableWaterfall.steps.getOrNull(succeededIndex) ?: return null
         CleanupStepStatusStore.record(this, step, CleanupStepHealth.SUCCESS)
         return step.group
     }
