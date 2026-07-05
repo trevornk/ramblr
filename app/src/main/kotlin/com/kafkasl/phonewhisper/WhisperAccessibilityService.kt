@@ -11,6 +11,8 @@ import android.graphics.Outline
 import android.graphics.PixelFormat
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -174,6 +176,9 @@ class WhisperAccessibilityService : AccessibilityService() {
     private val guard = TranscriptionGuard()
     private val inFlightCall = InFlightCall()
     private val cleanupCursor = CleanupWaterfallCursor()
+
+    /** Registered in [registerNetworkCallback]; null when registration failed or after teardown. */
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var activeToken: Int = 0
     private val handler = Handler(Looper.getMainLooper())
     private val hideFeedback = Runnable {
@@ -247,10 +252,45 @@ class WhisperAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         showOverlay()
+        registerNetworkCallback()
         thread { cleanupOrphanedRecordings() }
         // Try to load local model in background
         thread { initLocalModel() }
         thread { initStreamingModel() }
+    }
+
+    /**
+     * The primary reset trigger for [cleanupCursor], per ADR-0001 (#61): when the default
+     * network changes (SSID/VPN/cell transition), the last-known-good waterfall step may be
+     * wrong in the expensive direction -- e.g. the cursor stuck on a paid direct-provider step
+     * after leaving home, still billed on every dictation after returning to the LAN where the
+     * free OmniRoute step is reachable again. The 5-minute idle expiry inside the cursor is only
+     * the backstop. `onAvailable` fires once at registration (cursor is already 0 -- harmless)
+     * and then exactly on default-network switches, so no change-detection state is needed here.
+     */
+    private fun registerNetworkCallback() {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                cleanupCursor.reset()
+            }
+        }
+        try {
+            cm.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not register network callback; cleanup cursor will rely on idle expiry only", e)
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        try {
+            getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(callback)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to unregister network callback", e)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
@@ -269,6 +309,7 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
+        unregisterNetworkCallback()
         // If a recording is in progress, force the reader thread off RECORDING/TRANSCRIBING so
         // it tears down the AudioRecord and discards buffered PCM instead of leaking the mic or
         // silently continuing to record after the service appears off.
