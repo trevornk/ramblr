@@ -19,6 +19,13 @@ import java.io.FileNotFoundException
  * `benchModel`/CPU-feature-variant library selection. Cleanup is a single system-prompt +
  * user-text completion, not a chat session, so that surface would be unused complexity (YAGNI).
  *
+ * One loaded instance IS safely reusable for multiple sequential [complete] calls (#74):
+ * with `storeChats=false` the native side clears its message history, KV cache, and partial
+ * UTF-8 accumulator per completion (see the divergence notes in LLMInference.cpp), so each call
+ * is a genuinely independent one-shot. [LocalCleanupModelHolder] relies on this to keep the
+ * model loaded across dictations instead of paying a full GGUF load per call. Concurrent calls
+ * on one instance are NOT safe -- the holder serializes them.
+ *
  * ## Build status
  * The native library IS built and packaged: app/build.gradle.kts wires
  * `externalNativeBuild`/CMake against the pinned llama.cpp git submodule, and

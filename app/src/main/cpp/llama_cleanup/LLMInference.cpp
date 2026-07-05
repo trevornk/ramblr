@@ -12,6 +12,13 @@
 //   - loadModel adds the min-p sampler the minP parameter always promised (upstream accepted,
 //     logged, and silently ignored it), and tracks _chatTemplate ownership so the destructor can
 //     free the strdup'ed case.
+//   - storeChats=false now actually means "one-shot, no history" on a reused instance (#74):
+//     startCompletion clears the KV cache so a new turn's positions restart at 0 instead of
+//     appending after (and attending to) the previous turn's tokens, and stopCompletion frees and
+//     clears _messages so the next turn's chat template isn't rendered over every prior turn's
+//     system+user pair (upstream only ever cleared _messages in loadModel) and clears the partial
+//     UTF-8 accumulator so an aborted multi-byte sequence can't prepend garbage to the next
+//     response. Upstream never reused an instance with storeChats=false, so none of this bit it.
 #include "LLMInference.h"
 #include <android/log.h>
 #include <cstring>
@@ -105,6 +112,13 @@ LLMInference::startCompletion(const char *query) {
     if (!_storeChats) {
         _formattedMessages.clear();
         _formattedMessages = std::vector<char>(llama_n_ctx(_ctx));
+        // One-shot mode on a reused instance (#74): the batch below carries no positions, so
+        // llama_decode appends after llama_memory_seq_pos_max -- without this clear, a second
+        // completion's prompt would be decoded after (and attend to) the previous completion's
+        // tokens, and _nCtxUsed would grow across turns until "context size reached". _messages
+        // itself is cleared in stopCompletion, not here: the caller has already added this
+        // turn's system message by the time startCompletion runs (see LlamaCppInference.complete).
+        llama_memory_clear(llama_get_memory(_ctx), false);
     }
     _responseGenerationTime = 0;
     _responseNumTokens = 0;
@@ -242,8 +256,21 @@ void
 LLMInference::stopCompletion() {
     if (_storeChats) {
         addChatMessage(_response.c_str(), "assistant");
+    } else {
+        // One-shot mode (#74): drop this turn's system+user pair so the next completion on a
+        // reused instance renders its chat template over only its own messages. Upstream only
+        // cleared _messages in loadModel, which the old load-per-call pattern masked. Free the
+        // strdup'ed strings first, same pattern as the destructor.
+        for (llama_chat_message &message: _messages) {
+            free(const_cast<char *>(message.role));
+            free(const_cast<char *>(message.content));
+        }
+        _messages.clear();
     }
     _response.clear();
+    // An aborted multi-byte UTF-8 sequence would otherwise prepend stale bytes to the next
+    // completion's first piece on a reused instance (#74).
+    _cacheResponseTokens.clear();
 }
 
 LLMInference::~LLMInference() {
