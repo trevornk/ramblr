@@ -314,11 +314,60 @@ explanations, headers, or comments about your edits.
         !(waterfall.steps.size == 1 && waterfall.steps[0].group == CleanupStepGroup.LEGACY)
 
     /**
-     * Entry point cleanup call sites should use going forward (see #30). [waterfall] is normally
-     * [CleanupWaterfall.LEGACY_SINGLE_STEP], in which case this calls [process] exactly as before —
-     * zero behavior change. Once a caller (e.g. the Settings UI in #32) configures a real
-     * multi-step waterfall, this instead drives it through [CleanupWaterfallExecutor], reading
-     * OMNIROUTE/OPENAI_DIRECT/ANTHROPIC_DIRECT credentials from [CleanupCredentialStore].
+     * Provider-chain entry point for Phase 2 (#95). A single OPENAI entry deliberately runs through
+     * the same simple [process] path as the old LEGACY_SINGLE_STEP mode, but with the OpenAI secret
+     * resolved from [ProviderCredentialStore] by the caller. Any real multi-step chain is adapted
+     * to [CleanupWaterfall] and executed by [CleanupWaterfallExecutor] unchanged, preserving its
+     * fail-fast grouping, cursor resume, and bounded local-inference deadline behavior.
+     */
+    fun processProviderChain(
+        text: String,
+        prompt: String,
+        chain: ProviderChain,
+        cursor: CleanupWaterfallCursor,
+        cancelHolder: InFlightCall,
+        credentialLookup: (ProviderKind) -> String,
+        localModelPath: () -> String? = { null },
+        callback: (Result) -> Unit,
+    ) {
+        val waterfall = ProviderChainRuntime.cleanupWaterfallFor(chain)
+        if (waterfall.steps.isEmpty()) {
+            callback(Result(null, "No cleanup steps configured"))
+            return
+        }
+
+        if (ProviderChainRuntime.isSingleOpenAiCleanup(chain)) {
+            val entry = chain.capableEntriesFor(needsTranscription = false).first()
+            process(
+                text = text,
+                prompt = prompt,
+                apiKey = credentialLookup(ProviderKind.OPENAI),
+                cancelHolder = cancelHolder,
+                baseUrl = entry.baseUrlOverride ?: DEFAULT_BASE_URL,
+                model = entry.model,
+                callback = callback,
+            )
+            return
+        }
+
+        CleanupWaterfallExecutor.execute(
+            text = text,
+            prompt = prompt,
+            waterfall = waterfall,
+            cursor = cursor,
+            cancelHolder = cancelHolder,
+            legacyApiKey = credentialLookup(ProviderKind.OPENAI),
+            legacyBaseUrl = DEFAULT_BASE_URL,
+            credentialLookup = { slot -> credentialLookup(ProviderChainRuntime.providerKindForCleanupSlot(slot)) },
+            localModelPath = localModelPath,
+            callback = callback,
+        )
+    }
+
+    /**
+     * Legacy waterfall entry point retained for the Phase 3 UI window and tests. Live dictation is
+     * rewired to [processProviderChain] in Phase 2; this method still reads the old credential
+     * stores for settings/test surfaces that have not migrated yet.
      */
     fun processWaterfall(
         context: Context,
