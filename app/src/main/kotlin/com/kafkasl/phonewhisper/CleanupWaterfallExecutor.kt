@@ -70,6 +70,10 @@ sealed class CleanupStepOutcome {
     data class ConnectionFailed(val message: String?) : CleanupStepOutcome()
     /** Reachable host, but this step failed on its own (bad model name, HTTP error, malformed response). */
     data class StepFailed(val message: String?) : CleanupStepOutcome()
+    /** The user (or watchdog) cancelled the in-flight call — the whole waterfall must stop, not
+     *  fall through to the next group; anything it produced would be discarded by the caller's
+     *  guard token anyway, and a paid direct-provider step must never be billed for it (#63). */
+    object Cancelled : CleanupStepOutcome()
 }
 
 /**
@@ -109,6 +113,11 @@ sealed class CleanupHttpOutcome {
     data class Ok(val body: String) : CleanupHttpOutcome()
     data class HttpError(val code: Int, val body: String) : CleanupHttpOutcome()
     data class ConnectionFailure(val message: String?) : CleanupHttpOutcome()
+    /** The call was aborted via [InFlightCall.cancel] (user long-press or watchdog), not by the
+     *  network. Kept distinct from [ConnectionFailure] because OkHttp reports a cancel through
+     *  the same onFailure(IOException) path a dead host uses — treating it as one made a cancel
+     *  *advance* the waterfall to the next (possibly paid) group instead of stopping it (#63). */
+    object Cancelled : CleanupHttpOutcome()
 }
 
 /**
@@ -201,7 +210,11 @@ object RealCleanupHttpTransport : CleanupHttpTransport {
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 cancelHolder.clear(call)
-                callback(CleanupHttpOutcome.ConnectionFailure(e.message))
+                if (call.isCanceled()) {
+                    callback(CleanupHttpOutcome.Cancelled)
+                } else {
+                    callback(CleanupHttpOutcome.ConnectionFailure(e.message))
+                }
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -287,6 +300,7 @@ object CleanupWaterfallExecutor {
                     }
                     is CleanupStepOutcome.StepFailed -> attempt(index + 1)
                     is CleanupStepOutcome.ConnectionFailed -> attempt(nextGroupStart(index))
+                    is CleanupStepOutcome.Cancelled -> callback(PostProcessor.Result(null, "Cleanup cancelled"))
                 }
             }
         }
@@ -374,6 +388,7 @@ object CleanupWaterfallExecutor {
 
     private fun toStepOutcome(httpOutcome: CleanupHttpOutcome, parse: (String) -> PostProcessor.Result): CleanupStepOutcome =
         when (httpOutcome) {
+            is CleanupHttpOutcome.Cancelled -> CleanupStepOutcome.Cancelled
             is CleanupHttpOutcome.ConnectionFailure -> CleanupStepOutcome.ConnectionFailed(httpOutcome.message)
             is CleanupHttpOutcome.HttpError -> CleanupStepOutcome.StepFailed("HTTP ${httpOutcome.code}")
             is CleanupHttpOutcome.Ok -> {

@@ -495,3 +495,67 @@ class PostProcessorWaterfallGatingTest {
         assertEquals(true, PostProcessor.shouldUseWaterfallExecutor(waterfall))
     }
 }
+
+/** #63: a cancelled in-flight call must stop the waterfall outright — previously it reported
+ *  through the same onFailure path as a dead host, so a user's cancel *advanced* the waterfall
+ *  into the next (possibly paid) group for a result the guard token would discard anyway. */
+class CleanupWaterfallExecutorCancellationTest {
+
+    private fun execute(
+        waterfall: CleanupWaterfall,
+        transport: CleanupHttpTransport,
+    ): PostProcessor.Result {
+        var captured: PostProcessor.Result? = null
+        CleanupWaterfallExecutor.execute(
+            text = "raw transcript",
+            prompt = "clean it up",
+            waterfall = waterfall,
+            cursor = CleanupWaterfallCursor(),
+            cancelHolder = InFlightCall(),
+            legacyApiKey = "legacy-key",
+            legacyBaseUrl = PostProcessor.DEFAULT_BASE_URL,
+            credentialLookup = { "some-key" },
+            transport = transport,
+            localInference = LocalInferenceEngine { _, _, _ -> error("no local step expected") },
+            localModelPath = { null },
+            callback = { captured = it },
+        )
+        return captured ?: error("callback never fired")
+    }
+
+    @Test fun `a cancelled call stops the waterfall without attempting the next group`() {
+        val transport = FakeCleanupHttpTransport(
+            mutableListOf(
+                CleanupHttpOutcome.Cancelled,
+                okOutcome("must never be requested"),
+            )
+        )
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+                CleanupStep(CleanupStepGroup.ANTHROPIC_DIRECT, "claude-haiku-4-5"),
+            )
+        )
+        val result = execute(waterfall, transport)
+        assertNull(result.text)
+        assertEquals("Cleanup cancelled", result.error)
+        // Exactly 1 request: the cancelled step. The paid direct-provider steps were never called.
+        assertEquals(1, transport.requestedUrls.size)
+    }
+
+    @Test fun `a cancelled call stops the waterfall even within the same group`() {
+        val transport = FakeCleanupHttpTransport(
+            mutableListOf(CleanupHttpOutcome.Cancelled, okOutcome("sibling must not run"))
+        )
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "cx/gpt-5.5"),
+            )
+        )
+        val result = execute(waterfall, transport)
+        assertNull(result.text)
+        assertEquals(1, transport.requestedUrls.size)
+    }
+}
