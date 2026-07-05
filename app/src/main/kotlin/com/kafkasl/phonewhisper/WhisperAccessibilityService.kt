@@ -1119,11 +1119,33 @@ class WhisperAccessibilityService : AccessibilityService() {
                 return
             }
             else -> {
-                result.pcmFile?.delete()
+                // No valid token from this thread's view — but that view can be stale (#66): the
+                // stop tap mints the token on the main thread *after* the RECORDING->TRANSCRIBING
+                // CAS this reader thread reacted to, so deciding to discard here could silently
+                // drop a real dictation. Resolve on the main thread instead, where token/state
+                // are authoritative — mirroring startMaxDurationTranscription's pattern.
+                handler.post { resolveLateRecordingOnMain(result) }
                 return
             }
         }
         continueTranscription(result, token)
+    }
+
+    /** Main-thread resolution for a recording that finished without a token (#66/#90) — see
+     *  [resolveLateRecording] for the decision table. */
+    private fun resolveLateRecordingOnMain(result: RecordingEngine.Result) {
+        val token = activeToken
+        when (resolveLateRecording(token, guard.isCurrent(token), stateMachine.current())) {
+            LateRecordingResolution.CONTINUE_TRANSCRIPTION -> thread { continueTranscription(result, token) }
+            LateRecordingResolution.DISCARD -> result.pcmFile?.delete()
+            LateRecordingResolution.DISCARD_AND_RESET -> {
+                // Mic error mid-recording (#90): the reader thread self-claimed TRANSCRIBING but
+                // no transcription will run and no watchdog was armed — without this reset the
+                // overlay stays stuck in TRANSCRIBING with taps as no-ops forever.
+                result.pcmFile?.delete()
+                reset(result.errorMessage?.let { "Recording error: $it" } ?: "Recording stopped unexpectedly")
+            }
+        }
     }
 
     /**
