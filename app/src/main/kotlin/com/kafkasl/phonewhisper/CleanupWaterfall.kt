@@ -19,7 +19,7 @@ package com.kafkasl.phonewhisper
  * level, so grouping it with other steps is harmless but pointless -- it either succeeds or
  * fails as a single step regardless of neighbors.
  */
-enum class CleanupStepGroup { LEGACY, OMNIROUTE, OPENAI_DIRECT, ANTHROPIC_DIRECT, LOCAL_LLM }
+enum class CleanupStepGroup { LEGACY, OMNIROUTE, OPENAI_DIRECT, ANTHROPIC_DIRECT, GEMINI_DIRECT, LOCAL_LLM }
 
 /**
  * True for the groups that are billed per-token out of the user's own wallet (see ADR-0001's
@@ -29,7 +29,8 @@ enum class CleanupStepGroup { LEGACY, OMNIROUTE, OPENAI_DIRECT, ANTHROPIC_DIRECT
  * from the user's cost perspective.
  */
 fun CleanupStepGroup.isPaidFallback(): Boolean =
-    this == CleanupStepGroup.OPENAI_DIRECT || this == CleanupStepGroup.ANTHROPIC_DIRECT
+    this == CleanupStepGroup.OPENAI_DIRECT || this == CleanupStepGroup.ANTHROPIC_DIRECT ||
+        this == CleanupStepGroup.GEMINI_DIRECT
 
 /**
  * One entry in the user-configured cleanup waterfall. [group] determines which credential and
@@ -53,6 +54,7 @@ data class CleanupStep(
         CleanupStepGroup.OMNIROUTE -> CleanupCredentialSlot.OMNIROUTE
         CleanupStepGroup.OPENAI_DIRECT -> CleanupCredentialSlot.OPENAI_DIRECT
         CleanupStepGroup.ANTHROPIC_DIRECT -> CleanupCredentialSlot.ANTHROPIC_DIRECT
+        CleanupStepGroup.GEMINI_DIRECT -> CleanupCredentialSlot.GEMINI_DIRECT
         CleanupStepGroup.LOCAL_LLM -> null
     }
 }

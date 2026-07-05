@@ -10,7 +10,7 @@ import android.content.SharedPreferences
  * ANTHROPIC_DIRECT are the pay-per-token fallbacks used when OmniRoute (home LAN/VPN only) is
  * unreachable.
  */
-enum class CleanupCredentialSlot { OMNIROUTE, OPENAI_DIRECT, ANTHROPIC_DIRECT }
+enum class CleanupCredentialSlot { OMNIROUTE, OPENAI_DIRECT, ANTHROPIC_DIRECT, GEMINI_DIRECT }
 
 /**
  * Stores the three cleanup-waterfall secrets (OmniRoute consumer key, direct-OpenAI key,
@@ -25,11 +25,13 @@ object CleanupCredentialStore {
     private const val KEY_OMNIROUTE = "omniroute_key"
     private const val KEY_OPENAI_DIRECT = "openai_direct_key"
     private const val KEY_ANTHROPIC_DIRECT = "anthropic_direct_key"
+    private const val KEY_GEMINI_DIRECT = "gemini_direct_key"
 
     internal fun prefKeyFor(slot: CleanupCredentialSlot): String = when (slot) {
         CleanupCredentialSlot.OMNIROUTE -> KEY_OMNIROUTE
         CleanupCredentialSlot.OPENAI_DIRECT -> KEY_OPENAI_DIRECT
         CleanupCredentialSlot.ANTHROPIC_DIRECT -> KEY_ANTHROPIC_DIRECT
+        CleanupCredentialSlot.GEMINI_DIRECT -> KEY_GEMINI_DIRECT
     }
 
     fun get(context: Context, slot: CleanupCredentialSlot): String =

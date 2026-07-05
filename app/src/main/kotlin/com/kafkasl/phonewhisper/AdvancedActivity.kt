@@ -575,6 +575,7 @@ class AdvancedActivity : BaseSettingsActivity() {
         CleanupStepGroup.OMNIROUTE -> "OmniRoute"
         CleanupStepGroup.OPENAI_DIRECT -> "Direct OpenAI"
         CleanupStepGroup.ANTHROPIC_DIRECT -> "Direct Anthropic"
+        CleanupStepGroup.GEMINI_DIRECT -> "Direct Gemini"
         CleanupStepGroup.LOCAL_LLM -> "Local (on-device)"
     }
 

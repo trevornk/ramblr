@@ -1367,12 +1367,6 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     private fun transcribeApi(file: File, token: Int) {
         val chain = ProviderChainStore.load(this)
-        val skipped = chain.capableEntriesFor(needsTranscription = true)
-            .filter { it.kind in ProviderChainRuntime.transcriptionKindsNotImplemented }
-        if (skipped.isNotEmpty()) {
-            Log.w(TAG, "Skipping ${skipped.size} Gemini transcription provider(s): Gemini audio transcription is modeled but not implemented yet (#95 Phase 2)")
-        }
-
         val candidates = ProviderChainRuntime.transcriptionCandidates(chain)
         if (candidates.isEmpty()) {
             file.delete()
@@ -1419,8 +1413,25 @@ class WhisperAccessibilityService : AccessibilityService() {
                     }
                 }
                 ProviderKind.GEMINI -> {
-                    Log.w(TAG, "Skipping Gemini transcription provider: Gemini audio transcription is not implemented yet (#95 Phase 2)")
-                    attempt(index + 1)
+                    val apiKey = ProviderCredentialStore.get(this, ProviderKind.GEMINI)
+                    if (apiKey.isBlank()) {
+                        Log.w(TAG, "Skipping Gemini transcription provider: no ProviderCredentialStore.GEMINI credential configured")
+                        attempt(index + 1)
+                        return
+                    }
+                    Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (Gemini generateContent audio)")
+                    GeminiTranscriberClient.transcribe(file, apiKey, entry.model.ifBlank { GeminiTranscriberClient.DEFAULT_MODEL }, inFlightCall) { result ->
+                        file.delete()
+                        if (result.text != null && result.text.isNotBlank()) {
+                            handleTranscriptionResult(result.text, token)
+                        } else {
+                            handler.post {
+                                if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
+                                toast("Error: ${result.error ?: "empty transcript"}")
+                                resetToIdle()
+                            }
+                        }
+                    }
                 }
                 ProviderKind.ANTHROPIC, ProviderKind.OMNIROUTE -> attempt(index + 1) // filtered out by capability; defensive only
             }
@@ -1451,15 +1462,9 @@ class WhisperAccessibilityService : AccessibilityService() {
                 ProviderChainStore.load(this), CloudFeatureToggle.cleanupEnabled(this)
             )
             val cleanupWaterfall = ProviderChainRuntime.cleanupWaterfallFor(providerChain)
-            val skipped = providerChain.capableEntriesFor(needsTranscription = false)
-                .filter { it.kind in ProviderChainRuntime.cleanupKindsNotImplemented }
-            if (skipped.isNotEmpty()) {
-                Log.w(TAG, "Skipping ${skipped.size} Gemini cleanup provider(s): Gemini cleanup is modeled but not implemented yet (#95 Phase 2)")
-            }
 
             // A zero-step provider chain means the user explicitly removed every executable cleanup
-            // step (or only configured currently-unimplemented providers such as Gemini): cleanup is
-            // disabled, so inject raw instead of falling back to any legacy store.
+            // step: cleanup is disabled, so inject raw instead of falling back to any legacy store.
             if (cleanupWaterfall.steps.isEmpty()) {
                 handler.post {
                     if (!guard.isCurrent(token)) return@post
