@@ -1,5 +1,6 @@
 package com.kafkasl.phonewhisper
 
+import android.content.Intent
 import android.content.res.ColorStateList
 import android.os.Bundle
 import android.view.Gravity
@@ -15,11 +16,11 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.radiobutton.MaterialRadioButton
 
 /**
- * "Cleanup" category screen (#93 restructure): on/off switch, style/prompt presets, the simple
- * Local/Cloud choice (+ local model catalog), preview-before-inject toggle, and -- the fix this
- * whole restructure exists for -- its own contextual OpenAI API key row shown right here when
- * Cloud cleanup needs it, instead of only under a separate Transcription screen. See
- * [shouldShowOpenAiKeyRowForCleanup]/BaseSettingsActivity.promptApiKey.
+ * "Cleanup" category screen (#93 restructure, updated #95 Phase 3): on/off switch, style/prompt
+ * presets, the simple Local/Cloud choice (+ local model catalog), preview-before-inject toggle.
+ * Cloud provider/credential management now lives entirely on the unified CloudProviderActivity --
+ * this screen just links to it (see [CloudProviderActivity.subtitle]) rather than duplicating any
+ * key-entry UI.
  */
 class CleanupActivity : BaseSettingsActivity() {
 
@@ -34,8 +35,7 @@ class CleanupActivity : BaseSettingsActivity() {
     private lateinit var cleanupChoiceCaption: TextView
     private lateinit var cleanupLocalGroup: View
     private lateinit var cleanupCloudGroup: View
-    private lateinit var openAiKeyGroup: View
-    private lateinit var keyRowSub: TextView
+    private lateinit var cloudLinkRowSub: TextView
     private lateinit var previewBeforeInjectSwitch: MaterialSwitch
 
     private var pendingLocalCleanupSelection = false
@@ -115,26 +115,24 @@ class CleanupActivity : BaseSettingsActivity() {
             buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
         }
         cleanupDetailContainer.addView(
-            settingsRow("Cloud", "Uses your OpenAI API key by default, billed pay-per-use — Anthropic or OmniRoute available under Advanced", cleanupCloudRadio) {
+            settingsRow("Cloud", "Configure providers and keys under Cloud", cleanupCloudRadio) {
                 onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
             }
         )
 
         val cleanupCloudNested = nestedGroup()
 
-        // Contextual OpenAI API key row (#93 fix for #49's original bug): lives directly under
-        // Cleanup's own cloud sub-section now, so a user configuring Cloud Cleanup finds the key
-        // right here instead of having to go to a completely different Transcription screen.
-        // TranscriptionActivity has its own equivalent copy for its own cloud sub-section.
-        val keyRow = settingsRow("OpenAI API Key", "Tap to set", indent = 0) {
-            promptApiKey { refresh() }
+        // #95 Phase 3: the contextual OpenAI key row here is replaced by a link into the new
+        // unified CloudProviderActivity -- provider/credential management for cleanup no longer
+        // lives on this screen at all, it's one shared surface for both features.
+        val cloudLinkRow = settingsRow("Cloud provider chain", CloudProviderActivity.subtitle(this), indent = 0) {
+            startActivity(Intent(this, CloudProviderActivity::class.java))
         }
-        keyRowSub = keyRow.findViewWithTag("subtitle")
-        cleanupCloudNested.content.addView(keyRow)
+        cloudLinkRowSub = cloudLinkRow.findViewWithTag("subtitle")
+        cleanupCloudNested.content.addView(cloudLinkRow)
 
         cleanupCloudGroup = cleanupCloudNested.outer
         cleanupDetailContainer.addView(cleanupCloudGroup)
-        openAiKeyGroup = keyRow
 
         cleanupChoiceCaption = TextView(this).apply {
             text = "Doesn't match a simple choice — your existing configuration is preserved under Advanced."
@@ -181,9 +179,7 @@ class CleanupActivity : BaseSettingsActivity() {
         previewBeforeInjectSwitch.isChecked = PreviewBeforeInjectToggle.isEnabled(this)
         cleanupDetailContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
 
-        keyRowSub.text = apiKeyRowSubtitleText()
-        val cleanupChoice = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this))
-        openAiKeyGroup.visibility = if (shouldShowOpenAiKeyRowForCleanup(usePostProcessing, cleanupChoice)) View.VISIBLE else View.GONE
+        cloudLinkRowSub.text = CloudProviderActivity.subtitle(this)
 
         refreshWaterfallDependentUi()
         refreshAllCleanupRows()

@@ -1,6 +1,7 @@
 package com.kafkasl.phonewhisper
 
 import android.os.Bundle
+import android.content.Intent
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -14,17 +15,17 @@ import com.google.android.material.radiobutton.MaterialRadioButton
 import android.content.res.ColorStateList
 
 /**
- * "Transcription" category screen (#93 restructure): local/cloud switch, local model catalog, and
- * -- fixing the bug that triggered this whole restructure -- its own contextual OpenAI API key
- * row, shown right here instead of only living under a physically separate section. See
- * [shouldShowOpenAiKeyRowForTranscription]/BaseSettingsActivity.promptApiKey.
+ * "Transcription" category screen (#93 restructure, updated #95 Phase 3): local/cloud switch and
+ * local model catalog. Cloud provider/credential management (which providers, keys, models) now
+ * lives entirely on the unified CloudProviderActivity -- this screen just links to it when Cloud
+ * is selected.
  */
 class TranscriptionActivity : BaseSettingsActivity() {
 
     private lateinit var cloudSwitch: MaterialSwitch
     private lateinit var modelContainer: View
-    private lateinit var openAiKeyGroup: View
-    private lateinit var keyRowSub: TextView
+    private lateinit var cloudLinkGroup: View
+    private lateinit var cloudLinkRowSub: TextView
 
     private data class ModelRowViews(
         val radio: MaterialRadioButton,
@@ -56,7 +57,7 @@ class TranscriptionActivity : BaseSettingsActivity() {
 
         root.addView(TextView(this).apply {
             text = "Required — choose how speech becomes text. Local (default): fastest, fully " +
-                "private, works with no internet. Cloud: sends audio to OpenAI using your own API key."
+                "private, works with no internet. Cloud: uses your Cloud provider chain."
             textSize = 14f
             setTextColor(attrColor(android.R.attr.textColorSecondary))
             setPadding(dp(24), 0, dp(24), dp(8))
@@ -68,7 +69,7 @@ class TranscriptionActivity : BaseSettingsActivity() {
             isChecked = isCloud
             isClickable = false
         }
-        val cloudRow = settingsRow("Use cloud transcription", "Requires OpenAI API key", cloudSwitch) {
+        val cloudRow = settingsRow("Use cloud transcription", "Uses the Cloud provider chain", cloudSwitch) {
             val newCloud = !cloudSwitch.isChecked
             val usePostProcessing = prefs().getBoolean("use_post_processing", false)
             applyLocalCleanupChange(useLocal = !newCloud, usePostProcessing = usePostProcessing)
@@ -82,17 +83,17 @@ class TranscriptionActivity : BaseSettingsActivity() {
         modelContainer = localModelsGroup.outer
         root.addView(modelContainer)
 
-        // Contextual OpenAI API key row (#93 fix for #49's original bug): lives directly under
-        // Transcription's own cloud sub-section now, not a shared location a Cloud-Cleanup user
-        // had to leave this screen to find. CleanupActivity has its own equivalent copy.
-        val keyGroup = nestedGroup()
-        val keyRow = settingsRow("OpenAI API Key", "Tap to set", indent = 0) {
-            promptApiKey { refresh() }
+        // #95 Phase 3: link into the unified CloudProviderActivity instead of a contextual
+        // OpenAI-only key row -- provider/credential management for transcription is now shared
+        // with cleanup on one screen.
+        val cloudLinkGroupNested = nestedGroup()
+        val cloudLinkRow = settingsRow("Cloud provider chain", CloudProviderActivity.subtitle(this), indent = 0) {
+            startActivity(Intent(this, CloudProviderActivity::class.java))
         }
-        keyRowSub = keyRow.findViewWithTag("subtitle")
-        keyGroup.content.addView(keyRow)
-        openAiKeyGroup = keyGroup.outer
-        root.addView(openAiKeyGroup)
+        cloudLinkRowSub = cloudLinkRow.findViewWithTag("subtitle")
+        cloudLinkGroupNested.content.addView(cloudLinkRow)
+        cloudLinkGroup = cloudLinkGroupNested.outer
+        root.addView(cloudLinkGroup)
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -112,8 +113,8 @@ class TranscriptionActivity : BaseSettingsActivity() {
         cloudSwitch.isChecked = !useLocal
         modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
 
-        keyRowSub.text = apiKeyRowSubtitleText()
-        openAiKeyGroup.visibility = if (shouldShowOpenAiKeyRowForTranscription(useLocal)) View.VISIBLE else View.GONE
+        cloudLinkRowSub.text = CloudProviderActivity.subtitle(this)
+        cloudLinkGroup.visibility = if (shouldShowOpenAiKeyRowForTranscription(useLocal)) View.VISIBLE else View.GONE
 
         val cur = prefs().getString("model_name", "") ?: ""
         val curModel = MODEL_CATALOG.firstOrNull { it.archive == cur }
