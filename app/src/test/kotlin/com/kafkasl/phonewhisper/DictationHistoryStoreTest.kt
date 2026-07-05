@@ -171,3 +171,28 @@ class ShouldShowPaidFallbackBadgeTest {
         assertTrue(shouldShowPaidFallbackBadge(debugVisibilityEnabled = true, entry(CleanupStepGroup.ANTHROPIC_DIRECT)))
     }
 }
+
+/** #71: the @Synchronized methods lock on the instance, so every caller sharing a backing file
+ *  must share the instance — otherwise the service's background writes and MainActivity's
+ *  history dialog don't exclude each other's read-modify-write cycles. */
+class DictationHistoryStoreSharingTest {
+
+    @Test fun `forFile returns the same instance for the same path`() {
+        val file = java.io.File.createTempFile("history-sharing", ".jsonl")
+        try {
+            assertTrue(DictationHistoryStore.forFile(file) === DictationHistoryStore.forFile(file))
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test fun `forFile returns distinct instances for distinct paths`() {
+        val a = java.io.File.createTempFile("history-sharing-a", ".jsonl")
+        val b = java.io.File.createTempFile("history-sharing-b", ".jsonl")
+        try {
+            assertTrue(DictationHistoryStore.forFile(a) !== DictationHistoryStore.forFile(b))
+        } finally {
+            a.delete(); b.delete()
+        }
+    }
+}
