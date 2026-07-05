@@ -10,30 +10,54 @@ Ramblr supports two transcription modes.
 
 In local mode, audio is processed on-device using local speech recognition models. Audio does not leave the device.
 
-If optional cleanup is also enabled while local mode is selected, the transcribed *text* (not audio) is sent from the device to OpenAI's chat API to fix grammar, punctuation, and clarity. The app shows a one-time confirmation before this combination is first enabled, and the cleanup setting always names the destination host it sends text to.
+If optional cleanup is also enabled while local mode is selected, the transcribed *text* (not audio) is sent from the device to the cleanup provider(s) you configure (see "Cleanup providers" below) to fix grammar, punctuation, and clarity — unless you configure fully on-device cleanup, in which case nothing leaves the device. The app shows a one-time confirmation before local transcription is first combined with off-device cleanup (no confirmation is needed for on-device-only cleanup), and the cleanup setting always names the destination host it sends text to.
 
 ### Cloud mode
 
 In cloud mode, recorded audio is sent directly from the device to OpenAI's transcription API to generate text.
 
-If optional cleanup is enabled, the transcribed text is also sent directly from the device to OpenAI's chat API to improve punctuation, capitalization, and clarity.
+If optional cleanup is enabled, the transcribed text is also sent from the device to the cleanup provider(s) you configure (see "Cleanup providers" below) to improve punctuation, capitalization, and clarity.
+
+## Cleanup providers
+
+Cleanup sends the transcribed *text* (never audio) to the provider steps *you configure* in
+Settings, tried in order, falling through to the next configured step when one fails. That
+fallthrough is the point of the feature — so if you configure more than one provider, a failure
+at your first choice means the text **is** sent to your next configured provider. Text is only
+ever sent to steps you added yourself; there are no built-in silent fallbacks to providers you
+didn't configure.
+
+The possible destinations are:
+
+- **OpenAI** (`api.openai.com`) — the default simple "Cloud" choice, and/or a direct-OpenAI
+  waterfall step.
+- **Anthropic** (`api.anthropic.com`) — a direct-Anthropic waterfall step.
+- **A self-hosted or third-party OpenAI-compatible endpoint** (e.g. a router such as OmniRoute)
+  — any custom base URL you set. This app has no way to vouch for the privacy practices of a
+  custom endpoint; that responsibility is yours as the person who configured it.
+- **Fully on-device** — cleanup runs against a small language model downloaded to the phone. A
+  configuration whose only step(s) are on-device sends nothing off the device, ever: combined
+  with local transcription mode, neither audio nor text leaves the phone.
+
+The cleanup setting always names the destination host(s) it sends text to, so none of this is
+silent. If every configured step fails, the raw transcript is used as-is — no request is sent to
+any provider you did not configure.
 
 ## API keys
 
-If you use cloud features, your OpenAI API key is stored locally on your device in app storage and used to authenticate requests sent directly to OpenAI.
+If you use cloud features, your API keys (OpenAI, Anthropic, and/or a custom endpoint's key) are
+stored locally on your device in Android-Keystore-encrypted app storage and used to authenticate
+requests sent directly to the corresponding provider.
 
 I do not operate a relay server for these requests.
 
-### Custom cleanup endpoint
+## Dictation history
 
-Cleanup can optionally be pointed at any OpenAI-compatible chat completions API instead of
-OpenAI's, by setting a custom base URL and model name in Settings (e.g. to use a self-hosted
-router such as OmniRoute). In this mode, the transcribed text is sent to whatever host you
-configure — not to OpenAI — using the same API key field as Bearer token auth. This app has no
-way to vouch for the privacy practices of a custom endpoint; that responsibility is yours as the
-person who configured it. The cleanup toggle's subtitle always names the actual destination host
-so this is never silent. If the configured endpoint is unreachable, cleanup is skipped and the
-raw transcript is used instead — no request is sent elsewhere as a fallback.
+Ramblr keeps a local history of your dictations (the raw transcript and, when cleanup ran, the
+cleaned-up version) so a failed injection never loses your words. This history is stored only
+on-device, in the app's private storage, and is excluded from Android backups (the app sets
+`allowBackup=false`). It is never uploaded anywhere. You can turn history off in Settings, and
+you can delete recorded entries from the history screen.
 
 ## Accessibility Service
 
