@@ -1365,9 +1365,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** Safe to call from any thread: [resetToIdle] mutates main-thread-only state
+     *  (streamingSession/pendingStreamingHandoff, node recycling, the guard), and this is the
+     *  one entry point reachable from the RecordingEngine reader thread (fast tap-tap with zero
+     *  bytes captured, or missing API key) -- so it hops (#72). */
     private fun reset(msg: String) {
         toast(msg)
-        resetToIdle()
+        handler.post { resetToIdle() }
     }
 
     // --- Streaming preview (#29) ---
