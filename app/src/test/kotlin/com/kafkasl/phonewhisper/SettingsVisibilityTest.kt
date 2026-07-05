@@ -28,6 +28,23 @@ class SettingsVisibilityTest {
         assertTrue(shouldShowOpenAiKeyRow(useLocalTranscription = true, cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.CUSTOM))
     }
 
+    // --- shouldShowOpenAiKeyRowForTranscription / ...ForCleanup (#93) ---
+    // Each new per-category Activity shows its own contextual copy of the key row instead of one
+    // physically-shared location; these are the two independent halves that used to be OR'd
+    // together into shouldShowOpenAiKeyRow above.
+
+    @Test fun `transcription-scoped row shows only when transcription itself is cloud`() {
+        assertTrue(shouldShowOpenAiKeyRowForTranscription(useLocalTranscription = false))
+        assertFalse(shouldShowOpenAiKeyRowForTranscription(useLocalTranscription = true))
+    }
+
+    @Test fun `cleanup-scoped row shows only when cleanup is on and its choice is cloud`() {
+        assertTrue(shouldShowOpenAiKeyRowForCleanup(cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.CLOUD))
+        assertFalse(shouldShowOpenAiKeyRowForCleanup(cleanupEnabled = false, cleanupChoice = SimpleCleanupChoice.CLOUD))
+        assertFalse(shouldShowOpenAiKeyRowForCleanup(cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.LOCAL))
+        assertFalse(shouldShowOpenAiKeyRowForCleanup(cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.CUSTOM))
+    }
+
     // --- displayedCleanupChoice (#55) ---
     // Governs cleanupLocalGroup's visibility: it must stay reachable (with its download buttons)
     // whenever the Local radio is the one visually selected, even if no model is installed yet --

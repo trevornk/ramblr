@@ -1431,7 +1431,15 @@ class WhisperAccessibilityService : AccessibilityService() {
                             injectText(result.text, rawText = text, paidFallbackGroup = paidFallbackGroup)
                         }
                     } else {
-                        injectText(text, feedback = "Cleanup failed — raw copied to clipboard", feedbackDurationMs = 3000)
+                        // Log + surface the real failure reason (bad/missing key, HTTP status,
+                        // network error, etc.) instead of a generic "cleanup failed" that gives
+                        // the user and any future debugging nothing to go on (#98, Trevor hit
+                        // this directly: OpenAI key rejected/failed with zero visible reason).
+                        // result.error already carries this from PostProcessor.Result/
+                        // CleanupStepOutcome -- it was just being discarded here.
+                        val reason = result.error?.takeIf { it.isNotBlank() } ?: "unknown error"
+                        Log.w(TAG, "Cleanup failed, injecting raw text: $reason")
+                        injectText(text, feedback = "Cleanup failed ($reason) — raw copied to clipboard", feedbackDurationMs = 4000)
                     }
                     resetToIdle()
                 }
