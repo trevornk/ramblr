@@ -2241,30 +2241,41 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** Cleanup onboarding step (#52): optional, off by default, same Local/Cloud shape as
-     *  Transcription. Picking Local eagerly selects the recommended tier and downloads it in the
-     *  background, mirroring [showOnboardingModeStep]'s Local path -- unlike [onSelectSimpleCleanup]'s
-     *  Settings-screen version, which refuses until a model is already installed. */
+    /**
+     * Cleanup onboarding step (#98): optional, off by default, same Local/Cloud shape as
+     * Transcription. Cloud is now the RECOMMENDED default (was previously Local) -- following
+     * real on-device measurement this session: Trevor's phone was independently confirmed to be
+     * under persistent, real memory pressure (LowMemoryKiller actively killing background apps,
+     * MemAvailable as low as 1.1-1.4GB even after the LFM2.5-350M model swap cut local cleanup's
+     * own footprint from 651MB to ~450MB), and local cleanup generation reliably could not finish
+     * within its time budget under those conditions -- not a one-off, a persistent state of this
+     * device. Cloud cleanup has zero local memory footprint and consistent latency regardless of
+     * what else is running, so it's the more reliable default for a phone that's also a normal
+     * daily driver running many other apps. Local remains available and fully supported for
+     * anyone who prefers it or is offline-first, just no longer the recommended path.
+     */
     private fun showOnboardingCleanupStep() {
-        val recommended = LOCAL_CLEANUP_MODEL_CATALOG.firstOrNull { it.recommended } ?: LOCAL_CLEANUP_MODEL_CATALOG.first()
+        val recommendedLocal = LOCAL_CLEANUP_MODEL_CATALOG.firstOrNull { it.recommended } ?: LOCAL_CLEANUP_MODEL_CATALOG.first()
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Clean up dictation with AI? (optional)")
             .setMessage(
                 "Cleanup rewrites your raw dictation to fix grammar, punctuation, and filler words — " +
-                    "off by default.\n\nOn-device (recommended): downloads \"${recommended.name}\" and " +
-                    "keeps the text on this phone.\n\nCloud: uses your own API key — no download, but the " +
-                    "text leaves your device and usage is billed to you."
+                    "off by default.\n\nCloud (recommended): uses your own API key -- no download, " +
+                    "consistently fast, and doesn't compete with your phone's other apps for memory.\n\n" +
+                    "On-device: downloads \"${recommendedLocal.name}\" and keeps the text on this phone, " +
+                    "but on a phone that's also running lots of other apps, it can sometimes be too slow " +
+                    "to finish and fall back to raw text."
             )
             .setCancelable(false)
-            .setPositiveButton("Use on-device (recommended)") { _, _ ->
-                dismissOnboarding()
-                enableOnboardingCleanupLocal(recommended)
-                showOnboardingStreamingStep()
-            }
-            .setNegativeButton("Use cloud (needs API key)") { _, _ ->
+            .setPositiveButton("Use cloud (recommended)") { _, _ ->
                 dismissOnboarding()
                 enableOnboardingCleanupCloud()
                 promptOnboardingApiKey { showOnboardingStreamingStep() }
+            }
+            .setNegativeButton("Use on-device") { _, _ ->
+                dismissOnboarding()
+                enableOnboardingCleanupLocal(recommendedLocal)
+                showOnboardingStreamingStep()
             }
             .setNeutralButton("Skip (leave off)") { _, _ -> dismissOnboarding(); showOnboardingStreamingStep() }
             .show()
