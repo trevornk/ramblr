@@ -87,7 +87,10 @@ class LlamaCppInference : Closeable {
             return LlamaCompletionAccumulator.accumulate(
                 maxPieces = MAX_RESPONSE_TOKENS,
                 endOfGeneration = END_OF_GENERATION,
-                nextPiece = { completionLoop(nativePtr) },
+                // completionLoop returns raw UTF-8 bytes (#75): JNI's NewStringUTF can't carry
+                // supplementary-plane characters (emoji) -- it requires Modified UTF-8 -- so the
+                // native side hands back bytes and we decode them here instead.
+                nextPiece = { String(completionLoop(nativePtr), Charsets.UTF_8) },
             )
         } finally {
             stopCompletion(nativePtr)
@@ -117,7 +120,7 @@ class LlamaCppInference : Closeable {
 
     private external fun startCompletion(modelPtr: Long, prompt: String)
 
-    private external fun completionLoop(modelPtr: Long): String
+    private external fun completionLoop(modelPtr: Long): ByteArray
 
     private external fun stopCompletion(modelPtr: Long)
 
