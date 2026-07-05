@@ -264,8 +264,14 @@ object RealLocalInferenceEngine : LocalInferenceEngine {
             // including UnsatisfiedLinkError so a native problem fails the LOCAL_LLM step
             // cleanly instead of crashing the accessibility service. Note that since the
             // native build wiring landed (#37), UnsatisfiedLinkError here indicates a real
-            // packaging regression, not an expected gap (#87 item 5) -- it is logged as a
-            // step failure the user will see as cleanup falling through.
+            // packaging regression, not an expected gap (#87 item 5).
+            //
+            // Actually logged now (#96): a prior version of this comment *claimed* the failure
+            // was logged but never called Log.e, which meant every real local-cleanup failure
+            // (a fast-throwing load error, an OOM, a native crash) was silently swallowed into a
+            // generic toast with no way to diagnose it from logcat -- exactly the gap that made
+            // this failure mode invisible until adb-level thread/timing correlation exposed it.
+            android.util.Log.e("RealLocalInferenceEngine", "Local cleanup inference failed for $modelPath", e)
             if (isCancelled()) LocalInferenceResult.Cancelled
             else LocalInferenceResult.Failure(e.message ?: "Local inference failed")
         }

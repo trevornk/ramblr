@@ -146,6 +146,7 @@ object LocalCleanupModelHolder {
     fun warmUpAsync(modelPath: String) {
         scheduler.execute {
             runCatching { withInference(modelPath) { /* no-op body: load only, don't generate */ } }
+                .onFailure { android.util.Log.e("LocalCleanupModelHolder", "warmUpAsync load failed for $modelPath", it) }
         }
     }
 
