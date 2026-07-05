@@ -1737,20 +1737,27 @@ class MainActivity : AppCompatActivity() {
      *  WhisperAccessibilityService.recordWaterfallSuccess). */
     private fun testWaterfallStep(step: CleanupStep) {
         toast("Testing ${groupLabel(step.group)}...")
-        PostProcessor.processWaterfall(
-            context = this,
-            text = "Testing waterfall connectivity.",
-            prompt = PostProcessor.SIMPLE_PROMPT,
-            waterfall = CleanupWaterfall(listOf(step)),
-            cursor = CleanupWaterfallCursor(),
-            cancelHolder = InFlightCall(),
-            legacyApiKey = "",
-        ) { result ->
-            runOnUiThread {
-                val success = !result.text.isNullOrBlank()
-                CleanupStepStatusStore.record(this, step, if (success) CleanupStepHealth.SUCCESS else CleanupStepHealth.FAILURE)
-                toast(if (success) "${groupLabel(step.group)} OK" else "${groupLabel(step.group)} failed: ${result.error ?: "unknown error"}")
-                refreshWaterfallSteps()
+        // Off the main thread (#64): a LOCAL_LLM step runs the full llama.cpp model load +
+        // generation *synchronously* on whatever thread calls the executor (see
+        // CleanupWaterfallExecutor.performStep's LOCAL_LLM branch) — on the UI thread that's a
+        // guaranteed multi-second freeze/ANR. Cloud steps don't need this (OkHttp enqueues), but
+        // one consistent calling context is simpler than branching on the step's group here.
+        thread {
+            PostProcessor.processWaterfall(
+                context = this,
+                text = "Testing waterfall connectivity.",
+                prompt = PostProcessor.SIMPLE_PROMPT,
+                waterfall = CleanupWaterfall(listOf(step)),
+                cursor = CleanupWaterfallCursor(),
+                cancelHolder = InFlightCall(),
+                legacyApiKey = "",
+            ) { result ->
+                runOnUiThread {
+                    val success = !result.text.isNullOrBlank()
+                    CleanupStepStatusStore.record(this, step, if (success) CleanupStepHealth.SUCCESS else CleanupStepHealth.FAILURE)
+                    toast(if (success) "${groupLabel(step.group)} OK" else "${groupLabel(step.group)} failed: ${result.error ?: "unknown error"}")
+                    refreshWaterfallSteps()
+                }
             }
         }
     }
