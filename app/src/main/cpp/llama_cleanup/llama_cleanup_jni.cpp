@@ -85,12 +85,22 @@ Java_com_kafkasl_phonewhisper_LlamaCppInference_startCompletion(JNIEnv* env, job
     env->ReleaseStringUTFChars(prompt, promptCstr);
 }
 
-extern "C" JNIEXPORT jstring JNICALL
+extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_kafkasl_phonewhisper_LlamaCppInference_completionLoop(JNIEnv* env, jobject thiz, jlong modelPtr) {
     auto* llmInference = reinterpret_cast<LLMInference*>(modelPtr);
     try {
         std::string response = llmInference->completionLoop();
-        return env->NewStringUTF(response.c_str());
+        // Return raw UTF-8 bytes and decode with String(bytes, UTF_8) on the Kotlin side (#75):
+        // NewStringUTF requires Modified UTF-8, where supplementary-plane characters (emoji)
+        // must be CESU-8 surrogate pairs -- the standard 4-byte UTF-8 sequences that
+        // completionLoop() emits are illegal input to it (CheckJNI aborts the process).
+        jbyteArray result = env->NewByteArray(static_cast<jsize>(response.size()));
+        if (result == nullptr) {
+            return nullptr; // OutOfMemoryError is already pending
+        }
+        env->SetByteArrayRegion(result, 0, static_cast<jsize>(response.size()),
+                                reinterpret_cast<const jbyte*>(response.data()));
+        return result;
     } catch (std::exception& error) {
         env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), error.what());
         return nullptr;
