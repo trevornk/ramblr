@@ -115,10 +115,9 @@ Current catalog:
 
 | Model | Size | Notes |
 |---|---:|---|
-| Parakeet 110M | 100 MB | Best default |
-| Whisper Base | 199 MB | Solid baseline |
+| Parakeet 110M | 100 MB | Best value · smallest, recommended default |
+| Canary 180M Flash | 147 MB | Multilingual (en/es/de/fr), punctuated |
 | Parakeet 0.6B | 465 MB | Best quality |
-| Moonshine Tiny | 103 MB | Fastest |
 
 The app downloads and extracts models directly from the sherpa-onnx release archives.
 

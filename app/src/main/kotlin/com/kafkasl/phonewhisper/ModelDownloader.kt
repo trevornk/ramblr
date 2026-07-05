@@ -55,15 +55,17 @@ data class Model(
 )
 
 // Listed best-quality-first (#54-followup): Trevor asked for models to read in that order at a
-// glance rather than requiring a mental sort by the inline quality label. The two non-tiered
-// "alternative architecture" entries (Whisper Base, Moonshine Tiny) are interleaved by their own
-// real quality standing, not pinned to the bottom just because they predate the 3-tier scheme.
+// glance rather than requiring a mental sort by the inline quality label. Canary 180M Flash is
+// the one non-tiered "alternative architecture" entry (multilingual, punctuated) and is
+// interleaved by its own real quality standing, not pinned to the bottom.
 val MODEL_CATALOG = listOf(
     Model("Parakeet 0.6B", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
         465, "★★★★ Best quality",
         sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf"),
+    // Smallest AND best-value entry in the catalog (100MB, ~7.5% avg WER on the Open ASR
+    // Leaderboard) -- recommended default.
     Model("Parakeet 110M", "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
-        100, "★★★ Best value", recommended = true,
+        100, "★★★ Best value · Smallest", recommended = true,
         sha256 = "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479cefcabd06cf5703630b"),
     // Replaces Whisper Base.en for #98 (Claude Fable 5 STT model consult): Canary-180m-flash is
     // strictly better in the same size class -- 7.12% avg WER vs. Whisper Base.en's 10.32%
@@ -75,22 +77,23 @@ val MODEL_CATALOG = listOf(
     // 153,692,328-byte asset from the real sherpa-onnx GitHub release and hashing it locally
     // (`shasum -a 256`), same discipline as every other entry in this file.
     Model("Canary 180M Flash", "sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8",
-        147, "★★★ Alternative (multilingual, punctuated)",
+        147, "★★★★ Multilingual, punctuated",
         sha256 = "7a38ed8b13f014ad632b09ff8d22e0c6f1359dd046af9235d281dfae841b9ab9"),
-    // Kept as the fast/small alternative (#98 consult): still the smallest genuinely-good English
-    // option available in sherpa-onnx as of this pass -- a "Moonshine v2" family was considered
-    // but does NOT actually exist as a shipped sherpa-onnx model yet (only an open, unanswered
-    // feature request as of 2026-06-27, k2-fsa/sherpa-onnx#3231); shipping a fictional archive
-    // name would just be a broken download, so v1 stays until v2 support lands upstream.
-    Model("Moonshine Tiny", "sherpa-onnx-moonshine-tiny-en-int8",
-        103, "★★★ Fast alternative",
-        sha256 = "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2"),
+    // Moonshine Tiny REMOVED (#98, follow-up to Trevor's request to clean up mislabeled/confusing
+    // catalog entries): verified against Useful Sensors' own published benchmarks and the Open ASR
+    // Leaderboard, "English Tiny" (the non-streaming variant shipped here) has ~12.66% WER --
+    // nearly double Parakeet 110M's ~7.5% -- while ALSO being larger on disk (103MB vs. 100MB).
+    // It was labeled "Fast alternative" and described in comments as "the smallest genuinely-good
+    // English option," neither of which was true: it's strictly dominated by Parakeet 110M on
+    // every axis (size, WER, and it's the existing recommended default already installed for most
+    // users) with no redeeming tradeoff left to offer. A tier that loses on every axis isn't a
+    // real choice, just confusion.
     // NeMo Conformer CTC Small REMOVED for #98 (Claude Fable 5 STT model consult): despite being
     // the smallest entry by raw size (76MB), it outputs lowercase text with no punctuation at
     // all -- disqualifying for a dictation app regardless of WER, since every other model here
-    // (including the now-smallest remaining tier, Moonshine Tiny) produces real capitalization
-    // and punctuation. Better to have one fewer, genuinely usable tier than a technically-smaller
-    // one that silently produces worse-looking output for every single dictation.
+    // produces real capitalization and punctuation. Better to have one fewer, genuinely usable
+    // tier than a technically-smaller one that silently produces worse-looking output for every
+    // single dictation.
 )
 
 /**
@@ -150,12 +153,25 @@ val STREAMING_MODEL_CATALOG = listOf(STREAMING_MODEL)
  * Q4_0 (not Q4_K_M) is deliberately used here, also per the Fable consult: Q4_0 is the quantization
  * llama.cpp's ARM i8mm/dotprod kernels are specifically optimized for, making it the faster choice
  * on real Android CPU hardware even though Q4_K_M is nominally higher quality at rest.
+ *
+ * This is now the ONLY local-cleanup catalog entry (collapsed from 3 tiers for #98, Trevor's
+ * direct request after the model swap): the other two tiers were actively misleading rather than
+ * genuine choices. Qwen2.5-1.5B ("best quality") is a ~1.1GB download that would only compound
+ * the memory-pressure failures the LFM2.5-350M swap was meant to fix -- it was never going to
+ * work reliably on a phone already struggling to run the much smaller model. SmolLM2-360M
+ * ("smallest, still good") is independently confirmed BROKEN for this exact task in #54: verified
+ * via a standalone host probe against the real production prompt, it replies with generic
+ * assistant chit-chat ("I'd be happy to help you refine your text...") instead of cleaning the
+ * transcript, reproducibly and deterministically. Both tiers also displayed the same "★★★★"
+ * rating as this entry despite being either unusable-on-this-hardware or flat-out broken --
+ * confusing, not a real choice. One real, working, benchmarked-against-alternatives model beats
+ * three options where two don't actually work.
  */
 val LOCAL_CLEANUP_MODEL = Model(
     name = "LFM2.5 350M (Q4_0)",
     archive = "lfm2.5-350m-q4_0",
     sizeMb = 219,
-    quality = "★★★★ Best value · On-device cleanup",
+    quality = "On-device cleanup",
     recommended = true,
     sha256 = "85e32858daafad55b7bcd6b97a1343ee0661188e8036f9862d14d6b563142f50",
     isLocalCleanup = true,
@@ -163,43 +179,7 @@ val LOCAL_CLEANUP_MODEL = Model(
     fileName = "lfm2.5-350m-q4_0.gguf",
 )
 
-/**
- * Best-quality on-device cleanup tier (#50): the same Qwen2.5-Instruct family as
- * [LOCAL_CLEANUP_MODEL], scaled up to 1.5B for noticeably better instruction-following at the cost
- * of a ~1.1GB download. Sourced from the real `Qwen/Qwen2.5-1.5B-Instruct-GGUF` Hugging Face repo
- * (Apache-2.0), Q4_K_M quantization to match the existing entry's convention. [sha256] verified
- * 2026-07-04 by downloading the exact file and hashing it locally (`shasum -a 256`) -- not copied
- * from a webpage.
- */
-val LOCAL_CLEANUP_MODEL_QUALITY = Model(
-    name = "Qwen2.5 1.5B Instruct (Q4_K_M)",
-    archive = "qwen2.5-1.5b-instruct-q4_k_m",
-    sizeMb = 1117,
-    quality = "★★★★ Best quality · On-device cleanup",
-    sha256 = "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
-    isLocalCleanup = true,
-    sourceUrl = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
-    fileName = "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-)
-
-/**
- * Smallest-still-good on-device cleanup tier (#50): HuggingFaceTB's SmolLM2-360M-Instruct,
- * genuinely smaller than [LOCAL_CLEANUP_MODEL] (~271MB vs. ~492MB) while still instruction-tuned.
- * Sourced from `bartowski/SmolLM2-360M-Instruct-GGUF` (Apache-2.0), Q4_K_M quantization. [sha256]
- * verified 2026-07-04 by downloading the exact file and hashing it locally.
- */
-val LOCAL_CLEANUP_MODEL_SMALL = Model(
-    name = "SmolLM2 360M Instruct (Q4_K_M)",
-    archive = "smollm2-360m-instruct-q4_k_m",
-    sizeMb = 271,
-    quality = "★★☆ Smallest, still good · On-device cleanup",
-    sha256 = "2fa3f013dcdd7b99f9b237717fa0b12d75bbb89984cc1274be1471a465bac9c2",
-    isLocalCleanup = true,
-    sourceUrl = "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf",
-    fileName = "smollm2-360m-instruct-q4_k_m.gguf",
-)
-
-val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL_QUALITY, LOCAL_CLEANUP_MODEL, LOCAL_CLEANUP_MODEL_SMALL)
+val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL)
 
 sealed class DownloadState {
     data class Downloading(val progress: Float) : DownloadState()

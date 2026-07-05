@@ -56,10 +56,10 @@ class ModelDownloaderTest {
     }
 
     @Test fun `catalog has expected structure`() {
-        // Reduced from 5 to 4 for #98 (Claude Fable 5 STT model consult): NeMo Conformer CTC
-        // Small removed (outputs lowercase text with no punctuation -- disqualifying for a
-        // dictation app), Whisper Base replaced in-place by Canary 180M Flash.
-        assertEquals(4, MODEL_CATALOG.size)
+        // Reduced from 4 to 3 for #98 (Trevor's mislabeled-catalog cleanup follow-up): Moonshine
+        // Tiny removed -- verified strictly dominated by Parakeet 110M on every axis (103MB vs.
+        // 100MB on disk, ~12.66% WER vs. ~7.5%), so it was never a real choice, just confusion.
+        assertEquals(3, MODEL_CATALOG.size)
         assertTrue(MODEL_CATALOG.any { it.recommended })
         assertTrue(MODEL_CATALOG.all { it.archive.startsWith("sherpa-onnx-") })
         assertTrue(MODEL_CATALOG.all { it.sizeMb > 0 })
@@ -116,8 +116,14 @@ class ModelDownloaderTest {
 
     // -- local cleanup model catalog (#37) --
 
-    @Test fun `local cleanup catalog has three tiers, all marked and checksummed`() {
-        assertEquals(3, LOCAL_CLEANUP_MODEL_CATALOG.size)
+    @Test fun `local cleanup catalog has one working tier, marked and checksummed`() {
+        // Collapsed from 3 to 1 for #98 (Trevor's direct request): Qwen2.5-1.5B ("best quality")
+        // was a ~1.1GB download that would only compound the memory-pressure failures the
+        // LFM2.5-350M swap was meant to fix; SmolLM2-360M ("smallest, still good") is
+        // independently confirmed BROKEN for this exact task in #54 (falls back to generic
+        // assistant chit-chat instead of cleaning the transcript). One real, working model beats
+        // three options where two don't actually work.
+        assertEquals(1, LOCAL_CLEANUP_MODEL_CATALOG.size)
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.isLocalCleanup })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256 != null })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256!!.matches(Regex("[0-9a-f]{64}")) })
