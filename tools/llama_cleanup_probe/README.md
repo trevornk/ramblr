@@ -17,7 +17,7 @@ llama.cpp submodule pin or the model catalog changes.
 cmake -S tools/llama_cleanup_probe -B /tmp/llama_cleanup_probe_build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build /tmp/llama_cleanup_probe_build -j
 DYLD_LIBRARY_PATH=/tmp/llama_cleanup_probe_build/bin /tmp/llama_cleanup_probe_build/llama_cleanup_probe \
-  /path/to/model.gguf "<system prompt>" "<user text>"
+  /path/to/model.gguf "<system prompt>" "<user text>" [runs]
 ```
 
 Drives `LLMInference` through the exact same call sequence
@@ -25,6 +25,12 @@ Drives `LLMInference` through the exact same call sequence
 `minP`/`temperature`/`contextSize`/`nThreads`/`useMmap`/`useMlock` defaults as
 `LlamaCppInference.load()`), one `addChatMessage(systemPrompt, "system")`, `startCompletion
 (userText)`, then `completionLoop()` until `"[EOG]"`.
+
+The optional `runs` argument (default 1) repeats that whole sequence on the same loaded
+instance, mirroring `LocalCleanupModelHolder`'s cross-dictation reuse (#74). With the
+`storeChats=false` one-shot fixes in `LLMInference.cpp`, later runs must match the first (at
+`temperature = 0.0`) and report a flat "context used" figure -- growth across runs means prior
+turns are leaking into the prompt or the KV cache.
 
 ## Result (2026-07-04)
 

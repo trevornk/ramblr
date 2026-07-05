@@ -169,8 +169,9 @@ fun interface LocalInferenceEngine {
     ): LocalInferenceResult
 }
 
-/** Production [LocalInferenceEngine]: drives the vendored/adapted llama.cpp JNI wrapper. See
- *  [LlamaCppInference] for the native binding itself and its current build-status caveats. */
+/** Production [LocalInferenceEngine]: drives the vendored/adapted llama.cpp JNI wrapper through
+ *  [LocalCleanupModelHolder], which keeps the model loaded across dictations instead of paying a
+ *  full GGUF load per call (#74). See [LlamaCppInference] for the native binding itself. */
 object RealLocalInferenceEngine : LocalInferenceEngine {
     override fun complete(
         systemPrompt: String,
@@ -183,8 +184,7 @@ object RealLocalInferenceEngine : LocalInferenceEngine {
             if (isCancelled()) {
                 LocalInferenceResult.Cancelled
             } else {
-                val text = LlamaCppInference().use { inference ->
-                    inference.load(modelPath)
+                val text = LocalCleanupModelHolder.withInference(modelPath) { inference ->
                     inference.complete(systemPrompt, userText, deadlineAtMs, isCancelled)
                 }
                 if (text.isNotBlank()) LocalInferenceResult.Success(text)

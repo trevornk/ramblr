@@ -4,9 +4,17 @@
 // "[EOG]" -- capped at the same 512 pieces MAX_RESPONSE_TOKENS enforces (#60/#87). Same defaults
 // LlamaCppInference.kt hardcodes (minP/temperature/contextSize/nThreads/useMmap/useMlock) so this
 // is a faithful proof of the Kotlin call signature, not a looser test.
+//
+// An optional <runs> argument (default 1) repeats the whole system+user+completion sequence that
+// many times on the SAME instance, mirroring how LocalCleanupModelHolder now reuses one loaded
+// LlamaCppInference across dictations (#74). With the storeChats=false one-shot fixes in
+// LLMInference.cpp, every run should behave like the first: same response for the same input, and
+// a "context used" figure that stays flat across runs instead of accumulating -- a growing figure
+// means prior turns are leaking into later prompts or the KV cache.
 #include "LLMInference.h"
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -16,12 +24,17 @@ static const int kMaxPieces = 512;
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: %s <model.gguf> <system_prompt> <user_text>\n", argv[0]);
+        fprintf(stderr, "usage: %s <model.gguf> <system_prompt> <user_text> [runs]\n", argv[0]);
         return 1;
     }
     const std::string modelPath = argv[1];
     const std::string systemPrompt = argv[2];
     const std::string userText = argv[3];
+    const int numRuns = argc > 4 ? atoi(argv[4]) : 1;
+    if (numRuns < 1) {
+        fprintf(stderr, "runs must be >= 1, got %s\n", argv[4]);
+        return 1;
+    }
 
     LLMInference llm;
     fprintf(stderr, "loading model...\n");
@@ -41,34 +54,36 @@ int main(int argc, char** argv) {
     double loadSecs = std::chrono::duration<double>(loadEnd - loadStart).count();
     fprintf(stderr, "model loaded in %.2fs\n", loadSecs);
 
-    llm.addChatMessage(systemPrompt.c_str(), "system");
-    auto genStart = std::chrono::steady_clock::now();
-    std::string response;
-    int numPieces = 0;
-    try {
-        llm.startCompletion(userText.c_str());
-        while (true) {
-            std::string piece = llm.completionLoop();
-            if (piece == "[EOG]") break;
-            response += piece;
-            numPieces++;
-            if (numPieces >= kMaxPieces) {
-                fprintf(stderr, "aborting: exceeded %d pieces without end-of-generation (same cap as the app)\n",
-                        kMaxPieces);
-                break;
+    for (int run = 1; run <= numRuns; run++) {
+        llm.addChatMessage(systemPrompt.c_str(), "system");
+        auto genStart = std::chrono::steady_clock::now();
+        std::string response;
+        int numPieces = 0;
+        try {
+            llm.startCompletion(userText.c_str());
+            while (true) {
+                std::string piece = llm.completionLoop();
+                if (piece == "[EOG]") break;
+                response += piece;
+                numPieces++;
+                if (numPieces >= kMaxPieces) {
+                    fprintf(stderr, "aborting: exceeded %d pieces without end-of-generation (same cap as the app)\n",
+                            kMaxPieces);
+                    break;
+                }
             }
+        } catch (const std::exception& e) {
+            fprintf(stderr, "run %d: completion failed after %d pieces: %s\n", run, numPieces, e.what());
+            llm.stopCompletion();
+            return 1;
         }
-    } catch (const std::exception& e) {
-        fprintf(stderr, "completion failed after %d pieces: %s\n", numPieces, e.what());
         llm.stopCompletion();
-        return 1;
-    }
-    llm.stopCompletion();
-    auto genEnd = std::chrono::steady_clock::now();
-    double genSecs = std::chrono::duration<double>(genEnd - genStart).count();
+        auto genEnd = std::chrono::steady_clock::now();
+        double genSecs = std::chrono::duration<double>(genEnd - genStart).count();
 
-    printf("=== RESPONSE ===\n%s\n=== END ===\n", response.c_str());
-    fprintf(stderr, "generated %d pieces in %.2fs (%.1f tok/s), context used: %d\n",
-            numPieces, genSecs, numPieces / genSecs, llm.getContextSizeUsed());
+        printf("=== RESPONSE (run %d of %d) ===\n%s\n=== END ===\n", run, numRuns, response.c_str());
+        fprintf(stderr, "run %d: generated %d pieces in %.2fs (%.1f tok/s), context used: %d\n",
+                run, numPieces, genSecs, numPieces / genSecs, llm.getContextSizeUsed());
+    }
     return 0;
 }

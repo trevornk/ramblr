@@ -2,6 +2,7 @@ package com.kafkasl.phonewhisper
 
 import android.accessibilityservice.AccessibilityService
 import android.content.ClipboardManager
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -320,6 +321,10 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
         guard.cancel()
         inFlightCall.cancel()
+        // The cancel above makes any in-flight local completion abort at its next piece check
+        // (#83), so the holder's daemon thread can close the cached ~1 GB cleanup model promptly
+        // without this main-thread teardown waiting on it (#74).
+        LocalCleanupModelHolder.releaseAsync()
         teardownStreamingPreview()
         flushPendingStreamingHandoff()
         handler.removeCallbacks(expirePendingInjection)
@@ -343,6 +348,21 @@ class WhisperAccessibilityService : AccessibilityService() {
         dismissStyleMenu()
         removeOverlay()
         super.onDestroy()
+    }
+
+    /**
+     * Under memory pressure, drop the cached local-cleanup model (#74) -- it's a pure cache, and
+     * the next dictation reloads it. RUNNING_LOW is the threshold; every higher-numbered level
+     * (RUNNING_CRITICAL, plus the UI_HIDDEN/BACKGROUND/MODERATE/COMPLETE band, which all signal
+     * at least as much pressure or less foreground relevance) qualifies too. The transcriber
+     * slots are deliberately NOT released here: dictation latency is the product, and those
+     * models are an order of magnitude smaller.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            LocalCleanupModelHolder.releaseAsync()
+        }
     }
 
     /** Deletes any temp PCM files left behind by a process death that skipped normal teardown. */
