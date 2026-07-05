@@ -6,8 +6,8 @@ package com.kafkasl.phonewhisper
  *
  * The native side tokenizes the fully rendered chat template with `parse_special=true`
  * (LLMInference.cpp, vendored verbatim) -- required for the template's own scaffolding markers,
- * but it applies equally to the message content embedded in the same string. Every curated local
- * cleanup model (Qwen2.5, SmolLM2 -- see [LOCAL_CLEANUP_MODEL_CATALOG]) uses ChatML-style
+ * but it applies equally to the message content embedded in the same string. The curated local
+ * cleanup model (LFM2.5-350M -- see [LOCAL_CLEANUP_MODEL_CATALOG]) uses ChatML-style
  * `<|marker|>` special tokens, so a transcript containing literal `<|im_end|>` /
  * `<|im_start|>system` / `<|endoftext|>` text would become real control tokens: the user message
  * could close itself and forge a fake system/assistant turn.
