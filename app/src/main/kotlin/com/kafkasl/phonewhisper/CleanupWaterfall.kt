@@ -66,7 +66,8 @@ data class CleanupWaterfall(val steps: List<CleanupStep>) {
     /** True when every configured step runs on-device (#37/#65) — running this waterfall can
      *  never send the transcript anywhere, so the off-device consent prompt
      *  ([LocalCleanupConsent]) is meaningless for it. An empty waterfall is not "local only":
-     *  it can't run at all, and [CleanupWaterfallStore.load] never produces one. */
+     *  it means the user explicitly disabled cleanup by removing every step (#82), and callers
+     *  skip cleanup entirely rather than run it. */
     fun isLocalOnly(): Boolean =
         steps.isNotEmpty() && steps.all { it.group == CleanupStepGroup.LOCAL_LLM }
 

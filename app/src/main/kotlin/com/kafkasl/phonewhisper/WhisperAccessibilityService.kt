@@ -1246,6 +1246,18 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (usePostProcessing) {
             val waterfall = CleanupWaterfallStore.load(this)
 
+            // A zero-step waterfall means the user explicitly removed every step: cleanup is
+            // disabled, so inject raw. Before #82, this case collapsed into the legacy Cloud
+            // default and silently posted the transcript to api.openai.com.
+            if (waterfall.steps.isEmpty()) {
+                handler.post {
+                    if (!guard.isCurrent(token)) return@post
+                    injectText(text)
+                    resetToIdle()
+                }
+                return
+            }
+
             // The legacy cloud API key is only required in true legacy single-step mode. Once a
             // real waterfall is configured (including a LOCAL_LLM-only waterfall), credential
             // resolution is per-step inside CleanupWaterfallExecutor — which already handles
