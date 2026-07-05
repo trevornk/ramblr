@@ -169,28 +169,34 @@ there's a manual eval harness:
   compilation (so it's checked for compile errors), but JUnit never discovers or runs it, so it
   has no effect on `make test`, `make build`, or CI.
 
-**This tool calls the real OpenAI API and spends real credits.** Only run it manually, with your
-own key:
+**This tool calls real provider APIs and spends real credits.** Only run it manually, with your
+own keys. It runs against every provider whose key is set — OpenAI, Anthropic, and/or Gemini —
+skipping (with a stderr warning) any provider whose key env var is unset (#97):
 
 ```bash
-export OPENAI_API_KEY=sk-...   # your own key — never commit this, no .env is read by the tool
+export OPENAI_API_KEY=sk-...        # never commit this, no .env is read by the tool
+export ANTHROPIC_API_KEY=sk-ant-... # optional — omit to skip Anthropic
+export GEMINI_API_KEY=AIza...       # optional — omit to skip Gemini
 ./gradlew runEvalHarness                                              # compares SIMPLE_PROMPT vs DEV_PROMPT
 ./gradlew runEvalHarness --args="SIMPLE_PROMPT,DEV_PROMPT,STRUCTURED_PROMPT"   # explicit prompt list
 ./gradlew runEvalHarness --args="SIMPLE_PROMPT,DEV_PROMPT,STRUCTURED_PROMPT,GANGSTER_PROMPT,SMART_PROMPT,TEACHER_PROMPT"  # include tone personas (#40)
 ```
 
-Optional overrides:
+Each available provider is run against its own short-list of cheap-tier candidate models (see
+the `Provider` enum in `EvalHarness.kt`), overridable per provider:
 
 ```bash
-OPENAI_EVAL_MODEL=gpt-4o ./gradlew runEvalHarness   # defaults to gpt-4o-mini, matching PostProcessor
+OPENAI_EVAL_MODELS=gpt-5.4-nano ./gradlew runEvalHarness       # single OpenAI model instead of the default short-list
+ANTHROPIC_EVAL_MODELS=claude-haiku-4-5-20251001 ./gradlew runEvalHarness
+GEMINI_EVAL_MODELS=gemini-2.5-flash-lite,gemini-2.5-flash ./gradlew runEvalHarness
 ./gradlew runEvalHarness --args="DEV_PROMPT eval-reports/dev-only.md"  # custom output path
 ```
 
 Each run writes a markdown report (default `eval-reports/<prompts>.md`) with the raw transcript
-and the cleaned-up output from each prompt for every sample, for manual side-by-side review.
-Review the report yourself before trusting a prompt change — the harness doesn't score or grade
-output automatically. `eval-reports/` is gitignored so local runs don't clutter the repo; if you
-want to share or archive a specific report, `git add -f` it.
+and the cleaned-up output from every provider/model x prompt combination for every sample, for
+manual side-by-side review. Review the report yourself before trusting a prompt or model change —
+the harness doesn't score or grade output automatically. `eval-reports/` is gitignored so local
+runs don't clutter the repo; if you want to share or archive a specific report, `git add -f` it.
 
 To add a new prompt variant to the comparison, add it to the `PROMPT_REGISTRY` map at the top of
 `EvalHarness.kt`.
