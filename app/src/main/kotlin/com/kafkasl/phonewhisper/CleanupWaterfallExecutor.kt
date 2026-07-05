@@ -169,9 +169,73 @@ fun interface LocalInferenceEngine {
     ): LocalInferenceResult
 }
 
+/**
+ * Runs a bounded blocking call on a background thread and gives up waiting once [deadlineAtMs]
+ * passes, without attempting to interrupt or kill the underlying work (#92). Exists because a
+ * single native `completionLoop()` decode inside [LlamaCppInference.complete] is one
+ * synchronous, uninterruptible JNI call -- [LlamaCompletionAccumulator]'s own deadline/cancel
+ * checks only run *between* pieces, so a single slow-to-return decode (thermal throttling,
+ * memory pressure causing mmap page faults, or just a slow device) defeats the wall-clock budget
+ * entirely: the calling thread blocks inside that one call with no interruption point until it
+ * returns on its own. [runWithDeadline] moves the actual call onto [executor] and calls
+ * [Future.get] with a real timeout, so the *caller* always gets an answer within budget -- the
+ * abandoned background task is left running to completion (Thread.interrupt() on code crossing
+ * a JNI boundary mid-native-call is unsafe and can crash or corrupt process state) and its result
+ * is simply discarded when it eventually finishes.
+ *
+ * Note this does not fix "why is a single decode slow" -- only that the app must never hang past
+ * its stated budget regardless. A dictation immediately following a timed-out one may still see
+ * its own local step wait behind the still-running abandoned task on [executor]'s single thread,
+ * but that wait is itself bounded by that dictation's own deadline, so it fails fast rather than
+ * hanging too.
+ */
+object BoundedBlockingCall {
+    /** Single dedicated thread: local inference calls are already effectively serialized by
+     *  [LocalCleanupModelHolder]'s monitor, so a pool would buy nothing -- this just gives the
+     *  abandoned-task-keeps-running semantics a home off the calling (accessibility service)
+     *  thread. Daemon so it never blocks process shutdown. */
+    private val executor: java.util.concurrent.ExecutorService by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "local-cleanup-inference").apply { isDaemon = true }
+        }
+    }
+
+    /** Runs [block] on [executor] and waits up to `deadlineAtMs - now` for it. Returns null on
+     *  timeout (block keeps running, abandoned); rethrows [block]'s exception if it completes
+     *  within the deadline and threw. A [deadlineAtMs] already in the past still submits and
+     *  waits a minimum floor rather than an exact 0ms: `Future.get(0, ...)` treats 0 as "don't
+     *  block at all" and can throw [java.util.concurrent.TimeoutException] even for a task that
+     *  would complete near-instantly, which would make an already-tight budget spuriously fail a
+     *  call that never even got a real chance to run.
+     *
+     *  Wrapped explicitly in [java.util.concurrent.Callable] rather than passed as a bare
+     *  function value: `ExecutorService.submit` is overloaded for `Callable<R>` (keeps the
+     *  result) and `Runnable` (discards it, returning a `Future<*>` that always resolves to
+     *  null); passing a stored `() -> R` directly resolves to the `Runnable` overload, silently
+     *  dropping every real result. */
+    fun <R> runWithDeadline(deadlineAtMs: Long, block: () -> R): R? {
+        val future = executor.submit(java.util.concurrent.Callable { block() })
+        val timeoutMs = (deadlineAtMs - System.currentTimeMillis()).coerceAtLeast(MIN_WAIT_MS)
+        return try {
+            future.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            null
+        } catch (e: java.util.concurrent.ExecutionException) {
+            throw e.cause ?: e
+        }
+    }
+
+    /** Floor for [runWithDeadline]'s wait, so an already-past deadline still gives a fast call a
+     *  real chance to complete rather than racing `Future.get(0, ...)`'s "don't block" semantics. */
+    private const val MIN_WAIT_MS = 50L
+}
+
 /** Production [LocalInferenceEngine]: drives the vendored/adapted llama.cpp JNI wrapper through
  *  [LocalCleanupModelHolder], which keeps the model loaded across dictations instead of paying a
- *  full GGUF load per call (#74). See [LlamaCppInference] for the native binding itself. */
+ *  full GGUF load per call (#74). See [LlamaCppInference] for the native binding itself.
+ *  [BoundedBlockingCall] (#92) ensures a single slow/stuck native decode can never hang this call
+ *  past [deadlineAtMs] -- see its kdoc for why the accumulator's own per-piece deadline check
+ *  isn't enough on its own. */
 object RealLocalInferenceEngine : LocalInferenceEngine {
     override fun complete(
         systemPrompt: String,
@@ -184,11 +248,16 @@ object RealLocalInferenceEngine : LocalInferenceEngine {
             if (isCancelled()) {
                 LocalInferenceResult.Cancelled
             } else {
-                val text = LocalCleanupModelHolder.withInference(modelPath) { inference ->
-                    inference.complete(systemPrompt, userText, deadlineAtMs, isCancelled)
+                val text = BoundedBlockingCall.runWithDeadline(deadlineAtMs) {
+                    LocalCleanupModelHolder.withInference(modelPath) { inference ->
+                        inference.complete(systemPrompt, userText, deadlineAtMs, isCancelled)
+                    }
                 }
-                if (text.isNotBlank()) LocalInferenceResult.Success(text)
-                else LocalInferenceResult.Failure("Local model produced an empty response")
+                when {
+                    text == null -> LocalInferenceResult.Cancelled // timed out; abandoned task discarded
+                    text.isNotBlank() -> LocalInferenceResult.Success(text)
+                    else -> LocalInferenceResult.Failure("Local model produced an empty response")
+                }
             }
         } catch (e: Throwable) {
             // Broad catch is deliberate: this boundary must absorb everything up to and

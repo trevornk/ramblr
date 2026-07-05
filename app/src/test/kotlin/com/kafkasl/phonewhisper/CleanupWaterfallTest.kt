@@ -117,3 +117,29 @@ class CleanupWaterfallIsLocalOnlyTest {
         assertFalse(CleanupWaterfall(emptyList()).isLocalOnly())
     }
 }
+
+class CleanupWaterfallUsesLocalLlmTest {
+
+    @Test fun `a single LOCAL_LLM step uses local llm`() {
+        assertTrue(CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, "qwen2.5-0.5b-instruct-q4_k_m"))).usesLocalLlm())
+    }
+
+    @Test fun `a waterfall mixing local and network steps still uses local llm`() {
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, "qwen2.5-0.5b-instruct-q4_k_m"),
+            )
+        )
+        assertTrue(waterfall.usesLocalLlm())
+    }
+
+    @Test fun `an all-cloud waterfall does not use local llm`() {
+        assertFalse(CleanupWaterfall.LEGACY_SINGLE_STEP.usesLocalLlm())
+        assertFalse(CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"))).usesLocalLlm())
+    }
+
+    @Test fun `an empty waterfall does not use local llm`() {
+        assertFalse(CleanupWaterfall(emptyList()).usesLocalLlm())
+    }
+}

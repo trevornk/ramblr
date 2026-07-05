@@ -1109,6 +1109,8 @@ class WhisperAccessibilityService : AccessibilityService() {
             toast("Grant audio permission in Ramblr app"); return
         }
 
+        warmUpLocalCleanupModelIfNeeded()
+
         // A still-pending preview (#40) from the previous dictation shouldn't linger silently
         // while a new one starts -- resolve it the same safe way a timeout would.
         pendingPreview?.let { resolvePreview { p -> p.timeout() } }
@@ -1144,6 +1146,27 @@ class WhisperAccessibilityService : AccessibilityService() {
         handler.post { stopPulse() }
         setAppearance(COLOR_BUSY)
         setBusy(true)
+    }
+
+    /**
+     * Pre-warms the local cleanup model (#95) the instant recording starts, so its cold GGUF
+     * load (mmap + first-touch page faults on a several-hundred-MB file) overlaps with the user
+     * still talking and the transcription that follows, instead of starting only once cleanup
+     * itself runs and eating into [CLEANUP_WATERFALL_HARD_CAP_MS]'s budget -- see
+     * [LocalCleanupModelHolder.warmUpAsync]'s kdoc for the failure mode this fixes.
+     *
+     * Deliberately checked (not unconditional): only bothers when cleanup is actually enabled
+     * and the configured waterfall would use LOCAL_LLM for at least one step, since otherwise
+     * this would resident-load a multi-hundred-MB model into memory for a dictation that will
+     * never touch it (e.g. cleanup off, or an all-cloud waterfall).
+     */
+    private fun warmUpLocalCleanupModelIfNeeded() {
+        if (!PostProcessingToggle.shouldRunCleanup(PostProcessingToggle.isEnabled(this))) return
+        val waterfall = CleanupWaterfallStore.load(this)
+        if (!waterfall.usesLocalLlm()) return
+        val modelPath = ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this))?.absolutePath
+            ?: return
+        LocalCleanupModelHolder.warmUpAsync(modelPath)
     }
 
     /** Long-press while TRANSCRIBING (see overlay.setOnTouchListener): abort the in-flight call and return to idle. */
