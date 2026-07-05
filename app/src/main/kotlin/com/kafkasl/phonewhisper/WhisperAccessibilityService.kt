@@ -950,7 +950,8 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (PostProcessingToggle.isEnabled(this)) return true
         val useLocal = prefs().getBoolean("use_local", true)
         val hasConsented = prefs().getBoolean("local_cleanup_consent_seen", false)
-        if (LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing = true, hasConsented = hasConsented)) return false
+        val cleanupIsLocalOnly = CleanupWaterfallStore.load(this).isLocalOnly()
+        if (LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing = true, hasConsented = hasConsented, cleanupIsLocalOnly = cleanupIsLocalOnly)) return false
         PostProcessingToggle.setEnabled(this, true)
         return true
     }
