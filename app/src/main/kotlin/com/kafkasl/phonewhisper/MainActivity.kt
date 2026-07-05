@@ -100,7 +100,7 @@ class MainActivity : AppCompatActivity() {
     private var pendingLocalCleanupSelection = false
     private val cleanupModelRows = mutableMapOf<String, ModelRowViews>()
     private val cleanupModelDownloadState = mutableMapOf<String, WorkInfo.State>()
-    private val cleanupModelDownloadAcked = mutableSetOf<String>()
+    private val cleanupModelDownloadGate = DownloadCompletionGate()
 
     // "Advanced" waterfall disclosure (#38) — genuinely collapsed by default; the full #32/#37
     // editor underneath is untouched, just not front-and-center for a first-time user.
@@ -114,7 +114,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var streamingPreviewRowSub: TextView
     private val streamingModelRows = mutableMapOf<String, ModelRowViews>()
     private val streamingModelDownloadState = mutableMapOf<String, WorkInfo.State>()
-    private val streamingModelDownloadAcked = mutableSetOf<String>()
+    private val streamingModelDownloadGate = DownloadCompletionGate()
 
     // Cleanup waterfall (#32) — credential rows + the reorderable step list container.
     private lateinit var omnirouteKeyRowSub: TextView
@@ -129,10 +129,11 @@ class MainActivity : AppCompatActivity() {
     // WorkManager LiveData observer registered in buildModelRow. Read by
     // onModelAction to make a duplicate tap on an in-flight download a no-op.
     private val modelDownloadState = mutableMapOf<String, WorkInfo.State>()
-    // Archives we've already reacted to a SUCCEEDED WorkInfo for in this Activity
-    // instance, so re-observing old WorkInfo (e.g. after rotation) doesn't
-    // re-toast/re-select a model that finished downloading earlier.
-    private val modelDownloadAcked = mutableSetOf<String>()
+    // Gates the one-time completion side effects (auto-select + toast) behind having witnessed
+    // the download live in THIS Activity instance -- WorkManager re-delivers retained SUCCEEDED
+    // WorkInfo to every fresh observer, and rotation/fold recreates this Activity, so a plain
+    // per-instance acked set re-selected stale downloads on every recreation (#76).
+    private val modelDownloadGate = DownloadCompletionGate()
 
     // First-run wizard state (#6). Tracked in-memory so a dialog already on screen is never
     // duplicated by a stray onResume, and reset per Activity instance so a fresh launch always
@@ -646,6 +647,7 @@ class MainActivity : AppCompatActivity() {
         val views = modelRows[model.archive] ?: return
         val info = infos.firstOrNull { !it.state.isFinished } ?: infos.firstOrNull()
         modelDownloadState[model.archive] = info?.state ?: WorkInfo.State.CANCELLED
+        if (info != null && !info.state.isFinished) modelDownloadGate.onInFlight(info.id.toString())
 
         when (info?.state) {
             WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> {
@@ -667,7 +669,7 @@ class MainActivity : AppCompatActivity() {
             WorkInfo.State.SUCCEEDED -> {
                 views.progress.visibility = View.GONE
                 views.dlBtn.isEnabled = true
-                if (modelDownloadAcked.add(model.archive)) {
+                if (modelDownloadGate.shouldActOnSuccess(info.id.toString())) {
                     selectModel(model.archive)
                     toast("${model.name} ready!")
                 }
@@ -836,6 +838,7 @@ class MainActivity : AppCompatActivity() {
         val views = streamingModelRows[model.archive] ?: return
         val info = infos.firstOrNull { !it.state.isFinished } ?: infos.firstOrNull()
         streamingModelDownloadState[model.archive] = info?.state ?: WorkInfo.State.CANCELLED
+        if (info != null && !info.state.isFinished) streamingModelDownloadGate.onInFlight(info.id.toString())
 
         when (info?.state) {
             WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> {
@@ -857,7 +860,7 @@ class MainActivity : AppCompatActivity() {
             WorkInfo.State.SUCCEEDED -> {
                 views.progress.visibility = View.GONE
                 views.dlBtn.isEnabled = true
-                if (streamingModelDownloadAcked.add(model.archive)) {
+                if (streamingModelDownloadGate.shouldActOnSuccess(info.id.toString())) {
                     selectStreamingModel(model.archive)
                     toast("${model.name} ready — enable streaming live preview above")
                 }
@@ -1014,6 +1017,7 @@ class MainActivity : AppCompatActivity() {
         val views = cleanupModelRows[model.archive] ?: return
         val info = infos.firstOrNull { !it.state.isFinished } ?: infos.firstOrNull()
         cleanupModelDownloadState[model.archive] = info?.state ?: WorkInfo.State.CANCELLED
+        if (info != null && !info.state.isFinished) cleanupModelDownloadGate.onInFlight(info.id.toString())
 
         when (info?.state) {
             WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> {
@@ -1035,7 +1039,7 @@ class MainActivity : AppCompatActivity() {
             WorkInfo.State.SUCCEEDED -> {
                 views.progress.visibility = View.GONE
                 views.dlBtn.isEnabled = true
-                if (cleanupModelDownloadAcked.add(model.archive)) {
+                if (cleanupModelDownloadGate.shouldActOnSuccess(info.id.toString())) {
                     selectCleanupModel(model.archive)
                     toast("${model.name} ready — tap Local above to use it for cleanup")
                 }
