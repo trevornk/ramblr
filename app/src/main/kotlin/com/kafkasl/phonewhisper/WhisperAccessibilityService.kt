@@ -291,6 +291,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         // service component itself is destroyed, and skipping it would leave the user's clipboard
         // holding the just-dictated text instead of their prior content (#5).
         handler.removeCallbacks(previewTimeoutRunnable)
+        // A preview still pending at teardown would otherwise vanish without ever reaching
+        // history -- the one "never lose a transcript" (#25) gap in this teardown path (#73).
+        // Injection is pointless mid-destroy, but recording the transcript is not: persist both
+        // the raw text and the cleanup candidate so the dictation stays recoverable.
+        pendingPreview?.let { preview ->
+            recordHistory(preview.rawText, cleanedText = preview.candidateText, paidFallbackGroup = preview.paidFallbackGroup)
+        }
         pendingPreview = null
         dismissStyleMenu()
         removeOverlay()
