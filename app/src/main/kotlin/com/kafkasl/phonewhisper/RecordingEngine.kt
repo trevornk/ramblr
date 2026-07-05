@@ -93,7 +93,18 @@ class RecordingEngine(
             return false
         }
 
-        val pcmFile = File.createTempFile("rec_", ".pcm", cacheDir)
+        // Temp-file creation can fail under cache-dir/disk pressure (plausible on a phone
+        // carrying multi-GB models). We already hold the RECORDING claim and the mic here, so a
+        // throw must unwind both -- otherwise the state machine is wedged in RECORDING forever
+        // and the mic handle leaks (#85).
+        val pcmFile = try {
+            File.createTempFile("rec_", ".pcm", cacheDir)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create PCM temp file", e)
+            audioRecord.release()
+            stateMachine.reset()
+            return false
+        }
         try {
             audioRecord.startRecording()
         } catch (e: Exception) {
@@ -110,7 +121,24 @@ class RecordingEngine(
             val buf = ByteArray(bufSize)
             val startedAt = System.currentTimeMillis()
 
-            val result = PcmFileBuffer(pcmFile, MAX_BYTES).use { buffer ->
+            // Opening the file-backed buffer can also fail under disk pressure. It must not
+            // throw out of this bare thread (process death) with the recorder unreleased --
+            // funnel the failure through the same ERROR result path as a mid-recording
+            // exception (#85).
+            val fileBuffer = try {
+                PcmFileBuffer(pcmFile, MAX_BYTES)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open PCM buffer", e)
+                try { audioRecord.stop() } catch (_: Exception) {}
+                audioRecord.release()
+                stateMachine.tryStartTranscribing()
+                val discarded = stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING
+                pcmFile.delete()
+                onFinished(Result(null, 0L, discarded, StopReason.ERROR, e.message))
+                return@thread
+            }
+
+            val result = fileBuffer.use { buffer ->
                 try {
                     while (stateMachine.isRecording()) {
                         if (RecordingDurationCap.exceeded(startedAt, System.currentTimeMillis(), MAX_DURATION_MS)) {
