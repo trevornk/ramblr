@@ -340,7 +340,15 @@ object CleanupWaterfallExecutor {
             }
             callback(
                 when (val result = localInference.complete(prompt, text, modelPath)) {
-                    is LocalInferenceResult.Success -> CleanupStepOutcome.Success(result.text)
+                    is LocalInferenceResult.Success -> {
+                        // Trim to match what both cloud parsers already do to their model text
+                        // (PostProcessor.parseResponse / AnthropicCleanupProvider.parseResponse):
+                        // small local models routinely emit a leading space or newline as the
+                        // first sampled piece, which was injected verbatim (#84).
+                        val trimmed = result.text.trim()
+                        if (trimmed.isNotEmpty()) CleanupStepOutcome.Success(trimmed)
+                        else CleanupStepOutcome.StepFailed("Local model produced an empty response")
+                    }
                     is LocalInferenceResult.Failure -> CleanupStepOutcome.StepFailed(result.message)
                 }
             )

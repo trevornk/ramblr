@@ -28,17 +28,9 @@ object LocalCleanupProvider {
         return ModelDownloader.resolveActiveModel(LOCAL_CLEANUP_MODEL_CATALOG, archive)
     }
 
-    /**
-     * Runs one cleanup completion through [engine] and translates the result into the same
-     * [PostProcessor.Result] shape every other waterfall step produces, so callers outside the
-     * executor (e.g. MainActivity's per-step "Test" button) can drive a local step the same way
-     * as a cloud one. [engine] is the fakeable seam over native inference (see
-     * [LocalInferenceEngine]) -- production callers use [RealLocalInferenceEngine]; tests inject
-     * a fake with no native code involved.
-     */
-    fun run(text: String, prompt: String, modelPath: String, engine: LocalInferenceEngine): PostProcessor.Result =
-        when (val result = engine.complete(prompt, text, modelPath)) {
-            is LocalInferenceResult.Success -> PostProcessor.Result(result.text.trim().ifBlank { null }, null)
-            is LocalInferenceResult.Failure -> PostProcessor.Result(null, result.message)
-        }
+    // A `run(text, prompt, modelPath, engine)` helper used to live here, kdoc-claiming the
+    // Settings "Test" button drove local steps through it -- it never had a production caller
+    // (Test goes through PostProcessor.processWaterfall like everything else), and its trim was
+    // the only trimming local path while the executor injected untrimmed output. Deleted in #84;
+    // the executor's LOCAL_LLM branch now trims, matching the cloud parsers.
 }

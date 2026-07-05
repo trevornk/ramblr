@@ -424,6 +424,38 @@ class LocalLlmWaterfallStepTest {
         assertEquals(1, engine.calls.size)
     }
 
+    @Test fun `local output is trimmed before it becomes a Success, matching the cloud parsers`() {
+        // Small local models routinely emit a leading space/newline as the first sampled piece;
+        // both cloud parsers trim, so untrimmed local output was a visible behavior difference
+        // whenever the waterfall switched between local and cloud (#84).
+        val transport = FakeCleanupHttpTransport(mutableListOf())
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("\n cleaned locally ")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+
+        val result = execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
+
+        assertEquals("cleaned locally", result.text)
+    }
+
+    @Test fun `a whitespace-only local success falls through as a step failure instead of injecting blanks`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned via fallback")))
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("   \n ")))
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+
+        val result = execute(
+            waterfall, transport, engine,
+            localModelPath = { "/path/to/model.gguf" },
+            credentialLookup = { slot -> if (slot == CleanupCredentialSlot.OPENAI_DIRECT) "openai-key" else "" },
+        )
+
+        assertEquals("cleaned via fallback", result.text)
+    }
+
     @Test fun `the local step passes the waterfall prompt and text through unchanged as system+user`() {
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned")))
