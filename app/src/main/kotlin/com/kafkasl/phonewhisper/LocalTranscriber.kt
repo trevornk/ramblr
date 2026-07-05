@@ -89,6 +89,33 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
             }
 
             // Whisper (has encoder + decoder, no joiner)
+            //
+            // NeMo Canary (#98) has the IDENTICAL file layout -- encoder + decoder, no joiner,
+            // no distinguishing filename -- so it must be checked first by directory name before
+            // falling through to the Whisper branch below, or every Canary install would silently
+            // load as (garbage) Whisper. Curated-catalog-only (#37 non-goals: no arbitrary
+            // user-supplied GGUF/ONNX), so matching on the known archive name is safe and exact,
+            // unlike a heuristic that would need to hold for arbitrary future models.
+            if (dir.name.contains("canary")) {
+                val canaryEncoder = findFile(p, "encoder")
+                val canaryDecoder = findFile(p, "decoder")
+                if (canaryEncoder != null && canaryDecoder != null) {
+                    return OfflineRecognizerConfig(
+                        modelConfig = OfflineModelConfig(
+                            canary = OfflineCanaryModelConfig(
+                                encoder = canaryEncoder,
+                                decoder = canaryDecoder,
+                                srcLang = "en",
+                                tgtLang = "en",
+                                usePnc = true,
+                            ),
+                            tokens = tokens,
+                            numThreads = 2,
+                        )
+                    )
+                }
+            }
+
             val whisperEncoder = findFile(p, "encoder")
             val whisperDecoder = findFile(p, "decoder")
             if (whisperEncoder != null && whisperDecoder != null && findFile(p, "joiner") == null) {

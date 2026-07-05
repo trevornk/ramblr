@@ -56,7 +56,10 @@ class ModelDownloaderTest {
     }
 
     @Test fun `catalog has expected structure`() {
-        assertEquals(5, MODEL_CATALOG.size)
+        // Reduced from 5 to 4 for #98 (Claude Fable 5 STT model consult): NeMo Conformer CTC
+        // Small removed (outputs lowercase text with no punctuation -- disqualifying for a
+        // dictation app), Whisper Base replaced in-place by Canary 180M Flash.
+        assertEquals(4, MODEL_CATALOG.size)
         assertTrue(MODEL_CATALOG.any { it.recommended })
         assertTrue(MODEL_CATALOG.all { it.archive.startsWith("sherpa-onnx-") })
         assertTrue(MODEL_CATALOG.all { it.sizeMb > 0 })
@@ -79,8 +82,11 @@ class ModelDownloaderTest {
 
     // -- streaming model catalog (#29) --
 
-    @Test fun `streaming catalog has three tiers, all marked and checksummed`() {
-        assertEquals(3, STREAMING_MODEL_CATALOG.size)
+    @Test fun `streaming catalog has one tier, marked and checksummed`() {
+        // Collapsed from three tiers to one for #98 (Claude Fable 5 STT model consult): the
+        // quality difference between them was invisible in a cosmetic live preview, while the
+        // larger tiers cost real CPU during recording -- see STREAMING_MODEL's kdoc.
+        assertEquals(1, STREAMING_MODEL_CATALOG.size)
         assertTrue(STREAMING_MODEL_CATALOG.all { it.isStreaming })
         assertTrue(STREAMING_MODEL_CATALOG.all { it.sha256 != null })
         assertTrue(STREAMING_MODEL_CATALOG.all { it.sha256!!.matches(Regex("[0-9a-f]{64}")) })

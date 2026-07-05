@@ -224,6 +224,11 @@ class WhisperAccessibilityService : AccessibilityService() {
     // between dictations (see StreamingTranscriber.beginSession/endSession).
     private val streamingTranscriberSlot = TranscriberSlot<StreamingTranscriber> { it.release() }
 
+    // Set by onTrimMemory (#98) when the transcriber slots were released under memory pressure;
+    // cleared once warmUpTranscribersIfTrimmed reloads them. Avoids reloading on every single
+    // recording start -- only after a real trim actually emptied the slots.
+    @Volatile private var transcribersTrimmed = false
+
     // Live-preview injection state for the current recording (#29), null when no partial has been
     // injected yet this recording or once the session has ended. Only touched on the main thread.
     private data class StreamingPreviewSession(
@@ -354,14 +359,27 @@ class WhisperAccessibilityService : AccessibilityService() {
      * Under memory pressure, drop the cached local-cleanup model (#74) -- it's a pure cache, and
      * the next dictation reloads it. RUNNING_LOW is the threshold; every higher-numbered level
      * (RUNNING_CRITICAL, plus the UI_HIDDEN/BACKGROUND/MODERATE/COMPLETE band, which all signal
-     * at least as much pressure or less foreground relevance) qualifies too. The transcriber
-     * slots are deliberately NOT released here: dictation latency is the product, and those
-     * models are an order of magnitude smaller.
+     * at least as much pressure or less foreground relevance) qualifies too.
+     *
+     * The transcriber slots ARE released here too, as of #98 (Claude Fable 5 STT model consult):
+     * before this, they were the one local resource with NO memory-pressure handling at all --
+     * loaded once at service connect and held forever, unlike [LocalCleanupModelHolder]'s
+     * pre-warm/idle-unload/trim-release discipline. On a phone where Ramblr was independently
+     * measured as the single largest RSS consumer on the device, a permanently-resident batch
+     * recognizer (up to 465MB) plus streaming recognizer stacked on top of the cleanup model was
+     * a real, avoidable contributor to the exact mmap-eviction thrash the #92 native-hang
+     * investigation diagnosed. [warmUpTranscribersIfTrimmed] reloads them the next time recording
+     * starts, the same pre-warm timing [warmUpLocalCleanupModelIfNeeded] already uses -- the
+     * reload overlaps with the user still talking, so this should cost no perceived latency on
+     * the (much more common) case where memory pressure has already passed by the next dictation.
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             LocalCleanupModelHolder.releaseAsync()
+            transcribersTrimmed = true
+            transcriberSlot.replace(null)
+            streamingTranscriberSlot.replace(null)
         }
     }
 
@@ -1110,6 +1128,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
 
         warmUpLocalCleanupModelIfNeeded()
+        warmUpTranscribersIfTrimmed()
 
         // A still-pending preview (#40) from the previous dictation shouldn't linger silently
         // while a new one starts -- resolve it the same safe way a timeout would.
@@ -1167,6 +1186,21 @@ class WhisperAccessibilityService : AccessibilityService() {
         val modelPath = ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this))?.absolutePath
             ?: return
         LocalCleanupModelHolder.warmUpAsync(modelPath)
+    }
+
+    /**
+     * Reloads the batch (and, if enabled, streaming) transcriber if [onTrimMemory] released them
+     * under memory pressure (#98) -- mirrors [warmUpLocalCleanupModelIfNeeded]'s pre-warm timing:
+     * this runs the instant recording starts, so a reload (typically well under a second for
+     * these much-smaller-than-the-cleanup-LLM models) overlaps with the user still talking rather
+     * than adding perceived latency at transcription time. No-ops on the far more common case
+     * where no trim has happened since the last dictation.
+     */
+    private fun warmUpTranscribersIfTrimmed() {
+        if (!transcribersTrimmed) return
+        transcribersTrimmed = false
+        thread { initLocalModel() }
+        thread { initStreamingModel() }
     }
 
     /** Long-press while TRANSCRIBING (see overlay.setOnTouchListener): abort the in-flight call and return to idle. */

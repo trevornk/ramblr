@@ -65,67 +65,60 @@ val MODEL_CATALOG = listOf(
     Model("Parakeet 110M", "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
         100, "★★★ Best value", recommended = true,
         sha256 = "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479cefcabd06cf5703630b"),
-    // Same size/quality class as Parakeet 110M above (not a "smaller" tier -- see
-    // sherpa-onnx-nemo-ctc-en-conformer-small below for the genuine small tier, #50) -- kept as an
-    // alternative architecture for users who prefer Whisper's behavior, not part of the 3-tier set.
-    Model("Whisper Base", "sherpa-onnx-whisper-base.en",
-        199, "★★★ Alternative (Whisper architecture)",
-        sha256 = "475bc7052ce299c007f6d5d5407ba8601f819a2867f6eecee510ed17df581542"),
-    // Also same size class as Parakeet 110M (~100-108MB) despite the "Tiny" name -- kept as a fast
-    // alternative, not the small tier (#50).
+    // Replaces Whisper Base.en for #98 (Claude Fable 5 STT model consult): Canary-180m-flash is
+    // strictly better in the same size class -- 7.12% avg WER vs. Whisper Base.en's 10.32%
+    // (Open ASR Leaderboard), plus real punctuation/capitalization and en/es/de/fr support,
+    // where Whisper Base.en also pads every utterance to a fixed 30-second window regardless of
+    // actual dictation length. Real attention-decoder architecture (a bit slower per token than
+    // Parakeet's CTC/TDT decoders, but batch transcription -- not live-critical the way streaming
+    // preview is). CC-BY-4.0 licensed. URL/sha256 verified 2026-07-05 by downloading the exact
+    // 153,692,328-byte asset from the real sherpa-onnx GitHub release and hashing it locally
+    // (`shasum -a 256`), same discipline as every other entry in this file.
+    Model("Canary 180M Flash", "sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8",
+        147, "★★★ Alternative (multilingual, punctuated)",
+        sha256 = "7a38ed8b13f014ad632b09ff8d22e0c6f1359dd046af9235d281dfae841b9ab9"),
+    // Kept as the fast/small alternative (#98 consult): still the smallest genuinely-good English
+    // option available in sherpa-onnx as of this pass -- a "Moonshine v2" family was considered
+    // but does NOT actually exist as a shipped sherpa-onnx model yet (only an open, unanswered
+    // feature request as of 2026-06-27, k2-fsa/sherpa-onnx#3231); shipping a fictional archive
+    // name would just be a broken download, so v1 stays until v2 support lands upstream.
     Model("Moonshine Tiny", "sherpa-onnx-moonshine-tiny-en-int8",
         103, "★★★ Fast alternative",
         sha256 = "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2"),
-    // The genuine smallest-still-good tier (#50): NVIDIA NeMo's stt_en_conformer_ctc_small,
-    // converted by sherpa-onnx -- real, verifiably smaller (76MB) than every other entry above.
-    // URL/sha256 verified 2026-07-04 by downloading the exact asset and hashing it locally
-    // (`shasum -a 256`), same discipline as every other entry in this file.
-    Model("NeMo Conformer CTC Small", "sherpa-onnx-nemo-ctc-en-conformer-small",
-        76, "★★☆ Smallest, still good",
-        sha256 = "83dcb462aece5bef4e8072c267419389f0b8d1f91152d8851765f284ff664caa"),
+    // NeMo Conformer CTC Small REMOVED for #98 (Claude Fable 5 STT model consult): despite being
+    // the smallest entry by raw size (76MB), it outputs lowercase text with no punctuation at
+    // all -- disqualifying for a dictation app regardless of WER, since every other model here
+    // (including the now-smallest remaining tier, Moonshine Tiny) produces real capitalization
+    // and punctuation. Better to have one fewer, genuinely usable tier than a technically-smaller
+    // one that silently produces worse-looking output for every single dictation.
 )
 
 /**
- * Streaming zipformer (English), used only for live preview during recording (#29) — the final
- * injected transcript always still comes from the batch [MODEL_CATALOG] (or cloud) pipeline above,
- * unchanged. Kept in its own catalog/list rather than appended to [MODEL_CATALOG] so it's never
- * offered as a selectable *offline* model. Archive size and SHA-256 verified against `checksum.txt`
- * published alongside the sherpa-onnx `asr-models` GitHub release (and independently re-hashed from
- * the downloaded asset) on 2026-07-03. The best-value/default tier (#50): small enough for
- * low-latency live preview, decent accuracy.
+ * Streaming zipformer2 (English), used only for live preview during recording (#29) -- the final
+ * injected transcript always still comes from the batch [MODEL_CATALOG] (or cloud) pipeline
+ * above, unchanged. Kept in its own catalog/list rather than appended to [MODEL_CATALOG] so it's
+ * never offered as a selectable *offline* model.
+ *
+ * Collapsed to a single tier for #98 (Claude Fable 5 STT model consult): the prior 3-tier catalog
+ * (310MB "best quality" / 128MB "best value" / 57MB "smallest") spread a quality difference of
+ * only 0.9-2.0pp LibriSpeech WER across a 5.4x size range -- invisible in a cosmetic live preview
+ * whose every word gets replaced by the real batch transcript, while the larger tiers burned
+ * proportionally more CPU *during recording*, competing directly with the local cleanup model's
+ * record-start pre-warm (see [LocalCleanupModelHolder.warmUpAsync]) for the same performance
+ * cores. This is now the Kroko community model (Zipformer2, Aug 2025 release from Banafo) --
+ * already the smallest of the three prior tiers, now the only one. `modelType = "zipformer2"`,
+ * NOT "zipformer" -- confirmed against sherpa-onnx's own bundled example recognizer config for
+ * this exact archive (`OnlineRecognizer.kt` in this repo's vendored sherpa-onnx sources), since
+ * the two architectures aren't interchangeable. License is CC-BY-SA (Banafo/Kroko-ASR) --
+ * verified against the model card. URL/sha256 verified 2026-07-04 by downloading the exact asset
+ * and hashing it locally.
  */
-val STREAMING_MODEL = Model("Streaming Zipformer (EN)", "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
-    128, "★★★ Best value · Live preview", recommended = true,
-    sha256 = "9c559283e8498d3fe95913c79ca1cb454bb26281ac2b102b41306c7d752765d9",
-    isStreaming = true)
-
-/**
- * Best-quality streaming tier (#50): a newer, larger zipformer2 transducer trained on LibriSpeech,
- * noticeably more accurate than [STREAMING_MODEL] for users willing to spend the extra download/
- * install size. Uses `modelType = "zipformer2"`, NOT "zipformer" -- confirmed against sherpa-onnx's
- * own bundled example recognizer config for this exact archive (`OnlineRecognizer.kt` in this
- * repo's vendored sherpa-onnx sources), since the two architectures aren't interchangeable. URL/
- * sha256 verified 2026-07-04 by downloading the exact asset and hashing it locally.
- */
-val STREAMING_MODEL_QUALITY = Model("Streaming Zipformer2 (EN, high accuracy)",
-    "sherpa-onnx-streaming-zipformer-en-2023-06-26",
-    310, "★★★★ Best quality · Live preview",
-    sha256 = "639e25b578e9e997131402199419c13a941f8e4e198e2da1ce57dbf5cf401282",
-    isStreaming = true, streamingModelType = "zipformer2")
-
-/**
- * Smallest-still-good streaming tier (#50): a compact zipformer2 transducer from the Kroko English
- * release, genuinely smaller than [STREAMING_MODEL] (57MB vs. 128MB compressed). Also
- * `modelType = "zipformer2"` -- see [STREAMING_MODEL_QUALITY]'s note. URL/sha256 verified
- * 2026-07-04 by downloading the exact asset and hashing it locally.
- */
-val STREAMING_MODEL_SMALL = Model("Streaming Zipformer2 (EN, compact)",
-    "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06",
-    57, "★★☆ Smallest, still good · Live preview",
+val STREAMING_MODEL = Model("Streaming Zipformer2 (EN)", "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06",
+    57, "★★★ Live preview", recommended = true,
     sha256 = "c8676e5ff9ac2a85296e53ee0fd4d5fb1db6770e7a7647166eeafe349ade6834",
     isStreaming = true, streamingModelType = "zipformer2")
 
-val STREAMING_MODEL_CATALOG = listOf(STREAMING_MODEL_QUALITY, STREAMING_MODEL, STREAMING_MODEL_SMALL)
+val STREAMING_MODEL_CATALOG = listOf(STREAMING_MODEL)
 
 /**
  * The one curated on-device cleanup model shipped for #37 -- no arbitrary user-supplied GGUF
