@@ -36,8 +36,22 @@ class DictationHistoryStore(private val file: File, private val maxEntries: Int 
         const val DEFAULT_MAX_ENTRIES = 50
         private const val FILE_NAME = "dictation_history.jsonl"
 
+        // One store instance per backing file (#71): add/all/clear/delete are @Synchronized,
+        // i.e. locked on the instance — the service's background history writes and
+        // MainActivity's history dialog previously each held their *own* instance, so their
+        // read-modify-write cycles didn't exclude each other and a race could drop or
+        // resurrect entries. First caller's maxEntries wins for a given path; every production
+        // caller uses the default.
+        private val instances = mutableMapOf<String, DictationHistoryStore>()
+
+        /** The shared store for [file], creating it on first use. */
+        fun forFile(file: File, maxEntries: Int = DEFAULT_MAX_ENTRIES): DictationHistoryStore =
+            synchronized(instances) {
+                instances.getOrPut(file.absolutePath) { DictationHistoryStore(file, maxEntries) }
+            }
+
         fun forContext(context: Context, maxEntries: Int = DEFAULT_MAX_ENTRIES) =
-            DictationHistoryStore(File(context.filesDir, FILE_NAME), maxEntries)
+            forFile(File(context.filesDir, FILE_NAME), maxEntries)
     }
 
     /** Appends [entry], evicting the oldest entries beyond [maxEntries]. */
