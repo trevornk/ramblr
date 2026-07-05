@@ -81,8 +81,11 @@ class LlamaCppInference : Closeable {
      */
     fun complete(systemPrompt: String, userText: String): String {
         check(nativePtr != 0L) { "Model is not loaded. Call load() first." }
-        addChatMessage(nativePtr, systemPrompt, "system")
-        startCompletion(nativePtr, userText)
+        // Content is sanitized because the native side tokenizes the rendered template with
+        // parse_special=true -- literal <|im_end|>-style text in a transcript would otherwise
+        // become real control tokens and forge turn boundaries (#78).
+        addChatMessage(nativePtr, SpecialTokenSanitizer.sanitize(systemPrompt), "system")
+        startCompletion(nativePtr, SpecialTokenSanitizer.sanitize(userText))
         try {
             return LlamaCompletionAccumulator.accumulate(
                 maxPieces = MAX_RESPONSE_TOKENS,
