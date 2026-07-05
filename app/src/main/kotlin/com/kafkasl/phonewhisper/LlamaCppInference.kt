@@ -79,7 +79,12 @@ class LlamaCppInference : Closeable {
      * falling through to the next waterfall step (or raw text) exactly like any other
      * local-inference failure.
      */
-    fun complete(systemPrompt: String, userText: String): String {
+    fun complete(
+        systemPrompt: String,
+        userText: String,
+        deadlineAtMs: Long = Long.MAX_VALUE,
+        isCancelled: () -> Boolean = { false },
+    ): String {
         check(nativePtr != 0L) { "Model is not loaded. Call load() first." }
         // Content is sanitized because the native side tokenizes the rendered template with
         // parse_special=true -- literal <|im_end|>-style text in a transcript would otherwise
@@ -90,6 +95,8 @@ class LlamaCppInference : Closeable {
             return LlamaCompletionAccumulator.accumulate(
                 maxPieces = MAX_RESPONSE_TOKENS,
                 endOfGeneration = END_OF_GENERATION,
+                deadlineAtMs = deadlineAtMs,
+                isCancelled = isCancelled,
                 // completionLoop returns raw UTF-8 bytes (#75): JNI's NewStringUTF can't carry
                 // supplementary-plane characters (emoji) -- it requires Modified UTF-8 -- so the
                 // native side hands back bytes and we decode them here instead.

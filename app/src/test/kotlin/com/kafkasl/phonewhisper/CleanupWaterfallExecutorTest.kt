@@ -148,9 +148,17 @@ private fun okOutcome(text: String): CleanupHttpOutcome =
  *  in a JVM unit test, only this seam's plumbing can. */
 private class FakeLocalInferenceEngine(private val outcomes: MutableList<LocalInferenceResult>) : LocalInferenceEngine {
     val calls = mutableListOf<Triple<String, String, String>>()
+    val deadlines = mutableListOf<Long>()
 
-    override fun complete(systemPrompt: String, userText: String, modelPath: String): LocalInferenceResult {
+    override fun complete(
+        systemPrompt: String,
+        userText: String,
+        modelPath: String,
+        deadlineAtMs: Long,
+        isCancelled: () -> Boolean,
+    ): LocalInferenceResult {
         calls.add(Triple(systemPrompt, userText, modelPath))
+        deadlines.add(deadlineAtMs)
         check(outcomes.isNotEmpty()) { "FakeLocalInferenceEngine ran out of queued outcomes" }
         return outcomes.removeAt(0)
     }
@@ -168,7 +176,7 @@ class CleanupWaterfallExecutorTest {
             CleanupCredentialSlot.OPENAI_DIRECT to "openai-key",
             CleanupCredentialSlot.ANTHROPIC_DIRECT to "anthropic-key",
         ),
-        localInference: LocalInferenceEngine = LocalInferenceEngine { _, _, _ -> error("no local step expected") },
+        localInference: LocalInferenceEngine = LocalInferenceEngine { _, _, _, _, _ -> error("no local step expected") },
         localModelPath: () -> String? = { null },
     ): PostProcessor.Result {
         var captured: PostProcessor.Result? = null
@@ -424,6 +432,50 @@ class LocalLlmWaterfallStepTest {
         assertEquals(1, engine.calls.size)
     }
 
+    @Test fun `a cancelled local inference stops the waterfall instead of falling through`() {
+        // Like a cancelled HTTP call (#63), a cancel during local inference must not advance to
+        // the next (possibly paid) step (#83).
+        val transport = FakeCleanupHttpTransport(mutableListOf()) // must never be touched
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Cancelled))
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+
+        val result = execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
+
+        assertNull(result.text)
+        assertEquals("Cleanup cancelled", result.error)
+        assertEquals(0, transport.requestedUrls.size)
+    }
+
+    @Test fun `the local step receives the waterfall's own wall-clock deadline`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf())
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("ok")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+
+        val before = System.currentTimeMillis()
+        execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
+        val after = System.currentTimeMillis()
+
+        val deadline = engine.deadlines.single()
+        assertTrue(deadline >= before + CLEANUP_WATERFALL_HARD_CAP_MS)
+        assertTrue(deadline <= after + CLEANUP_WATERFALL_HARD_CAP_MS)
+    }
+
+    @Test fun `each waterfall run clears a stale cancel from the previous dictation`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf())
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned locally")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+
+        cancelHolder.cancel() // left over from a previous dictation
+        val result = execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
+
+        assertEquals("cleaned locally", result.text)
+    }
+
     @Test fun `local output is trimmed before it becomes a Success, matching the cloud parsers`() {
         // Small local models routinely emit a leading space/newline as the first sampled piece;
         // both cloud parsers trim, so untrimmed local output was a visible behavior difference
@@ -548,7 +600,7 @@ class CleanupWaterfallExecutorCancellationTest {
             legacyBaseUrl = PostProcessor.DEFAULT_BASE_URL,
             credentialLookup = { "some-key" },
             transport = transport,
-            localInference = LocalInferenceEngine { _, _, _ -> error("no local step expected") },
+            localInference = LocalInferenceEngine { _, _, _, _, _ -> error("no local step expected") },
             localModelPath = { null },
             callback = { captured = it },
         )
