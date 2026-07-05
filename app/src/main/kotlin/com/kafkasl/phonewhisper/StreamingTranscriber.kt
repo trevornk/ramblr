@@ -21,14 +21,23 @@ import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
  */
 class StreamingTranscriber private constructor(private val recognizer: OnlineRecognizer) {
 
-    @Volatile private var stream: OnlineStream? = null
+    /** Serializes every native stream operation (#77): [acceptChunk] runs on the RecordingEngine
+     *  reader thread while [endSession]/[beginSession] run on the main thread, and
+     *  `OnlineStream.release()` deletes the native object -- without mutual exclusion a release
+     *  can interleave an in-flight decode and dereference freed native memory (SIGSEGV). Chunks
+     *  arrive ~25/s and each decode is short, so holding one lock across a chunk is cheap. */
+    private val lock = Any()
+
+    private var stream: OnlineStream? = null
 
     /** Starts a fresh decode session for one recording. Releases any stream left over from a
      *  previous session first, in case [endSession] was never reached (e.g. the service was torn
      *  down mid-recording). */
     fun beginSession() {
-        stream?.release()
-        stream = recognizer.createStream()
+        synchronized(lock) {
+            stream?.release()
+            stream = recognizer.createStream()
+        }
     }
 
     /**
@@ -39,23 +48,31 @@ class StreamingTranscriber private constructor(private val recognizer: OnlineRec
      * incremental-chunk usage, decoding synchronously as far as the buffered audio allows.
      */
     fun acceptChunk(samples: FloatArray, sampleRate: Int): String? {
-        val s = stream ?: return null
-        s.acceptWaveform(samples, sampleRate)
-        while (recognizer.isReady(s)) recognizer.decode(s)
-        return recognizer.getResult(s).text.trim()
+        synchronized(lock) {
+            val s = stream ?: return null
+            s.acceptWaveform(samples, sampleRate)
+            while (recognizer.isReady(s)) recognizer.decode(s)
+            return recognizer.getResult(s).text.trim()
+        }
     }
 
     /** Ends the current decode session, releasing the native stream. Safe to call even when no
      *  session is active. */
     fun endSession() {
-        stream?.release()
-        stream = null
+        synchronized(lock) {
+            stream?.release()
+            stream = null
+        }
     }
 
-    /** Releases the native recognizer. Call once no in-flight [acceptChunk] can still be using it. */
+    /** Releases the native recognizer. Safe to call while a straggling [acceptChunk] is in
+     *  flight -- the internal lock serializes the release behind it. */
     fun release() {
-        endSession()
-        recognizer.release()
+        synchronized(lock) {
+            stream?.release()
+            stream = null
+            recognizer.release()
+        }
     }
 
     companion object {
