@@ -1221,7 +1221,14 @@ class WhisperAccessibilityService : AccessibilityService() {
         val apiKey = ApiKeyStore.getApiKey(this)
 
         if (usePostProcessing) {
-            if (apiKey.isBlank()) {
+            val waterfall = CleanupWaterfallStore.load(this)
+
+            // The legacy cloud API key is only required in true legacy single-step mode. Once a
+            // real waterfall is configured (including a LOCAL_LLM-only waterfall), credential
+            // resolution is per-step inside CleanupWaterfallExecutor — which already handles
+            // LOCAL_LLM without needing this key. Gating on it here made local-only cleanup
+            // unreachable whenever no cloud key was set (#58).
+            if (!PostProcessor.shouldUseWaterfallExecutor(waterfall) && apiKey.isBlank()) {
                 handler.post {
                     if (!guard.isCurrent(token)) return@post
                     toast("Post-processing needs API key. Using raw text.")
@@ -1238,7 +1245,6 @@ class WhisperAccessibilityService : AccessibilityService() {
             val model = prefs().getString("cleanup_model", PostProcessor.DEFAULT_MODEL) ?: PostProcessor.DEFAULT_MODEL
 
             if (!guard.isCurrent(token)) return
-            val waterfall = CleanupWaterfallStore.load(this)
             PostProcessor.processWaterfall(
                 this, text, prompt, waterfall, cleanupCursor, inFlightCall, apiKey, baseUrl, model,
             ) { result ->
