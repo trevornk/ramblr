@@ -10,9 +10,11 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.Editable
 import android.text.InputType
 import android.text.Spannable
 import android.text.SpannableString
+import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
 import android.util.TypedValue
 import android.view.Gravity
@@ -1237,7 +1239,7 @@ class MainActivity : AppCompatActivity() {
      *  bullet in a plain [android.app.AlertDialog.Builder.setItems] list is enough to pick a
      *  clearly-legible overlay color without building/maintaining a custom picker view. */
     private fun pickOverlayColor(title: String, current: Int?, onPick: (Int?) -> Unit) {
-        val items = overlayColorSwatches.map { (label, color) ->
+        val swatchItems = overlayColorSwatches.map { (label, color) ->
             SpannableString("●  $label").apply {
                 setSpan(
                     ForegroundColorSpan(color ?: attrColor(android.R.attr.textColorSecondary)),
@@ -1245,11 +1247,142 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
+        // Trailing "Custom…" row (#59) opens openCustomColorPicker so any RGB color is reachable,
+        // not just the fixed preset swatches above. Swatched in the currently-set color (if any)
+        // rather than a generic dot, so a custom color that's already active is visible at a glance.
+        val customItem = SpannableString("●  Custom…").apply {
+            setSpan(
+                ForegroundColorSpan(current ?: attrColor(android.R.attr.textColorSecondary)),
+                0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+        }
+        val items = swatchItems + customItem
         android.app.AlertDialog.Builder(this)
             .setTitle(title)
-            .setItems(items.toTypedArray()) { _, which -> onPick(overlayColorSwatches[which].second) }
+            .setItems(items.toTypedArray()) { _, which ->
+                if (which < overlayColorSwatches.size) onPick(overlayColorSwatches[which].second)
+                else openCustomColorPicker(title, current, onPick)
+            }
             .show()
     }
+
+    /** Full custom color picker (#59): Hue/Saturation/Value sliders and a hex text field stay in
+     *  sync with each other and with a live preview swatch, so any RGB color is reachable either
+     *  visually or by typing an exact hex code. Colors this app stores are always opaque (see
+     *  OverlayAppearancePrefs's NO_COLOR sentinel note), so the alpha channel is forced to 0xFF
+     *  before handing the result back to [onPick]. */
+    private fun openCustomColorPicker(title: String, current: Int?, onPick: (Int?) -> Unit) {
+        val hsv = FloatArray(3)
+        Color.colorToHSV((current ?: Color.WHITE) or 0xFF000000.toInt(), hsv)
+
+        // Guards against the hex TextWatcher and the slider listeners re-triggering each other
+        // in a feedback loop when one side programmatically updates the other.
+        var isSyncing = false
+        fun currentColor(): Int = Color.HSVToColor(hsv) or 0xFF000000.toInt()
+
+        val preview = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(56))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(8).toFloat()
+                setColor(currentColor())
+                setStroke(dp(1), attrColor(android.R.attr.textColorSecondary))
+            }
+        }
+
+        val hexInput = EditText(this).apply {
+            hint = "#RRGGBB"
+            setText(String.format("#%06X", 0xFFFFFF and currentColor()))
+        }
+
+        fun updatePreview() {
+            (preview.background as GradientDrawable).setColor(currentColor())
+        }
+
+        fun syncHexFromSliders() {
+            isSyncing = true
+            hexInput.setText(String.format("#%06X", 0xFFFFFF and currentColor()))
+            isSyncing = false
+        }
+
+        fun sliderRow(labelText: String, maxValue: Int, initialProgress: Int, onChange: (Int) -> Unit): LinearLayout {
+            val valueLabel = TextView(this).apply { text = "$labelText: $initialProgress" }
+            val seekBar = SeekBar(this).apply {
+                max = maxValue
+                progress = initialProgress
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        if (!fromUser || isSyncing) return
+                        valueLabel.text = "$labelText: $progress"
+                        onChange(progress)
+                        updatePreview()
+                        syncHexFromSliders()
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                })
+            }
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(valueLabel)
+                addView(seekBar)
+                tag = Pair(valueLabel, seekBar)
+            }
+        }
+
+        val hueRow = sliderRow("Hue", 360, hsv[0].toInt()) { hsv[0] = it.toFloat() }
+        val satRow = sliderRow("Saturation", 100, (hsv[1] * 100).toInt()) { hsv[1] = it / 100f }
+        val valRow = sliderRow("Brightness", 100, (hsv[2] * 100).toInt()) { hsv[2] = it / 100f }
+
+        @Suppress("UNCHECKED_CAST")
+        fun sliderRowViews(row: LinearLayout) = row.tag as Pair<TextView, SeekBar>
+
+        hexInput.addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) {
+                if (isSyncing) return
+                val parsed = parseHexColor(s.toString()) ?: return
+                Color.colorToHSV(parsed, hsv)
+                isSyncing = true
+                listOf(hueRow to 0, satRow to 1, valRow to 2).forEach { (row, hsvIndex) ->
+                    val (label, seekBar) = sliderRowViews(row)
+                    val progress = if (hsvIndex == 0) hsv[0].toInt() else (hsv[hsvIndex] * 100).toInt()
+                    seekBar.progress = progress
+                    val name = when (hsvIndex) { 0 -> "Hue"; 1 -> "Saturation"; else -> "Brightness" }
+                    label.text = "$name: $progress"
+                }
+                isSyncing = false
+                updatePreview()
+            }
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        })
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(8), dp(24), dp(8))
+            addView(preview, LinearLayout.LayoutParams(LP_MATCH, dp(56)).apply { bottomMargin = dp(16) })
+            addView(hueRow)
+            addView(satRow)
+            addView(valRow)
+            addView(TextView(this@MainActivity).apply {
+                text = "Hex"
+                setPadding(0, dp(8), 0, dp(4))
+            })
+            addView(hexInput)
+        }
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(ScrollView(this).apply { addView(container) })
+            .setPositiveButton("Use this color") { _, _ -> onPick(currentColor()) }
+            .setNeutralButton("Reset to default") { _, _ -> onPick(null) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Parses via [HexColorParser] -- kept as a thin wrapper here since call sites in this file
+     *  reference `parseHexColor(...)`. See [HexColorParser] for why the actual logic lives there. */
+    private fun parseHexColor(raw: String): Int? = HexColorParser.parse(raw)
 
     // --- State Updates ---
 
