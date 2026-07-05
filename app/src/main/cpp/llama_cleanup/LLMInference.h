@@ -1,7 +1,13 @@
-// Vendored verbatim (no logic changes) from shubham0204/SmolChat-Android's `smollm` module
+// Vendored from shubham0204/SmolChat-Android's `smollm` module
 // (Apache License 2.0, commit 8408e1ced09e, 2026-07-03):
 // https://github.com/shubham0204/SmolChat-Android/blob/main/smollm/src/main/cpp/LLMInference.h
 // See app/src/main/cpp/llama_cleanup/README.md for build status and what's adapted vs. vendored.
+//
+// Divergences from upstream (#87): pointer members carry `= nullptr` default initializers so a
+// stack-constructed instance (see tools/llama_cleanup_probe) has a safe destructor on error
+// paths, and `_chatTemplateOwned` tracks whether `_chatTemplate` was strdup'ed (owned) vs.
+// borrowed from the model, so the destructor can free the owned case without freeing
+// model-owned memory.
 #pragma once
 #include "chat.h"
 #include "common.h"
@@ -11,11 +17,11 @@
 
 class LLMInference {
     // llama.cpp-specific types
-    llama_context* _ctx;
-    llama_model*   _model;
-    llama_sampler* _sampler;
+    llama_context* _ctx     = nullptr;
+    llama_model*   _model   = nullptr;
+    llama_sampler* _sampler = nullptr;
     llama_token    _currToken;
-    llama_batch*   _batch;
+    llama_batch*   _batch   = nullptr;
 
     llama_batch g_batch;
 
@@ -27,7 +33,10 @@ class LLMInference {
     // stores the tokens for the last query
     // appended to `_messages`
     std::vector<llama_token> _promptTokens;
-    const char*              _chatTemplate;
+    const char*              _chatTemplate = nullptr;
+    // true when `_chatTemplate` was strdup'ed by loadModel (caller-supplied template) and must
+    // be freed by the destructor; false when it points at model-owned memory (#87).
+    bool _chatTemplateOwned = false;
 
     // stores the complete response for the given query
     std::string _response;

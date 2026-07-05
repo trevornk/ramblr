@@ -191,9 +191,12 @@ object RealLocalInferenceEngine : LocalInferenceEngine {
                 else LocalInferenceResult.Failure("Local model produced an empty response")
             }
         } catch (e: Throwable) {
-            // Broad catch is deliberate: this boundary also absorbs UnsatisfiedLinkError, which
-            // is expected (not a bug) until the native provisioning gap documented in #37 is
-            // closed -- see LlamaCppInference's kdoc.
+            // Broad catch is deliberate: this boundary must absorb everything up to and
+            // including UnsatisfiedLinkError so a native problem fails the LOCAL_LLM step
+            // cleanly instead of crashing the accessibility service. Note that since the
+            // native build wiring landed (#37), UnsatisfiedLinkError here indicates a real
+            // packaging regression, not an expected gap (#87 item 5) -- it is logged as a
+            // step failure the user will see as cleanup falling through.
             if (isCancelled()) LocalInferenceResult.Cancelled
             else LocalInferenceResult.Failure(e.message ?: "Local inference failed")
         }
