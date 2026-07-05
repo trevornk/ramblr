@@ -12,6 +12,13 @@
 //   - loadModel adds the min-p sampler the minP parameter always promised (upstream accepted,
 //     logged, and silently ignored it), and tracks _chatTemplate ownership so the destructor can
 //     free the strdup'ed case.
+//   - loadModel installs a ggml abort callback and completionLoop treats a non-zero llama_decode
+//     return as a hard error (#92): a single decode is otherwise uninterruptible, so a decode that
+//     runs pathologically long (mmap'd model pages re-faulted from swap under memory pressure --
+//     the live-confirmed device cause) blocks past the waterfall's whole wall-clock budget with no
+//     way out. setInferenceBudgetMs arms a deadline the callback checks between graph nodes.
+//     Upstream never bounded a decode and only checked `< 0`, so it would sample garbage after an
+//     abort (which returns 2, not a negative).
 //   - storeChats=false now actually means "one-shot, no history" on a reused instance (#74):
 //     startCompletion clears the KV cache so a new turn's positions restart at 0 instead of
 //     appending after (and attending to) the previous turn's tokens, and stopCompletion frees and
@@ -69,6 +76,12 @@ LLMInference::loadModel(const char *model_path, float minP, float temperature, b
         throw std::runtime_error("llama_new_context_with_model() returned null");
     }
 
+    // Give an in-flight llama_decode() an interruption point (#92). ggml calls this between
+    // graph nodes on the compute thread; returning true aborts the decode (which then returns 2,
+    // handled in completionLoop). Disarmed here (_abortAtUs == 0) and armed per completion by
+    // setInferenceBudgetMs, so the speculative warm-up load never carries a stale deadline.
+    llama_set_abort_callback(_ctx, &LLMInference::abortCallback, this);
+
     // create an instance of llama_sampler
     llama_sampler_chain_params sampler_params = llama_sampler_chain_default_params();
     sampler_params.no_perf = true; // disable performance metrics
@@ -95,6 +108,27 @@ LLMInference::loadModel(const char *model_path, float minP, float temperature, b
 void
 LLMInference::addChatMessage(const char *message, const char *role) {
     _messages.push_back({strdup(role), strdup(message)});
+}
+
+bool
+LLMInference::abortCallback(void *data) {
+    auto *self = static_cast<LLMInference *>(data);
+    const int64_t deadline = self->_abortAtUs.load(std::memory_order_relaxed);
+    return deadline != 0 && ggml_time_us() >= deadline;
+}
+
+void
+LLMInference::setInferenceBudgetMs(int64_t budgetMs) {
+    if (budgetMs == 0) {
+        _abortAtUs.store(0, std::memory_order_relaxed); // no deadline
+    } else if (budgetMs < 0) {
+        // Budget already spent before we even started: arm an already-reached deadline so the
+        // first abort-callback check trips. ggml_time_us() is monotonic and > 0 once the backend
+        // is up, so any positive value in the past works; use 1 (never itself 0 == "disabled").
+        _abortAtUs.store(1, std::memory_order_relaxed);
+    } else {
+        _abortAtUs.store(ggml_time_us() + budgetMs * 1000, std::memory_order_relaxed);
+    }
 }
 
 float
@@ -212,9 +246,17 @@ LLMInference::completionLoop() {
     }
 
     auto start = ggml_time_us();
-    // run the model
-    if (llama_decode(_ctx, *_batch) < 0) {
-        throw std::runtime_error("llama_decode() failed");
+    // run the model. Any non-zero return means no usable logits were produced, so sampling below
+    // would read stale/garbage values -- treat every non-success code as a hard stop rather than
+    // the original `< 0`-only check, which silently ignored 2 (aborted) and 1 (no KV slot) and
+    // sampled anyway. 2 is our own deadline abort (#92): the decode ran past the waterfall's
+    // wall-clock budget and ggml stopped it mid-graph via abortCallback.
+    const int32_t decodeStatus = llama_decode(_ctx, *_batch);
+    if (decodeStatus == 2) {
+        throw std::runtime_error("llama_decode() aborted: inference budget exceeded");
+    }
+    if (decodeStatus != 0) {
+        throw std::runtime_error("llama_decode() failed (status " + std::to_string(decodeStatus) + ")");
     }
 
     // sample a token and check if it is an EOG (end of generation token)
@@ -271,6 +313,9 @@ LLMInference::stopCompletion() {
     // An aborted multi-byte UTF-8 sequence would otherwise prepend stale bytes to the next
     // completion's first piece on a reused instance (#74).
     _cacheResponseTokens.clear();
+    // Disarm the wall-clock deadline so it can't carry into the next completion on a reused
+    // instance before that call re-arms it (#92). setInferenceBudgetMs re-arms per completion.
+    _abortAtUs.store(0, std::memory_order_relaxed);
 }
 
 LLMInference::~LLMInference() {

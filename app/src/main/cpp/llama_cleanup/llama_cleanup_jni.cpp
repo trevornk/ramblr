@@ -70,6 +70,13 @@ Java_com_kafkasl_phonewhisper_LlamaCppInference_close(JNIEnv* env, jobject thiz,
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_kafkasl_phonewhisper_LlamaCppInference_setInferenceBudgetMs(JNIEnv* env, jobject thiz, jlong modelPtr,
+                                                                     jlong budgetMs) {
+    auto* llmInference = reinterpret_cast<LLMInference*>(modelPtr);
+    llmInference->setInferenceBudgetMs(budgetMs);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_kafkasl_phonewhisper_LlamaCppInference_startCompletion(JNIEnv* env, jobject thiz, jlong modelPtr,
                                                                  jstring prompt) {
     jboolean    isCopy       = true;
