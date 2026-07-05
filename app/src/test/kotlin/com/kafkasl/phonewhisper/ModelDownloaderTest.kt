@@ -41,6 +41,20 @@ class ModelDownloaderTest {
         }
     }
 
+    @Test fun `rejects traversal into a sibling dir whose name merely starts with the out dir's (#88)`() {
+        withTempDir { tmp ->
+            val archive = File(tmp, "evil.tar.bz2")
+            // Canonicalizes to <tmp>/outevil/x.txt, which startsWith(<tmp>/out) as a plain
+            // string -- the missing-separator bypass the prefix check now closes.
+            writeTarBz2(archive, mapOf("../outevil/x.txt" to "gotcha"))
+
+            assertThrows(IllegalArgumentException::class.java) {
+                ModelDownloader.extractTarBz2(archive, File(tmp, "out"))
+            }
+            assertFalse(File(tmp, "outevil").exists())
+        }
+    }
+
     @Test fun `catalog has expected structure`() {
         assertEquals(5, MODEL_CATALOG.size)
         assertTrue(MODEL_CATALOG.any { it.recommended })
@@ -151,6 +165,40 @@ class ModelDownloaderTest {
 
             assertTrue(ModelDownloader.isInstalledDir(finalDir))
             assertEquals("fresh-bytes", File(finalDir, "mymodel.gguf").readText())
+        }
+    }
+
+    @Test fun `a failed install restores the previous good install instead of destroying it (#88)`() {
+        withTempDir { tmp ->
+            val finalDir = File(tmp, "cleanup_models/mymodel")
+            val firstDownload = File(tmp, "first.tmp").apply { writeText("good-bytes") }
+            ModelDownloader.installSingleFile(firstDownload, finalDir, "mymodel.gguf")
+            assertTrue(ModelDownloader.isInstalledDir(finalDir))
+
+            // A source file that no longer exists makes renameTo fail and copyTo throw --
+            // the same shape as disk-full mid-copy. Previously finalDir had already been
+            // deleted at this point, so a failed upgrade destroyed the working install.
+            val vanishedDownload = File(tmp, "vanished.tmp")
+            assertThrows(Exception::class.java) {
+                ModelDownloader.installSingleFile(vanishedDownload, finalDir, "mymodel.gguf")
+            }
+
+            assertTrue(ModelDownloader.isInstalledDir(finalDir))
+            assertEquals("good-bytes", File(finalDir, "mymodel.gguf").readText())
+        }
+    }
+
+    @Test fun `a successful re-install replaces the previous one and leaves no swap residue`() {
+        withTempDir { tmp ->
+            val finalDir = File(tmp, "cleanup_models/mymodel")
+            ModelDownloader.installSingleFile(File(tmp, "v1.tmp").apply { writeText("v1") }, finalDir, "mymodel.gguf")
+            ModelDownloader.installSingleFile(File(tmp, "v2.tmp").apply { writeText("v2") }, finalDir, "mymodel.gguf")
+
+            assertTrue(ModelDownloader.isInstalledDir(finalDir))
+            assertEquals("v2", File(finalDir, "mymodel.gguf").readText())
+            // The move-aside dir from the swap must not linger (it would waste a model's worth
+            // of disk) -- and nothing else unexpected should appear next to the install.
+            assertEquals(listOf("mymodel"), finalDir.parentFile!!.list()!!.toList())
         }
     }
 
@@ -329,6 +377,21 @@ class ModelDownloaderTest {
         val e = NotEnoughSpaceException(1_395_000_000L, 500_000_000L)
         assertTrue(e.message!!.contains("1395"))
         assertTrue(e.message!!.contains("500"))
+    }
+
+    @Test fun `single-file installs demand rename-in-place headroom, not the 3x extraction multiple`() {
+        // The 1117 MB Qwen 1.5B GGUF is renamed in place, never extracted: demanding 3x
+        // (~3.35 GB) was a false NotEnoughSpaceException on phones with real room (#88).
+        assertEquals(1117L * 1_000_000L * 120L / 100L, ModelDownloader.requiredSpaceBytes(1117, singleFile = true))
+        assertTrue(ModelDownloader.requiredSpaceBytes(1117, singleFile = true) < ModelDownloader.requiredSpaceBytes(1117))
+    }
+
+    @Test fun `a resumable partial on disk is credited against the space requirement`() {
+        val full = ModelDownloader.requiredSpaceBytes(465)
+        assertEquals(full - 100_000_000L, ModelDownloader.requiredSpaceBytes(465, alreadyDownloadedBytes = 100_000_000L))
+        // And an over-complete partial floors at zero rather than going negative.
+        assertEquals(0L, ModelDownloader.requiredSpaceBytes(465, alreadyDownloadedBytes = full + 1))
+        assertTrue(ModelDownloader.hasEnoughSpace(0L, 465, alreadyDownloadedBytes = full))
     }
 
     // -- resume: range header + offset/append planning --
