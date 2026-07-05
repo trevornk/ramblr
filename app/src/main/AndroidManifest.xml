@@ -29,6 +29,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Per-category Settings screens (#93 restructure): internal only, launched from
+             MainActivity's category rows and never from outside the app. -->
+        <activity android:name=".SetupActivity" android:exported="false" />
+        <activity android:name=".TranscriptionActivity" android:exported="false" />
+        <activity android:name=".CleanupActivity" android:exported="false" />
+        <activity android:name=".LivePreviewActivity" android:exported="false" />
+        <activity android:name=".AdvancedActivity" android:exported="false" />
+
         <service
             android:name=".WhisperAccessibilityService"
             android:exported="false"
