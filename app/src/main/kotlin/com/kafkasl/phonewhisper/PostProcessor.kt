@@ -289,7 +289,13 @@ explanations, headers, or comments about your edits.
 
             override fun onResponse(call: Call, response: Response) {
                 cancelHolder.clear(call)
-                val responseBody = response.body?.string() ?: ""
+                // Read via HttpBodyReader (#62): a body read that throws inside onResponse is
+                // swallowed by OkHttp (onFailure never fires), so this callback would otherwise
+                // never be invoked and the dictation would hang until the watchdog.
+                val responseBody = HttpBodyReader.read(response).getOrElse { e ->
+                    callback(Result(null, e.message))
+                    return
+                }
                 if (!response.isSuccessful && responseBody.isBlank()) {
                     callback(Result(null, "HTTP ${response.code}"))
                     return

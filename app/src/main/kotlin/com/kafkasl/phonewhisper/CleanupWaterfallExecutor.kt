@@ -206,12 +206,20 @@ object RealCleanupHttpTransport : CleanupHttpTransport {
 
             override fun onResponse(call: Call, response: Response) {
                 cancelHolder.clear(call)
-                val responseBody = response.body?.string() ?: ""
-                if (response.isSuccessful) {
-                    callback(CleanupHttpOutcome.Ok(responseBody))
-                } else {
-                    callback(CleanupHttpOutcome.HttpError(response.code, responseBody))
-                }
+                // A body read that dies mid-stream (stalled socket after headers arrived) must
+                // report as a connection failure, not throw out of onResponse — OkHttp swallows
+                // exceptions thrown here without ever calling onFailure, which would leave the
+                // waterfall permanently stuck on this step (#62).
+                HttpBodyReader.read(response).fold(
+                    onSuccess = { responseBody ->
+                        if (response.isSuccessful) {
+                            callback(CleanupHttpOutcome.Ok(responseBody))
+                        } else {
+                            callback(CleanupHttpOutcome.HttpError(response.code, responseBody))
+                        }
+                    },
+                    onFailure = { e -> callback(CleanupHttpOutcome.ConnectionFailure(e.message)) },
+                )
             }
         })
     }

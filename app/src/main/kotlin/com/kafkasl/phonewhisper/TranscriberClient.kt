@@ -51,7 +51,13 @@ object TranscriberClient {
             }
             override fun onResponse(call: Call, response: Response) {
                 cancelHolder.clear(call)
-                callback(parseResponse(response.body?.string() ?: ""))
+                // Read via HttpBodyReader (#62): a body read that throws inside onResponse is
+                // swallowed by OkHttp, so the callback (and the temp PCM file's deletion in it)
+                // would otherwise never run and the dictation would hang until the watchdog.
+                HttpBodyReader.read(response).fold(
+                    onSuccess = { body -> callback(parseResponse(body)) },
+                    onFailure = { e -> callback(Result(null, e.message)) },
+                )
             }
         })
     }
