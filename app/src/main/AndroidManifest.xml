@@ -76,11 +76,17 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
-        <!-- Reached only via the "icon hidden" notification's own explicit PendingIntent (Feature
-             B, IconVisibilityNotifications); never invoked from outside this app. -->
-        <receiver
-            android:name=".RestoreIconReceiver"
-            android:exported="false" />
+        <!-- No-UI trampoline reached only via the "icon hidden" notification's own explicit
+             PendingIntent (Feature B, IconVisibilityNotifications); never invoked from outside
+             this app. Must be an Activity (not a BroadcastReceiver) so tapping the notification
+             gets the normal, immediate shade-collapse animation instead of a lingering one. The
+             translucent/no-history theme keeps it fully invisible and out of Recents. -->
+        <activity
+            android:name=".RestoreIconActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true" />
 
     </application>
 </manifest>

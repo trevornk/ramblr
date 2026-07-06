@@ -754,9 +754,9 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  already peeked. */
     private fun attemptAutoPeek() {
         if (isPeeked) return
-        if (!RingPeek.shouldAutoPeek(stateMachine.current())) return
+        if (!RingPeek.shouldAutoPeek(stateMachine.current())) { armIdlePeekTimer(); return }
         val overlay = overlayView ?: return
-        if (overlay.visibility != View.VISIBLE) return
+        if (overlay.visibility != View.VISIBLE) { armIdlePeekTimer(); return }
         val params = layoutParams ?: return
 
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
