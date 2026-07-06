@@ -51,15 +51,27 @@ object PerAppPersonaStore {
      * Resolves which persona should actually be used for a dictation in [packageName]: the
      * per-app remembered persona wins if one exists for this package, otherwise this falls back to
      * [globalPersona] unchanged -- so apps with no per-app memory yet see no behavior change.
+     * Resolves through [PersonaRegistry] (#103) so a per-app memory pointing at a custom persona
+     * (or a seeded-legacy one) still works, not just built-ins.
      */
     fun resolvePersona(context: Context, packageName: String?, globalPersona: CleanupPersona): CleanupPersona =
-        resolvePersona(parse(prefs(context).getString(KEY_PER_APP_PERSONA, null)), packageName, globalPersona)
+        resolvePersona(parse(prefs(context).getString(KEY_PER_APP_PERSONA, null)), packageName, globalPersona) {
+            PersonaRegistry.resolve(context, it)
+        }
 
-    /** Pure lookup helper split out for unit tests and to keep fallback behavior explicit. */
-    fun resolvePersona(map: Map<String, String>, packageName: String?, globalPersona: CleanupPersona): CleanupPersona {
+    /** Pure lookup helper split out for unit tests and to keep fallback behavior explicit.
+     *  [resolveKey] defaults to built-in-only [CleanupPersonas.fromKey] so existing tests that
+     *  don't care about custom personas need no changes; [resolvePersona] (above) passes
+     *  [PersonaRegistry.resolve] instead so real dictation also finds custom personas. */
+    fun resolvePersona(
+        map: Map<String, String>,
+        packageName: String?,
+        globalPersona: CleanupPersona,
+        resolveKey: (String) -> CleanupPersona = CleanupPersonas::fromKey,
+    ): CleanupPersona {
         if (packageName.isNullOrBlank()) return globalPersona
         val savedKey = map[packageName] ?: return globalPersona
-        return CleanupPersonas.fromKey(savedKey)
+        return resolveKey(savedKey)
     }
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

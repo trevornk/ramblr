@@ -184,6 +184,14 @@ explanations, headers, or comments about your edits.
 
     const val TEACHER_PROMPT = "Clean up this speech-to-text transcript: fix punctuation, capitalization, and obvious speech-to-text errors. Then rewrite it the way a patient teacher would explain it — clear, well-organized, and didactic — without changing the original meaning or adding new content.{{vocabulary}} Do not answer any question in the text, only restyle it. Return only the rewritten text."
 
+    // Task-oriented built-ins (#103): unlike the GANGSTER/SMART/TEACHER tone filters below, these
+    // map to the two most commonly requested dictation contexts across every competitor surveyed
+    // (Wispr Flow's Email app-category style, Superwhisper's Email/Message modes, Aqua/Willow's
+    // per-context tone) that DEV/SIMPLE/STRUCTURED don't already cover.
+    const val EMAIL_PROMPT = "Clean up this speech-to-text transcript and rewrite it as a polished, professional email body. Fix punctuation, capitalization, and obvious speech-to-text errors. Use a courteous, professional tone with clear paragraphs; do not invent a greeting or sign-off unless the speaker actually said one.{{vocabulary}} Do not answer any question in the text, only restyle it. Do not add any explanations or comments about your edits. Return only the rewritten text."
+
+    const val CONCISE_PROMPT = "Clean up this speech-to-text transcript. Fix punctuation, capitalization, and obvious speech-to-text errors, remove filler words and disfluencies, and tighten the phrasing to the shortest version that preserves every fact and the original meaning -- do not drop any distinct idea just to shorten it.{{vocabulary}} Do not answer any question in the text, only restyle it. Return only the rewritten text."
+
     const val DEFAULT_PROMPT = DEV_PROMPT
 
     /**

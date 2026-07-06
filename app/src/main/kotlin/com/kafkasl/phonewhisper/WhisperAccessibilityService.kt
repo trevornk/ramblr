@@ -285,6 +285,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         ensureProviderChainMigrated()
+        CustomPersonaStore.ensureLegacySeeded(this)
         showOverlay()
         registerNetworkCallback()
         thread { cleanupOrphanedRecordings() }
@@ -1003,7 +1004,14 @@ class WhisperAccessibilityService : AccessibilityService() {
         (getSystemService(WINDOW_SERVICE) as WindowManager).updateViewLayout(view, params)
     }
 
-    // --- Long-press style/cleanup menu (#53) ---
+    // --- Long-press style/cleanup menu (#53, #103) ---
+
+    /** Personas shown in the long-press style menu (#103): the user's persisted quick-menu
+     *  selection (built-in and/or custom, 5-8 entries, see [QuickMenuPersonaStore]), resolved to
+     *  full [CleanupPersona] objects in the user's chosen order. Falls back to
+     *  [QuickMenuPersonaStore.defaultSelection] (the five #103 built-ins) for a fresh install. */
+    private fun quickMenuPersonas(): List<CleanupPersona> =
+        QuickMenuPersonaStore.load(this).map { PersonaRegistry.resolve(this, it) }
 
     /**
      * Opens the long-press menu (see overlayLongPressActionFor's state map) letting the user
@@ -1114,7 +1122,8 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         container.addView(styleMenuDivider())
 
-        val globalPersona = CleanupPersonas.currentPersona(
+        val globalPersona = PersonaRegistry.currentPersona(
+            this,
             prefs().getString("cleanup_style", null),
             prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
         )
@@ -1123,7 +1132,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         } else {
             globalPersona
         }
-        for (persona in CleanupPersonas.BUILT_IN) {
+        for (persona in quickMenuPersonas()) {
             val title = if (persona == current) "✓ ${persona.title}" else persona.title
             container.addView(styleMenuRow(icon = null, title = title, subtitle = persona.subtitle) {
                 onStyleMenuPersonaTapped(persona)
@@ -1718,7 +1727,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 null
             }
             val rawPrompt = perAppPersonaKey
-                ?.let { CleanupPersonas.promptForExplicitSelection(CleanupPersonas.fromKey(it)) }
+                ?.let { CleanupPersonas.promptForExplicitSelection(PersonaRegistry.resolve(this, it)) }
                 ?: savedPrompt
             val vocabulary = VocabularyTerms.parse(prefs().getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED))
             val prompt = PostProcessor.interpolateVocabulary(rawPrompt, vocabulary)

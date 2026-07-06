@@ -49,6 +49,8 @@
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <activity android:name=".CleanupActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <activity android:name=".StyleManagerActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <activity android:name=".LivePreviewActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <activity android:name=".CloudProviderActivity" android:exported="false"

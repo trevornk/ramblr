@@ -7,7 +7,7 @@ import org.junit.Test
 
 class CleanupPersonaTest {
 
-    // --- Built-in personas resolve to the exact original prompt constants (#40) ---
+    // --- Built-in personas resolve to the exact original prompt constants (#40, #103) ---
     // These byte-for-byte comparisons are the regression guard for "existing users' saved preset
     // selection must keep working identically" -- any drift here changes what an existing user's
     // saved "formal"/"casual"/"notes" selection actually sends to the cleanup model.
@@ -24,13 +24,21 @@ class CleanupPersonaTest {
         assertEquals(PostProcessor.STRUCTURED_PROMPT, CleanupPersonas.NOTES.prompt)
     }
 
+    @Test fun `email maps to email prompt byte for byte`() {
+        assertEquals(PostProcessor.EMAIL_PROMPT, CleanupPersonas.EMAIL.prompt)
+    }
+
+    @Test fun `concise maps to concise prompt byte for byte`() {
+        assertEquals(PostProcessor.CONCISE_PROMPT, CleanupPersonas.CONCISE.prompt)
+    }
+
     @Test fun `original three keys are unchanged so existing saved selections still resolve`() {
         assertEquals("formal", CleanupPersonas.FORMAL.key)
         assertEquals("casual", CleanupPersonas.CASUAL.key)
         assertEquals("notes", CleanupPersonas.NOTES.key)
     }
 
-    // --- New personas (#40) exist and use their own distinct prompts ---
+    // --- Retired personas (#103): demoted out of BUILT_IN, still resolvable by key ---
 
     @Test fun `gangster maps to gangster prompt`() {
         assertEquals(PostProcessor.GANGSTER_PROMPT, CleanupPersonas.GANGSTER.prompt)
@@ -44,12 +52,25 @@ class CleanupPersonaTest {
         assertEquals(PostProcessor.TEACHER_PROMPT, CleanupPersonas.TEACHER.prompt)
     }
 
+    @Test fun `legacy retired personas are not built-in`() {
+        for (legacy in CleanupPersonas.LEGACY_RETIRED) {
+            assertTrue(CleanupPersonas.BUILT_IN.none { it.key == legacy.key })
+            assertTrue(!legacy.isBuiltIn)
+        }
+    }
+
+    @Test fun `legacy retired personas still resolve by key via fromKey`() {
+        for (legacy in CleanupPersonas.LEGACY_RETIRED) {
+            assertSame(legacy, CleanupPersonas.fromKey(legacy.key))
+        }
+    }
+
     // --- Persona list integrity ---
 
-    @Test fun `built-in list contains all six personas`() {
-        assertEquals(6, CleanupPersonas.BUILT_IN.size)
+    @Test fun `built-in list contains all five task-oriented personas`() {
+        assertEquals(5, CleanupPersonas.BUILT_IN.size)
         assertEquals(
-            setOf("formal", "casual", "notes", "gangster", "smart", "teacher"),
+            setOf("formal", "casual", "notes", "email", "concise"),
             CleanupPersonas.BUILT_IN.map { it.key }.toSet()
         )
     }
@@ -65,6 +86,12 @@ class CleanupPersonaTest {
             assertTrue("${persona.key} title", persona.title.isNotBlank())
             assertTrue("${persona.key} subtitle", persona.subtitle.isNotBlank())
             assertTrue("${persona.key} prompt", persona.prompt.isNotBlank())
+        }
+    }
+
+    @Test fun `every built-in persona reports isBuiltIn true`() {
+        for (persona in CleanupPersonas.BUILT_IN) {
+            assertTrue(persona.isBuiltIn)
         }
     }
 
