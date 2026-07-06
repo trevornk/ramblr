@@ -69,13 +69,16 @@ object NetworkWarmup {
         val client = NetworkClients.shared
         hosts.forEach { host ->
             Thread {
+                val t0 = System.currentTimeMillis()
                 runCatching {
                     val request = Request.Builder().url("https://$host/").head().build()
                     client.newCall(request).execute().close()
+                }.onSuccess {
+                    android.util.Log.i("NetworkWarmup", "warm-up connect to $host succeeded in ${System.currentTimeMillis() - t0}ms")
                 }.onFailure {
                     // Any outcome (connect refused, TLS ok but 404, DNS failure) is fine here --
                     // the goal was attempting the handshake, not getting a particular response.
-                    android.util.Log.d("NetworkWarmup", "warm-up connect to $host failed (non-fatal): ${it.message}")
+                    android.util.Log.d("NetworkWarmup", "warm-up connect to $host failed (non-fatal) after ${System.currentTimeMillis() - t0}ms: ${it.message}")
                 }
             }.apply { isDaemon = true }.start()
         }

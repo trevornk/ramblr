@@ -1598,7 +1598,9 @@ class WhisperAccessibilityService : AccessibilityService() {
                         return
                     }
                     Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (OpenAI audio/transcriptions)")
+                    val transcribeStartMs = System.currentTimeMillis()
                     TranscriberClient.transcribe(file, apiKey, inFlightCall) { result ->
+                        Log.i(TAG, "OpenAI transcription HTTP round-trip took ${System.currentTimeMillis() - transcribeStartMs}ms")
                         file.delete()
                         if (result.text != null && result.text.isNotBlank()) {
                             handleTranscriptionResult(result.text, token)
