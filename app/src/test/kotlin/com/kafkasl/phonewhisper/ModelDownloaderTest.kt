@@ -158,6 +158,48 @@ class ModelDownloaderTest {
         assertTrue(MUMBLE_CLEANUP_Q4_0_MODEL.sha256!!.matches(Regex("[0-9a-f]{64}")))
     }
 
+    // -- orphaned model dir pruning (post-Q4_K_M-removal cleanup) --
+
+    @Test fun `orphanedArchives flags installed dirs no longer in the catalog`() {
+        val installed = listOf("lfm2.5-350m-q4_0", "mumble-cleanup-2stage-q4km", "mumble-cleanup-2stage-q4_0")
+        val catalog = setOf("lfm2.5-350m-q4_0", "mumble-cleanup-2stage-q4_0")
+        assertEquals(listOf("mumble-cleanup-2stage-q4km"), ModelDownloader.orphanedArchives(installed, catalog))
+    }
+
+    @Test fun `orphanedArchives returns nothing when every installed dir is still cataloged`() {
+        val installed = listOf("lfm2.5-350m-q4_0", "mumble-cleanup-2stage-q4_0")
+        val catalog = setOf("lfm2.5-350m-q4_0", "mumble-cleanup-2stage-q4_0")
+        assertTrue(ModelDownloader.orphanedArchives(installed, catalog).isEmpty())
+    }
+
+    @Test fun `orphanedArchives returns nothing when nothing is installed`() {
+        assertTrue(ModelDownloader.orphanedArchives(emptyList(), setOf("lfm2.5-350m-q4_0")).isEmpty())
+    }
+
+    @Test fun `pruneOrphanedModelDirs deletes a stale cleanup-model dir no longer in the catalog`() {
+        withTempDir { filesDir ->
+            val cleanupModelsDir = File(filesDir, "cleanup_models")
+            val staleDir = File(cleanupModelsDir, "mumble-cleanup-2stage-q4km").apply { mkdirs() }
+            File(staleDir, "mumble-cleanup-2stage-q4km.gguf").writeText("fake-gguf-bytes")
+            File(staleDir, ".complete").writeText("")
+            val liveDir = File(cleanupModelsDir, MUMBLE_CLEANUP_Q4_0_MODEL.archive).apply { mkdirs() }
+            File(liveDir, ".complete").writeText("")
+
+            ModelDownloader.pruneOrphanedModelDirs(filesDir)
+
+            assertFalse("orphaned Q4_K_M dir should be deleted", staleDir.exists())
+            assertTrue("still-cataloged Q4_0 dir must survive pruning", liveDir.exists())
+        }
+    }
+
+    @Test fun `pruneOrphanedModelDirs is a no-op when a kind dir doesn't exist yet`() {
+        withTempDir { filesDir ->
+            // Fresh install: none of "models"/"streaming_models"/"cleanup_models" exist yet.
+            ModelDownloader.pruneOrphanedModelDirs(filesDir)
+            // No exception, nothing to assert beyond "didn't crash".
+        }
+    }
+
     @Test fun `local cleanup model is sourced from a real Hugging Face URL, not the sherpa-onnx release host`() {
         assertTrue(LOCAL_CLEANUP_MODEL.sourceUrl!!.startsWith("https://huggingface.co/"))
         assertTrue(LOCAL_CLEANUP_MODEL.sourceUrl!!.endsWith(".gguf"))
