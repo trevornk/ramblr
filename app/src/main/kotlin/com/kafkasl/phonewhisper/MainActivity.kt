@@ -271,7 +271,7 @@ class MainActivity : BaseSettingsActivity() {
 
     private fun showOnboardingMicStep() {
         onboardingDialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Microphone access")
+            .setTitle("Step 1 of 5: Microphone access")
             .setMessage("Ramblr needs the microphone to record what you say before transcribing it.")
             .setCancelable(false)
             .setPositiveButton("Continue") { _, _ ->
@@ -310,7 +310,7 @@ class MainActivity : BaseSettingsActivity() {
                 "On the next screen, look for \"Ramblr\" in the list and turn it on."
         }
         onboardingDialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Turn on Accessibility")
+            .setTitle("Step 2 of 5: Turn on Accessibility")
             .setMessage(message)
             .setCancelable(false)
             .setPositiveButton(if (blocked) "Open App info" else "Open Accessibility Settings") { _, _ ->
@@ -333,7 +333,7 @@ class MainActivity : BaseSettingsActivity() {
     private fun showOnboardingModeStep() {
         val recommended = MODEL_CATALOG.firstOrNull { it.recommended } ?: MODEL_CATALOG.first()
         onboardingDialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Choose transcription mode")
+            .setTitle("Step 3 of 5: Choose transcription mode")
             .setMessage(
                 "On-device (recommended): downloads \"${recommended.name}\" and keeps your audio on " +
                     "this phone.\n\nCloud: uses OpenAI's API with your own key — no download, but audio " +
@@ -406,7 +406,7 @@ class MainActivity : BaseSettingsActivity() {
     private fun showOnboardingCleanupStep() {
         val recommendedLocal = LOCAL_CLEANUP_MODEL_CATALOG.firstOrNull { it.recommended } ?: LOCAL_CLEANUP_MODEL_CATALOG.first()
         onboardingDialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Clean up dictation with AI? (optional)")
+            .setTitle("Step 4 of 5: Clean up dictation with AI? (optional)")
             .setMessage(
                 "Cleanup rewrites your raw dictation to fix grammar, punctuation, and filler words — " +
                     "off by default.\n\nCloud (recommended): uses your own API key -- no download, " +
@@ -471,7 +471,7 @@ class MainActivity : BaseSettingsActivity() {
     private fun showOnboardingStreamingStep() {
         val recommended = STREAMING_MODEL_CATALOG.firstOrNull { it.recommended } ?: STREAMING_MODEL_CATALOG.first()
         onboardingDialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Show live text while you speak? (optional)")
+            .setTitle("Step 5 of 5: Show live text while you speak? (optional)")
             .setMessage(
                 "Streaming preview shows your words appearing in the field as you talk, using a small " +
                     "on-device model — always local, nothing is ever sent anywhere for this. The final " +
