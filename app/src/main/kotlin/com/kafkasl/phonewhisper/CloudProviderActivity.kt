@@ -243,7 +243,14 @@ class CloudProviderActivity : BaseSettingsActivity() {
 
     // --- Add / edit provider dialog ---
 
+    /** The catalog backing the model picker (#98): bundled/cached immediately, refreshed in the
+     *  background by [ModelCatalogStore.currentCatalog] if stale. Loaded once per dialog open
+     *  rather than per-kind-change so switching the provider radio in "Add provider" doesn't
+     *  re-hit the cache repeatedly. */
+    private fun loadCatalogForDialog(): List<ModelCatalogEntry> = ModelCatalogStore.currentCatalog(this)
+
     private fun promptAddOrEditEntry(existing: ProviderChainEntry?, onSave: (ProviderChainEntry) -> Unit) {
+        val catalog = loadCatalogForDialog()
         val container = vertical(dp(24), dp(8))
 
         val radioGroup = RadioGroup(this).apply { orientation = LinearLayout.VERTICAL }
@@ -261,11 +268,93 @@ class CloudProviderActivity : BaseSettingsActivity() {
         if (existing != null) radioButtons.forEach { it.isEnabled = false }
         container.addView(radioGroup)
 
-        val modelInput = EditText(this).apply {
-            hint = "Model, e.g. gpt-4o-mini"
+        fun selectedKind() = addableKinds.getOrElse(radioButtons.indexOfFirst { it.isChecked }) { addableKinds[0] }
+
+        // --- Model picker (#98): replaces the old free-text model EditText with catalog radio
+        // options (tier badge + description), reusing existing curated data instead of a blind
+        // typed string. Rebuilt whenever the selected provider kind changes, since the catalog
+        // is keyed by ProviderKind.
+        container.addView(TextView(this).apply {
+            text = "Model"
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, dp(16), 0, dp(4))
+        })
+        val modelPickerContainer = vertical(0)
+        container.addView(modelPickerContainer)
+
+        // Hidden advanced escape hatch (#98): a hand-typed model id, only revealed via the
+        // disclosure below. Pre-filled + auto-expanded when the existing entry's model isn't a
+        // recognized catalog id for its kind (e.g. a retired id, or a value only reachable
+        // through this same escape hatch previously).
+        val advancedModelInput = EditText(this).apply {
+            hint = "Custom model id (untested, unsupported)"
             setText(existing?.model ?: "")
         }
-        container.addView(modelInput)
+        val advancedSection = vertical(0).apply {
+            visibility = View.GONE
+            addView(TextView(this@CloudProviderActivity).apply {
+                text = "Unsupported: typos or retired model ids will fail at call time with no extra validation."
+                textSize = 12f
+                setTextColor(attrColor(android.R.attr.textColorSecondary))
+                setPadding(0, 0, 0, dp(4))
+            })
+            addView(advancedModelInput)
+        }
+        container.addView(TextView(this).apply {
+            text = "Advanced: enter a custom model id"
+            setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
+            setPadding(0, dp(8), 0, dp(4))
+            setOnClickListener { advancedSection.visibility = View.VISIBLE }
+        })
+        container.addView(advancedSection)
+
+        // Radio-selected catalog model id, or null if none picked yet (fresh "Add provider"
+        // dialog before the group is first built, or the advanced field is in control instead).
+        var pickedModelId: String? = null
+        val modelRadioGroup = RadioGroup(this).apply { orientation = LinearLayout.VERTICAL }
+
+        fun rebuildModelPicker(kind: ProviderKind) {
+            modelPickerContainer.removeAllViews()
+            modelRadioGroup.removeAllViews()
+            val entries = ModelCatalogResolver.entriesFor(catalog, kind)
+            val existingModel = existing?.model
+            val existingIsCatalogModel = existingModel != null && ModelCatalogResolver.isCatalogModel(catalog, kind, existingModel)
+            pickedModelId = existingModel?.takeIf { existingIsCatalogModel }
+                ?: ModelCatalogResolver.recommendedEntryFor(catalog, kind)?.modelId
+
+            entries.forEach { entry ->
+                val row = MaterialRadioButton(this).apply {
+                    text = "${entry.displayName} \u00b7 ${ModelCatalogResolver.tierBadge(entry.tier)}\n${entry.description}"
+                    id = View.generateViewId()
+                    isChecked = entry.modelId == pickedModelId
+                    buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
+                    setOnClickListener {
+                        pickedModelId = entry.modelId
+                        advancedSection.visibility = View.GONE
+                    }
+                }
+                modelRadioGroup.addView(row)
+            }
+            modelPickerContainer.addView(modelRadioGroup)
+
+            // Existing entry with an off-catalog model: nothing in the picker matches, so open
+            // the advanced field pre-filled instead of silently defaulting to a different model.
+            if (existingModel != null && !existingIsCatalogModel) {
+                advancedSection.visibility = View.VISIBLE
+                pickedModelId = null
+            }
+        }
+
+        rebuildModelPicker(existing?.kind ?: selectedKind())
+        if (existing == null) {
+            radioButtons.forEachIndexed { i, rb ->
+                rb.setOnClickListener {
+                    advancedModelInput.setText("")
+                    advancedSection.visibility = View.GONE
+                    rebuildModelPicker(addableKinds[i])
+                }
+            }
+        }
 
         val baseUrlInput = EditText(this).apply {
             hint = "Base URL override (optional)"
@@ -273,14 +362,12 @@ class CloudProviderActivity : BaseSettingsActivity() {
             visibility = if (existing?.baseUrlOverride.isNullOrBlank()) View.GONE else View.VISIBLE
         }
         container.addView(TextView(this).apply {
-            text = "Advanced"
+            text = "Advanced: base URL override"
             setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
             setPadding(0, dp(8), 0, dp(4))
             setOnClickListener { baseUrlInput.visibility = View.VISIBLE }
         })
         container.addView(baseUrlInput)
-
-        fun selectedKind() = addableKinds.getOrElse(radioButtons.indexOfFirst { it.isChecked }) { addableKinds[0] }
 
         container.addView(TextView(this).apply {
             text = "Credential"
@@ -299,9 +386,14 @@ class CloudProviderActivity : BaseSettingsActivity() {
             .setView(ScrollView(this).apply { addView(container) })
             .setPositiveButton("Save") { _, _ ->
                 val kind = existing?.kind ?: selectedKind()
-                val model = modelInput.text.toString().trim()
+                val customModel = advancedModelInput.text.toString().trim()
+                val model = if (advancedSection.visibility == View.VISIBLE && customModel.isNotBlank()) {
+                    customModel
+                } else {
+                    pickedModelId ?: ""
+                }
                 if (model.isBlank()) {
-                    toast("Model can't be blank")
+                    toast("Pick a model or enter a custom model id")
                     return@setPositiveButton
                 }
                 val baseUrlOverride = baseUrlInput.text.toString().trim().takeIf { it.isNotBlank() }
