@@ -514,7 +514,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         val params = WindowManager.LayoutParams(
             ringSize, ringSize,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            // FLAG_LAYOUT_NO_LIMITS (Feature A): auto-peek intentionally slides most of the ring
+            // off the edge of the display (see RingPeek.peekedX), leaving only a small sliver
+            // on-screen. Without this flag WindowManager clamps any window position back to fully
+            // on-screen bounds, silently negating the peek animation -- the window would visibly
+            // animate but always snap back to its normal resting x, i.e. peek would appear to do
+            // nothing at all.
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -746,6 +752,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun armIdlePeekTimer() {
         handler.removeCallbacks(idlePeekRunnable)
         handler.postDelayed(idlePeekRunnable, RingPeek.IDLE_TIMEOUT_MS)
+        Log.d(TAG, "armIdlePeekTimer: scheduled in ${RingPeek.IDLE_TIMEOUT_MS}ms")
     }
 
     /** Fires once [RingPeek.IDLE_TIMEOUT_MS] has elapsed with no ring interaction. Never peeks
@@ -753,6 +760,7 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  nor while the ring itself isn't currently showing (e.g. MainActivity foregrounded, #35) or
      *  already peeked. */
     private fun attemptAutoPeek() {
+        Log.d(TAG, "attemptAutoPeek: isPeeked=$isPeeked state=${stateMachine.current()} overlayVisible=${overlayView?.visibility} params=${layoutParams?.x}")
         if (isPeeked) return
         if (!RingPeek.shouldAutoPeek(stateMachine.current())) { armIdlePeekTimer(); return }
         val overlay = overlayView ?: return
@@ -763,6 +771,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         val ringSize = params.width
         val peekVisiblePx = (RingPeek.PEEK_VISIBLE_DP * dp).toInt()
         val targetX = RingPeek.peekedX(params.x, screenW, ringSize, peekVisiblePx)
+        Log.d(TAG, "attemptAutoPeek: peeking to targetX=$targetX from x=${params.x} screenW=$screenW ringSize=$ringSize")
 
         prePeekX = params.x
         isPeeked = true
