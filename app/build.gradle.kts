@@ -1,10 +1,21 @@
 import java.net.URI
+import java.util.Properties
 import java.util.zip.ZipFile
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+// Optional self-hosted OmniRoute-style cleanup gateway (see OmniRoute.kt / ADR-0001). Never
+// committed: read from local.properties (gitignored, machine-local) so a public clone builds
+// fine with this feature simply dormant. Set OMNIROUTE_BASE_URL=https://your-gateway/v1 in your
+// own local.properties to enable it for your own builds only.
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val omniRouteBaseUrl: String = (localProperties.getProperty("OMNIROUTE_BASE_URL") ?: "").trim()
 
 android {
     namespace = "com.kafkasl.phonewhisper"
@@ -17,6 +28,8 @@ android {
         targetSdk = 34
         versionCode = 2
         versionName = "0.3.0"
+
+        buildConfigField("String", "OMNIROUTE_BASE_URL", "\"$omniRouteBaseUrl\"")
 
         ndk { abiFilters += "arm64-v8a" }
 

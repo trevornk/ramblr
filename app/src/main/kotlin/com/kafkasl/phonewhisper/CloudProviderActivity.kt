@@ -50,8 +50,17 @@ class CloudProviderActivity : BaseSettingsActivity() {
     private lateinit var cloudFallbackRowSub: TextView
 
     /** Provider kinds a user can manually add here. LOCAL is the implicit floor (never a
-     *  manually-added row). */
-    private val addableKinds = listOf(ProviderKind.OPENAI, ProviderKind.ANTHROPIC, ProviderKind.GEMINI, ProviderKind.OMNIROUTE)
+     *  manually-added row). OMNIROUTE only appears once a base URL has been supplied via
+     *  local.properties (see OmniRoute.kt) -- on a public/unconfigured build there's nothing
+     *  useful to add it as, so it's simply not offered rather than shown as a dead option. An
+     *  already-existing (e.g. migrated) OMNIROUTE entry can still be edited even when hidden
+     *  from "Add provider", since [existing] bypasses this list entirely for edit dialogs. */
+    private val addableKinds = listOfNotNull(
+        ProviderKind.OPENAI,
+        ProviderKind.ANTHROPIC,
+        ProviderKind.GEMINI,
+        ProviderKind.OMNIROUTE.takeIf { OmniRoute.isConfigured },
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -141,7 +150,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         }
         root.addView(emptyStateView)
 
-        root.addView(settingsRow("Add provider", "OpenAI / Anthropic / Gemini / OmniRoute", indent = 0) {
+        root.addView(settingsRow("Add provider", addableKindsSummary(), indent = 0) {
             promptAddOrEditEntry(null) { newEntry -> saveChain(ProviderChainEditing.addCloud(currentChain().entries, newEntry)) }
         })
 
@@ -365,6 +374,11 @@ class CloudProviderActivity : BaseSettingsActivity() {
         val value = ProviderCredentialStore.get(this, kind)
         return if (value.isBlank()) "not set" else ProviderCredentialStore.maskForDisplay(value)
     }
+
+    /** Human-readable summary of [addableKinds] for the "Add provider" row subtitle, so it
+     *  reflects whichever kinds are actually offered (e.g. omits OmniRoute when unconfigured)
+     *  instead of a hardcoded string that could drift out of sync. */
+    private fun addableKindsSummary(): String = addableKinds.joinToString(" / ", transform = ::providerLabel)
 
     private fun providerLabel(kind: ProviderKind): String = when (kind) {
         ProviderKind.OPENAI -> "OpenAI"
