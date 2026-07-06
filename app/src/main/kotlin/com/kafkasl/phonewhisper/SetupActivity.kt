@@ -39,7 +39,7 @@ class SetupActivity : BaseSettingsActivity() {
         root.addView(audioRow)
 
         val accRow = settingsRow("Accessibility service", "Checking...") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            onAccessibilityRowTapped()
         }
         accRowSub = accRow.findViewWithTag("subtitle")
         root.addView(accRow)
@@ -70,6 +70,38 @@ class SetupActivity : BaseSettingsActivity() {
     }
 
     private fun hasPerm(p: String) = ContextCompat.checkSelfPermission(this, p) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Sideloaded Ramblr installs (GitHub Releases, not Play Store) hit Android 13+'s Restricted
+     * Settings block on Accessibility -- system Settings just silently refuses to let the toggle
+     * turn on, with no explanation of why or how to fix it (Trevor hit this directly re-testing a
+     * fresh sideload). Detected proactively via [RestrictedSettingsCheck] instead of letting the
+     * user discover it themselves: show the exact unblock steps first, then continue to system
+     * Settings once dismissed either way (a false positive here should never trap the user).
+     */
+    private fun onAccessibilityRowTapped() {
+        if (RestrictedSettingsCheck.isBlocked(this)) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("One extra step needed")
+                .setMessage(
+                    "Because Ramblr was installed outside the Play Store, Android blocks its " +
+                        "Accessibility toggle by default (a security feature, not a bug).\n\n" +
+                        "To unblock it:\n" +
+                        "1. Open this app's App info (Settings \u2192 Apps \u2192 Ramblr)\n" +
+                        "2. Tap the \u22ee menu in the top-right corner\n" +
+                        "3. Choose \"Allow restricted settings\"\n" +
+                        "4. Come back here and enable Accessibility as normal\n\n" +
+                        "This is a one-time step per install."
+                )
+                .setPositiveButton("Open Accessibility settings") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        } else {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+    }
 
     companion object {
         /** Category subtitle for MainActivity's Setup row (#93) -- read fresh, no Activity

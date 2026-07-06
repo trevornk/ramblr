@@ -283,13 +283,24 @@ class MainActivity : BaseSettingsActivity() {
     }
 
     private fun showOnboardingAccessibilityStep() {
+        // #44 follow-up: a sideloaded install (GitHub Releases, not Play Store) hits Android 13+'s
+        // Restricted Settings block here -- the toggle on the next screen will silently refuse to
+        // turn on with zero explanation unless this extra unblock step is called out up front.
+        val restrictedSettingsNote = if (RestrictedSettingsCheck.isBlocked(this)) {
+            "\n\n\u26a0\ufe0f Since Ramblr was installed outside the Play Store, Android will block " +
+                "the toggle until you first go to Settings \u2192 Apps \u2192 Ramblr \u2192 \u22ee menu " +
+                "(top-right) \u2192 \"Allow restricted settings\" -- a one-time step per install."
+        } else {
+            ""
+        }
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Turn on Accessibility")
             .setMessage(
                 "Ramblr uses Android's Accessibility service for one narrow reason: to insert " +
                     "dictated text into whatever text field is currently focused. It doesn't replace your " +
                     "keyboard and doesn't run background automation.\n\n" +
-                    "On the next screen, look for \"Ramblr\" in the list and turn it on."
+                    "On the next screen, look for \"Ramblr\" in the list and turn it on." +
+                    restrictedSettingsNote
             )
             .setCancelable(false)
             .setPositiveButton("Open Accessibility Settings") { _, _ ->
