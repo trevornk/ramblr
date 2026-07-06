@@ -139,19 +139,31 @@ class CloudProviderActivity : BaseSettingsActivity() {
         cloudCleanupRowSub.text = cloudCleanupSubtitle()
     }
 
+    /** Only cloud-capable entries are ever shown as rows here: LOCAL is the undeletable floor
+     *  (see kdoc above and [ProviderChain.withLocalFloor]) and this screen is specifically titled
+     *  "Cloud provider chain" -- rendering it alongside real cloud entries with the same
+     *  edit/reorder/remove controls previously let it be deleted here by mistake (Trevor hit this
+     *  live: removing "Local" from this list broke on-device cleanup, since the LOCAL entry *is*
+     *  what makes Local cleanup/transcription work, not a redundant display of it). Local's
+     *  presence is instead communicated by the always-visible explainer text above
+     *  ("On-device always works underneath, with no setup needed.") -- no separate row needed. */
     private fun refreshChainRows(chain: ProviderChain) {
         chainContainer.removeAllViews()
-        if (chain.entries.isEmpty()) {
+        // Pair each cloud entry with its real index in the full (unfiltered) chain -- edit/move/
+        // remove all operate on ProviderChainEditing against currentChain().entries, so they need
+        // the true index, not cloudEntries' own filtered position.
+        val cloudEntries = chain.entries.withIndex().filter { it.value.kind != ProviderKind.LOCAL }
+        if (cloudEntries.isEmpty()) {
             emptyStateView.visibility = View.VISIBLE
             return
         }
         emptyStateView.visibility = View.GONE
-        chain.entries.forEachIndexed { index, entry ->
-            chainContainer.addView(buildChainEntryRow(entry, index, chain.entries.size))
+        cloudEntries.forEachIndexed { displayPosition, (realIndex, entry) ->
+            chainContainer.addView(buildChainEntryRow(entry, realIndex, displayPosition, cloudEntries.size))
         }
     }
 
-    private fun buildChainEntryRow(entry: ProviderChainEntry, index: Int, total: Int): View {
+    private fun buildChainEntryRow(entry: ProviderChainEntry, index: Int, displayPosition: Int, total: Int): View {
         val row = vertical(0).apply { setPadding(dp(24), dp(10), dp(24), dp(10)) }
 
         val topLine = LinearLayout(this).apply {
@@ -159,7 +171,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         topLine.addView(TextView(this).apply {
-            text = "${index + 1}. ${providerLabel(entry.kind)} \u00b7 ${entry.model}"
+            text = "${displayPosition + 1}. ${providerLabel(entry.kind)} \u00b7 ${entry.model}"
             textSize = 16f
             setTextColor(attrColor(android.R.attr.textColorPrimary))
             layoutParams = LinearLayout.LayoutParams(0, LP_WRAP, 1f)
@@ -195,11 +207,11 @@ class CloudProviderActivity : BaseSettingsActivity() {
             }
         })
         buttonRow.addView(chainButton("\u25b2") {
-            saveChain(ProviderChainEditing.moveUp(currentChain().entries, index))
-        }.apply { isEnabled = index > 0 })
+            saveChain(ProviderChainEditing.moveCloudUp(currentChain().entries, index))
+        }.apply { isEnabled = displayPosition > 0 })
         buttonRow.addView(chainButton("\u25bc") {
-            saveChain(ProviderChainEditing.moveDown(currentChain().entries, index))
-        }.apply { isEnabled = index < total - 1 })
+            saveChain(ProviderChainEditing.moveCloudDown(currentChain().entries, index))
+        }.apply { isEnabled = displayPosition < total - 1 })
         buttonRow.addView(chainButton("\u2715") {
             confirmRemoveEntry(entry, index)
         })
