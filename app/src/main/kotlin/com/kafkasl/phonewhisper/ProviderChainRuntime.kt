@@ -50,12 +50,18 @@ object ProviderChainRuntime {
     }
 
     /**
-     * Ordered transcription candidates. LOCAL is left in the result so cloud-mode callers can
-     * fall through to the on-device floor if the chain says that is the next usable option.
+     * Ordered transcription candidates. When [allowLocalFallback] is true (the default,
+     * preserving today's behavior), LOCAL is left in the result so cloud-mode callers can fall
+     * through to the on-device floor if the chain says that is the next usable option. When
+     * false (#100: explicit "fall back to on-device if cloud fails" toggle turned off), LOCAL is
+     * stripped from the cloud candidate list entirely -- every cloud candidate failing means the
+     * caller reports an error instead of silently retrying on-device.
      */
-    fun transcriptionCandidates(chain: ProviderChain): List<ProviderChainEntry> =
-        chain.capableEntriesFor(needsTranscription = true)
+    fun transcriptionCandidates(chain: ProviderChain, allowLocalFallback: Boolean = true): List<ProviderChainEntry> {
+        val candidates = chain.capableEntriesFor(needsTranscription = true)
             .filterNot { it.kind in transcriptionKindsNotImplemented }
+        return if (allowLocalFallback) candidates else candidates.filterNot { it.kind == ProviderKind.LOCAL }
+    }
 
     /**
      * Applies the Phase 3 "Use cloud for Cleanup" toggle ([CloudFeatureToggle.cleanupEnabled|
@@ -65,7 +71,16 @@ object ProviderChainRuntime {
      * (empty result -- the existing "no cleanup steps configured" raw-injection path). When
      * [cloudEnabled] is true (the default), [chain] passes through unchanged -- zero behavior
      * change for anyone who never touches the new toggle.
+     *
+     * [allowLocalFallback] (#100: explicit "fall back to on-device if cloud fails" toggle) only
+     * matters when [cloudEnabled] is true: when false, the LOCAL floor is stripped from the
+     * cloud chain too, so every cloud step failing means cleanup reports an error/raw-injects
+     * instead of silently completing on-device.
      */
-    fun effectiveChainForCleanup(chain: ProviderChain, cloudEnabled: Boolean): ProviderChain =
-        if (cloudEnabled) chain else ProviderChain(chain.entries.filter { it.kind == ProviderKind.LOCAL })
+    fun effectiveChainForCleanup(chain: ProviderChain, cloudEnabled: Boolean, allowLocalFallback: Boolean = true): ProviderChain =
+        if (cloudEnabled) {
+            if (allowLocalFallback) chain else ProviderChain(chain.entries.filterNot { it.kind == ProviderKind.LOCAL })
+        } else {
+            ProviderChain(chain.entries.filter { it.kind == ProviderKind.LOCAL })
+        }
 }

@@ -53,6 +53,7 @@ abstract class BaseSettingsActivity : AppCompatActivity() {
         }
 
         textContainer.addView(TextView(this).apply {
+            tag = "title"
             text = title
             textSize = 18f
             setTextColor(attrColor(android.R.attr.textColorPrimary))

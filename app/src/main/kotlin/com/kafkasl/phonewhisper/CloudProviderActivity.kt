@@ -41,6 +41,13 @@ class CloudProviderActivity : BaseSettingsActivity() {
     private lateinit var cloudTranscriptionRowSub: TextView
     private lateinit var cloudCleanupSwitch: MaterialSwitch
     private lateinit var cloudCleanupRowSub: TextView
+    private lateinit var modeRadioGroup: RadioGroup
+    private lateinit var modeRadioButtons: Map<DictationMode, MaterialRadioButton>
+    private lateinit var modeCustomNote: TextView
+    private lateinit var localFallbackSwitch: MaterialSwitch
+    private lateinit var localFallbackRowSub: TextView
+    private lateinit var cloudFallbackSwitch: MaterialSwitch
+    private lateinit var cloudFallbackRowSub: TextView
 
     /** Provider kinds a user can manually add here. LOCAL is the implicit floor (never a
      *  manually-added row). */
@@ -66,6 +73,61 @@ class CloudProviderActivity : BaseSettingsActivity() {
             setPadding(dp(24), 0, dp(24), dp(8))
         })
 
+        root.addView(sectionHeader("Dictation mode"))
+        root.addView(TextView(this).apply {
+            text = "Pick a preset, or fine-tune with the toggles below. Each mode controls both " +
+                "how your speech is transcribed and how the text gets cleaned up."
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(8))
+        })
+
+        modeRadioGroup = RadioGroup(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(4), dp(24), dp(8))
+        }
+        modeRadioButtons = DICTATION_MODE_OPTIONS.associateWith { mode ->
+            MaterialRadioButton(this).apply {
+                text = modeLabel(mode)
+                id = View.generateViewId()
+                buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
+                setOnClickListener { applyMode(mode) }
+            }
+        }
+        modeRadioButtons.values.forEach { modeRadioGroup.addView(it) }
+        root.addView(modeRadioGroup)
+
+        modeCustomNote = TextView(this).apply {
+            text = ""
+            textSize = 13f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(12))
+            visibility = View.GONE
+        }
+        root.addView(modeCustomNote)
+
+        root.addView(sectionHeader("Fallback behavior"))
+        root.addView(TextView(this).apply {
+            text = "These control what happens automatically when your current mode's provider fails."
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(8))
+        })
+
+        localFallbackSwitch = MaterialSwitch(this).apply { isClickable = false }
+        val localFallbackRow = settingsRow(
+            "Fall back to on-device if cloud fails", localFallbackSubtitle(), localFallbackSwitch
+        ) { onToggleLocalFallback(!localFallbackSwitch.isChecked) }
+        localFallbackRowSub = localFallbackRow.findViewWithTag("subtitle")
+        root.addView(localFallbackRow)
+
+        cloudFallbackSwitch = MaterialSwitch(this).apply { isClickable = false }
+        val cloudFallbackRow = settingsRow(
+            "Fall back to cloud if on-device fails", cloudFallbackSubtitle(), cloudFallbackSwitch
+        ) { onToggleCloudFallback(!cloudFallbackSwitch.isChecked) }
+        cloudFallbackRowSub = cloudFallbackRow.findViewWithTag("subtitle")
+        root.addView(cloudFallbackRow)
+
         root.addView(sectionHeader("Cloud provider chain"))
 
         chainContainer = vertical(0)
@@ -83,7 +145,14 @@ class CloudProviderActivity : BaseSettingsActivity() {
             promptAddOrEditEntry(null) { newEntry -> saveChain(ProviderChainEditing.addCloud(currentChain().entries, newEntry)) }
         })
 
-        root.addView(sectionHeader("Use cloud for"))
+        root.addView(sectionHeader("Advanced: per-feature override"))
+        root.addView(TextView(this).apply {
+            text = "Usually set together by the mode preset above. Only change these individually " +
+                "if you want a mix, e.g. cloud transcription with on-device cleanup."
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(8))
+        })
 
         cloudTranscriptionSwitch = MaterialSwitch(this).apply { isClickable = false }
         val transcriptionRow = settingsRow(
@@ -137,6 +206,58 @@ class CloudProviderActivity : BaseSettingsActivity() {
 
         cloudCleanupSwitch.isChecked = CloudFeatureToggle.cleanupEnabled(this)
         cloudCleanupRowSub.text = cloudCleanupSubtitle()
+
+        localFallbackSwitch.isChecked = DictationModeToggle.allowLocalFallback(this)
+        localFallbackRowSub.text = localFallbackSubtitle()
+        cloudFallbackSwitch.isChecked = DictationModeToggle.allowCloudFallback(this)
+        cloudFallbackRowSub.text = cloudFallbackSubtitle()
+
+        refreshModeSelection()
+    }
+
+    private fun currentMode(): DictationMode = DictationMode.resolve(
+        useLocalTranscription = prefs().getBoolean("use_local", true),
+        cloudCleanupEnabled = CloudFeatureToggle.cleanupEnabled(this),
+    )
+
+    private fun refreshModeSelection() {
+        val mode = currentMode()
+        modeRadioButtons.forEach { (candidate, button) -> button.isChecked = candidate == mode }
+        if (mode == DictationMode.CUSTOM) {
+            modeCustomNote.visibility = View.VISIBLE
+            modeCustomNote.text = "Custom -- transcription and cleanup are set independently below."
+        } else {
+            modeCustomNote.visibility = View.GONE
+        }
+    }
+
+    /** Applies a mode preset by flipping the two underlying per-feature toggles together --
+     *  [DictationMode] itself has no persisted state of its own, it's purely derived from
+     *  ([prefs] "use_local", [CloudFeatureToggle.cleanupEnabled]) via [DictationMode.resolve]. */
+    private fun applyMode(mode: DictationMode) {
+        when (mode) {
+            DictationMode.CLOUD -> {
+                prefs().edit().putBoolean("use_local", false).apply()
+                CloudFeatureToggle.setCleanupEnabled(this, true)
+            }
+            DictationMode.LOCAL -> {
+                prefs().edit().putBoolean("use_local", true).apply()
+                CloudFeatureToggle.setCleanupEnabled(this, false)
+            }
+            DictationMode.FASTEST -> {
+                prefs().edit().putBoolean("use_local", true).apply()
+                CloudFeatureToggle.setCleanupEnabled(this, true)
+            }
+            DictationMode.CUSTOM -> Unit // not directly selectable -- no matching radio button
+        }
+        refresh()
+    }
+
+    private fun modeLabel(mode: DictationMode): String = when (mode) {
+        DictationMode.CLOUD -> "Cloud -- cloud transcription + cloud cleanup"
+        DictationMode.LOCAL -> "Local -- on-device transcription + on-device cleanup, fully offline"
+        DictationMode.FASTEST -> "Fastest -- on-device transcription (near-instant) + cloud cleanup"
+        DictationMode.CUSTOM -> "Custom"
     }
 
     /** Only cloud-capable entries are ever shown as rows here: LOCAL is the undeletable floor
@@ -444,8 +565,37 @@ class CloudProviderActivity : BaseSettingsActivity() {
         refresh()
     }
 
+    // --- Fallback toggles (#100) ---
+
+    private fun localFallbackSubtitle(): String =
+        if (DictationModeToggle.allowLocalFallback(this))
+            "On -- if every cloud provider fails, dictation falls back to on-device"
+        else
+            "Off -- if cloud fails, you'll see an error instead of a silent on-device retry"
+
+    private fun cloudFallbackSubtitle(): String =
+        if (DictationModeToggle.allowCloudFallback(this))
+            "On -- if on-device isn't ready or fails, dictation retries in the cloud"
+        else
+            "Off -- if on-device isn't ready or fails, you'll see an error instead of a silent cloud retry"
+
+    private fun onToggleLocalFallback(enabled: Boolean) {
+        DictationModeToggle.setAllowLocalFallback(this, enabled)
+        refresh()
+    }
+
+    private fun onToggleCloudFallback(enabled: Boolean) {
+        DictationModeToggle.setAllowCloudFallback(this, enabled)
+        refresh()
+    }
+
     companion object {
         private const val LP_WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
+
+        /** Presets shown as radio options on the Dictation mode section, in display order.
+         *  [DictationMode.CUSTOM] deliberately has no radio button -- it's a derived state
+         *  reachable only by hand-editing the per-feature overrides below, never picked directly. */
+        private val DICTATION_MODE_OPTIONS = listOf(DictationMode.CLOUD, DictationMode.LOCAL, DictationMode.FASTEST)
 
         /** Category subtitle for MainActivity's Cloud row (#95 Phase 3), e.g. "1 provider
          *  configured" or "Not configured". Counts only cloud-capable entries -- the same LOCAL-
