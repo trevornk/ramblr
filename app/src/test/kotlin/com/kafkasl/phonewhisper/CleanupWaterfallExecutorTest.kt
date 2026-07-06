@@ -484,6 +484,32 @@ class LocalLlmWaterfallStepTest {
         assertEquals(0, transport.requestedUrls.size)
     }
 
+    @Test fun `a timed-out local inference falls through to the next step, unlike a real cancel`() {
+        // Regression (#98 live bug, Trevor's device): BoundedBlockingCall returning null on a
+        // plain LOCAL_LLM_STEP_BUDGET_MS timeout was previously mapped to the same
+        // LocalInferenceResult.Cancelled value a real user/watchdog cancel produces, which
+        // aborted the ENTIRE waterfall instead of advancing -- so switching to a cloud-only
+        // chain still injected raw text because a slow local model's timeout looked identical
+        // to a cancel. A timeout must behave like any other step failure and fall through.
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned by openai")))
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.TimedOut("Local cleanup timed out")))
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+
+        val result = execute(
+            waterfall, transport, engine,
+            localModelPath = { "/path/to/model.gguf" },
+            credentialLookup = { "openai-key" },
+        )
+        assertEquals("cleaned by openai", result.text)
+        assertNull(result.error)
+        assertEquals(1, transport.requestedUrls.size)
+    }
+
     @Test fun `a single LOCAL_LLM step -- the last step in the waterfall -- gets the full deadline, not the tighter budget`() {
         // #37 follow-up: Trevor's real Local-only cleanup choice is exactly this shape (one
         // LOCAL_LLM step, nothing after it). The tighter LOCAL_LLM_STEP_BUDGET_MS exists only to

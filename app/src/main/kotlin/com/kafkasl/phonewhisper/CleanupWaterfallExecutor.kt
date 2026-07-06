@@ -180,6 +180,16 @@ sealed class LocalInferenceResult {
     /** The user (or watchdog) cancelled while inference was running (#83) -- like
      *  [CleanupHttpOutcome.Cancelled], this must stop the whole waterfall, not fall through. */
     object Cancelled : LocalInferenceResult()
+    /** [LOCAL_LLM_STEP_BUDGET_MS] (or the overall deadline) expired before the native decode
+     *  produced text -- e.g. `llama_decode() aborted: inference budget exceeded` on a device
+     *  too slow for the current model. Deliberately distinct from [Cancelled]: a real user/
+     *  watchdog cancel must stop the entire waterfall (a paid step must never run after a
+     *  cancel, #63), but a plain timeout is just this one step failing to finish in time --
+     *  it should fall through to the next step exactly like any other [Failure], not silently
+     *  abort the whole cleanup and leave every configured cloud provider untried (Trevor hit
+     *  this live: switching to a cloud-only chain still injected raw, un-cleaned-up text
+     *  because a slow local model's timeout was being treated as if he'd hit cancel). */
+    data class TimedOut(val message: String) : LocalInferenceResult()
 }
 
 /**
@@ -287,7 +297,7 @@ object RealLocalInferenceEngine : LocalInferenceEngine {
                     }
                 }
                 when {
-                    text == null -> LocalInferenceResult.Cancelled // timed out; abandoned task discarded
+                    text == null -> LocalInferenceResult.TimedOut("Local cleanup timed out")
                     text.isNotBlank() -> LocalInferenceResult.Success(text)
                     else -> LocalInferenceResult.Failure("Local model produced an empty response")
                 }
@@ -508,6 +518,7 @@ object CleanupWaterfallExecutor {
                         else CleanupStepOutcome.StepFailed("Local model produced an empty response")
                     }
                     is LocalInferenceResult.Failure -> CleanupStepOutcome.StepFailed(result.message)
+                    is LocalInferenceResult.TimedOut -> CleanupStepOutcome.StepFailed(result.message)
                     is LocalInferenceResult.Cancelled -> CleanupStepOutcome.Cancelled
                 }
             )
