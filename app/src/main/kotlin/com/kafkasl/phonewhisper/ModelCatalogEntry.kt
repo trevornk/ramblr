@@ -138,41 +138,74 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         costPer1MOutputUsd = 5.00,
     ),
 
-    // --- OmniRoute: the actual recommended DEFAULT cleanup path overall (#98). "-latest"/
-    // "auto/" alias model ids (confirmed live against omniroute.example.com) hot-swap what
-    // they resolve to server-side as the upstream provider ships new versions, so this is the
-    // one path that gets automatic model upgrades for free with zero app changes -- direct
-    // provider ids above are pinned and need a catalog edit (or app update) when a provider
-    // retires a model. ---
+    // --- OmniRoute: the actual recommended DEFAULT cleanup path overall (#98), BUT tiered to
+    // mirror the exact same cheap/good/advanced split as the direct providers above -- Trevor's
+    // explicit correction: going through your own OmniRoute server should never default to a
+    // *pricier* model than going direct just because OmniRoute happens to expose one. Re-queried
+    // omniroute.example.com/v1/models live to confirm what's actually available before fixing
+    // this (don't guess at alias names):
+    //  - gemini/gemini-flash-lite-latest exists and auto-upgrades -- the correct RECOMMENDED
+    //    pick, matching direct Gemini's flash-lite recommendation (previously this wrongly
+    //    pointed at gemini/gemini-flash-latest, the pricier non-lite tier).
+    //  - No "-latest"/"auto/" alias exists for Haiku specifically (only pinned
+    //    cc/claude-haiku-4-5-20251001 / claude/claude-haiku-4-5-20251001) -- still the correct
+    //    GOOD-tier pick to mirror direct Anthropic's Haiku entry, even though it won't auto-
+    //    upgrade the same way the "-latest" aliases do; flagged honestly in its description
+    //    rather than silently claiming an alias that doesn't exist.
+    //  - No OpenAI "-latest"/"auto/" alias at all; cx/gpt-5.4-mini is OmniRoute's cheapest
+    //    available OpenAI-family model (no nano-equivalent routes through OmniRoute today).
+    //  - auto/claude-sonnet and gemini/gemini-pro-latest are demoted to ADVANCED (moved down
+    //    from RECOMMENDED/GOOD) -- premium tiers, not the "cheapest that's still top-notch"
+    //    default this catalog is supposed to steer people toward. ---
     ModelCatalogEntry(
         provider = ProviderKind.OMNIROUTE,
-        modelId = "gemini/gemini-flash-latest",
-        displayName = "OmniRoute: Gemini Flash (auto-upgrading)",
-        description = "Always resolves to Google's current Flash-tier model server-side -- no app update needed when Gemini ships a new version. Recommended default cleanup path.",
+        modelId = "gemini/gemini-flash-lite-latest",
+        displayName = "OmniRoute: Gemini Flash-Lite (auto-upgrading)",
+        description = "Cheapest, auto-upgrading -- mirrors direct Gemini's own recommended flash-lite tier so you don't overpay just because you're using OmniRoute. Recommended default cleanup path.",
         tier = ModelTier.RECOMMENDED,
         useCase = ModelUseCase.CLEANUP,
-        costPer1MInputUsd = 0.30,
-        costPer1MOutputUsd = 2.50,
+        costPer1MInputUsd = 0.10,
+        costPer1MOutputUsd = 0.40,
     ),
     ModelCatalogEntry(
         provider = ProviderKind.OMNIROUTE,
-        modelId = "auto/claude-sonnet",
-        displayName = "OmniRoute: Claude Sonnet (auto-upgrading)",
-        description = "Always resolves to Anthropic's current Sonnet-tier model server-side. Good alternative default if you prefer Claude's cleanup voice.",
+        modelId = "cx/gpt-5.4-mini",
+        displayName = "OmniRoute: GPT-5.4 Mini",
+        description = "OmniRoute's cheapest available OpenAI-family model (no nano-tier route exists through OmniRoute today). Pinned, not an auto-upgrading alias.",
         tier = ModelTier.GOOD,
         useCase = ModelUseCase.CLEANUP,
-        costPer1MInputUsd = 3.00,
-        costPer1MOutputUsd = 15.00,
+        costPer1MInputUsd = 0.75,
+        costPer1MOutputUsd = 4.50,
+    ),
+    ModelCatalogEntry(
+        provider = ProviderKind.OMNIROUTE,
+        modelId = "cc/claude-haiku-4-5-20251001",
+        displayName = "OmniRoute: Claude Haiku 4.5",
+        description = "Mirrors direct Anthropic's Haiku entry -- good cleanup quality, cheap. Pinned, not an auto-upgrading alias (no Haiku-specific \"-latest\"/\"auto/\" route exists on OmniRoute today).",
+        tier = ModelTier.GOOD,
+        useCase = ModelUseCase.CLEANUP,
+        costPer1MInputUsd = 1.00,
+        costPer1MOutputUsd = 5.00,
     ),
     ModelCatalogEntry(
         provider = ProviderKind.OMNIROUTE,
         modelId = "gemini/gemini-pro-latest",
         displayName = "OmniRoute: Gemini Pro (auto-upgrading)",
-        description = "Always resolves to Google's current Pro-tier model server-side -- higher cost, for when you want the strongest available cleanup quality.",
+        description = "Always resolves to Google's current Pro-tier model server-side -- higher cost, for when you deliberately want the strongest available cleanup quality over the cheap default.",
         tier = ModelTier.ADVANCED,
         useCase = ModelUseCase.CLEANUP,
         costPer1MInputUsd = 1.25,
         costPer1MOutputUsd = 10.00,
+    ),
+    ModelCatalogEntry(
+        provider = ProviderKind.OMNIROUTE,
+        modelId = "auto/claude-sonnet",
+        displayName = "OmniRoute: Claude Sonnet (auto-upgrading)",
+        description = "Always resolves to Anthropic's current Sonnet-tier model server-side -- premium, not the cost-efficient default.",
+        tier = ModelTier.ADVANCED,
+        useCase = ModelUseCase.CLEANUP,
+        costPer1MInputUsd = 3.00,
+        costPer1MOutputUsd = 15.00,
     ),
     ModelCatalogEntry(
         provider = ProviderKind.OMNIROUTE,

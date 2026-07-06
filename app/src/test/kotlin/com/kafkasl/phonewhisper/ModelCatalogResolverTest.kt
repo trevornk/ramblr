@@ -120,12 +120,15 @@ class BundledDefaultModelCatalogTest {
         assertTrue(recommended!!.modelId.contains("-latest") || recommended.modelId.startsWith("auto/"))
     }
 
-    @Test fun `every OmniRoute entry uses an alias id -- latest or auto- not a pinned version string`() {
+    @Test fun `OmniRoute's RECOMMENDED cleanup entry specifically is a -latest alias, not a pinned version string`() {
         val omniRouteEntries = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OMNIROUTE)
         assertTrue(omniRouteEntries.isNotEmpty())
-        assertTrue(omniRouteEntries.all { it.modelId.contains("-latest") || it.modelId.startsWith("auto/") })
+        val recommended = omniRouteEntries.first { it.tier == ModelTier.RECOMMENDED }
+        assertTrue(recommended.modelId.contains("-latest") || recommended.modelId.startsWith("auto/"))
+        // Not every OmniRoute entry needs to be an alias -- e.g. Haiku and GPT-5.4-mini have no
+        // "-latest"/"auto/" alias available on OmniRoute today, so they're pinned model ids
+        // (still correctly tiered GOOD to mirror their direct-provider cheap-tier equivalents).
     }
-
     @Test fun `Anthropic's Claude Haiku entry is GOOD, never RECOMMENDED, given the transcription gap`() {
         val anthropicEntries = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.ANTHROPIC)
         assertTrue(anthropicEntries.isNotEmpty())
