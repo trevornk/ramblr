@@ -975,7 +975,11 @@ class WhisperAccessibilityService : AccessibilityService() {
             prefs().getString("cleanup_style", null),
             prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
         )
-        val current = PerAppPersonaStore.resolvePersona(this, currentForegroundPackageName(), globalPersona)
+        val current = if (PerAppPersonaToggle.isEnabled(this)) {
+            PerAppPersonaStore.resolvePersona(this, currentForegroundPackageName(), globalPersona)
+        } else {
+            globalPersona
+        }
         for (persona in CleanupPersonas.BUILT_IN) {
             val title = if (persona == current) "✓ ${persona.title}" else persona.title
             container.addView(styleMenuRow(icon = null, title = title, subtitle = persona.subtitle) {
@@ -1089,7 +1093,9 @@ class WhisperAccessibilityService : AccessibilityService() {
      * cleanup is now running.
      */
     private fun onStyleMenuPersonaTapped(persona: CleanupPersona) {
-        PerAppPersonaStore.record(this, currentForegroundPackageName(), persona)
+        if (PerAppPersonaToggle.isEnabled(this)) {
+            PerAppPersonaStore.record(this, currentForegroundPackageName(), persona)
+        }
         prefs().edit()
             .putString("cleanup_style", persona.key)
             .putString("post_processing_prompt", CleanupPersonas.promptForExplicitSelection(persona))
@@ -1511,7 +1517,11 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
 
             val savedPrompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
-            val perAppPersonaKey = PerAppPersonaStore.personaKeyFor(this, currentForegroundPackageName())
+            val perAppPersonaKey = if (PerAppPersonaToggle.isEnabled(this)) {
+                PerAppPersonaStore.personaKeyFor(this, currentForegroundPackageName())
+            } else {
+                null
+            }
             val rawPrompt = perAppPersonaKey
                 ?.let { CleanupPersonas.promptForExplicitSelection(CleanupPersonas.fromKey(it)) }
                 ?: savedPrompt
