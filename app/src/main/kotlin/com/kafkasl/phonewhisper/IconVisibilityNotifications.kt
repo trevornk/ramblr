@@ -29,8 +29,10 @@ object IconVisibilityNotifications {
     }
 
     private fun restoreIntent(ctx: Context): PendingIntent {
-        val intent = Intent(ctx, RestoreIconReceiver::class.java)
-        return PendingIntent.getBroadcast(
+        val intent = Intent(ctx, RestoreIconActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        }
+        return PendingIntent.getActivity(
             ctx, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
