@@ -179,7 +179,47 @@ val LOCAL_CLEANUP_MODEL = Model(
     fileName = "lfm2.5-350m-q4_0.gguf",
 )
 
-val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL)
+/**
+ * Second local-cleanup catalog entry (Trevor-requested A/B test, following the real on-device
+ * failure where LFM2.5-350M + Formal persona's DEV_PROMPT drifted into answering/chatting instead
+ * of restyling the transcript -- see CleanupWaterfallExecutor's localPrompt fix). Unlike
+ * [LOCAL_CLEANUP_MODEL] (a general-purpose instruct model being *prompted* to do cleanup),
+ * `mumble-cleanup-2stage` is a LoRA fine-tune of Qwen2.5-0.5B-Instruct *specifically trained* on
+ * this exact task: Stage 1 pretrains on 50,000 synthetic (raw, clean) transcript pairs, Stage 2
+ * fine-tunes on 638 hand-curated real-style pairs at a 10x lower learning rate to preserve a
+ * "no-reword, no-hallucination" contract -- the same failure mode Trevor hit live. Its own
+ * DictationQuality golden-corpus eval claims 10/10 (self-reported, not independently verified
+ * here; that's exactly what this A/B test is for).
+ *
+ * Real prior art found via direct web research (not built from scratch) at Trevor's explicit
+ * request to search first: `adikuma/mumble-cleanup` (the original) and
+ * `amitashwini/mumble-cleanup-2stage` (this entry, the improved two-stage version) are both real,
+ * Apache-2.0-licensed Hugging Face models. Apache-2.0 covers both the LoRA fine-tune and the base
+ * Qwen2.5-0.5B-Instruct model -- free for any use, no revenue-cap license terms unlike LFM2.5.
+ *
+ * `recommended = false`: LFM2.5-350M stays the default so installing this is purely additive for
+ * Trevor's A/B test, not a silent swap of what every existing user gets. Whichever wins gets
+ * promoted to `recommended` in a follow-up once real-world testing confirms it.
+ *
+ * URL/sha256 verified 2026-07-06 by downloading the exact asset from the real
+ * `amitashwini/mumble-cleanup-2stage` Hugging Face repo and hashing it locally
+ * (`shasum -a 256`) -- 397,807,904 bytes, matching the model card's documented ~379 MB Q4_K_M
+ * size -- the same verification discipline as every other entry in this file, not copied from a
+ * webpage.
+ */
+val MUMBLE_CLEANUP_MODEL = Model(
+    name = "Mumble Cleanup 2-Stage (Q4_K_M)",
+    archive = "mumble-cleanup-2stage-q4km",
+    sizeMb = 379,
+    quality = "On-device cleanup · fine-tuned for dictation",
+    recommended = false,
+    sha256 = "fc6409457b8db4b37ef6184ae720a9bffe4df5ac506979ed83d0d53faab158ab",
+    isLocalCleanup = true,
+    sourceUrl = "https://huggingface.co/amitashwini/mumble-cleanup-2stage/resolve/main/mumble-cleanup-2stage-q4km.gguf",
+    fileName = "mumble-cleanup-2stage-q4km.gguf",
+)
+
+val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL, MUMBLE_CLEANUP_MODEL)
 
 sealed class DownloadState {
     data class Downloading(val progress: Float) : DownloadState()
