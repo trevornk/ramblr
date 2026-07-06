@@ -6,40 +6,57 @@
 
 Push-to-talk dictation for Android.
 
-Ramblr lets you speak into most apps without switching keyboards. Tap the floating button, speak, tap again, and your text is inserted into the currently focused text field when the app exposes a standard Android input field.\
+Ramblr lets you speak into most apps without switching keyboards. Tap the floating button,
+speak, tap again, and your text is inserted into the currently focused text field when the app
+exposes a standard Android input field.
 
 It supports:
 
-- **Local on-device transcription** with sherpa-onnx
-- **Cloud transcription** with OpenAI Whisper
-- **Optional cleanup** with OpenAI to fix punctuation and grammar
+- **Local on-device transcription and cleanup** — nothing has to leave the phone
+- **Cloud transcription** (OpenAI Whisper today) and **cloud cleanup** across OpenAI, Anthropic,
+  and Gemini, in whatever order you configure
+- A **Fastest** mode — instant local transcription, cloud cleanup for the best text quality
+- Per-style "Formal / Casual / Notes / Email / Concise" cleanup presets, plus your own custom
+  ones
+- A personal vocabulary list so cleanup stops mangling your project names and jargon
 
 Ramblr is a private fork of [kafkasl/phone-whisper](https://github.com/kafkasl/phone-whisper).
 
-
 ## Why I built this
 
-- I like SwiftKey and want to keep it as keyboard but...
+- I like SwiftKey and want to keep it as my keyboard, but...
 - Most keyboard dictation felt too inaccurate
-- Gemini's voice input auto submits your transcription (which is pretty bad) so you can't edit it before sending
-- Post processing yields much better results, specially adding a list of keywords and technical terms you often use
-- Inserting text into the field you're already using lets you keep editing it like any other draft.
+- Gemini's voice input auto-submits your transcription (which is pretty bad) so you can't edit
+  it before sending
+- Post-processing yields much better results, especially with a list of keywords and technical
+  terms you often use
+- Inserting text into the field you're already using lets you keep editing it like any other
+  draft
 
 ## Install
 
 ### Easiest: download the APK
 
-Grab the latest APK from [GitHub Releases](https://github.com/trevornk/ramblr/releases).
+Grab the latest APK from [GitHub Releases](https://github.com/trevornk/ramblr/releases) — a new
+one is built and published automatically on every push to `main` (unsigned debug build, sideload
+only).
 
 Open it on your phone, install it, then launch the app once to finish setup.
 
 ### Build from source
 
-Requires JDK 17 and Android SDK.
+Requires JDK 17 and the Android SDK.
 
 ```bash
-git clone https://github.com/trevornk/ramblr.git && cd ramblr
+git clone --recursive https://github.com/trevornk/ramblr.git && cd ramblr
 make build
+```
+
+`--recursive` matters: `llama.cpp` is a git submodule the on-device cleanup build depends on. If
+you already cloned without it:
+
+```bash
+git submodule update --init --recursive
 ```
 
 The build automatically downloads the sherpa-onnx native libs (`libsherpa-onnx-jni.so`,
@@ -48,7 +65,7 @@ The build automatically downloads the sherpa-onnx native libs (`libsherpa-onnx-j
 APK output:
 
 ```bash
-app/build/outputs/apk/debug/app-debug.apk
+app/build/outputs/apk/debug/Ramblr-<version>-debug.apk
 ```
 
 If you use ADB:
@@ -63,8 +80,10 @@ make adb-install
 2. Tap once to start recording
 3. Tap again to stop
 4. Audio is transcribed locally or in the cloud
-5. The text is inserted into the focused text field
-6. If insertion fails, the text is copied to the clipboard
+5. Optional cleanup (local or cloud) fixes grammar, punctuation, and phrasing
+6. The text is inserted into the focused text field
+7. If insertion fails, the text is copied to the clipboard, and the feedback bubble stays up
+   longer and stays tappable so a failed insertion is hard to miss
 
 ## Setup
 
@@ -73,75 +92,124 @@ make adb-install
 1. Open **Ramblr**
 2. Grant the **audio recording** permission
 3. Enable the **Accessibility Service**
-4. Choose your transcription mode:
-   - **Local**: download a model in the app
-   - **Cloud**: paste your OpenAI API key
+4. Pick a **Dictation mode** (Settings → Cloud), or leave the defaults and adjust later:
+   - **Local** — on-device transcription + on-device cleanup, fully offline
+   - **Cloud** — cloud transcription + cloud cleanup
+   - **Fastest** — on-device transcription (near-instant) + cloud cleanup (best text quality)
+   - Advanced per-feature overrides are available if you want any other combination
+5. If you picked Local/Fastest, download a transcription model in Settings → Transcription
+6. If you picked Cloud/Fastest, add at least one cloud provider and its API key in
+   Settings → Cloud
 
 Once setup is done, the floating button is ready.
 
 ## Why does it need Accessibility?
 
-Ramblr uses Android Accessibility Service for one narrow reason: to insert dictated text into the currently focused text field across apps.
+Ramblr uses Android's Accessibility Service for one narrow reason: to insert dictated text into
+the currently focused text field across apps.
 
-It does **not** replace your keyboard. It does **not** run background automation. It only acts after you explicitly tap the overlay button.
+It does **not** replace your keyboard. It does **not** run background automation. It only acts
+after you explicitly tap the overlay button.
 
 ## Privacy
 
-Ramblr supports two modes:
+Ramblr supports two transcription modes and, independently, two cleanup modes:
 
-- **Local mode**: audio stays on-device
-- **Cloud mode**: audio is sent directly from your device to OpenAI's transcription API
-- **Optional cleanup**: transcript text is sent directly from your device to OpenAI's chat API
+- **Local transcription**: audio is processed on-device using a downloaded sherpa-onnx model.
+  Audio never leaves the phone.
+- **Cloud transcription**: audio is sent directly from your device to OpenAI's transcription API.
+- **Local cleanup**: the transcript text is processed on-device against a small downloaded GGUF
+  model (llama.cpp). Nothing leaves the phone.
+- **Cloud cleanup**: the transcript text is sent from your device to whichever provider(s) you
+  configured — OpenAI, Anthropic, Gemini, and/or a custom OpenAI-compatible endpoint you point it
+  at yourself (e.g. a self-hosted router on your own LAN, via **Settings → Cloud → base URL
+  override**).
 
-I don't run a backend for this app. In cloud mode, requests go straight from your phone to OpenAI using your own API key.
+Combine local transcription with local cleanup and nothing ever leaves the device.
 
-Cleanup can instead be pointed at any OpenAI-compatible chat completions API (e.g. a self-hosted
-router on your own LAN) by setting a custom base URL and model name in **Settings → Cleanup API
-base URL / Cleanup model name**. In that mode, transcript text is sent to whatever host you
-configure — e.g. `http://192.168.1.50:8000/v1` — not to OpenAI. The API key field is reused as a
-Bearer token for the custom endpoint too. See [PRIVACY.md](PRIVACY.md) for details.
+I don't run a backend for this app. In every cloud mode, requests go straight from your phone to
+the provider using your own API key — there is no relay server in the middle.
 
 Full policy: [PRIVACY.md](PRIVACY.md)
 
+## Cloud providers & the cleanup waterfall
+
+Cleanup isn't limited to a single provider. **Settings → Cloud** lets you build an ordered chain
+of steps — e.g. "try Gemini Flash first, fall back to OpenAI, fall back to Anthropic, fall back
+to on-device" — and Ramblr walks it in order on any failure (timeout, non-2xx, network error). If
+every step fails, the raw (uncleaned) transcript is used, never silently dropped.
+
+Supported chain entries today:
+
+| Provider | Transcription | Cleanup |
+|---|---|---|
+| OpenAI | ✅ (Whisper) | ✅ |
+| Gemini | ✅ | ✅ |
+| Anthropic | — | ✅ (no audio input capability) |
+| Local (on-device) | ✅ | ✅ |
+| Self-hosted OpenAI-compatible gateway | — | ✅ (opt-in, see below) |
+
+### Optional: your own self-hosted gateway
+
+Ramblr can also route cleanup through a self-hosted OpenAI-compatible gateway (e.g. a personal
+LLM router). This is entirely opt-in and off by default — there is no bundled/default endpoint in
+this repo. To enable it for your own build:
+
+```properties
+# local.properties (never committed — see .gitignore)
+OMNIROUTE_BASE_URL=https://your-gateway.example/v1
+```
+
+Leave it unset and the option simply doesn't appear in the "Add provider" picker; nothing else
+about the app changes. See `app/src/main/kotlin/com/kafkasl/phonewhisper/OmniRoute.kt`.
+
 ## Local models
 
-Models are stored in app storage under:
+Models are downloaded on demand and stored in app-private storage under:
 
-```bash
+```
 /data/data/com.kafkasl.phonewhisper/files/models/
 ```
 
-Current catalog:
+Current transcription catalog:
 
 | Model | Size | Notes |
 |---|---:|---|
 | Parakeet 110M | 100 MB | Best value · smallest, recommended default |
 | Canary 180M Flash | 147 MB | Multilingual (en/es/de/fr), punctuated |
-| Parakeet 0.6B | 465 MB | Best quality |
+| Parakeet 0.6B | 465 MB | Best quality, slower |
 
-The app downloads and extracts models directly from the sherpa-onnx release archives.
+A separate small streaming model powers the live preview overlay, and a small GGUF model (LFM2.5
+350M by default) powers fully on-device cleanup. The app downloads and extracts all of these
+directly from their upstream release archives/Hugging Face — nothing is bundled into the APK, and
+downloads are checksum-verified before use.
 
-## Post-processing
+## Cleanup styles
 
-When cloud cleanup is enabled, the raw transcript is sent to OpenAI's chat API with a system
-prompt before being inserted. You can pick which prompt to use from **Settings → Edit current
-prompt** presets, or write your own:
+When cleanup is enabled, the raw transcript is sent through an LLM with a system prompt before
+being inserted. **Settings → Cleanup → Style** manages which prompt is used:
 
-| Preset | Behavior |
+| Built-in style | Behavior |
 |---|---|
-| **Dev cleanup** (default) | Fixes spelling, grammar, and punctuation, corrects known project/technical names, and preserves the original sentence structure 1:1. Best for coding, CLI commands, and short technical notes. |
-| **Simple cleanup** | Minimal edit: punctuation, capitalization, and obvious speech-to-text errors only. |
-| **Structured rewrite** | Fluid-1/Typeless-style rewrite for rambling dictation: strips filler words and false starts ("um", "like", "you know"), collapses self-corrections ("wait no, actually...") down to the final intended meaning, and reorganizes long rambling monologue into paragraphs or numbered/bulleted lists when the speaker is clearly enumerating items or steps. It still corrects the same technical/project-name list as Dev cleanup, and never adds facts, opinions, or answers that weren't in the source. Short one-line notes are left as a single sentence rather than restructured. |
-| **Custom** | Any prompt you type yourself in the "Edit current prompt" dialog. |
+| **Formal** (default) | Fixes spelling, grammar, and punctuation, corrects known project/technical names, and preserves the original sentence structure 1:1. Best for coding, CLI commands, and short technical notes. |
+| **Casual** | Minimal edit: punctuation, capitalization, and obvious speech-to-text errors only. |
+| **Notes & lists** | Strips filler words and false starts ("um", "like", "you know"), collapses self-corrections ("wait no, actually...") down to the final intended meaning, and reorganizes rambling monologue into paragraphs or lists when you're clearly enumerating items or steps. Short one-line notes are left as a single sentence rather than restructured. |
+| **Email** | Rewrites the transcript as a polished, professional email body. Won't invent a greeting or sign-off you didn't actually say. |
+| **Concise** | Tightens rambling into the shortest version that still preserves every fact and the original meaning. |
 
-All three built-in presets are defined as prompt constants in `PostProcessor.kt`
-(`DEV_PROMPT`, `SIMPLE_PROMPT`, `STRUCTURED_PROMPT`) so you can read or fork them directly.
+Beyond the five built-ins, the Style manager lets you:
+
+- **Create custom styles** — your own name, subtitle, and prompt, editable and deletable at any
+  time
+- **Fork a built-in** — editing a built-in style creates a custom copy instead of mutating the
+  shipped preset
+- **Pick which styles show up in the floating icon's long-press quick menu** (capped at 5–8, so
+  it doesn't grow unbounded)
+- **Set a per-app style** — e.g. always use Email in Gmail, Notes & lists in a scratchpad app
 
 **Settings → Personal vocabulary** lets you edit the list of project names and jargon (one per
-line) that cleanup should recognize instead of mis-hearing, seeded with Ramblr's own
-defaults on first run. Built-in prompts interpolate this list at send time via a `{{vocabulary}}`
-placeholder; a fully custom prompt can opt in to the same behavior by including that placeholder
-itself (see #26).
+line) that cleanup should recognize instead of mis-hearing, seeded with sensible defaults on
+first run. Built-in prompts interpolate this list at send time.
 
 ## Development
 
@@ -152,18 +220,52 @@ make adb-install # build + install via ADB
 make clean       # clean build artifacts
 ```
 
+Or directly via Gradle:
+
+```bash
+export JAVA_HOME=/path/to/jdk-17
+./gradlew testDebugUnitTest
+./gradlew assembleDebug
+```
+
+### Architecture at a glance
+
+- **`WhisperAccessibilityService.kt`** — the accessibility service: overlay button, recording
+  state machine, and the code path that resolves transcription/cleanup candidates and injects
+  the result.
+- **`ProviderChain.kt` / `ProviderChainRuntime.kt` / `ProviderChainStore.kt`** — the unified,
+  user-editable ordered list of providers (OpenAI/Anthropic/Gemini/self-hosted/local) each
+  feature (transcription, cleanup) walks looking for its first capable, configured entry.
+- **`CleanupWaterfallExecutor.kt`** — executes the cleanup chain: host-grouped fast-fail, no
+  retries (this blocks a user waiting on their text), cursor-based last-known-good tracking that
+  resets on network change.
+- **`PostProcessor.kt`** — the OpenAI-compatible chat-completions client used for cloud cleanup,
+  plus the built-in style prompt constants.
+- **`CleanupPersona.kt` / `PersonaRegistry.kt` / `CustomPersonaStore.kt` /
+  `QuickMenuPersonaStore.kt`** — the Style system: built-in + user-authored cleanup
+  personas/prompts, unified lookup, and the persisted quick-menu selection.
+- **`ModelDownloader.kt` / `ModelCatalogStore.kt`** — the on-device model catalog (transcription,
+  streaming preview, local cleanup), download/extraction, and checksum verification.
+- **`LocalTranscriber.kt` / `LlamaCppInference.kt`** — sherpa-onnx (STT) and llama.cpp (cleanup)
+  JNI bindings for fully offline operation.
+- **`docs/adr/`** — architecture decision records for the bigger design calls (e.g.
+  `0001-cleanup-waterfall.md`).
+
+See `AndroidManifest.xml` for the full list of Settings activities
+(`SetupActivity`, `TranscriptionActivity`, `CleanupActivity`, `StyleManagerActivity`,
+`CloudProviderActivity`, `AdvancedActivity`), one per settings category.
+
 ### Prompt eval harness
 
 `PostProcessorTest.kt` only checks JSON parsing, not output *quality*. To compare cleanup
-prompts (`SIMPLE_PROMPT`, `DEV_PROMPT`, `STRUCTURED_PROMPT`, or future variants) side by side,
-there's a manual eval harness:
+prompts side by side, there's a manual eval harness:
 
-- Sample transcripts live in `app/src/test/resources/eval_samples/` — 23 synthetic but
-  realistic dictation samples covering rambling brainstorms, self-corrected sentences,
-  technical jargon, spoken lists, quick notes, and two edge cases (a very short two-word
-  command, and a dictation that's already clean and needs no restructuring).
-  `eval_samples/NOTES.md` is a human-reference companion (not read by the harness) noting what a
-  *good* cleanup output should preserve or fix for each sample — use it when judging a report.
+- Sample transcripts live in `app/src/test/resources/eval_samples/` — 23 synthetic but realistic
+  dictation samples covering rambling brainstorms, self-corrected sentences, technical jargon,
+  spoken lists, quick notes, and two edge cases (a very short two-word command, and a dictation
+  that's already clean and needs no restructuring). `eval_samples/NOTES.md` is a human-reference
+  companion (not read by the harness) noting what a *good* cleanup output should preserve or fix
+  for each sample — use it when judging a report.
 - The harness itself is `app/src/test/kotlin/com/kafkasl/phonewhisper/tools/EvalHarness.kt`, a
   standalone `main()` — **not** a JUnit test. It compiles as part of `make test`'s Kotlin
   compilation (so it's checked for compile errors), but JUnit never discovers or runs it, so it
@@ -171,15 +273,14 @@ there's a manual eval harness:
 
 **This tool calls real provider APIs and spends real credits.** Only run it manually, with your
 own keys. It runs against every provider whose key is set — OpenAI, Anthropic, and/or Gemini —
-skipping (with a stderr warning) any provider whose key env var is unset (#97):
+skipping (with a stderr warning) any provider whose key env var is unset:
 
 ```bash
 export OPENAI_API_KEY=sk-...        # never commit this, no .env is read by the tool
 export ANTHROPIC_API_KEY=sk-ant-... # optional — omit to skip Anthropic
 export GEMINI_API_KEY=AIza...       # optional — omit to skip Gemini
-./gradlew runEvalHarness                                              # compares SIMPLE_PROMPT vs DEV_PROMPT
-./gradlew runEvalHarness --args="SIMPLE_PROMPT,DEV_PROMPT,STRUCTURED_PROMPT"   # explicit prompt list
-./gradlew runEvalHarness --args="SIMPLE_PROMPT,DEV_PROMPT,STRUCTURED_PROMPT,GANGSTER_PROMPT,SMART_PROMPT,TEACHER_PROMPT"  # include tone personas (#40)
+./gradlew runEvalHarness                                              # compares built-in prompts
+./gradlew runEvalHarness --args="DEV_PROMPT,SIMPLE_PROMPT,STRUCTURED_PROMPT"   # explicit prompt list
 ```
 
 Each available provider is run against its own short-list of cheap-tier candidate models (see
@@ -201,31 +302,43 @@ runs don't clutter the repo; if you want to share or archive a specific report, 
 To add a new prompt variant to the comparison, add it to the `PROMPT_REGISTRY` map at the top of
 `EvalHarness.kt`.
 
+### Tests
+
+```bash
+make test
+```
+
+Runs the full JVM unit test suite (no emulator/device required) — 700+ tests covering the
+provider chain, cleanup waterfall, model catalog, persona system, and dictation state machine.
+CI (`.github/workflows/ci.yml`) runs the same suite plus `assembleDebug` on every push and pull
+request against `main`.
+
 ## App compatibility
 
-Ramblr works best in apps that use standard Android text fields.
-Some apps use custom text surfaces or terminal-style views, which may not support direct accessibility paste.
-When insertion is not possible, Ramblr falls back to copying the transcript to the clipboard, and the
-feedback bubble stays up longer and is tappable to re-copy so a failed insertion is hard to miss (see below).
+Ramblr works best in apps that use standard Android text fields. Some apps use custom text
+surfaces or terminal-style views, which may not support direct accessibility paste. When
+insertion is not possible, Ramblr falls back to copying the transcript to the clipboard, and the
+feedback bubble stays up longer and is tappable to re-copy so a failed insertion is hard to miss.
 
-If the very first scan for an insertable field comes up empty — which can happen for a moment right after the
-overlay button is tapped, since the tap itself briefly steals focus — Ramblr waits ~200ms and scans once
-more before giving up and falling back to the clipboard. This is a narrow fix for that specific transient race,
-not a general compatibility improvement.
+If the very first scan for an insertable field comes up empty — which can happen for a moment
+right after the overlay button is tapped, since the tap itself briefly steals focus — Ramblr
+waits ~200ms and scans once more before giving up and falling back to the clipboard. This is a
+narrow fix for that specific transient race, not a general compatibility improvement.
 
-There is no compatibility table of tested apps (e.g. Gmail, Slack, Signal, Chrome, Discord, a Compose-based
-messaging app, WebView-based inputs) in this README. Building one requires exercising each app on a real device
-and recording which strategy succeeds, which hasn't been done — see [#5](https://github.com/trevornk/ramblr/issues/5)
-for that as tracked follow-up work. Don't treat the absence of an app from this doc as either "supported" or
-"unsupported."
+There is no compatibility table of tested apps (e.g. Gmail, Slack, Signal, Chrome, Discord, a
+Compose-based messaging app, WebView-based inputs) in this README. Building one requires
+exercising each app on a real device and recording which strategy succeeds, which hasn't been
+done — see [#5](https://github.com/trevornk/ramblr/issues/5) for that as tracked follow-up work.
+Don't treat the absence of an app from this doc as either "supported" or "unsupported."
 
-Ramblr intentionally does not implement a full IME (replacement keyboard). It only acts once, after an
-explicit tap on the overlay button, and never intercepts normal typing — becoming a keyboard is a different,
-much larger feature and is out of scope.
+Ramblr intentionally does not implement a full IME (replacement keyboard). It only acts once,
+after an explicit tap on the overlay button, and never intercepts normal typing — becoming a
+keyboard is a different, much larger feature and is out of scope.
 
 ### Termux
 
-Termux's main terminal area is not a standard Android text field, so direct insertion may not work there.
+Termux's main terminal area is not a standard Android text field, so direct insertion may not
+work there.
 
 To use Ramblr in Termux:
 
@@ -241,12 +354,33 @@ Once text is inserted into the native input box, Termux sends it to the terminal
 - Accessibility permission is required for cross-app insertion
 - Some apps may block paste or text injection
 - Some apps use custom input surfaces instead of standard Android text fields
-- Local models are large
-- Cloud mode requires your own OpenAI API key
+- Local transcription/cleanup models are sizable downloads (100–465 MB)
+- Cloud modes require your own API key for whichever provider(s) you configure
+- Google Play distribution hasn't been evaluated — Accessibility Service apps face real policy
+  scrutiny there; see [#99](https://github.com/trevornk/ramblr/issues/99). For now, sideload from
+  [Releases](https://github.com/trevornk/ramblr/releases) or build from source.
+
+## Contributing
+
+Issues and PRs are welcome. Before opening a PR:
+
+```bash
+export JAVA_HOME=/path/to/jdk-17
+./gradlew testDebugUnitTest
+./gradlew assembleDebug
+```
+
+Please keep diffs focused and add/update tests for any new logic — see existing tests under
+`app/src/test/kotlin/com/kafkasl/phonewhisper/` for the project's conventions (small, well-named
+`@Test` functions, one behavior per test, pure logic factored out of Android classes wherever
+possible so it's unit-testable without Robolectric).
 
 ## Attribution
 
-Ramblr is a private fork of [kafkasl/phone-whisper](https://github.com/kafkasl/phone-whisper), which this project is built on top of.
+Ramblr is a private fork of [kafkasl/phone-whisper](https://github.com/kafkasl/phone-whisper),
+which this project is built on top of. Transcription is powered by
+[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) and on-device cleanup by
+[llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT), used as a git submodule.
 
 ## License
 
