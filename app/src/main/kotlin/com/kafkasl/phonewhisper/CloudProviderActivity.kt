@@ -448,9 +448,18 @@ class CloudProviderActivity : BaseSettingsActivity() {
         private const val LP_WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
 
         /** Category subtitle for MainActivity's Cloud row (#95 Phase 3), e.g. "1 provider
-         *  configured" or "Not configured". */
-        fun subtitle(context: android.content.Context): String {
-            val count = ProviderChainStore.load(context).entries.size
+         *  configured" or "Not configured". Counts only cloud-capable entries -- the same LOCAL-
+         *  is-not-a-cloud-provider filtering as [refreshChainRows] -- so a chain holding only the
+         *  undeletable LOCAL floor entry (the common/default state) correctly reads as "Not
+         *  configured" instead of misreporting "1 provider configured" for a provider that isn't
+         *  really configurable/removable here at all. */
+        fun subtitle(context: android.content.Context): String =
+            subtitleFor(ProviderChainStore.load(context))
+
+        /** Pure half of [subtitle], split out so the LOCAL-filtering logic is unit-testable
+         *  without a [android.content.Context]/SharedPreferences. */
+        fun subtitleFor(chain: ProviderChain): String {
+            val count = chain.entries.count { it.kind != ProviderKind.LOCAL }
             return when (count) {
                 0 -> "Not configured -- using on-device"
                 1 -> "1 provider configured"
