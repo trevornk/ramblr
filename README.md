@@ -384,4 +384,4 @@ which this project is built on top of. Transcription is powered by
 
 ## License
 
-Personal project. Do whatever you want with it.
+GPLv3. See [LICENSE](LICENSE) and [NOTICE](NOTICE) (third-party attributions) for details.

@@ -1,0 +1,47 @@
+Ramblr
+Copyright (C) 2026 Trevor NK
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+---
+
+Attribution / third-party notices
+==================================
+
+Ramblr is a fork of phone-whisper (https://github.com/kafkasl/phone-whisper)
+by kafkasl, whose README states: "Personal project. Do whatever you want
+with it." This fork is distributed under GPLv3 per the terms above.
+
+Third-party components used by Ramblr and their licenses:
+
+- sherpa-onnx (https://github.com/k2-fsa/sherpa-onnx) — Apache License 2.0
+  Used for on-device speech transcription. Native libraries are downloaded
+  at build time (see app/build.gradle.kts), not vendored in this repo.
+
+- llama.cpp (https://github.com/ggml-org/llama.cpp) — MIT License
+  Used for on-device cleanup/post-processing. Included as a git submodule
+  (see .gitmodules); not modified beyond the JNI shim in
+  app/src/main/cpp/llama_cleanup/.
+
+- OkHttp (https://square.github.io/okhttp/) — Apache License 2.0
+- AndroidX Core, AppCompat, Material Components, Security-Crypto,
+  WorkManager (https://developer.android.com/jetpack/androidx) — Apache
+  License 2.0
+- Apache Commons Compress (https://commons.apache.org/proper/commons-compress/)
+  — Apache License 2.0
+
+Cloud transcription and cleanup calls (OpenAI, Anthropic, Gemini, or an
+optional self-hosted OpenAI-compatible endpoint you configure) are made
+directly from the device using your own API key — no third-party SDKs
+are vendored for these; see PRIVACY.md for the full data-flow description.
