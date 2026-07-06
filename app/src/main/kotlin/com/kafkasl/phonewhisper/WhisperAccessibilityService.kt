@@ -2121,17 +2121,21 @@ class WhisperAccessibilityService : AccessibilityService() {
         val isFallback = method == InjectMethod.NONE
         fallbackClipboardText = if (isFallback) text else null
 
-        val suffix = when {
-            retryRawOffered -> " · tap to use raw text"
-            isFallback -> " · tap to copy again"
-            else -> ""
-        }
         val duration = when {
             retryRawOffered -> UNDO_RETRY_WINDOW_MS
             isFallback -> FALLBACK_FEEDBACK_DURATION_MS
             else -> feedbackDurationMs
         }
-        feedback?.let { showFeedback(it + suffix, duration, touchable = retryRawOffered || isFallback, isFallback = isFallback) }
+        // retryRawOffered replaces the base feedback text entirely rather than appending a suffix
+        // to it (e.g. "Copied to clipboard") -- the cleaned text is already injected at this point,
+        // so "Copied to clipboard" is stale/misleading noise; the only actionable thing left to
+        // tell the user is that tapping swaps in the raw transcript instead (Trevor's request).
+        val displayFeedback = when {
+            retryRawOffered -> "Tap to use raw text"
+            isFallback -> feedback?.let { "$it · tap to copy again" }
+            else -> feedback
+        }
+        displayFeedback?.let { showFeedback(it, duration, touchable = retryRawOffered || isFallback, isFallback = isFallback) }
 
         when (val action = clipboardClearActionFor(method, CLIPBOARD_CLEAR_DELAY_MS)) {
             ClipboardClearAction.Immediate -> restoreClipboardAfterInjection(text, priorClipboard)
