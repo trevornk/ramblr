@@ -1523,9 +1523,10 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (result.errorMessage != null) Log.e(TAG, "Recording ended with error: ${result.errorMessage}")
 
         val useLocal = prefs().getBoolean("use_local", true)
+        val allowCloudFallback = DictationModeToggle.allowCloudFallback(this)
 
         when {
-            useLocal && transcriberSlot.get() != null -> transcribeLocal(file, token)
+            useLocal && transcriberSlot.get() != null -> transcribeLocal(file, token, allowCloudFallback)
             // #98 UX follow-up: previously this fell straight through to transcribeApi() whenever
             // the local model wasn't loaded yet, regardless of *why* -- including the real-world
             // case of a fresh install where onboarding's model download is still in progress.
@@ -1534,7 +1535,10 @@ class WhisperAccessibilityService : AccessibilityService() {
             // making the whole dictation feature look silently broken during exactly the moment
             // (onboarding's "Try it out" step) a new user is forming their first impression.
             // Give an honest, specific message instead of misrouting to a path that was never
-            // configured.
+            // configured -- unless #100's "fall back to cloud if on-device fails" toggle is on,
+            // in which case a not-yet-downloaded local model is exactly the case that toggle
+            // exists for.
+            useLocal && allowCloudFallback -> transcribeApi(file, token)
             useLocal -> {
                 file.delete()
                 reset("Local model still downloading -- try again once it finishes")
@@ -1550,7 +1554,7 @@ class WhisperAccessibilityService : AccessibilityService() {
      * accepts one full FloatArray per stream — there's no incremental/chunked accept in the
      * vendored bindings — so this remains the single largest allocation on this path.
      */
-    private fun transcribeLocal(file: File, token: Int) {
+    private fun transcribeLocal(file: File, token: Int, allowCloudFallback: Boolean) {
         thread {
             try {
                 val samples = try { PcmFileBuffer.readAsFloatArray(file) } finally { file.delete() }
@@ -1564,6 +1568,13 @@ class WhisperAccessibilityService : AccessibilityService() {
                 handleTranscriptionResult(text, token)
             } catch (e: Exception) {
                 Log.e(TAG, "Local transcription failed", e)
+                // #100: local transcription's audio file is already gone (read-then-delete
+                // above), so a cloud fallback here needs the raw PCM again -- but re-reading a
+                // deleted file isn't possible. Since local transcription failure this late
+                // (post-decode) is rare and re-recording is cheap, cloud fallback for
+                // transcription is only wired at the "model not loaded yet" branch in
+                // continueTranscription, not this in-flight-failure path; report the error
+                // honestly instead of silently retrying without audio.
                 handler.post {
                     if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                     toast("Local error: ${e.message}")
@@ -1575,7 +1586,8 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     private fun transcribeApi(file: File, token: Int) {
         val chain = ProviderChainStore.load(this)
-        val candidates = ProviderChainRuntime.transcriptionCandidates(chain)
+        val allowLocalFallback = DictationModeToggle.allowLocalFallback(this)
+        val candidates = ProviderChainRuntime.transcriptionCandidates(chain, allowLocalFallback)
         if (candidates.isEmpty()) {
             file.delete()
             reset("No transcription provider configured")
@@ -1616,7 +1628,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 ProviderKind.LOCAL -> {
                     if (transcriberSlot.get() != null) {
                         Log.i(TAG, "Transcription via ProviderChain provider=${entry.kind}")
-                        transcribeLocal(file, token)
+                        transcribeLocal(file, token, allowCloudFallback = false)
                     } else {
                         file.delete()
                         reset("Local model still downloading -- try again once it finishes")
@@ -1669,7 +1681,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             // shouldUseCleanupExecutor, processProviderChain) keeps operating on a plain
             // ProviderChain exactly as Phase 2 verified.
             val providerChain = ProviderChainRuntime.effectiveChainForCleanup(
-                ProviderChainStore.load(this), CloudFeatureToggle.cleanupEnabled(this)
+                ProviderChainStore.load(this), CloudFeatureToggle.cleanupEnabled(this), DictationModeToggle.allowLocalFallback(this)
             )
             val cleanupWaterfall = ProviderChainRuntime.cleanupWaterfallFor(providerChain)
 
