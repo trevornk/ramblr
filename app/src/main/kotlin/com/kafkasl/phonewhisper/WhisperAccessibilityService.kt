@@ -463,6 +463,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         val pad = (dpScaledToRing(PAD_DP, ringSizeDp) * dp).toInt()
         val margin = (MARGIN_DP * dp).toInt()
 
+        // Busy ring drawn INSIDE the button's own circular fill (Trevor's fix, 2026-07-06) rather
+        // than in the ~6dp margin outside it: the prior outer-ring placement was invisible over
+        // Google Keep's white note editor because COLOR_RING (a near-white gray) had no contrast
+        // against a white host-app background it was drawn over. Sizing/z-ordering the ring to sit
+        // on top of the button's OWN fill color (whatever COLOR_BUSY/custom appearance fill is
+        // active) makes contrast fully within this app's control regardless of what's behind the
+        // overlay -- no host-app background can ever show through it again.
         val ring = ProgressBar(this).apply {
             isIndeterminate = true
             indeterminateTintList = ColorStateList.valueOf(COLOR_RING)
@@ -474,8 +481,11 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
 
         val overlay = FrameLayout(this).apply {
-            addView(ring, FrameLayout.LayoutParams(ringSize, ringSize, Gravity.CENTER))
             addView(img, FrameLayout.LayoutParams(buttonSize, buttonSize, Gravity.CENTER))
+            // Added after img (on top in z-order) and sized to the button itself, not the larger
+            // outer ringSize, so it draws as a ring inset within the button's circular fill instead
+            // of in the transparent margin around it.
+            addView(ring, FrameLayout.LayoutParams(buttonSize, buttonSize, Gravity.CENTER))
         }
 
         val params = WindowManager.LayoutParams(
@@ -776,7 +786,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             params.height = ringSize
             wm.updateViewLayout(overlay, params)
 
-            (ring.layoutParams as FrameLayout.LayoutParams).apply { width = ringSize; height = ringSize }
+            (ring.layoutParams as FrameLayout.LayoutParams).apply { width = buttonSize; height = buttonSize }
             ring.requestLayout()
             (btn.layoutParams as FrameLayout.LayoutParams).apply { width = buttonSize; height = buttonSize }
             btn.setPadding(pad, pad, pad, pad)
@@ -1509,6 +1519,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 cancelHolder = inFlightCall,
                 credentialLookup = { kind -> ProviderCredentialStore.get(this, kind) },
                 localModelPath = { ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this))?.absolutePath },
+                localPrompt = LocalCleanupProvider.selectedSystemPrompt(this),
             ) { result ->
                 handler.post {
                     if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
@@ -1692,7 +1703,36 @@ class WhisperAccessibilityService : AccessibilityService() {
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
-        return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (ok) nudgeSelectionToEnd(node, text.length)
+        return ok
+    }
+
+    /**
+     * Defensive, app-agnostic nudge after a successful ACTION_SET_TEXT (#quirk-compat): the
+     * platform contract already says ACTION_SET_TEXT places the cursor at the end and the widget
+     * "should" fire TYPE_VIEW_TEXT_CHANGED, so on a spec-compliant EditText this is a no-op.
+     * Observed on-device with Google Keep though: a large bulk ACTION_SET_TEXT (as opposed to
+     * incremental per-keystroke input, which is what Keep's own rendering path is normally
+     * exercised by) can land text that's present in the node's reported .text and still
+     * selectable/deletable, but never gets repainted -- independently corroborated by user reports
+     * of Keep's own editor going invisible mid-typing, unrelated to any accessibility service. This
+     * is *not* Keep-specific code: it's the same explicit ACTION_SET_SELECTION call for every node
+     * on every app, on the theory that some custom text renderers only recompute/repaint their
+     * layout in response to an explicit selection-change action rather than trusting ACTION_SET_TEXT
+     * alone. Best-effort -- failure here doesn't invalidate the SET_TEXT that already succeeded.
+     */
+    private fun nudgeSelectionToEnd(node: AccessibilityNodeInfo, textLength: Int) {
+        val args = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, textLength)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, textLength)
+        }
+        try {
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+        } catch (e: Exception) {
+            // Best-effort only; some nodes reject selection args entirely (e.g. non-text views
+            // that happened to report isEditable=true). Never let this affect injection success.
+        }
     }
 
     private fun refreshNode(node: AccessibilityNodeInfo): Boolean =
@@ -2143,13 +2183,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             val replacementStart = minOf(start, end)
             val replacementEnd = maxOf(start, end)
             val updated = current.replaceRange(replacementStart, replacementEnd, text)
-            val args = Bundle().apply {
-                putCharSequence(
-                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                    updated
-                )
-            }
-            val setTextOk = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            val setTextOk = setNodeText(node, updated)
             Log.i(TAG, "ACTION_SET_TEXT => $setTextOk")
             if (setTextOk) return InjectAttempt(InjectMethod.DIRECT, priorText = current)
         }
