@@ -416,10 +416,11 @@ class MainActivity : BaseSettingsActivity() {
             .putBoolean("use_post_processing", true)
             .putString(KEY_LOCAL_CLEANUP_MODEL_NAME, model.archive)
             .apply()
-        // #37/#52 follow-up: write the real, live ProviderChainStore, not the legacy
-        // CleanupWaterfallStore, which the live cleanup path stopped reading after #95 Phase 2 --
-        // see SimpleCleanupChoice.simpleCleanupChoiceForChain's kdoc for the full history.
-        ProviderChainStore.save(this, ProviderChain(listOf(ProviderChainEntry(ProviderKind.LOCAL, model.archive))))
+        // #37/#52 follow-up: add/update only the LOCAL floor entry, never overwrite the whole
+        // chain (see ProviderChain.withLocalFloor's kdoc -- the same real regression Trevor hit
+        // live applies here too, even though onboarding usually runs on a fresh chain).
+        ProviderChainStore.save(this, ProviderChainStore.load(this).withLocalFloor(model.archive))
+        CloudFeatureToggle.setCleanupEnabled(this, false)
         if (!ModelDownloader.isInstalled(this, model)) {
             ModelDownloadWorker.enqueue(this, model)
             toast("Downloading ${model.name}...")
@@ -436,8 +437,13 @@ class MainActivity : BaseSettingsActivity() {
             .putBoolean("use_post_processing", true)
             .putBoolean(KEY_LOCAL_CLEANUP_CONSENT, true)
             .apply()
-        // #37/#52 follow-up: same real-store fix as enableOnboardingCleanupLocal above.
-        ProviderChainStore.save(this, ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, PostProcessor.DEFAULT_MODEL))))
+        // #37/#52 follow-up: seed a default OpenAI entry only if the chain has no cloud-capable
+        // entry yet -- same non-destructive rule as CleanupActivity.onSelectSimpleCleanup.
+        val chain = ProviderChainStore.load(this)
+        if (chain.capableEntriesFor(needsTranscription = false).none { it.kind != ProviderKind.LOCAL }) {
+            ProviderChainStore.save(this, ProviderChain(chain.entries + ProviderChainEntry(ProviderKind.OPENAI, PostProcessor.DEFAULT_MODEL)))
+        }
+        CloudFeatureToggle.setCleanupEnabled(this, true)
         refresh()
     }
 

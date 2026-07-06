@@ -89,6 +89,33 @@ data class ProviderChain(val entries: List<ProviderChainEntry>) {
             if (needsTranscription) entry.kind.supportsTranscription() else entry.kind.supportsCleanup()
         }
 
+    /**
+     * Returns a copy of this chain with exactly one [ProviderKind.LOCAL] entry present, using
+     * [model] as its model id, appended after every existing non-LOCAL entry (or replacing the
+     * one already there, in its existing position, if one exists) -- never touching any other
+     * entry (#37 follow-up, real regression Trevor hit live: [CleanupActivity]'s simple
+     * Local/Cloud picker used to persist its choice as a full chain OVERWRITE, which silently
+     * deleted every configured cloud provider the moment "Local" was tapped). This is the
+     * non-destructive alternative: it guarantees the LOCAL floor this class's kdoc already
+     * describes as supposed to exist ("a guaranteed, undeletable floor beneath every chain"),
+     * while leaving cloud entries completely alone. [CloudFeatureToggle.cleanupEnabled]
+     * (see [ProviderChainRuntime.effectiveChainForCleanup]) is the correct, already-existing
+     * mechanism for the actual "prefer local vs cloud" decision -- it filters non-LOCAL entries
+     * out of the *effective* chain used for one cleanup call without ever mutating the persisted
+     * chain itself. Appending (not prepending) the LOCAL entry means an enabled cloud chain still
+     * tries its configured cloud providers first, falling through to on-device automatically if
+     * they all fail -- a strict improvement over today's behavior, not just a bug fix.
+     */
+    fun withLocalFloor(model: String): ProviderChain {
+        val localEntry = ProviderChainEntry(ProviderKind.LOCAL, model)
+        val existingIndex = entries.indexOfFirst { it.kind == ProviderKind.LOCAL }
+        return if (existingIndex >= 0) {
+            ProviderChain(entries.toMutableList().apply { set(existingIndex, localEntry) })
+        } else {
+            ProviderChain(entries + localEntry)
+        }
+    }
+
     companion object {
         /**
          * Default chain for a fresh install or any state that hasn't gone through

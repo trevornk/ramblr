@@ -191,14 +191,22 @@ class CleanupActivity : BaseSettingsActivity() {
      *  (choice radios, group visibility, caption, key row) -- mirrors MainActivity's original
      *  saveWaterfallSteps() comment on why a full refresh (not just the step list) matters: an
      *  edit changes the effective simple choice, and with it the radios, subtitle, and the
-     *  OpenAI-key row's visibility (#81). */
+     *  OpenAI-key row's visibility (#81).
+     *
+     *  The active LOCAL/CLOUD radio choice reads [CloudFeatureToggle.cleanupEnabled] directly
+     *  (#37 follow-up), not the chain's shape: since [onSelectSimpleCleanup] now maintains a
+     *  permanent LOCAL floor entry alongside whatever cloud providers exist (see
+     *  [ProviderChain.withLocalFloor]), the chain routinely has more than one entry even in the
+     *  simple "Local" or "Cloud" state, so [simpleCleanupChoiceForChain]'s single-entry-shape
+     *  classification no longer reflects the user's actual choice here -- it would misreport
+     *  CUSTOM the moment any cloud provider is configured. */
     private fun refreshWaterfallDependentUi() {
-        val persistedChoice = simpleCleanupChoiceForChain(ProviderChainStore.load(this))
-        if (persistedChoice == SimpleCleanupChoice.LOCAL) pendingLocalCleanupSelection = false
+        if (!CloudFeatureToggle.cleanupEnabled(this)) pendingLocalCleanupSelection = false
+        val persistedChoice = if (CloudFeatureToggle.cleanupEnabled(this)) SimpleCleanupChoice.CLOUD else SimpleCleanupChoice.LOCAL
         val choice = displayedCleanupChoice(persistedChoice, pendingLocalCleanupSelection)
         cleanupLocalRadio.isChecked = choice == SimpleCleanupChoice.LOCAL
         cleanupCloudRadio.isChecked = choice == SimpleCleanupChoice.CLOUD
-        cleanupChoiceCaption.visibility = if (persistedChoice == SimpleCleanupChoice.CUSTOM) View.VISIBLE else View.GONE
+        cleanupChoiceCaption.visibility = View.GONE
         cleanupLocalGroup.visibility = if (choice == SimpleCleanupChoice.LOCAL) View.VISIBLE else View.GONE
         cleanupCloudGroup.visibility = if (choice == SimpleCleanupChoice.CLOUD) View.VISIBLE else View.GONE
     }
@@ -207,7 +215,7 @@ class CleanupActivity : BaseSettingsActivity() {
      *  #23 when the change would first combine local transcription with cleanup. */
     private fun applyLocalCleanupChange(useLocal: Boolean, usePostProcessing: Boolean) {
         val hasConsented = prefs().getBoolean(KEY_LOCAL_CLEANUP_CONSENT, false)
-        val cleanupIsLocalOnly = ProviderChainStore.load(this).isLocalOnly()
+        val cleanupIsLocalOnly = !CloudFeatureToggle.cleanupEnabled(this)
         if (!LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing, hasConsented, cleanupIsLocalOnly)) {
             prefs().edit()
                 .putBoolean("use_local", useLocal)
@@ -414,7 +422,7 @@ class CleanupActivity : BaseSettingsActivity() {
     }
 
     private fun confirmDeleteCleanupModel(model: Model) {
-        val isActive = simpleCleanupChoiceForChain(ProviderChainStore.load(this)) == SimpleCleanupChoice.LOCAL &&
+        val isActive = !CloudFeatureToggle.cleanupEnabled(this) &&
             selectedCleanupModel().archive == model.archive
         val activeNote = if (isActive) " Cleanup will switch back to Cloud." else ""
         android.app.AlertDialog.Builder(this)
@@ -426,7 +434,7 @@ class CleanupActivity : BaseSettingsActivity() {
     }
 
     private fun deleteCleanupModel(model: Model) {
-        val wasActive = simpleCleanupChoiceForChain(ProviderChainStore.load(this)) == SimpleCleanupChoice.LOCAL &&
+        val wasActive = !CloudFeatureToggle.cleanupEnabled(this) &&
             selectedCleanupModel().archive == model.archive
         ModelDownloader.delete(this, model)
         if (wasActive) onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
@@ -514,11 +522,22 @@ class CleanupActivity : BaseSettingsActivity() {
                     return
                 }
                 pendingLocalCleanupSelection = false
-                saveProviderChain(ProviderChain(listOf(ProviderChainEntry(ProviderKind.LOCAL, model.archive))))
+                ensureLocalFloor(model.archive)
+                CloudFeatureToggle.setCleanupEnabled(this, false)
+                refresh()
             }
             SimpleCleanupChoice.CLOUD -> {
                 pendingLocalCleanupSelection = false
-                saveProviderChain(ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, PostProcessor.DEFAULT_MODEL))))
+                // Seed a default OpenAI entry only if the chain has no cloud-capable entry at
+                // all yet (fresh install / a user who never visited Cloud Providers) -- if
+                // Trevor already configured real providers there, switching Cleanup to "Cloud"
+                // must use exactly those, never silently add or replace anything of his.
+                val chain = ProviderChainStore.load(this)
+                if (chain.capableEntriesFor(needsTranscription = false).none { it.kind != ProviderKind.LOCAL }) {
+                    ProviderChainStore.save(this, ProviderChain(chain.entries + ProviderChainEntry(ProviderKind.OPENAI, PostProcessor.DEFAULT_MODEL)))
+                }
+                CloudFeatureToggle.setCleanupEnabled(this, true)
+                refresh()
             }
             SimpleCleanupChoice.CUSTOM -> return
         }
@@ -526,30 +545,18 @@ class CleanupActivity : BaseSettingsActivity() {
     }
 
     /**
-     * Writes the real, live [ProviderChain] this Settings screen's simple Local/Cloud choice maps
-     * to (#37/#52 follow-up: previously wrote only to the legacy, dead [CleanupWaterfallStore] --
-     * see [simpleCleanupChoiceForChain]'s kdoc for why that silently broke this exact toggle).
-     *
-     * Deliberately a full overwrite, NOT a merge with the existing chain's transcription-capable
-     * entries: an earlier version of this fix tried to "preserve" those, on the theory that
-     * Cleanup and Transcription share one chain (#95). That was wrong and caused a real,
-     * user-visible regression Trevor caught immediately -- it left a phantom LOCAL entry sitting
-     * in the Cloud provider picker (nonsensical there; LOCAL has no credential and isn't a "cloud
-     * provider" a user adds) and broke re-selecting Local/Cloud from Settings. The actual
-     * capability split is: Transcription's local/cloud routing is governed entirely by the
-     * separate `use_local` boolean pref (see [WhisperAccessibilityService.continueTranscription],
-     * which calls [transcribeLocal] directly and never consults the chain's LOCAL entries at
-     * all) -- cloud transcription instead falls through the chain's OPENAI/GEMINI entries via
-     * [ProviderChainRuntime.transcriptionCandidates]. The chain's LOCAL entry only ever meant
-     * anything for Cleanup ([ProviderChainRuntime.cleanupWaterfallFor]/[ProviderChain.isLocalOnly]'s
-     * consent-gate check) -- there was nothing to "preserve" for Transcription in the first place.
+     * Ensures the persisted [ProviderChain] has a [ProviderKind.LOCAL] entry using [modelArchive]
+     * (#37 follow-up, real regression Trevor hit live: the previous fix persisted "Local" as a
+     * full chain OVERWRITE -- `ProviderChain(listOf(ProviderChainEntry(LOCAL, model)))` -- which
+     * silently deleted every cloud provider entry the instant "Local" was tapped, even though
+     * those providers, their credentials, and their order in the Cloud Providers screen were
+     * never something this simple picker should be allowed to touch). Uses
+     * [ProviderChain.withLocalFloor] to add/update only the LOCAL entry, leaving every other
+     * entry exactly as CloudProviderActivity left it; [CloudFeatureToggle] is what actually
+     * decides whether cleanup prefers local or cloud right now, not the chain's contents.
      */
-    private fun saveProviderChain(newCleanupEntry: ProviderChain) {
-        ProviderChainStore.save(this, newCleanupEntry)
-        // Full refresh, not just the waterfall-dependent bits: mirrors MainActivity's original
-        // saveWaterfallSteps() comment -- a chain edit changes the effective simple choice, and
-        // with it the radios, the cleanup subtitle, and the Cloud provider chain link's subtitle (#81).
-        refresh()
+    private fun ensureLocalFloor(modelArchive: String) {
+        ProviderChainStore.save(this, ProviderChainStore.load(this).withLocalFloor(modelArchive))
     }
 
     companion object {
@@ -558,22 +565,21 @@ class CleanupActivity : BaseSettingsActivity() {
         private const val KEY_LOCAL_CLEANUP_MODEL_NAME = "local_cleanup_model_name"
 
         /** Category subtitle for MainActivity's Cleanup row (#93), e.g. "Off", "Local ·
-         *  LFM2.5 350M", or "Cloud · GPT-4o mini". */
+         *  LFM2.5 350M", or "Cloud · GPT-4o mini" (#37 follow-up: reads
+         *  [CloudFeatureToggle.cleanupEnabled] directly rather than the chain's shape -- see
+         *  [refreshWaterfallDependentUi]'s kdoc for why the chain can no longer be classified by
+         *  entry count once a permanent LOCAL floor coexists with cloud entries). */
         fun subtitle(context: android.content.Context): String {
             val prefs = context.getSharedPreferences("phonewhisper", android.content.Context.MODE_PRIVATE)
             if (!prefs.getBoolean("use_post_processing", false)) return "Off"
-            return when (simpleCleanupChoiceForChain(ProviderChainStore.load(context))) {
-                SimpleCleanupChoice.LOCAL -> {
-                    val archive = prefs.getString(KEY_LOCAL_CLEANUP_MODEL_NAME, "") ?: ""
-                    val model = LOCAL_CLEANUP_MODEL_CATALOG.firstOrNull { it.archive == archive }
-                        ?: LOCAL_CLEANUP_MODEL_CATALOG.first()
-                    "Local · ${model.name}"
-                }
-                SimpleCleanupChoice.CLOUD -> {
-                    val model = prefs.getString("cleanup_model", PostProcessor.DEFAULT_MODEL) ?: PostProcessor.DEFAULT_MODEL
-                    "Cloud · $model"
-                }
-                SimpleCleanupChoice.CUSTOM -> "Custom waterfall (see Advanced)"
+            return if (!CloudFeatureToggle.cleanupEnabled(context)) {
+                val archive = prefs.getString(KEY_LOCAL_CLEANUP_MODEL_NAME, "") ?: ""
+                val model = LOCAL_CLEANUP_MODEL_CATALOG.firstOrNull { it.archive == archive }
+                    ?: LOCAL_CLEANUP_MODEL_CATALOG.first()
+                "Local · ${model.name}"
+            } else {
+                val model = prefs.getString("cleanup_model", PostProcessor.DEFAULT_MODEL) ?: PostProcessor.DEFAULT_MODEL
+                "Cloud · $model"
             }
         }
     }

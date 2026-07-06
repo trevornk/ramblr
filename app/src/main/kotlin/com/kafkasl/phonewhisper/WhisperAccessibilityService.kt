@@ -1058,7 +1058,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (PostProcessingToggle.isEnabled(this)) return true
         val useLocal = prefs().getBoolean("use_local", true)
         val hasConsented = prefs().getBoolean("local_cleanup_consent_seen", false)
-        val cleanupIsLocalOnly = ProviderChainStore.load(this).isLocalOnly()
+        val cleanupIsLocalOnly = !CloudFeatureToggle.cleanupEnabled(this)
         if (LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing = true, hasConsented = hasConsented, cleanupIsLocalOnly = cleanupIsLocalOnly)) return false
         PostProcessingToggle.setEnabled(this, true)
         return true

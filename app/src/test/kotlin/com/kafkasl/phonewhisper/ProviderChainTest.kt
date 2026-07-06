@@ -121,3 +121,47 @@ class ProviderChainDefaultTest {
         assertEquals(PostProcessor.DEFAULT_MODEL, chain.entries[0].model)
     }
 }
+
+/** Covers [ProviderChain.withLocalFloor] (#37 follow-up, real regression Trevor hit live):
+ *  Cleanup's simple Local/Cloud picker previously persisted "Local" as a full chain OVERWRITE,
+ *  which silently deleted every configured cloud provider entry. These tests pin the
+ *  non-destructive replacement: add/update only the LOCAL entry, leave every other entry alone. */
+class ProviderChainWithLocalFloorTest {
+    @Test fun `appends a LOCAL entry to an empty chain`() {
+        val chain = ProviderChain(emptyList()).withLocalFloor("lfm2.5-350m-q4_0")
+        assertEquals(listOf(ProviderChainEntry(ProviderKind.LOCAL, "lfm2.5-350m-q4_0")), chain.entries)
+    }
+
+    @Test fun `appends a LOCAL entry after existing cloud entries, never removing them`() {
+        val openai = ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-mini")
+        val anthropic = ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5")
+        val chain = ProviderChain(listOf(openai, anthropic)).withLocalFloor("lfm2.5-350m-q4_0")
+
+        assertEquals(
+            listOf(openai, anthropic, ProviderChainEntry(ProviderKind.LOCAL, "lfm2.5-350m-q4_0")),
+            chain.entries,
+        )
+    }
+
+    @Test fun `replaces an existing LOCAL entry in place instead of duplicating or moving it`() {
+        val openai = ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-mini")
+        val oldLocal = ProviderChainEntry(ProviderKind.LOCAL, "old-model")
+        val anthropic = ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5")
+        val chain = ProviderChain(listOf(openai, oldLocal, anthropic)).withLocalFloor("new-model")
+
+        assertEquals(
+            listOf(openai, ProviderChainEntry(ProviderKind.LOCAL, "new-model"), anthropic),
+            chain.entries,
+        )
+    }
+
+    @Test fun `switching Local models updates the floor without touching cloud entries`() {
+        val openai = ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-mini")
+        val chain = ProviderChain(listOf(openai)).withLocalFloor("model-a").withLocalFloor("model-b")
+
+        assertEquals(
+            listOf(openai, ProviderChainEntry(ProviderKind.LOCAL, "model-b")),
+            chain.entries,
+        )
+    }
+}
