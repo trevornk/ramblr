@@ -557,7 +557,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                     params.y = startY + (ev.rawY - touchY).toInt()
                     wm.updateViewLayout(v, params)
                     feedbackLayoutParams?.let {
-                        positionFeedback(it, params)
+                        positionFeedback(it, params, feedbackView?.height ?: 0)
                         wm.updateViewLayout(feedbackView, it)
                     }
                     // The hold that opened the style menu (#57) has turned into a drag -- dismiss
@@ -581,7 +581,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                             screenW - ringSize - margin else margin
                         wm.updateViewLayout(v, params)
                         feedbackLayoutParams?.let {
-                            positionFeedback(it, params)
+                            positionFeedback(it, params, feedbackView?.height ?: 0)
                             wm.updateViewLayout(feedbackView, it)
                         }
                     }
@@ -618,7 +618,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
         }
-        positionFeedback(feedbackParams, params)
+        positionFeedback(feedbackParams, params, feedbackHeight = 0)
 
         wm.addView(overlay, params)
         wm.addView(feedback, feedbackParams)
@@ -670,7 +670,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         overlayView?.let { wm.updateViewLayout(it, params) }
         feedbackLayoutParams?.let {
-            positionFeedback(it, params)
+            positionFeedback(it, params, feedbackView?.height ?: 0)
             wm.updateViewLayout(feedbackView, it)
         }
     }
@@ -810,7 +810,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
             applyButtonAppearance(stateColor)
 
-            feedbackLayoutParams?.let { positionFeedback(it, params); wm.updateViewLayout(feedbackView, it) }
+            feedbackLayoutParams?.let { positionFeedback(it, params, feedbackView?.height ?: 0); wm.updateViewLayout(feedbackView, it) }
         }
     }
 
@@ -820,14 +820,34 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Anchors the feedback bubble beside the floating icon, flipping above/below based on the
+     * icon's vertical screen position (bug fix: the bubble used to always sit a fixed
+     * [MARGIN_DP] above the icon regardless of the bubble's real height, so on a tall multi-line
+     * bubble -- or when the icon itself was already near the top of the screen -- the bubble
+     * could overlap the icon and make it hard to tap once you're done talking). Mirrors
+     * [positionStyleMenu]'s already-proven above/below-flip approach: when the icon is in the
+     * bottom half of the screen there's more room above it, so the bubble opens upward (as
+     * before); when the icon is in the top half, the bubble now opens downward instead, using
+     * [feedbackHeight] -- the view's real last-measured height, not a guess -- so it never
+     * overlaps the icon on either side. Both directions are still clamped fully on-screen.
+     */
     private fun positionFeedback(
         feedbackParams: WindowManager.LayoutParams,
-        bubbleParams: WindowManager.LayoutParams
+        bubbleParams: WindowManager.LayoutParams,
+        feedbackHeight: Int
     ) {
         val margin = (MARGIN_DP * dp).toInt()
         val offset = (FEEDBACK_OFFSET_DP * dp).toInt()
+        val ringSize = bubbleParams.width
         feedbackParams.x = maxOf(margin, bubbleParams.x - offset)
-        feedbackParams.y = maxOf(margin, bubbleParams.y - margin)
+        feedbackParams.y = if (bubbleParams.y + ringSize / 2 > screenH / 2) {
+            // Icon in bottom half: open upward, same placement as before this fix.
+            (bubbleParams.y - feedbackHeight - margin).coerceAtLeast(margin)
+        } else {
+            // Icon in top half: open downward instead, so the bubble can't cover the icon.
+            (bubbleParams.y + ringSize + margin).coerceAtMost(screenH - feedbackHeight - margin)
+        }
     }
 
     private fun showFeedback(text: String, durationMs: Long = 2000, touchable: Boolean = false, isFallback: Boolean = false) {
@@ -840,8 +860,18 @@ class WhisperAccessibilityService : AccessibilityService() {
             view.text = text
             view.background = pill(if (isFallback) COLOR_FEEDBACK_FALLBACK_BG else COLOR_FEEDBACK_BG)
             setFeedbackTouchable(touchable)
-            positionFeedback(feedbackParams, bubbleParams)
+            // view.height reflects the PREVIOUS text's measured size (0 before the bubble has
+            // ever been shown) -- close enough for the initial placement below, then corrected
+            // once this text's real layout is available, same two-pass approach as
+            // showStyleMenu's menu.post{} (WRAP_CONTENT's true size still isn't known until after
+            // the next layout pass actually runs).
+            positionFeedback(feedbackParams, bubbleParams, view.height)
             wm.updateViewLayout(view, feedbackParams)
+            view.post {
+                if (feedbackView !== view) return@post // hidden/replaced already
+                positionFeedback(feedbackParams, bubbleParams, view.height)
+                wm.updateViewLayout(view, feedbackParams)
+            }
 
             handler.removeCallbacks(hideFeedback)
             view.animate().cancel()
