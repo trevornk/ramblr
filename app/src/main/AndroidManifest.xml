@@ -22,7 +22,8 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop">
+            android:launchMode="singleTop"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -30,13 +31,30 @@
         </activity>
 
         <!-- Per-category Settings screens (#93 restructure): internal only, launched from
-             MainActivity's category rows and never from outside the app. -->
-        <activity android:name=".SetupActivity" android:exported="false" />
-        <activity android:name=".TranscriptionActivity" android:exported="false" />
-        <activity android:name=".CleanupActivity" android:exported="false" />
-        <activity android:name=".LivePreviewActivity" android:exported="false" />
-        <activity android:name=".CloudProviderActivity" android:exported="false" />
-        <activity android:name=".AdvancedActivity" android:exported="false" />
+             MainActivity's category rows and never from outside the app.
+
+             configChanges (#80 follow-up): a Pixel Fold's fold/unfold is a screenLayout +
+             smallestScreenSize configuration change, same category as a rotation. Without this,
+             Android's default behavior is to fully destroy and recreate the Activity: any
+             transient in-memory UI state that isn't itself persisted (most visibly, an open
+             AlertDialog like CloudProviderActivity's Add/Edit provider dialog) is lost, even
+             though persisted SharedPreferences-backed settings correctly survive because they
+             never lived in the destroyed Activity instance to begin with. Declaring these
+             config changes here means Android reconfigures the existing Activity instance in
+             place instead, so open dialogs (and anything else transient) survive a fold/unfold
+             just like they'd survive backgrounding the app. -->
+        <activity android:name=".SetupActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <activity android:name=".TranscriptionActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <activity android:name=".CleanupActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <activity android:name=".LivePreviewActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <activity android:name=".CloudProviderActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <activity android:name=".AdvancedActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
 
         <service
             android:name=".WhisperAccessibilityService"
