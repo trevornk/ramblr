@@ -63,6 +63,27 @@ class ProviderChainEditingTest {
         assertEquals(listOf(ProviderKind.ANTHROPIC, ProviderKind.LOCAL), replaced.map { it.kind })
     }
 
+    @Test fun `addCloud inserts a new provider ahead of an existing LOCAL entry, not after it`() {
+        // Regression (#98 live bug, Trevor's device): plain list-append let a newly-added cloud
+        // provider land AFTER an existing LOCAL entry, so every dictation still paid the full
+        // local-model waterfall step (and its timeout) before the new cloud provider ever ran.
+        val entries = listOf(entry(ProviderKind.LOCAL, "local"))
+        val result = ProviderChainEditing.addCloud(entries, entry(ProviderKind.OPENAI, "gpt-5.4-nano"))
+        assertEquals(listOf(ProviderKind.OPENAI, ProviderKind.LOCAL), result.map { it.kind })
+    }
+
+    @Test fun `addCloud inserts ahead of LOCAL even with other cloud entries already present`() {
+        val entries = listOf(entry(ProviderKind.OPENAI, "a"), entry(ProviderKind.LOCAL, "local"))
+        val result = ProviderChainEditing.addCloud(entries, entry(ProviderKind.GEMINI, "b"))
+        assertEquals(listOf(ProviderKind.OPENAI, ProviderKind.GEMINI, ProviderKind.LOCAL), result.map { it.kind })
+    }
+
+    @Test fun `addCloud is a plain append when there is no LOCAL entry`() {
+        val entries = listOf(entry(ProviderKind.OPENAI, "a"))
+        val result = ProviderChainEditing.addCloud(entries, entry(ProviderKind.ANTHROPIC, "b"))
+        assertEquals(listOf(ProviderKind.OPENAI, ProviderKind.ANTHROPIC), result.map { it.kind })
+    }
+
     @Test fun `subtitleFor reads Not configured for a chain holding only the LOCAL floor entry`() {
         // Real bug Trevor hit live: MainActivity's Cloud row (and CleanupActivity's/
         // TranscriptionActivity's cloud link subtitle, which all share this function) said

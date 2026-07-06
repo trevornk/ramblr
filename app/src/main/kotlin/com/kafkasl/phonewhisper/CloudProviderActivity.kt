@@ -80,7 +80,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         root.addView(emptyStateView)
 
         root.addView(settingsRow("Add provider", "OpenAI / Anthropic / Gemini / OmniRoute", indent = 0) {
-            promptAddOrEditEntry(null) { newEntry -> saveChain(currentChain().entries + newEntry) }
+            promptAddOrEditEntry(null) { newEntry -> saveChain(ProviderChainEditing.addCloud(currentChain().entries, newEntry)) }
         })
 
         root.addView(sectionHeader("Use cloud for"))

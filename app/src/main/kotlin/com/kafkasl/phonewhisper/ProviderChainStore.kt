@@ -53,9 +53,25 @@ object ProviderChainStore {
     }
 
     /** The user's configured chain; [ProviderChain.DEFAULT_SINGLE_OPENAI_ENTRY] if nothing
-     *  (valid) has ever been saved. */
+     *  (valid) has ever been saved. [normalizeLocalPosition] repairs any chain persisted before
+     *  [ProviderChainEditing.addCloud] existed, where a LOCAL entry could have ended up ahead of
+     *  cloud entries -- self-healing on every load rather than requiring a one-shot migration
+     *  step or a manual re-add from the user (Trevor hit this live on an existing install). */
     fun load(context: Context): ProviderChain =
-        deserialize(prefs(context).getString(KEY_ENTRIES, null)) ?: ProviderChain.DEFAULT_SINGLE_OPENAI_ENTRY
+        normalizeLocalPosition(deserialize(prefs(context).getString(KEY_ENTRIES, null)) ?: ProviderChain.DEFAULT_SINGLE_OPENAI_ENTRY)
+
+    /** Moves any [ProviderKind.LOCAL] entry to the end of [chain], preserving the relative order
+     *  of every other entry. No-op (returns [chain] unchanged, same instance) if LOCAL is already
+     *  last or absent, so a normal already-correct chain never gets a spurious re-save. Internal
+     *  (not private) so it's directly unit-testable as the pure function it is, without needing a
+     *  fake Android [Context]/SharedPreferences just to exercise list-reordering logic. */
+    internal fun normalizeLocalPosition(chain: ProviderChain): ProviderChain {
+        val entries = chain.entries
+        val localIndex = entries.indexOfFirst { it.kind == ProviderKind.LOCAL }
+        if (localIndex < 0 || localIndex == entries.lastIndex) return chain
+        val reordered = entries.toMutableList().apply { add(removeAt(localIndex)) }
+        return ProviderChain(reordered)
+    }
 
     fun save(context: Context, chain: ProviderChain) {
         prefs(context).edit().putString(KEY_ENTRIES, serialize(chain)).apply()
