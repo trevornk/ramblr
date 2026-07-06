@@ -15,7 +15,7 @@ invalid, cleanup fails and the raw transcript is injected with a toast — safe,
 resilient, and not using Trevor's existing subscriptions where cheaper/faster options are
 available.
 
-Trevor self-hosts **OmniRoute** (`omniroute.example.com`, docker-host, port 20128 behind
+Trevor self-hosts **OmniRoute** (a private hostname, docker-host, behind
 Nginx Proxy Manager with a valid public TLS cert) — a self-hosted OpenAI-compatible AI
 gateway that fronts his Claude Max, ChatGPT/Codex, and Gemini access behind a single flat
 consumer API key. OmniRoute does its own OAuth to upstream providers server-side; Ramblr
@@ -68,7 +68,7 @@ Only three encrypted secrets are needed, extending the existing `ApiKeyStore`
 (`EncryptedSharedPreferences`) pattern from issue #8:
 - **OmniRoute key** — one consumer Bearer token, reused across all OmniRoute sub-steps
   (only the model string differs per sub-step; base_url is fixed at
-  `https://omniroute.example.com/v1`).
+  a private URL not committed to this repo — see `OmniRoute.kt`).
 - **OpenAI key** — for the direct-OpenAI fallback step. Reuses transcription's OpenAI key
   field is NOT assumed; cleanup gets its own explicit field since the user may want a
   different key/quota for cleanup vs. cloud transcription.
@@ -77,7 +77,7 @@ Only three encrypted secrets are needed, extending the existing `ApiKeyStore`
 ### Waterfall shape (host-grouped, not flat)
 
 ```
-Group 1 — OmniRoute (one credential, one host, https://omniroute.example.com/v1)
+Group 1 — OmniRoute (one credential, one host, private URL — see OmniRoute.kt)
   1a. claude/claude-sonnet-4-6      (or whatever model the user configures)
   1b. cx/gpt-5.5
   1c. gemini/gemini-2.5-flash        (built generically; untested live — known upstream bug)
@@ -177,3 +177,14 @@ the Test button covers the same typo risk more cheaply).
       OmniRoute Gemini credential bug is fixed.
 - [ ] Consider a `/v1/models`-backed model picker as a stretch goal once the flat-text
       field + Test button pattern has been used in practice.
+
+## Addendum (2026-07-06): repo made public
+
+`OmniRoute.BASE_URL` is no longer a hardcoded string constant in source — it's now sourced from
+`BuildConfig.OMNIROUTE_BASE_URL`, populated at build time from an `OMNIROUTE_BASE_URL` entry in
+`local.properties` (gitignored, machine-local; see `OmniRoute.kt` and `app/build.gradle.kts`).
+Rationale: this repo went public, and even a non-secret personal hostname shouldn't sit in
+source anyone can clone. Leaving the entry unset makes `OmniRoute.isConfigured` false, which
+hides "Add OmniRoute provider" from `CloudProviderActivity`'s picker entirely — the feature is
+dormant, not deleted, for anyone who hasn't configured their own gateway. No behavior changes
+described elsewhere in this ADR are affected; only where the URL string comes from changed.
