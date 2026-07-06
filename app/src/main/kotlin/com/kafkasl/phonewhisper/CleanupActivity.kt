@@ -16,20 +16,25 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.radiobutton.MaterialRadioButton
 
 /**
- * "Cleanup" category screen (#93 restructure, updated #95 Phase 3): on/off switch, style/prompt
- * presets, the simple Local/Cloud choice (+ local model catalog), preview-before-inject toggle.
- * Cloud provider/credential management now lives entirely on the unified CloudProviderActivity --
- * this screen just links to it (see [CloudProviderActivity.subtitle]) rather than duplicating any
- * key-entry UI.
+ * "Cleanup" category screen (#93 restructure, updated #95 Phase 3, #103 Style manager): on/off
+ * switch, a link into the Style manager, the simple Local/Cloud choice (+ local model catalog),
+ * preview-before-inject toggle. Cloud provider/credential management now lives entirely on the
+ * unified CloudProviderActivity -- this screen just links to it (see [CloudProviderActivity.subtitle])
+ * rather than duplicating any key-entry UI.
+ *
+ * The flat built-in-only prompt-preset radio list (#3, #40) that used to live directly on this
+ * screen has been replaced by a single summary row linking to [StyleManagerActivity] (#103): full
+ * persona CRUD (create/edit/delete/quick-menu selection) didn't fit as an inline radio list once
+ * custom personas joined the five built-ins, so it moved to its own screen. Day-to-day switching
+ * between styles now happens via the floating icon's long-press quick menu, not here.
  */
 class CleanupActivity : BaseSettingsActivity() {
 
     private lateinit var postProcessSwitch: MaterialSwitch
     private lateinit var postProcessRowSub: TextView
     private lateinit var cleanupDetailContainer: LinearLayout
-    private lateinit var promptRow: LinearLayout
-    private lateinit var promptRowSub: TextView
-    private lateinit var promptContainer: LinearLayout
+    private lateinit var styleSummaryRow: LinearLayout
+    private lateinit var styleSummaryRowTitle: TextView
     private lateinit var cleanupLocalRadio: MaterialRadioButton
     private lateinit var cleanupCloudRadio: MaterialRadioButton
     private lateinit var cleanupChoiceCaption: TextView
@@ -42,7 +47,6 @@ class CleanupActivity : BaseSettingsActivity() {
     private val cleanupModelRows = mutableMapOf<String, ModelRowViews>()
     private val cleanupModelDownloadState = mutableMapOf<String, WorkInfo.State>()
     private val cleanupModelDownloadGate = DownloadCompletionGate()
-    private val promptRows = mutableMapOf<String, PromptRowViews>()
 
     private data class ModelRowViews(
         val radio: MaterialRadioButton,
@@ -51,8 +55,6 @@ class CleanupActivity : BaseSettingsActivity() {
         val dlBtn: MaterialButton,
         val deleteBtn: MaterialButton
     )
-
-    private data class PromptRowViews(val radio: MaterialRadioButton, val subtitle: TextView)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,17 +84,16 @@ class CleanupActivity : BaseSettingsActivity() {
         // Everything below only matters once cleanup is on -- shown/hidden as one unit in refresh().
         cleanupDetailContainer = vertical(0)
 
-        val promptGroup = nestedGroup()
-        promptGroup.content.addView(subsectionHeader("Style", indent = 0))
-        for (preset in promptPresets()) promptGroup.content.addView(buildPromptRow(preset))
-        promptContainer = promptGroup.content
-        cleanupDetailContainer.addView(promptGroup.outer)
-
-        promptRow = settingsRow("Edit current prompt", currentPrompt()) { promptPostProcessing() }
-        promptRowSub = promptRow.findViewWithTag("subtitle")
-        promptRowSub.maxLines = 2
-        promptRowSub.ellipsize = android.text.TextUtils.TruncateAt.END
-        cleanupDetailContainer.addView(promptRow)
+        val styleGroup = nestedGroup()
+        styleGroup.content.addView(subsectionHeader("Style", indent = 0))
+        styleSummaryRow = settingsRow(
+            currentPersonaSummary(),
+            "Manage styles, quick-menu selection, and custom prompts",
+            indent = 0
+        ) { startActivity(Intent(this, StyleManagerActivity::class.java)) }
+        styleSummaryRowTitle = styleSummaryRow.findViewWithTag("title")
+        styleGroup.content.addView(styleSummaryRow)
+        cleanupDetailContainer.addView(styleGroup.outer)
 
         cleanupDetailContainer.addView(subsectionHeader("How cleanup runs", indent = 0))
 
@@ -180,11 +181,10 @@ class CleanupActivity : BaseSettingsActivity() {
         cleanupDetailContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
 
         cloudLinkRowSub.text = CloudProviderActivity.subtitle(this)
+        styleSummaryRowTitle.text = currentPersonaSummary()
 
         refreshWaterfallDependentUi()
         refreshAllCleanupRows()
-        promptRowSub.text = currentPrompt()
-        refreshPromptRows()
     }
 
     /** Everything downstream of the waterfall that needs recomputing after any edit to it
@@ -268,97 +268,17 @@ class CleanupActivity : BaseSettingsActivity() {
 
     private fun cleanupBaseUrl() = prefs().getString("cleanup_base_url", PostProcessor.DEFAULT_BASE_URL) ?: PostProcessor.DEFAULT_BASE_URL
 
-    // --- Prompt Rows (verbatim from MainActivity, #93) ---
+    // --- Style summary (#103) ---
 
-    private data class PromptPreset(val key: String, val title: String, val subtitle: String, val prompt: String)
-
-    private fun promptPresets() = CleanupPersonas.BUILT_IN.map {
-        PromptPreset(key = it.key, title = it.title, subtitle = it.subtitle, prompt = it.prompt)
-    } + PromptPreset(
-        key = "custom",
-        title = "Custom",
-        subtitle = customPromptSummary(),
-        prompt = customPrompt()
-    )
-
-    private fun buildPromptRow(preset: PromptPreset): View {
-        val radio = MaterialRadioButton(this).apply {
-            isClickable = false
-            buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
-        }
-        val row = settingsRow(preset.title, preset.subtitle, radio) { selectPrompt(preset.key) }
-        promptRows[preset.key] = PromptRowViews(radio, row.findViewWithTag("subtitle"))
-        refreshPromptRow(preset)
-        return row
-    }
-
-    private fun selectPrompt(key: String) {
-        if (key == "custom") {
-            val saved = customPrompt()
-            if (CleanupPersonas.BUILT_IN.any { it.prompt == saved }) {
-                promptPostProcessing()
-                return
-            }
-            prefs().edit().putString("post_processing_prompt", saved).apply()
-        } else {
-            val persona = CleanupPersonas.fromKey(key)
-            PerAppPersonaStore.record(this, WhisperAccessibilityService.foregroundPackageNameOrNull(), persona)
-            prefs().edit()
-                .putString("cleanup_style", persona.key)
-                .putString("post_processing_prompt", CleanupPersonas.promptForExplicitSelection(persona))
-                .apply()
-        }
-        refreshPromptRows(); refresh()
-    }
-
-    private fun refreshPromptRow(preset: PromptPreset) {
-        val views = promptRows[preset.key] ?: return
-        val current = currentPrompt()
-        val active = when (preset.key) {
-            "custom" -> CleanupPersonas.BUILT_IN.none { it.prompt == current }
-            else -> current == preset.prompt
-        }
-        views.radio.isChecked = active
-        views.subtitle.text = if (preset.key == "custom") customPromptSummary() else preset.subtitle
-    }
-
-    private fun refreshPromptRows() = promptPresets().forEach { refreshPromptRow(it) }
-
-    private fun currentPrompt() = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
-    private fun customPrompt() = prefs().getString("custom_post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
-
-    private fun customPromptSummary(): String {
-        val prompt = customPrompt()
-        return if (prompt == PostProcessor.DEFAULT_PROMPT) "Your edited prompt"
-        else prompt.replace("\n", " ")
-    }
-
-    private fun currentPersona(): CleanupPersona =
-        CleanupPersonas.currentPersona(prefs().getString("cleanup_style", null), currentPrompt())
-
-    private fun promptPostProcessing() {
-        val input = android.widget.EditText(this).apply {
-            hint = "Prompt"
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            minLines = 3
-            gravity = Gravity.TOP or Gravity.START
-            setText(currentPrompt())
-        }
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Edit current prompt")
-            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
-            .setPositiveButton("Save") { _, _ ->
-                val text = input.text.toString().trim()
-                val customPrompt = if (text.isBlank()) PostProcessor.DEFAULT_PROMPT else text
-                val active = CleanupPersonas.resolvePrompt(currentPersona(), customPrompt)
-                prefs().edit()
-                    .putString("custom_post_processing_prompt", customPrompt)
-                    .putString("post_processing_prompt", active)
-                    .apply()
-                refresh()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+    /** Title text for the Style summary row: the currently active global persona's name,
+     *  resolved through [PersonaRegistry] so a custom or seeded-legacy persona shows its real
+     *  name instead of falling back to "Formal". Mirrors [WhisperAccessibilityService]'s own
+     *  global-persona resolution so the Settings screen and the long-press quick menu never
+     *  disagree about what's currently selected. */
+    private fun currentPersonaSummary(): String {
+        val prompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+        val persona = PersonaRegistry.currentPersona(this, prefs().getString("cleanup_style", null), prompt)
+        return "Style: ${persona.title}"
     }
 
     // --- Simple Local/Cloud cleanup choice (#38, verbatim from MainActivity) ---
