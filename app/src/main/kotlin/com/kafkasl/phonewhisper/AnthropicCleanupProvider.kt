@@ -34,6 +34,15 @@ object AnthropicCleanupProvider {
         "content-type" to "application/json",
     )
 
+    /**
+     * Deliberately omits `temperature`: Claude Sonnet 5 and Opus 4.7+ hard-reject any non-default
+     * sampling parameter with a 400 (`temperature is deprecated for this model` — confirmed live
+     * against the real API, see the #97 eval harness run), while every earlier Claude generation
+     * accepts an omitted `temperature` and just uses its own default. Explicit `temperature: 0.0`
+     * would silently break every ANTHROPIC_DIRECT cleanup call on current-generation models —
+     * omitting it is the one request shape that works across all of them without per-model
+     * conditional logic.
+     */
     fun buildRequestBody(text: String, prompt: String, model: String): JSONObject {
         val messages = JSONArray().apply {
             put(JSONObject().apply {
@@ -45,7 +54,6 @@ object AnthropicCleanupProvider {
             put("model", model)
             put("system", prompt)
             put("max_tokens", DEFAULT_MAX_TOKENS)
-            put("temperature", 0.0)
             put("messages", messages)
         }
     }
