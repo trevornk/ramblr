@@ -17,7 +17,7 @@ class LlamaCppInferenceDefaultsTest {
         assertEquals(0.0f, LlamaCppInference.DEFAULT_TEMPERATURE)
         assertEquals(0.05f, LlamaCppInference.DEFAULT_MIN_P)
         assertEquals(2048L, LlamaCppInference.DEFAULT_CONTEXT_SIZE)
-        assertEquals(4, LlamaCppInference.DEFAULT_NUM_THREADS)
+        assertEquals(6, LlamaCppInference.DEFAULT_NUM_THREADS)
         assertEquals("[EOG]", LlamaCppInference.END_OF_GENERATION)
         assertEquals("llama-cleanup-jni", LlamaCppInference.LIBRARY_NAME)
     }

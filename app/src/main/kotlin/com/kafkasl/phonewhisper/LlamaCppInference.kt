@@ -156,7 +156,12 @@ class LlamaCppInference : Closeable {
         const val DEFAULT_TEMPERATURE = 0.0f
         const val DEFAULT_MIN_P = 0.05f
         const val DEFAULT_CONTEXT_SIZE = 2048L
-        const val DEFAULT_NUM_THREADS = 4
+        // 6 threads (#37 follow-up, real on-device timeout hit): Trevor's Pixel 10 Pro Fold has
+        // 8 logical cores (confirmed via `adb shell nproc`); 4 was an arbitrary conservative
+        // guess, not tuned against real hardware. Leaving 2 cores free avoids starving the UI
+        // thread / accessibility service / other apps during a foreground dictation the user is
+        // actively waiting on, while still using meaningfully more of the device than before.
+        const val DEFAULT_NUM_THREADS = 6
         const val END_OF_GENERATION = "[EOG]"
         const val LIBRARY_NAME = "llama-cleanup-jni"
 
