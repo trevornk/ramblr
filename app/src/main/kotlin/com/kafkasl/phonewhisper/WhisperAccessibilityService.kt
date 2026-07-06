@@ -280,6 +280,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         showOverlay()
         registerNetworkCallback()
         thread { cleanupOrphanedRecordings() }
+        thread { ModelDownloader.pruneOrphanedModelDirs(this) }
         // Try to load local model in background
         thread { initLocalModel() }
         thread { initStreamingModel() }

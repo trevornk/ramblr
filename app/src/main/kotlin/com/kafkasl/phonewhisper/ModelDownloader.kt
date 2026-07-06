@@ -1,6 +1,7 @@
 package com.kafkasl.phonewhisper
 
 import android.content.Context
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
@@ -435,6 +436,52 @@ object ModelDownloader {
         modelDir(ctx, model).deleteRecursively()
         stagingDir(ctx, model).deleteRecursively()
     }
+
+    /**
+     * Pure helper: given the archive-directory names actually present on disk under one
+     * `kindDir()` (e.g. "cleanup_models") and the archive names the current app version's catalog
+     * still recognizes for that kind, returns which installed archive names are orphaned -- present
+     * on disk but no longer in any catalog, e.g. because a model was removed after being found
+     * incompatible (like the Q4_K_M mumble-cleanup build blowing the 15s deadline on Trevor's
+     * device). Split out from the [Context]-based [pruneOrphanedModelDirs] so the actual pruning
+     * decision is unit-testable without touching real files.
+     */
+    fun orphanedArchives(installedArchiveDirNames: List<String>, catalogArchiveNames: Set<String>): List<String> =
+        installedArchiveDirNames.filter { it !in catalogArchiveNames }
+
+    /**
+     * Deletes any installed model directory under "models", "streaming_models", or
+     * "cleanup_models" whose archive name no longer appears in [MODEL_CATALOG],
+     * [STREAMING_MODEL_CATALOG], or [LOCAL_CLEANUP_MODEL_CATALOG] respectively -- leftovers from a
+     * model that was removed from the catalog after an app update (e.g. found incompatible on some
+     * devices), which would otherwise sit on disk forever taking up space with no UI path to
+     * discover or remove them. Pure [File]-based core (testable without a real [Context], same
+     * split as [modelDirPath] vs [modelDir]); swallows individual delete failures per-directory so
+     * one locked/busy directory can't block pruning the rest.
+     */
+    fun pruneOrphanedModelDirs(filesDir: File) {
+        val catalogsByKindDir = mapOf(
+            "models" to MODEL_CATALOG.map { it.archive }.toSet(),
+            "streaming_models" to STREAMING_MODEL_CATALOG.map { it.archive }.toSet(),
+            "cleanup_models" to LOCAL_CLEANUP_MODEL_CATALOG.map { it.archive }.toSet(),
+        )
+        for ((kindDirName, catalogArchives) in catalogsByKindDir) {
+            val kindDir = File(filesDir, kindDirName)
+            val installedDirNames = kindDir.listFiles { f -> f.isDirectory }?.map { it.name } ?: continue
+            for (orphan in orphanedArchives(installedDirNames, catalogArchives)) {
+                try {
+                    File(kindDir, orphan).deleteRecursively()
+                } catch (e: Exception) {
+                    Log.w("ModelDownloader", "Failed to prune orphaned model dir $kindDirName/$orphan", e)
+                }
+            }
+        }
+    }
+
+    /** Safe to call unconditionally on every app/service start: an up-to-date install with
+     *  nothing orphaned is a no-op scan. See [pruneOrphanedModelDirs] (File overload) for the
+     *  actual logic. */
+    fun pruneOrphanedModelDirs(ctx: Context) = pruneOrphanedModelDirs(ctx.filesDir)
 
     /**
      * What the "model_name" preference (the offline-model selection, #51) should become after
