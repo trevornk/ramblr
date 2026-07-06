@@ -22,6 +22,29 @@ object ProviderChainEditing {
         return entries.toMutableList().apply { add(index + 1, removeAt(index)) }
     }
 
+    /**
+     * Like [moveUp], but swaps with the nearest preceding entry that is NOT [ProviderKind.LOCAL]
+     * (skipping over it if one sits directly in between) instead of the literal predecessor.
+     * [CloudProviderActivity] only ever displays cloud-capable entries -- if a LOCAL floor entry
+     * happens to sit between two cloud entries (e.g. added chain order was cloud, then Local, then
+     * a second cloud provider), a plain index-based [moveUp] would silently swap the tapped entry
+     * past the invisible LOCAL entry instead of past its visible cloud neighbor, producing zero
+     * visible change and a confusing "the button did nothing" bug. No-op if there is no earlier
+     * cloud entry or [index] is out of range.
+     */
+    fun moveCloudUp(entries: List<ProviderChainEntry>, index: Int): List<ProviderChainEntry> {
+        if (index !in entries.indices) return entries
+        val precedingCloudIndex = (index - 1 downTo 0).firstOrNull { entries[it].kind != ProviderKind.LOCAL } ?: return entries
+        return entries.toMutableList().apply { add(precedingCloudIndex, removeAt(index)) }
+    }
+
+    /** [moveCloudUp]'s downward counterpart: swaps with the nearest following non-LOCAL entry. */
+    fun moveCloudDown(entries: List<ProviderChainEntry>, index: Int): List<ProviderChainEntry> {
+        if (index !in entries.indices) return entries
+        val followingCloudIndex = (index + 1..entries.lastIndex).firstOrNull { entries[it].kind != ProviderKind.LOCAL } ?: return entries
+        return entries.toMutableList().apply { add(followingCloudIndex, removeAt(index)) }
+    }
+
     /** Removes the entry at [index]. No-op if out of range. */
     fun remove(entries: List<ProviderChainEntry>, index: Int): List<ProviderChainEntry> {
         if (index !in entries.indices) return entries
