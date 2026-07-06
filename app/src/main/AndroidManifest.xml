@@ -76,5 +76,11 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
+        <!-- Reached only via the "icon hidden" notification's own explicit PendingIntent (Feature
+             B, IconVisibilityNotifications); never invoked from outside this app. -->
+        <receiver
+            android:name=".RestoreIconReceiver"
+            android:exported="false" />
+
     </application>
 </manifest>
