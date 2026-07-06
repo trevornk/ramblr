@@ -83,4 +83,18 @@ class CleanupPreviewStateTest {
         state.commit()
         assertEquals(CleanupStepGroup.OPENAI_DIRECT, state.paidFallbackGroup)
     }
+
+    @Test fun `historyTimestamp defaults to zero when not supplied`() {
+        val state = CleanupPreviewState(rawText = "raw", candidateText = "cleaned")
+        assertEquals(0L, state.historyTimestamp)
+    }
+
+    @Test fun `historyTimestamp is carried through unchanged for the caller to reuse on resolution`() {
+        // #73: WhisperAccessibilityService.beginPreview records history immediately and stamps
+        // the resulting timestamp here so resolvePreview can update that same row instead of
+        // adding a duplicate -- this state machine just carries the value through untouched.
+        val state = CleanupPreviewState(rawText = "raw", candidateText = "cleaned", historyTimestamp = 42L)
+        state.commit()
+        assertEquals(42L, state.historyTimestamp)
+    }
 }

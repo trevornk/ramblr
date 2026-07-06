@@ -153,6 +153,66 @@ class DictationHistoryStoreTest {
         assertEquals("raw", readBack.rawText)
         assertNull(readBack.paidFallbackGroup)
     }
+
+    // --- upsert (#73) ---
+
+    @Test fun `upsert on an empty store behaves like add`() {
+        val store = DictationHistoryStore(tempFile())
+        store.upsert(entry(1, "raw", "cleaned"))
+
+        assertEquals(1, store.all().size)
+        assertEquals("cleaned", store.all().single().cleanedText)
+    }
+
+    @Test fun `upsert replaces the entry with a matching timestamp instead of adding a duplicate`() {
+        val store = DictationHistoryStore(tempFile())
+        store.upsert(entry(1, "raw", "candidate cleanup"))
+        store.upsert(entry(1, "raw", "final injected text"))
+
+        val all = store.all()
+        assertEquals(1, all.size)
+        assertEquals("final injected text", all.single().cleanedText)
+    }
+
+    @Test fun `upsert preserves original entry position rather than moving it to the end`() {
+        val store = DictationHistoryStore(tempFile())
+        store.add(entry(1, "first"))
+        store.add(entry(2, "second"))
+        store.add(entry(3, "third"))
+
+        store.upsert(entry(1, "first").copy(cleanedText = "updated"))
+
+        // Still newest-first by original write order, not re-sorted by the update.
+        assertEquals(listOf(3L, 2L, 1L), store.all().map { it.timestamp })
+        assertEquals("updated", store.all().last().cleanedText)
+    }
+
+    @Test fun `upsert adding a brand new timestamp alongside existing entries does not touch the others`() {
+        val store = DictationHistoryStore(tempFile())
+        store.add(entry(1, "first"))
+        store.upsert(entry(2, "second"))
+
+        assertEquals(listOf(2L, 1L), store.all().map { it.timestamp })
+    }
+
+    @Test fun `upsert still evicts oldest entries beyond maxEntries when adding a new one`() {
+        val store = DictationHistoryStore(tempFile(), maxEntries = 3)
+        for (i in 1..3) store.add(entry(i.toLong()))
+
+        store.upsert(entry(4))
+
+        assertEquals(listOf(4L, 3L, 2L), store.all().map { it.timestamp })
+    }
+
+    @Test fun `upsert persists the update across separate store instances backed by the same file`() {
+        val file = tempFile()
+        DictationHistoryStore(file).upsert(entry(1, "raw", "candidate"))
+        DictationHistoryStore(file).upsert(entry(1, "raw", "final"))
+
+        val reopened = DictationHistoryStore(file)
+        assertEquals(1, reopened.all().size)
+        assertEquals("final", reopened.all().single().cleanedText)
+    }
 }
 
 class ShouldShowPaidFallbackBadgeTest {

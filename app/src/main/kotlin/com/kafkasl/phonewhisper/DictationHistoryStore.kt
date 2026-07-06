@@ -61,6 +61,25 @@ class DictationHistoryStore(private val file: File, private val maxEntries: Int 
         writeAll(entries)
     }
 
+    /** Inserts [entry], or replaces the existing entry with the same [DictationHistoryEntry.timestamp]
+     *  in place if one exists (#73): lets a caller record a dictation as soon as its transcript+
+     *  cleanup result exist, then update that same row later (e.g. once injection actually
+     *  happens, or the user picks raw text over the cleaned candidate) without creating a second,
+     *  duplicate entry for one dictation. Falls back to [add]'s ordering when no existing entry
+     *  matches -- an update-in-place preserves the original entry's position rather than moving
+     *  it to the end, since [timestamp] (the true dictation time) is unchanged either way. */
+    @Synchronized
+    fun upsert(entry: DictationHistoryEntry) {
+        val existing = readAll()
+        val replaced = existing.map { if (it.timestamp == entry.timestamp) entry else it }
+        val entries = if (replaced != existing) {
+            replaced
+        } else {
+            (existing + entry).takeLast(maxEntries)
+        }
+        writeAll(entries)
+    }
+
     /** All entries, newest first. */
     @Synchronized
     fun all(): List<DictationHistoryEntry> = readAll().asReversed()
