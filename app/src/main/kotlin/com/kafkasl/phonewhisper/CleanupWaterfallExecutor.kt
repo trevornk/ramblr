@@ -397,6 +397,17 @@ object CleanupWaterfallExecutor {
         transport: CleanupHttpTransport = RealCleanupHttpTransport,
         localInference: LocalInferenceEngine = RealLocalInferenceEngine,
         localModelPath: () -> String? = { null },
+        // The LOCAL_LLM step always uses this prompt instead of [prompt], regardless of which
+        // cloud persona the user has selected (#54 follow-up): today's on-device models are
+        // small, general-purpose instruct models, not fine-tuned for this specific task the way
+        // e.g. FluidVoice's Fluid-1 is -- they don't reliably follow DEV_PROMPT's long, few-shot,
+        // XML-tagged instructions and can drift into answering/chatting instead of restyling.
+        // PostProcessor.SIMPLE_PROMPT is a single short plain-language instruction with no
+        // few-shot examples, which small models follow far more reliably. Deliberately a separate
+        // parameter (not baked into the LOCAL_LLM branch below) so swapping it out later -- e.g.
+        // once a properly fine-tuned local cleanup model replaces the current generic one -- is a
+        // one-line change here, not a hunt through the executor.
+        localPrompt: String = PostProcessor.SIMPLE_PROMPT,
         callback: (PostProcessor.Result) -> Unit,
     ) {
         val steps = waterfall.steps
@@ -430,7 +441,7 @@ object CleanupWaterfallExecutor {
                 return
             }
 
-            performStep(steps[index], text, prompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
+            performStep(steps[index], text, prompt, localPrompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
                         cursor.recordSuccess(index, System.currentTimeMillis())
@@ -458,6 +469,7 @@ object CleanupWaterfallExecutor {
         step: CleanupStep,
         text: String,
         prompt: String,
+        localPrompt: String,
         legacyApiKey: String,
         legacyBaseUrl: String,
         credentialLookup: (CleanupCredentialSlot) -> String,
@@ -485,7 +497,7 @@ object CleanupWaterfallExecutor {
             // in which case it gets the real remaining deadline like every other step group.
             val localDeadlineAtMs = localLlmStepDeadline(deadlineAtMs, System.currentTimeMillis(), isLastStep)
             callback(
-                when (val result = localInference.complete(prompt, text, modelPath, localDeadlineAtMs, { cancelHolder.isCancelled })) {
+                when (val result = localInference.complete(localPrompt, text, modelPath, localDeadlineAtMs, { cancelHolder.isCancelled })) {
                     is LocalInferenceResult.Success -> {
                         // Trim to match what both cloud parsers already do to their model text
                         // (PostProcessor.parseResponse / AnthropicCleanupProvider.parseResponse):
