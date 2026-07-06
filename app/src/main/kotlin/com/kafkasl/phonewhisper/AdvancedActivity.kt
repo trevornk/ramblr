@@ -50,6 +50,7 @@ class AdvancedActivity : BaseSettingsActivity() {
 
     private lateinit var debugVisibilitySwitch: MaterialSwitch
     private lateinit var perAppPersonaSwitch: MaterialSwitch
+    private lateinit var hideIconSwitch: MaterialSwitch
     private lateinit var vocabularyRowSub: TextView
     private lateinit var historyEnabledSwitch: MaterialSwitch
 
@@ -126,6 +127,35 @@ class AdvancedActivity : BaseSettingsActivity() {
             perAppPersonaSwitch.isChecked = newVal
         }
         root.addView(perAppPersonaRow)
+
+        hideIconSwitch = MaterialSwitch(this).apply {
+            isChecked = HideIconToggle.isEnabled(this@AdvancedActivity)
+            isClickable = false
+        }
+        val hideIconRow = settingsRow(
+            "Allow hiding the floating icon",
+            "Adds a 'Hide icon' option to the long-press menu, so you can fully hide the icon and bring it back from a notification",
+            hideIconSwitch
+        ) {
+            val newVal = !hideIconSwitch.isChecked
+            HideIconToggle.setEnabled(this, newVal)
+            hideIconSwitch.isChecked = newVal
+        }
+        root.addView(hideIconRow)
+
+        // Fallback restore path (#Feature B): if the icon is currently hidden -- including for
+        // someone who turns the toggle above off while already hidden -- give them a way back
+        // that doesn't depend on the notification still being around.
+        if (IconHiddenState.isHidden(this)) {
+            root.addView(
+                settingsRow("Icon is currently hidden", "Tap to show it again") {
+                    IconHiddenState.setHidden(this, false)
+                    WhisperAccessibilityService.instance?.applyOverlayVisibility()
+                    IconVisibilityNotifications.cancel(this)
+                    recreate()
+                }
+            )
+        }
 
         // --- Overlay appearance (#43/#53) ---
         root.addView(sectionHeader("Overlay appearance"))
