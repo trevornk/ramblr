@@ -135,7 +135,7 @@ class TranscriptionActivity : BaseSettingsActivity() {
      */
     private fun applyLocalCleanupChange(useLocal: Boolean, usePostProcessing: Boolean) {
         val hasConsented = prefs().getBoolean(KEY_LOCAL_CLEANUP_CONSENT, false)
-        val cleanupIsLocalOnly = ProviderChainStore.load(this).isLocalOnly()
+        val cleanupIsLocalOnly = !CloudFeatureToggle.cleanupEnabled(this)
         if (!LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing, hasConsented, cleanupIsLocalOnly)) {
             prefs().edit()
                 .putBoolean("use_local", useLocal)
