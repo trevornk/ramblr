@@ -125,35 +125,26 @@ class ModelDownloaderTest {
         //
         // Reopened for the mumble-cleanup A/B test (Trevor-requested, following a real on-device
         // LFM2.5+DEV_PROMPT failure and Trevor's explicit request to search for existing prior art
-        // before building a fine-tuning pipeline from scratch): unlike the old rejected tiers,
-        // MUMBLE_CLEANUP_MODEL/MUMBLE_CLEANUP_Q4_0_MODEL are real, independently-sourced,
-        // differently-architected models (Qwen2.5-0.5B LoRA fine-tuned specifically for this task,
-        // not just a smaller/larger instance of the same "prompt a generic instruct model"
-        // approach) -- genuine options worth comparing, not a confusing non-choice like the old
-        // tiers were. MUMBLE_CLEANUP_Q4_0_MODEL was added after the Q4_K_M build blew through the
-        // full 15s waterfall hard cap on-device and got aborted mid-decode -- it's a same-model
-        // Q4_0 speed test (quantized locally via the vendored llama-quantize tool, no prebuilt
-        // Q4_0 GGUF exists upstream), not a quality claim.
-        assertEquals(3, LOCAL_CLEANUP_MODEL_CATALOG.size)
+        // before building a fine-tuning pipeline from scratch): MUMBLE_CLEANUP_Q4_0_MODEL is a
+        // real, independently-sourced, differently-architected model (Qwen2.5-0.5B LoRA
+        // fine-tuned specifically for this task, not just a smaller/larger instance of the same
+        // "prompt a generic instruct model" approach) -- a genuine option worth comparing, not a
+        // confusing non-choice like the old tiers were. The catalog originally also had a prebuilt
+        // Q4_K_M build, but that blew through the full 15s waterfall hard cap on-device and got
+        // aborted mid-decode -- confirmed not usable on Trevor's device at all -- so it was
+        // removed entirely and replaced with this self-quantized Q4_0 build (quantized locally via
+        // the vendored llama-quantize tool, no prebuilt Q4_0 GGUF exists upstream), which came in
+        // at ~2.9s on-device.
+        assertEquals(2, LOCAL_CLEANUP_MODEL_CATALOG.size)
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.isLocalCleanup })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256 != null })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256!!.matches(Regex("[0-9a-f]{64}")) })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.contains(LOCAL_CLEANUP_MODEL))
-        assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.contains(MUMBLE_CLEANUP_MODEL))
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.contains(MUMBLE_CLEANUP_Q4_0_MODEL))
         // Exactly one default: installing the new A/B entries must not silently change what every
         // existing user's fresh install (or resolveActiveModel's recommended-fallback) resolves to.
         assertEquals(1, LOCAL_CLEANUP_MODEL_CATALOG.count { it.recommended })
         assertEquals(LOCAL_CLEANUP_MODEL, LOCAL_CLEANUP_MODEL_CATALOG.first { it.recommended })
-    }
-
-    @Test fun `mumble-cleanup model is sourced from a real Hugging Face URL with a distinct archive and file name`() {
-        assertTrue(MUMBLE_CLEANUP_MODEL.sourceUrl!!.startsWith("https://huggingface.co/"))
-        assertTrue(MUMBLE_CLEANUP_MODEL.sourceUrl!!.endsWith(".gguf"))
-        assertEquals("mumble-cleanup-2stage-q4km.gguf", MUMBLE_CLEANUP_MODEL.fileName)
-        assertFalse(MUMBLE_CLEANUP_MODEL.recommended)
-        assertNotEquals(LOCAL_CLEANUP_MODEL.archive, MUMBLE_CLEANUP_MODEL.archive)
-        assertNotEquals(LOCAL_CLEANUP_MODEL.fileName, MUMBLE_CLEANUP_MODEL.fileName)
     }
 
     @Test fun `mumble-cleanup Q4_0 speed-test model has no source URL (locally quantized, not downloadable) but is still checksummed`() {
@@ -162,8 +153,8 @@ class ModelDownloaderTest {
         // the f16 GGUF, so unlike every other catalog entry it has no sourceUrl to download from.
         assertEquals(null, MUMBLE_CLEANUP_Q4_0_MODEL.sourceUrl)
         assertFalse(MUMBLE_CLEANUP_Q4_0_MODEL.recommended)
-        assertNotEquals(MUMBLE_CLEANUP_MODEL.archive, MUMBLE_CLEANUP_Q4_0_MODEL.archive)
-        assertNotEquals(MUMBLE_CLEANUP_MODEL.fileName, MUMBLE_CLEANUP_Q4_0_MODEL.fileName)
+        assertNotEquals(LOCAL_CLEANUP_MODEL.archive, MUMBLE_CLEANUP_Q4_0_MODEL.archive)
+        assertNotEquals(LOCAL_CLEANUP_MODEL.fileName, MUMBLE_CLEANUP_Q4_0_MODEL.fileName)
         assertTrue(MUMBLE_CLEANUP_Q4_0_MODEL.sha256!!.matches(Regex("[0-9a-f]{64}")))
     }
 
