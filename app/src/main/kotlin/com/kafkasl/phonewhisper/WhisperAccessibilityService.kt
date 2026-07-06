@@ -75,7 +75,8 @@ private data class PendingInjection(
     val injectedText: String,
     val priorClipboard: String?,
     val priorNodeText: String?,
-    val node: AccessibilityNodeInfo?
+    val node: AccessibilityNodeInfo?,
+    val historyTimestamp: Long,
 )
 
 class WhisperAccessibilityService : AccessibilityService() {
@@ -362,13 +363,10 @@ class WhisperAccessibilityService : AccessibilityService() {
         // service component itself is destroyed, and skipping it would leave the user's clipboard
         // holding the just-dictated text instead of their prior content (#5).
         handler.removeCallbacks(previewTimeoutRunnable)
-        // A preview still pending at teardown would otherwise vanish without ever reaching
-        // history -- the one "never lose a transcript" (#25) gap in this teardown path (#73).
-        // Injection is pointless mid-destroy, but recording the transcript is not: persist both
-        // the raw text and the cleanup candidate so the dictation stays recoverable.
-        pendingPreview?.let { preview ->
-            recordHistory(preview.rawText, cleanedText = preview.candidateText, paidFallbackGroup = preview.paidFallbackGroup)
-        }
+        // A pending preview is already recorded to history as of #73 (beginPreview upserts it the
+        // moment the cleanup candidate exists, not only once injection eventually happens) -- so
+        // there's nothing left to persist here. Just drop the in-memory state; the history row
+        // survives with the raw+candidate text exactly as it was when the preview began.
         pendingPreview = null
         dismissStyleMenu()
         removeOverlay()
@@ -1574,7 +1572,12 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun beginPreview(rawText: String, candidateText: String, paidFallbackGroup: CleanupStepGroup? = null) {
         pendingPreview?.let { resolvePreview { p -> p.timeout() } }
 
-        pendingPreview = CleanupPreviewState(rawText, candidateText, paidFallbackGroup)
+        // #73: record history the moment a cleanup candidate exists, not only once injection
+        // happens up to PREVIEW_TIMEOUT_MS later -- closes the process-death/service-teardown
+        // window where a pending preview was lost with no trace at all. resolvePreview below
+        // updates this exact row in place instead of adding a duplicate once the preview resolves.
+        val historyTimestamp = recordHistory(rawText, cleanedText = candidateText, paidFallbackGroup = paidFallbackGroup)
+        pendingPreview = CleanupPreviewState(rawText, candidateText, paidFallbackGroup, historyTimestamp)
         handler.postDelayed(previewTimeoutRunnable, PREVIEW_TIMEOUT_MS)
 
         val truncated = candidateText.take(PREVIEW_PREVIEW_CHARS)
@@ -1589,9 +1592,21 @@ class WhisperAccessibilityService : AccessibilityService() {
         handler.removeCallbacks(previewTimeoutRunnable)
         val resolution = action(preview)
         if (resolution.committed) {
-            injectText(resolution.textToInject, rawText = preview.rawText, paidFallbackGroup = preview.paidFallbackGroup)
+            injectText(
+                resolution.textToInject,
+                rawText = preview.rawText,
+                paidFallbackGroup = preview.paidFallbackGroup,
+                existingHistoryTimestamp = preview.historyTimestamp,
+            )
         } else {
-            injectText(resolution.textToInject, feedback = "Cleanup skipped — raw copied to clipboard")
+            // Discard/timeout falls back to raw text (see CleanupPreviewState) -- update the
+            // already-recorded row to reflect that outcome (no cleanedText survives the discard)
+            // rather than leaving the stale candidate text sitting in history (#73).
+            injectText(
+                resolution.textToInject,
+                feedback = "Cleanup skipped — raw copied to clipboard",
+                existingHistoryTimestamp = preview.historyTimestamp,
+            )
         }
     }
 
@@ -1717,13 +1732,19 @@ class WhisperAccessibilityService : AccessibilityService() {
         rawText: String? = null,
         feedback: String? = "Copied to clipboard",
         feedbackDurationMs: Long = 2000,
-        paidFallbackGroup: CleanupStepGroup? = null
+        paidFallbackGroup: CleanupStepGroup? = null,
+        existingHistoryTimestamp: Long? = null,
     ) {
         pendingClipboardRestore?.let { handler.removeCallbacks(it) }
         pendingClipboardRestore = null
         pendingInjectionRetry?.let { handler.removeCallbacks(it) }
         pendingInjectionRetry = null
-        recordHistory(rawText ?: text, cleanedText = if (rawText != null) text else null, paidFallbackGroup = paidFallbackGroup)
+        val historyTimestamp = recordHistory(
+            rawText ?: text,
+            cleanedText = if (rawText != null) text else null,
+            paidFallbackGroup = paidFallbackGroup,
+            existingTimestamp = existingHistoryTimestamp,
+        )
 
         // Claim whichever streaming-preview session (#29) is relevant to this injection right now,
         // before doing anything else (#45): either the recording's session is still live (this is
@@ -1750,14 +1771,14 @@ class WhisperAccessibilityService : AccessibilityService() {
             Log.i(TAG, "No injection candidates on first scan; retrying in ${INJECTION_RETRY_DELAY_MS}ms")
             val retry = Runnable {
                 pendingInjectionRetry = null
-                finishInjection(findInjectionCandidates(), text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff)
+                finishInjection(findInjectionCandidates(), text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff, historyTimestamp)
             }
             pendingInjectionRetry = retry
             handler.postDelayed(retry, INJECTION_RETRY_DELAY_MS)
             return
         }
 
-        finishInjection(candidates, text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff)
+        finishInjection(candidates, text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff, historyTimestamp)
     }
 
     private fun finishInjection(
@@ -1767,7 +1788,8 @@ class WhisperAccessibilityService : AccessibilityService() {
         priorClipboard: String?,
         feedback: String?,
         feedbackDurationMs: Long,
-        streamingHandoff: StreamingPreviewSession?
+        streamingHandoff: StreamingPreviewSession?,
+        historyTimestamp: Long,
     ) {
         Log.i(TAG, "Injecting text into ${candidates.size} candidate node(s)")
 
@@ -1811,7 +1833,7 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         Log.i(TAG, if (method != InjectMethod.NONE) "Text injection action reported success" else "No injection action succeeded; clipboard fallback only")
 
-        updatePendingInjection(method, injectedText = text, rawText = rawText ?: text, priorClipboard, priorNodeText, injectedNode)
+        updatePendingInjection(method, injectedText = text, rawText = rawText ?: text, priorClipboard, priorNodeText, injectedNode, historyTimestamp)
 
         val retryRawOffered = method != InjectMethod.NONE && rawText != null && rawText != text
         val isFallback = method == InjectMethod.NONE
@@ -1875,12 +1897,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         rawText: String,
         priorClipboard: String?,
         priorNodeText: String?,
-        node: AccessibilityNodeInfo?
+        node: AccessibilityNodeInfo?,
+        historyTimestamp: Long,
     ) {
         pendingInjection?.node?.recycle()
         handler.removeCallbacks(expirePendingInjection)
         pendingInjection = if (method != InjectMethod.NONE) {
-            PendingInjection(System.currentTimeMillis(), rawText, injectedText, priorClipboard, priorNodeText, node)
+            PendingInjection(System.currentTimeMillis(), rawText, injectedText, priorClipboard, priorNodeText, node, historyTimestamp)
         } else {
             node?.recycle()
             null
@@ -1954,7 +1977,15 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (pending != null) {
             val ageMs = System.currentTimeMillis() - pending.timestamp
             if (canRetryRaw(ageMs, UNDO_RETRY_WINDOW_MS, pending.rawText, pending.injectedText)) {
-                injectText(pending.rawText, feedback = "Raw text copied", feedbackDurationMs = 2000)
+                // #73: reuse the same history row (via existingHistoryTimestamp) instead of
+                // recording a second entry for a dictation that already has one -- "retry with
+                // raw text" is an update to what actually ended up injected, not a new dictation.
+                injectText(
+                    pending.rawText,
+                    feedback = "Raw text copied",
+                    feedbackDurationMs = 2000,
+                    existingHistoryTimestamp = pending.historyTimestamp,
+                )
                 return
             }
         }
@@ -1964,18 +1995,29 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Persists the transcript to local history off the main thread, right as it's handed off
-     *  for injection/clipboard-copy, so a failed injection still leaves it recoverable (#25). */
-    private fun recordHistory(rawText: String, cleanedText: String?, paidFallbackGroup: CleanupStepGroup? = null) {
-        if (!prefs().getBoolean("dictation_history_enabled", true)) return
-        val timestamp = System.currentTimeMillis()
+    /** Persists the transcript to local history off the main thread (#25). [existingTimestamp],
+     *  when supplied, updates that already-recorded row in place ([DictationHistoryStore.upsert])
+     *  instead of adding a second entry for the same dictation (#73) -- the caller already
+     *  recorded this dictation earlier (e.g. as soon as a cleanup candidate existed, before
+     *  injection/preview even ran) and is now updating it with the outcome. Returns the
+     *  timestamp actually used, so a caller recording for the first time can hand that identity
+     *  to a later update call. */
+    private fun recordHistory(
+        rawText: String,
+        cleanedText: String?,
+        paidFallbackGroup: CleanupStepGroup? = null,
+        existingTimestamp: Long? = null,
+    ): Long {
+        val timestamp = existingTimestamp ?: System.currentTimeMillis()
+        if (!prefs().getBoolean("dictation_history_enabled", true)) return timestamp
         thread {
             try {
-                historyStore.add(DictationHistoryEntry(timestamp, rawText, cleanedText, paidFallbackGroup))
+                historyStore.upsert(DictationHistoryEntry(timestamp, rawText, cleanedText, paidFallbackGroup))
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to record dictation history", e)
             }
         }
+        return timestamp
     }
 
     private fun findInjectionCandidates(): List<AccessibilityNodeInfo> {

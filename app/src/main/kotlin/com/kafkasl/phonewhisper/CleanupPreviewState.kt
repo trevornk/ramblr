@@ -26,8 +26,19 @@ data class PreviewResolution(val textToInject: String, val committed: Boolean)
  * [paidFallbackGroup] carries which waterfall group produced [candidateText], if it was a paid
  * one (#33) -- only meaningful on [commit], since [discard]/[timeout] fall back to [rawText],
  * which was never touched by cleanup.
+ *
+ * [historyTimestamp] identifies the [DictationHistoryEntry] already recorded for this dictation
+ * (#73) as soon as the transcript+cleanup result existed, so the eventual [WhisperAccessibilityService.injectText]
+ * call updates that same row in place (via [DictationHistoryStore.upsert]) instead of adding a
+ * second, duplicate entry. Defaults to 0L only so existing unit tests constructing a bare
+ * [CleanupPreviewState] keep compiling -- the real caller always supplies the real value.
  */
-class CleanupPreviewState(val rawText: String, val candidateText: String, val paidFallbackGroup: CleanupStepGroup? = null) {
+class CleanupPreviewState(
+    val rawText: String,
+    val candidateText: String,
+    val paidFallbackGroup: CleanupStepGroup? = null,
+    val historyTimestamp: Long = 0L,
+) {
     var resolution: PreviewResolution? = null
         private set
 
