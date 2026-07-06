@@ -1335,6 +1335,7 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         warmUpLocalCleanupModelIfNeeded()
         warmUpTranscribersIfTrimmed()
+        warmUpCloudConnectionsIfNeeded()
 
         // A still-pending preview (#40) from the previous dictation shouldn't linger silently
         // while a new one starts -- resolve it the same safe way a timeout would.
@@ -1409,6 +1410,21 @@ class WhisperAccessibilityService : AccessibilityService() {
         transcribersTrimmed = false
         thread { initLocalModel() }
         thread { initStreamingModel() }
+    }
+
+    /**
+     * Pre-warms DNS/TCP/TLS for whatever cloud host(s) this dictation would actually call (#100
+     * perceived-latency follow-up), the same "pay the cost while the user is still talking"
+     * timing [warmUpLocalCleanupModelIfNeeded]/[warmUpTranscribersIfTrimmed] already use. Reads
+     * the same [ProviderChainStore]/[CloudFeatureToggle] state the real transcription and cleanup
+     * call sites resolve against, so this only opens connections a real call could actually use.
+     */
+    private fun warmUpCloudConnectionsIfNeeded() {
+        val chain = ProviderChainStore.load(this)
+        val transcriptionCandidates = ProviderChainRuntime.transcriptionCandidates(chain)
+        val cleanupChain = ProviderChainRuntime.effectiveChainForCleanup(chain, CloudFeatureToggle.cleanupEnabled(this))
+        val hosts = NetworkWarmup.hostsToWarm(transcriptionCandidates, cleanupChain)
+        NetworkWarmup.warmUpAsync(hosts)
     }
 
     /** Long-press while TRANSCRIBING (see overlay.setOnTouchListener): abort the in-flight call and return to idle. */
