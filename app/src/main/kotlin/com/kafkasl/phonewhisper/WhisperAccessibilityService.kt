@@ -98,6 +98,9 @@ class WhisperAccessibilityService : AccessibilityService() {
             instance?.let { service -> service.handler.post { service.applyOverlayVisibility() } }
         }
 
+        /** Best-effort package name for whichever app currently owns the active accessibility root. */
+        fun foregroundPackageNameOrNull(): String? = instance?.currentForegroundPackageName()
+
         private const val TAG = "PhoneWhisper"
         private const val SAMPLE_RATE = 16000
         private const val BTN_DP = 44
@@ -968,10 +971,11 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         container.addView(styleMenuDivider())
 
-        val current = CleanupPersonas.currentPersona(
+        val globalPersona = CleanupPersonas.currentPersona(
             prefs().getString("cleanup_style", null),
             prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
         )
+        val current = PerAppPersonaStore.resolvePersona(this, currentForegroundPackageName(), globalPersona)
         for (persona in CleanupPersonas.BUILT_IN) {
             val title = if (persona == current) "✓ ${persona.title}" else persona.title
             container.addView(styleMenuRow(icon = null, title = title, subtitle = persona.subtitle) {
@@ -1085,6 +1089,7 @@ class WhisperAccessibilityService : AccessibilityService() {
      * cleanup is now running.
      */
     private fun onStyleMenuPersonaTapped(persona: CleanupPersona) {
+        PerAppPersonaStore.record(this, currentForegroundPackageName(), persona)
         prefs().edit()
             .putString("cleanup_style", persona.key)
             .putString("post_processing_prompt", CleanupPersonas.promptForExplicitSelection(persona))
@@ -1505,7 +1510,11 @@ class WhisperAccessibilityService : AccessibilityService() {
                 return
             }
 
-            val rawPrompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+            val savedPrompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+            val perAppPersonaKey = PerAppPersonaStore.personaKeyFor(this, currentForegroundPackageName())
+            val rawPrompt = perAppPersonaKey
+                ?.let { CleanupPersonas.promptForExplicitSelection(CleanupPersonas.fromKey(it)) }
+                ?: savedPrompt
             val vocabulary = VocabularyTerms.parse(prefs().getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED))
             val prompt = PostProcessor.interpolateVocabulary(rawPrompt, vocabulary)
 
@@ -2210,6 +2219,15 @@ class WhisperAccessibilityService : AccessibilityService() {
             TAG,
             "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} actions=[$actions]"
         )
+    }
+
+    private fun currentForegroundPackageName(): String? {
+        val root = rootInActiveWindow ?: return null
+        return try {
+            root.packageName?.toString()
+        } finally {
+            root.recycle()
+        }
     }
 
     private fun prefs() = getSharedPreferences("phonewhisper", MODE_PRIVATE)
