@@ -529,22 +529,23 @@ class CleanupActivity : BaseSettingsActivity() {
      * Writes the real, live [ProviderChain] this Settings screen's simple Local/Cloud choice maps
      * to (#37/#52 follow-up: previously wrote only to the legacy, dead [CleanupWaterfallStore] --
      * see [simpleCleanupChoiceForChain]'s kdoc for why that silently broke this exact toggle).
-     * Cleanup and Transcription share one [ProviderChain] (#95), so this can't blindly overwrite
-     * the whole chain -- it must preserve any entries that support Transcription so switching
-     * Cleanup's simple choice never silently disables cloud transcription out from under the
-     * user. [newCleanupEntry] (LOCAL or OPENAI, exactly what [onSelectSimpleCleanup] builds) is
-     * placed first; any existing chain entry that is transcription-capable but NOT already the
-     * new entry's own kind is preserved after it, so it's still reachable as a transcription
-     * fallback. An existing entry of the SAME kind as [newCleanupEntry] is replaced (not
-     * duplicated) by the new one, since they'd be redundant/conflicting for that kind.
+     *
+     * Deliberately a full overwrite, NOT a merge with the existing chain's transcription-capable
+     * entries: an earlier version of this fix tried to "preserve" those, on the theory that
+     * Cleanup and Transcription share one chain (#95). That was wrong and caused a real,
+     * user-visible regression Trevor caught immediately -- it left a phantom LOCAL entry sitting
+     * in the Cloud provider picker (nonsensical there; LOCAL has no credential and isn't a "cloud
+     * provider" a user adds) and broke re-selecting Local/Cloud from Settings. The actual
+     * capability split is: Transcription's local/cloud routing is governed entirely by the
+     * separate `use_local` boolean pref (see [WhisperAccessibilityService.continueTranscription],
+     * which calls [transcribeLocal] directly and never consults the chain's LOCAL entries at
+     * all) -- cloud transcription instead falls through the chain's OPENAI/GEMINI entries via
+     * [ProviderChainRuntime.transcriptionCandidates]. The chain's LOCAL entry only ever meant
+     * anything for Cleanup ([ProviderChainRuntime.cleanupWaterfallFor]/[ProviderChain.isLocalOnly]'s
+     * consent-gate check) -- there was nothing to "preserve" for Transcription in the first place.
      */
     private fun saveProviderChain(newCleanupEntry: ProviderChain) {
-        val newEntry = newCleanupEntry.entries.single()
-        val existingChain = ProviderChainStore.load(this)
-        val preservedForTranscription = existingChain.entries.filter {
-            it.kind != newEntry.kind && it.kind.supportsTranscription()
-        }
-        ProviderChainStore.save(this, ProviderChain(listOf(newEntry) + preservedForTranscription))
+        ProviderChainStore.save(this, newCleanupEntry)
         // Full refresh, not just the waterfall-dependent bits: mirrors MainActivity's original
         // saveWaterfallSteps() comment -- a chain edit changes the effective simple choice, and
         // with it the radios, the cleanup subtitle, and the Cloud provider chain link's subtitle (#81).
