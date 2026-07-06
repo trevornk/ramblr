@@ -401,6 +401,7 @@ class LocalLlmWaterfallStepTest {
         localModelPath: () -> String?,
         legacyApiKey: String = "",
         credentialLookup: (CleanupCredentialSlot) -> String = { "" },
+        localPrompt: String = PostProcessor.SIMPLE_PROMPT,
     ): PostProcessor.Result {
         var captured: PostProcessor.Result? = null
         CleanupWaterfallExecutor.execute(
@@ -415,6 +416,7 @@ class LocalLlmWaterfallStepTest {
             transport = transport,
             localInference = localInference,
             localModelPath = localModelPath,
+            localPrompt = localPrompt,
             callback = { captured = it },
         )
         return captured ?: error("callback never fired")
@@ -430,6 +432,37 @@ class LocalLlmWaterfallStepTest {
         assertEquals("cleaned locally", result.text)
         assertEquals(0, transport.requestedUrls.size) // no network call at all
         assertEquals(1, engine.calls.size)
+    }
+
+    @Test fun `local step uses the dedicated local prompt, not the cloud persona prompt`() {
+        // #54 follow-up: today's small on-device models (e.g. LFM2.5-350M) don't reliably follow
+        // the longer, few-shot DEV_PROMPT-style cloud persona prompts -- they can drift into
+        // answering/chatting instead of restyling. The executor must always route LOCAL_LLM
+        // through its own localPrompt (default PostProcessor.SIMPLE_PROMPT), independent of
+        // whatever persona prompt the caller passes as [prompt] for cloud steps.
+        val transport = FakeCleanupHttpTransport(mutableListOf())
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned locally")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+
+        execute(
+            waterfall, transport, engine,
+            localModelPath = { "/data/data/app/files/cleanup_models/model.gguf" },
+            localPrompt = "a distinct local-only prompt",
+        )
+
+        assertEquals(1, engine.calls.size)
+        assertEquals("a distinct local-only prompt", engine.calls[0].first) // systemPrompt arg
+    }
+
+    @Test fun `local step defaults to SIMPLE_PROMPT when no localPrompt is supplied`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf())
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned locally")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+
+        execute(waterfall, transport, engine, localModelPath = { "/data/data/app/files/cleanup_models/model.gguf" })
+
+        assertEquals(1, engine.calls.size)
+        assertEquals(PostProcessor.SIMPLE_PROMPT, engine.calls[0].first)
     }
 
     @Test fun `a cancelled local inference stops the waterfall instead of falling through`() {
@@ -563,7 +596,10 @@ class LocalLlmWaterfallStepTest {
         assertEquals("cleaned via fallback", result.text)
     }
 
-    @Test fun `the local step passes the waterfall prompt and text through unchanged as system+user`() {
+    @Test fun `the local step uses localPrompt (not the waterfall's cloud prompt) as its system message, with the waterfall text as user`() {
+        // Superseded by the #54 follow-up fix above: LOCAL_LLM must NOT receive the cloud
+        // persona's `prompt` verbatim -- see "local step uses the dedicated local prompt" and
+        // "local step defaults to SIMPLE_PROMPT" for the actual current contract.
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned")))
         val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
@@ -571,7 +607,7 @@ class LocalLlmWaterfallStepTest {
         execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
 
         val (systemPrompt, userText, modelPath) = engine.calls.single()
-        assertEquals("clean it up", systemPrompt) // the `prompt` arg passed to execute()
+        assertEquals(PostProcessor.SIMPLE_PROMPT, systemPrompt) // default localPrompt, not the `prompt` arg
         assertEquals("raw transcript", userText) // the `text` arg passed to execute()
         assertEquals("/path/to/model.gguf", modelPath)
     }
