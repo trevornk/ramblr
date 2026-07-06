@@ -193,7 +193,7 @@ class CleanupActivity : BaseSettingsActivity() {
      *  edit changes the effective simple choice, and with it the radios, subtitle, and the
      *  OpenAI-key row's visibility (#81). */
     private fun refreshWaterfallDependentUi() {
-        val persistedChoice = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this))
+        val persistedChoice = simpleCleanupChoiceForChain(ProviderChainStore.load(this))
         if (persistedChoice == SimpleCleanupChoice.LOCAL) pendingLocalCleanupSelection = false
         val choice = displayedCleanupChoice(persistedChoice, pendingLocalCleanupSelection)
         cleanupLocalRadio.isChecked = choice == SimpleCleanupChoice.LOCAL
@@ -207,7 +207,7 @@ class CleanupActivity : BaseSettingsActivity() {
      *  #23 when the change would first combine local transcription with cleanup. */
     private fun applyLocalCleanupChange(useLocal: Boolean, usePostProcessing: Boolean) {
         val hasConsented = prefs().getBoolean(KEY_LOCAL_CLEANUP_CONSENT, false)
-        val cleanupIsLocalOnly = CleanupWaterfallStore.load(this).isLocalOnly()
+        val cleanupIsLocalOnly = ProviderChainStore.load(this).isLocalOnly()
         if (!LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing, hasConsented, cleanupIsLocalOnly)) {
             prefs().edit()
                 .putBoolean("use_local", useLocal)
@@ -414,7 +414,7 @@ class CleanupActivity : BaseSettingsActivity() {
     }
 
     private fun confirmDeleteCleanupModel(model: Model) {
-        val isActive = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this)) == SimpleCleanupChoice.LOCAL &&
+        val isActive = simpleCleanupChoiceForChain(ProviderChainStore.load(this)) == SimpleCleanupChoice.LOCAL &&
             selectedCleanupModel().archive == model.archive
         val activeNote = if (isActive) " Cleanup will switch back to Cloud." else ""
         android.app.AlertDialog.Builder(this)
@@ -426,7 +426,7 @@ class CleanupActivity : BaseSettingsActivity() {
     }
 
     private fun deleteCleanupModel(model: Model) {
-        val wasActive = simpleCleanupChoiceFor(CleanupWaterfallStore.load(this)) == SimpleCleanupChoice.LOCAL &&
+        val wasActive = simpleCleanupChoiceForChain(ProviderChainStore.load(this)) == SimpleCleanupChoice.LOCAL &&
             selectedCleanupModel().archive == model.archive
         ModelDownloader.delete(this, model)
         if (wasActive) onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
@@ -514,22 +514,40 @@ class CleanupActivity : BaseSettingsActivity() {
                     return
                 }
                 pendingLocalCleanupSelection = false
-                saveWaterfallSteps(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, model.archive)))
+                saveProviderChain(ProviderChain(listOf(ProviderChainEntry(ProviderKind.LOCAL, model.archive))))
             }
             SimpleCleanupChoice.CLOUD -> {
                 pendingLocalCleanupSelection = false
-                saveWaterfallSteps(listOf(CleanupStep(CleanupStepGroup.LEGACY, PostProcessor.DEFAULT_MODEL)))
+                saveProviderChain(ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, PostProcessor.DEFAULT_MODEL))))
             }
             SimpleCleanupChoice.CUSTOM -> return
         }
         refreshWaterfallDependentUi()
     }
 
-    private fun saveWaterfallSteps(steps: List<CleanupStep>) {
-        CleanupWaterfallStore.save(this, CleanupWaterfall(steps))
+    /**
+     * Writes the real, live [ProviderChain] this Settings screen's simple Local/Cloud choice maps
+     * to (#37/#52 follow-up: previously wrote only to the legacy, dead [CleanupWaterfallStore] --
+     * see [simpleCleanupChoiceForChain]'s kdoc for why that silently broke this exact toggle).
+     * Cleanup and Transcription share one [ProviderChain] (#95), so this can't blindly overwrite
+     * the whole chain -- it must preserve any entries that support Transcription so switching
+     * Cleanup's simple choice never silently disables cloud transcription out from under the
+     * user. [newCleanupEntry] (LOCAL or OPENAI, exactly what [onSelectSimpleCleanup] builds) is
+     * placed first; any existing chain entry that is transcription-capable but NOT already the
+     * new entry's own kind is preserved after it, so it's still reachable as a transcription
+     * fallback. An existing entry of the SAME kind as [newCleanupEntry] is replaced (not
+     * duplicated) by the new one, since they'd be redundant/conflicting for that kind.
+     */
+    private fun saveProviderChain(newCleanupEntry: ProviderChain) {
+        val newEntry = newCleanupEntry.entries.single()
+        val existingChain = ProviderChainStore.load(this)
+        val preservedForTranscription = existingChain.entries.filter {
+            it.kind != newEntry.kind && it.kind.supportsTranscription()
+        }
+        ProviderChainStore.save(this, ProviderChain(listOf(newEntry) + preservedForTranscription))
         // Full refresh, not just the waterfall-dependent bits: mirrors MainActivity's original
-        // saveWaterfallSteps() comment -- a waterfall edit changes the effective simple choice,
-        // and with it the radios, the cleanup subtitle, and the OpenAI-key row's visibility (#81).
+        // saveWaterfallSteps() comment -- a chain edit changes the effective simple choice, and
+        // with it the radios, the cleanup subtitle, and the Cloud provider chain link's subtitle (#81).
         refresh()
     }
 
@@ -543,7 +561,7 @@ class CleanupActivity : BaseSettingsActivity() {
         fun subtitle(context: android.content.Context): String {
             val prefs = context.getSharedPreferences("phonewhisper", android.content.Context.MODE_PRIVATE)
             if (!prefs.getBoolean("use_post_processing", false)) return "Off"
-            return when (simpleCleanupChoiceFor(CleanupWaterfallStore.load(context))) {
+            return when (simpleCleanupChoiceForChain(ProviderChainStore.load(context))) {
                 SimpleCleanupChoice.LOCAL -> {
                     val archive = prefs.getString(KEY_LOCAL_CLEANUP_MODEL_NAME, "") ?: ""
                     val model = LOCAL_CLEANUP_MODEL_CATALOG.firstOrNull { it.archive == archive }

@@ -416,7 +416,10 @@ class MainActivity : BaseSettingsActivity() {
             .putBoolean("use_post_processing", true)
             .putString(KEY_LOCAL_CLEANUP_MODEL_NAME, model.archive)
             .apply()
-        CleanupWaterfallStore.save(this, CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, model.archive))))
+        // #37/#52 follow-up: write the real, live ProviderChainStore, not the legacy
+        // CleanupWaterfallStore, which the live cleanup path stopped reading after #95 Phase 2 --
+        // see SimpleCleanupChoice.simpleCleanupChoiceForChain's kdoc for the full history.
+        ProviderChainStore.save(this, ProviderChain(listOf(ProviderChainEntry(ProviderKind.LOCAL, model.archive))))
         if (!ModelDownloader.isInstalled(this, model)) {
             ModelDownloadWorker.enqueue(this, model)
             toast("Downloading ${model.name}...")
@@ -433,7 +436,8 @@ class MainActivity : BaseSettingsActivity() {
             .putBoolean("use_post_processing", true)
             .putBoolean(KEY_LOCAL_CLEANUP_CONSENT, true)
             .apply()
-        CleanupWaterfallStore.save(this, CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LEGACY, PostProcessor.DEFAULT_MODEL))))
+        // #37/#52 follow-up: same real-store fix as enableOnboardingCleanupLocal above.
+        ProviderChainStore.save(this, ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, PostProcessor.DEFAULT_MODEL))))
         refresh()
     }
 

@@ -30,3 +30,27 @@ fun simpleCleanupChoiceFor(waterfall: CleanupWaterfall): SimpleCleanupChoice {
         else -> SimpleCleanupChoice.CUSTOM
     }
 }
+
+/**
+ * Same classification as [simpleCleanupChoiceFor], but over the live [ProviderChain] model
+ * (#37/#52 follow-up): [CleanupActivity]'s Local/Cloud picker previously wrote to the legacy
+ * [CleanupWaterfallStore], which stopped mattering the moment [ProviderChainMigration] ran once
+ * -- the real cleanup path (see [WhisperAccessibilityService.handleTranscriptionResult]) has
+ * read [ProviderChainStore] exclusively since #95 Phase 2. That left the Settings toggle
+ * silently disconnected from real behavior: picking "Local" updated a dead store while live
+ * dictation kept using whatever cloud entries were already in the real chain. This is the
+ * ProviderChain-native equivalent so the picker can classify/write the store that's actually
+ * live. A single LOCAL entry reads as [SimpleCleanupChoice.LOCAL]; a single OPENAI entry reads
+ * as [SimpleCleanupChoice.CLOUD] (mirroring LEGACY's meaning); anything else (multiple entries,
+ * or a single entry of ANTHROPIC/GEMINI/OMNIROUTE) is [SimpleCleanupChoice.CUSTOM] -- a real
+ * waterfall/chain a user built deliberately, which this simple picker must never overwrite.
+ */
+fun simpleCleanupChoiceForChain(chain: ProviderChain): SimpleCleanupChoice {
+    val entries = chain.entries
+    if (entries.size != 1) return SimpleCleanupChoice.CUSTOM
+    return when (entries[0].kind) {
+        ProviderKind.LOCAL -> SimpleCleanupChoice.LOCAL
+        ProviderKind.OPENAI -> SimpleCleanupChoice.CLOUD
+        else -> SimpleCleanupChoice.CUSTOM
+    }
+}
