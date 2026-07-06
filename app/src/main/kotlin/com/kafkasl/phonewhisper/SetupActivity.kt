@@ -76,8 +76,13 @@ class SetupActivity : BaseSettingsActivity() {
      * Settings block on Accessibility -- system Settings just silently refuses to let the toggle
      * turn on, with no explanation of why or how to fix it (Trevor hit this directly re-testing a
      * fresh sideload). Detected proactively via [RestrictedSettingsCheck] instead of letting the
-     * user discover it themselves: show the exact unblock steps first, then continue to system
-     * Settings once dismissed either way (a false positive here should never trap the user).
+     * user discover it themselves.
+     *
+     * The primary button routes to App info FIRST when blocked (not Accessibility Settings) --
+     * sending the user to Accessibility Settings while still blocked just reproduces the exact
+     * silent-dead-end this dialog exists to prevent, since the toggle there would still refuse to
+     * turn on with no explanation. App info -> \u22ee menu -> "Allow restricted settings" -> back
+     * here is the one-time real fix; only after that should the button point at Accessibility.
      */
     private fun onAccessibilityRowTapped() {
         if (RestrictedSettingsCheck.isBlocked(this)) {
@@ -86,15 +91,19 @@ class SetupActivity : BaseSettingsActivity() {
                 .setMessage(
                     "Because Ramblr was installed outside the Play Store, Android blocks its " +
                         "Accessibility toggle by default (a security feature, not a bug).\n\n" +
-                        "To unblock it:\n" +
-                        "1. Open this app's App info (Settings \u2192 Apps \u2192 Ramblr)\n" +
-                        "2. Tap the \u22ee menu in the top-right corner\n" +
-                        "3. Choose \"Allow restricted settings\"\n" +
-                        "4. Come back here and enable Accessibility as normal\n\n" +
+                        "Tap below to open Ramblr's App info, then:\n" +
+                        "1. Tap the \u22ee menu in the top-right corner\n" +
+                        "2. Choose \"Allow restricted settings\"\n" +
+                        "3. Come back here and enable Accessibility as normal\n\n" +
                         "This is a one-time step per install."
                 )
-                .setPositiveButton("Open Accessibility settings") { _, _ ->
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                .setPositiveButton("Open App info") { _, _ ->
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            android.net.Uri.fromParts("package", packageName, null),
+                        )
+                    )
                 }
                 .setNegativeButton("Cancel", null)
                 .show()

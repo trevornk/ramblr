@@ -285,27 +285,46 @@ class MainActivity : BaseSettingsActivity() {
     private fun showOnboardingAccessibilityStep() {
         // #44 follow-up: a sideloaded install (GitHub Releases, not Play Store) hits Android 13+'s
         // Restricted Settings block here -- the toggle on the next screen will silently refuse to
-        // turn on with zero explanation unless this extra unblock step is called out up front.
-        val restrictedSettingsNote = if (RestrictedSettingsCheck.isBlocked(this)) {
-            "\n\n\u26a0\ufe0f Since Ramblr was installed outside the Play Store, Android will block " +
-                "the toggle until you first go to Settings \u2192 Apps \u2192 Ramblr \u2192 \u22ee menu " +
-                "(top-right) \u2192 \"Allow restricted settings\" -- a one-time step per install."
+        // turn on with zero explanation. Previously this dialog only *explained* the block in text
+        // while still routing to Accessibility Settings, where the tap would fail again exactly as
+        // before -- the user had to notice, back out, and find App info on their own. Now the
+        // primary button routes to App info FIRST when blocked, so the flow is a real fix instead
+        // of just a warning: unblock there, come back, onResume() re-runs this same step, and since
+        // isBlocked() is now false the button correctly points at Accessibility Settings instead.
+        val blocked = RestrictedSettingsCheck.isBlocked(this)
+        val message = if (blocked) {
+            "Ramblr uses Android's Accessibility service for one narrow reason: to insert " +
+                "dictated text into whatever text field is currently focused. It doesn't replace your " +
+                "keyboard and doesn't run background automation.\n\n" +
+                "\u26a0\ufe0f Since Ramblr was installed outside the Play Store, Android blocks the " +
+                "Accessibility toggle by default (a security feature, not a bug) until you allow it " +
+                "once per install.\n\n" +
+                "Tap below to open Ramblr's App info, then:\n" +
+                "1. Tap the \u22ee menu in the top-right corner\n" +
+                "2. Choose \"Allow restricted settings\"\n" +
+                "3. Come back here"
         } else {
-            ""
+            "Ramblr uses Android's Accessibility service for one narrow reason: to insert " +
+                "dictated text into whatever text field is currently focused. It doesn't replace your " +
+                "keyboard and doesn't run background automation.\n\n" +
+                "On the next screen, look for \"Ramblr\" in the list and turn it on."
         }
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Turn on Accessibility")
-            .setMessage(
-                "Ramblr uses Android's Accessibility service for one narrow reason: to insert " +
-                    "dictated text into whatever text field is currently focused. It doesn't replace your " +
-                    "keyboard and doesn't run background automation.\n\n" +
-                    "On the next screen, look for \"Ramblr\" in the list and turn it on." +
-                    restrictedSettingsNote
-            )
+            .setMessage(message)
             .setCancelable(false)
-            .setPositiveButton("Open Accessibility Settings") { _, _ ->
+            .setPositiveButton(if (blocked) "Open App info" else "Open Accessibility Settings") { _, _ ->
                 dismissOnboarding()
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                if (blocked) {
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            android.net.Uri.fromParts("package", packageName, null),
+                        )
+                    )
+                } else {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
             }
             .setNegativeButton("Not now") { _, _ -> dismissOnboarding() }
             .show()
