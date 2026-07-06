@@ -149,6 +149,10 @@ class WhisperAccessibilityService : AccessibilityService() {
          *  when it's off -- the same colors the old always-visible badge used. */
         private const val COLOR_CLEANUP_ON = 0xFF34D399.toInt()
         private const val COLOR_CLEANUP_OFF = 0xFF6B7280.toInt()
+        /** Subtle light-alpha border around the long-press style menu (#53 follow-up) -- the
+         *  menu's near-black translucent fill has no edge of its own and blends into a dark app
+         *  background or dark wallpaper without one. */
+        private const val COLOR_MENU_BORDER = 0x33FFFFFF
         /** The mic glyph's original hardcoded color (see ic_mic.xml) -- used when the user hasn't
          *  picked a custom glyph color (#43), so an unconfigured install renders identically. */
         private const val COLOR_GLYPH_DEFAULT = 0xFFFFFFFF.toInt()
@@ -934,6 +938,10 @@ class WhisperAccessibilityService : AccessibilityService() {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = 12 * dp
                 setColor(COLOR_FEEDBACK_BG)
+                // A near-black translucent fill with no edge blends into a dark app background or
+                // dark wallpaper -- a subtle light-alpha border keeps the menu visually distinct
+                // regardless of what's behind it, without needing a hard opaque outline.
+                setStroke((1 * dp).toInt(), COLOR_MENU_BORDER)
             }
             setPadding((6 * dp).toInt(), (6 * dp).toInt(), (6 * dp).toInt(), (6 * dp).toInt())
         }
