@@ -176,6 +176,14 @@ class WhisperAccessibilityService : AccessibilityService() {
     private var feedbackView: TextView? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var feedbackLayoutParams: WindowManager.LayoutParams? = null
+
+    // Auto-hide-to-peek (see RingPeek): true while the ring is currently slid over toward its
+    // snapped edge, leaving only a small sliver visible. prePeekX is the full-position window x
+    // to animate back to on restore -- null whenever isPeeked is false.
+    private var isPeeked = false
+    private var prePeekX: Int? = null
+    private var peekAnimator: android.animation.ValueAnimator? = null
+    private val idlePeekRunnable = Runnable { attemptAutoPeek() }
     // screenW/screenH as of the last time the ring's position was computed (#41) -- the baseline
     // handleScreenSizeChange() diffs against to detect a fold/unfold. Set alongside layoutParams
     // in showOverlay() and kept in sync every time it repositions the ring.
@@ -506,7 +514,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         val params = WindowManager.LayoutParams(
             ringSize, ringSize,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            // FLAG_LAYOUT_NO_LIMITS (Feature A): auto-peek intentionally slides most of the ring
+            // off the edge of the display (see RingPeek.peekedX), leaving only a small sliver
+            // on-screen. Without this flag WindowManager clamps any window position back to fully
+            // on-screen bounds, silently negating the peek animation -- the window would visibly
+            // animate but always snap back to its normal resting x, i.e. peek would appear to do
+            // nothing at all.
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -528,11 +542,16 @@ class WhisperAccessibilityService : AccessibilityService() {
         // ACTION_MOVE single out "the menu I just opened" from cancel-transcription/undo already
         // having fired, neither of which is a persistent overlay that needs dismissing on drag.
         var styleMenuOpenedByLongPress = false
+        // Set when ACTION_DOWN consumed this gesture as a peek-restore tap (Feature A) -- ACTION_UP
+        // must then no-op instead of falling through to onTap()/drag-snap using touchX/touchY that
+        // were never updated for this gesture (still holding whatever the previous gesture left).
+        var consumedByPeekRestore = false
         val longPressAction = Runnable {
             val action = overlayLongPressActionFor(stateMachine.current(), hasPendingInjection = pendingInjection != null)
             val moved = abs(lastRawX - touchX) + abs(lastRawY - touchY)
             if (!shouldFireLongPress(action, movedPastThreshold = moved >= TAP_THRESHOLD_DP * dp)) return@Runnable
             longPressFired = true
+            armIdlePeekTimer()
             when (action) {
                 OverlayLongPressAction.CANCEL_TRANSCRIPTION -> cancelTranscription()
                 OverlayLongPressAction.UNDO_INJECTION -> undoLastInjection()
@@ -544,6 +563,16 @@ class WhisperAccessibilityService : AccessibilityService() {
         overlay.setOnTouchListener { v, ev ->
             when (ev.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    armIdlePeekTimer()
+                    consumedByPeekRestore = false
+                    // A touch-down on a currently-peeked ring is a restore tap, not the start of a
+                    // normal drag/tap/long-press gesture (Feature A): consume it here so it can
+                    // never also fall through to onTap()'s mic-toggle on ACTION_UP.
+                    if (isPeeked) {
+                        restoreFromPeek()
+                        consumedByPeekRestore = true
+                        return@setOnTouchListener true
+                    }
                     startX = params.x; startY = params.y
                     touchX = ev.rawX; touchY = ev.rawY
                     lastRawX = ev.rawX; lastRawY = ev.rawY
@@ -556,6 +585,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    if (consumedByPeekRestore) return@setOnTouchListener true
                     lastRawX = ev.rawX; lastRawY = ev.rawY
                     params.x = startX + (ev.rawX - touchX).toInt()
                     params.y = startY + (ev.rawY - touchY).toInt()
@@ -576,6 +606,8 @@ class WhisperAccessibilityService : AccessibilityService() {
                 }
                 MotionEvent.ACTION_UP -> {
                     handler.removeCallbacks(longPressAction)
+                    armIdlePeekTimer()
+                    if (consumedByPeekRestore) return@setOnTouchListener true
                     if (longPressFired) return@setOnTouchListener true
                     val moved = abs(ev.rawX - touchX) + abs(ev.rawY - touchY)
                     if (moved < TAP_THRESHOLD_DP * dp) {
@@ -634,6 +666,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         feedbackLayoutParams = feedbackParams
         applyButtonAppearance(COLOR_IDLE)
         applyOverlayVisibility()
+        armIdlePeekTimer()
     }
 
     /** Scales [valueDp] (one of [BTN_DP]/[PAD_DP], defined against the [RING_DP] reference size)
@@ -680,14 +713,17 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Applies [overlayShouldBeVisible] to the live overlay views (#35): hides the ring (draw +
-     * touch) and dismisses the feedback bubble and any open style menu (#53) while MainActivity is
-     * foregrounded. This only toggles presentation -- [layoutParams] and [feedbackLayoutParams]
-     * stay non-null throughout, so drag-to-reposition is untouched and the overlay reappears
-     * exactly where it was left. Recording/transcription state is never touched here.
+     * Applies [overlayShouldBeVisible] to the live overlay views (#35, Feature B): hides the ring
+     * (draw + touch) and dismisses the feedback bubble and any open style menu (#53) while
+     * MainActivity is foregrounded OR the user has explicitly hidden the icon via the long-press
+     * "Hide icon" row ([IconHiddenState]). This only toggles presentation -- [layoutParams] and
+     * [feedbackLayoutParams] stay non-null throughout, so drag-to-reposition is untouched and the
+     * overlay reappears exactly where it was left. Recording/transcription state is never touched
+     * here. Internal (not private) so [RestoreIconReceiver] can re-apply visibility immediately
+     * after flipping [IconHiddenState] back off from outside this class.
      */
-    private fun applyOverlayVisibility() {
-        val visible = overlayShouldBeVisible(mainActivityForeground)
+    internal fun applyOverlayVisibility() {
+        val visible = overlayShouldBeVisible(mainActivityForeground, IconHiddenState.isHidden(this))
         setOverlayTouchable(visible)
         overlayView?.visibility = if (visible) View.VISIBLE else View.GONE
         if (!visible) {
@@ -706,6 +742,71 @@ class WhisperAccessibilityService : AccessibilityService() {
             else flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         }
         layoutParams?.let { it.applyTouchable(); overlayView?.let { v -> wm.updateViewLayout(v, it) } }
+    }
+
+    // --- Auto-hide-to-peek (Feature A, see RingPeek) ---
+
+    /** Any interaction with the ring (drag, tap, long-press) calls this to re-arm the idle timer,
+     *  cancelling whatever peek was previously scheduled and restoring the ring if it was already
+     *  peeked when the new interaction began. */
+    private fun armIdlePeekTimer() {
+        handler.removeCallbacks(idlePeekRunnable)
+        handler.postDelayed(idlePeekRunnable, RingPeek.IDLE_TIMEOUT_MS)
+    }
+
+    /** Fires once [RingPeek.IDLE_TIMEOUT_MS] has elapsed with no ring interaction. Never peeks
+     *  while actively recording or while cleanup/transcription is in flight (RingPeek.shouldAutoPeek),
+     *  nor while the ring itself isn't currently showing (e.g. MainActivity foregrounded, #35) or
+     *  already peeked. */
+    private fun attemptAutoPeek() {
+        if (isPeeked) return
+        if (!RingPeek.shouldAutoPeek(stateMachine.current())) { armIdlePeekTimer(); return }
+        val overlay = overlayView ?: return
+        if (overlay.visibility != View.VISIBLE) { armIdlePeekTimer(); return }
+        val params = layoutParams ?: return
+
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        val ringSize = params.width
+        val peekVisiblePx = (RingPeek.PEEK_VISIBLE_DP * dp).toInt()
+        val targetX = RingPeek.peekedX(params.x, screenW, ringSize, peekVisiblePx)
+
+        prePeekX = params.x
+        isPeeked = true
+        animateRingX(params, wm, targetX)
+    }
+
+    /** Restores the ring to its pre-peek position immediately -- called on a touch-down that
+     *  lands on a peeked ring (see overlay.setOnTouchListener). Deliberately does NOT call onTap(),
+     *  so un-peeking a tap never also toggles the mic. */
+    private fun restoreFromPeek() {
+        val params = layoutParams ?: return
+        val targetX = prePeekX ?: return
+        isPeeked = false
+        prePeekX = null
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        animateRingX(params, wm, targetX)
+        armIdlePeekTimer()
+    }
+
+    /** Animates the ring window's x from its current value to [targetX], keeping the feedback
+     *  bubble anchored to it in step exactly like drag-to-reposition already does. */
+    private fun animateRingX(params: WindowManager.LayoutParams, wm: WindowManager, targetX: Int) {
+        peekAnimator?.cancel()
+        val startXValue = params.x
+        val overlay = overlayView ?: return
+        val animator = android.animation.ValueAnimator.ofInt(startXValue, targetX).apply {
+            duration = RingPeek.ANIM_DURATION_MS
+            addUpdateListener { anim ->
+                params.x = anim.animatedValue as Int
+                wm.updateViewLayout(overlay, params)
+                feedbackLayoutParams?.let {
+                    positionFeedback(it, params, feedbackView?.height ?: 0)
+                    wm.updateViewLayout(feedbackView, it)
+                }
+            }
+        }
+        peekAnimator = animator
+        animator.start()
     }
 
     private fun removeOverlay() {
@@ -1048,6 +1149,15 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
         )
 
+        if (HideIconToggle.isEnabled(this)) {
+            container.addView(styleMenuDivider())
+            container.addView(
+                styleMenuRow(icon = null, title = "Hide icon", subtitle = "Fully hides it -- restore from a notification") {
+                    onStyleMenuHideIconTapped()
+                }
+            )
+        }
+
         return container
     }
 
@@ -1179,6 +1289,17 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun onStyleMenuOpenSettingsTapped() {
         dismissStyleMenu()
         startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    /** "Hide icon" long-press menu row (Feature B): fully hides the ring/feedback bubble (same
+     *  end-state as MainActivity being foregrounded, #35) and posts the "tap to show it again"
+     *  notification, since once the ring is gone there's otherwise no on-screen affordance left
+     *  to bring it back. */
+    private fun onStyleMenuHideIconTapped() {
+        dismissStyleMenu()
+        IconHiddenState.setHidden(this, true)
+        applyOverlayVisibility()
+        IconVisibilityNotifications.postHidden(this)
     }
 
     private fun startPulse() {
