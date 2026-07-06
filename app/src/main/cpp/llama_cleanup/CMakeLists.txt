@@ -45,6 +45,23 @@ set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
 
+# CPU feature targeting (#37 follow-up, real on-device timeout hit): ggml's GGML_NATIVE
+# defaults OFF for any cross-compiled build (this NDK build included -- see
+# CMAKE_CROSSCOMPILING in llama.cpp/ggml/CMakeLists.txt), and with GGML_CPU_ARM_ARCH unset
+# ggml-cpu/CMakeLists.txt's ARCH_FLAGS stays completely empty -- i.e. the ARM CPU quantized
+# matmul kernels compile against the compiler's baseline armv8-a target only, with NO dotprod,
+# i8mm, or fp16-vector-arithmetic acceleration, regardless of what the real device supports.
+# llama.cpp's ARM CPU backend has dedicated fast paths for Q4_0 quantized matmul keyed on
+# exactly these instructions (see ggml-cpu/CMakeLists.txt's check_arm_feature block), so leaving
+# them off is a real, avoidable multiple-x decode slowdown, not just an untuned default.
+# armv8.6-a+dotprod+i8mm+fp16 is confirmed present on Trevor's real device (Pixel 10 Pro Fold
+# `/proc/cpuinfo` Features line: asimddp, i8mm, asimdhp/fphp) -- ndk.abiFilters already
+# restricts this app to arm64-v8a only and it isn't yet distributed beyond this one device
+# (see #99, Play Store distribution still unevaluated), so hardcoding to this device's real
+# baseline is safe today. Revisit with GGML_CPU_ALL_VARIANTS (runtime dispatch) instead of a
+# hardcoded -march if/when this ships to arbitrary ARM64 hardware.
+set(GGML_CPU_ARM_ARCH "armv8.6-a+dotprod+i8mm+fp16" CACHE STRING "" FORCE)
+
 add_subdirectory(../../../../../llama.cpp llama.cpp)
 set(LLAMA_DIR_RELATIVE "../../../../../llama.cpp")
 get_filename_component(LLAMA_DIR ${LLAMA_DIR_RELATIVE} ABSOLUTE)
