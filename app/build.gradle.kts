@@ -46,6 +46,16 @@ android {
     buildFeatures { buildConfig = true }
 
     testOptions { unitTests { isIncludeAndroidResources = true } }
+
+    // Names the built APK "Ramblr-<versionName>-<buildType>.apk" (e.g. Ramblr-0.3.0-debug.apk)
+    // instead of Gradle's generic default "app-debug.apk"/"app-release.apk", so a file downloaded
+    // from GitHub Releases or shared directly is recognizable by filename alone.
+    applicationVariants.all {
+        outputs.all {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            output.outputFileName = "Ramblr-${versionName}-${buildType.name}.apk"
+        }
+    }
 }
 
 dependencies {
