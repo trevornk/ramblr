@@ -452,6 +452,7 @@ object CleanupWaterfallExecutor {
             }
 
             performStep(steps[index], text, prompt, localPrompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
+                logStepOutcome(steps[index], startedAtMs, outcome)
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
                         cursor.recordSuccess(index, System.currentTimeMillis())
@@ -465,6 +466,24 @@ object CleanupWaterfallExecutor {
         }
 
         attempt(startIndex)
+    }
+
+    /**
+     * Logs which cleanup step actually served the request and how long the waterfall had run by
+     * that point (#100 perceived-latency follow-up). [android.util.Log] isn't available in the
+     * plain JVM unit tests this executor is designed to run in without Android, so failures here
+     * are swallowed -- this is diagnostics only, never allowed to affect the real outcome.
+     */
+    private fun logStepOutcome(step: CleanupStep, startedAtMs: Long, outcome: CleanupStepOutcome) {
+        runCatching {
+            val elapsedMs = System.currentTimeMillis() - startedAtMs
+            when (outcome) {
+                is CleanupStepOutcome.Success -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} succeeded at +${elapsedMs}ms")
+                is CleanupStepOutcome.StepFailed -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} failed at +${elapsedMs}ms: ${outcome.message}")
+                is CleanupStepOutcome.ConnectionFailed -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} connection failed at +${elapsedMs}ms: ${outcome.message}")
+                is CleanupStepOutcome.Cancelled -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} cancelled at +${elapsedMs}ms")
+            }
+        }
     }
 
     private fun groupBoundaries(groups: List<List<CleanupStep>>): List<IntRange> {
