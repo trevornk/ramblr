@@ -62,4 +62,31 @@ class ProviderChainEditingTest {
         val replaced = ProviderChainEditing.replace(entries, 0, entry(ProviderKind.ANTHROPIC, "c"))
         assertEquals(listOf(ProviderKind.ANTHROPIC, ProviderKind.LOCAL), replaced.map { it.kind })
     }
+
+    @Test fun `subtitleFor reads Not configured for a chain holding only the LOCAL floor entry`() {
+        // Real bug Trevor hit live: MainActivity's Cloud row (and CleanupActivity's/
+        // TranscriptionActivity's cloud link subtitle, which all share this function) said
+        // "1 provider configured" with zero real cloud providers set up -- counting the LOCAL
+        // floor entry as if it were a user-configured cloud provider.
+        val chain = ProviderChain(listOf(entry(ProviderKind.LOCAL, "lfm2.5-350m-q4_0")))
+        assertEquals("Not configured -- using on-device", CloudProviderActivity.subtitleFor(chain))
+    }
+
+    @Test fun `subtitleFor counts only cloud entries, ignoring LOCAL`() {
+        val chain = ProviderChain(
+            listOf(entry(ProviderKind.LOCAL, "local"), entry(ProviderKind.OPENAI, "gpt-4o-mini"))
+        )
+        assertEquals("1 provider configured", CloudProviderActivity.subtitleFor(chain))
+    }
+
+    @Test fun `subtitleFor pluralizes for two or more cloud entries`() {
+        val chain = ProviderChain(
+            listOf(
+                entry(ProviderKind.OPENAI, "gpt-4o-mini"),
+                entry(ProviderKind.ANTHROPIC, "claude-haiku"),
+                entry(ProviderKind.LOCAL, "local"),
+            )
+        )
+        assertEquals("2 providers configured", CloudProviderActivity.subtitleFor(chain))
+    }
 }
