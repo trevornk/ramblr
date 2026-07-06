@@ -10,6 +10,29 @@ package com.kafkasl.phonewhisper
  * models would both have to fit.
  */
 object ProviderChainEditing {
+    /**
+     * Appends [newEntry] to [entries], but keeps any existing [ProviderKind.LOCAL] entry as the
+     * last item rather than letting it get stranded ahead of a newly-added cloud provider. Plain
+     * list-append (`entries + newEntry`) silently broke this: [ProviderChain]'s own kdoc and
+     * [ProviderChain.withLocalFloor] both document LOCAL as "a guaranteed floor beneath every
+     * chain", tried last -- but if a LOCAL entry was already first (e.g. left over from an
+     * earlier Local-only choice, or a fresh install's default), appending a cloud provider after
+     * it never actually surfaced the new cloud provider until LOCAL exhausted its own step budget
+     * and failed on every single dictation (Trevor hit this live: adding OpenAI/Gemini/Anthropic
+     * providers here still ran ~4-6s of local-model overhead, including entire-waterfall-aborting
+     * timeouts, before a cloud provider was ever attempted). This only reorders when a LOCAL entry
+     * is already present; a chain with no LOCAL entry just gets a plain append, unchanged from
+     * before.
+     */
+    fun addCloud(entries: List<ProviderChainEntry>, newEntry: ProviderChainEntry): List<ProviderChainEntry> {
+        val localIndex = entries.indexOfFirst { it.kind == ProviderKind.LOCAL }
+        return if (localIndex >= 0) {
+            entries.toMutableList().apply { add(localIndex, newEntry) }
+        } else {
+            entries + newEntry
+        }
+    }
+
     /** Swaps [index] with its predecessor. No-op if [index] is already first or out of range. */
     fun moveUp(entries: List<ProviderChainEntry>, index: Int): List<ProviderChainEntry> {
         if (index !in entries.indices || index == 0) return entries
