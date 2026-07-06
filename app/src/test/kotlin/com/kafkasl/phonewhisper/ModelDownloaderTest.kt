@@ -116,19 +116,39 @@ class ModelDownloaderTest {
 
     // -- local cleanup model catalog (#37) --
 
-    @Test fun `local cleanup catalog has one working tier, marked and checksummed`() {
+    @Test fun `local cleanup catalog has real, distinct, checksummed tiers with exactly one default`() {
         // Collapsed from 3 to 1 for #98 (Trevor's direct request): Qwen2.5-1.5B ("best quality")
         // was a ~1.1GB download that would only compound the memory-pressure failures the
         // LFM2.5-350M swap was meant to fix; SmolLM2-360M ("smallest, still good") is
         // independently confirmed BROKEN for this exact task in #54 (falls back to generic
-        // assistant chit-chat instead of cleaning the transcript). One real, working model beats
-        // three options where two don't actually work.
-        assertEquals(1, LOCAL_CLEANUP_MODEL_CATALOG.size)
+        // assistant chit-chat instead of cleaning the transcript).
+        //
+        // Reopened to 2 tiers for the mumble-cleanup A/B test (Trevor-requested, following a real
+        // on-device LFM2.5+DEV_PROMPT failure and Trevor's explicit request to search for existing
+        // prior art before building a fine-tuning pipeline from scratch): unlike the old rejected
+        // tiers, MUMBLE_CLEANUP_MODEL is a real, independently-sourced, differently-architected
+        // model (Qwen2.5-0.5B LoRA fine-tuned specifically for this task, not just a smaller/
+        // larger instance of the same "prompt a generic instruct model" approach) -- a genuine
+        // second option worth comparing, not a confusing non-choice like the old tiers were.
+        assertEquals(2, LOCAL_CLEANUP_MODEL_CATALOG.size)
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.isLocalCleanup })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256 != null })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256!!.matches(Regex("[0-9a-f]{64}")) })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.contains(LOCAL_CLEANUP_MODEL))
+        assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.contains(MUMBLE_CLEANUP_MODEL))
+        // Exactly one default: installing the new A/B entry must not silently change what every
+        // existing user's fresh install (or resolveActiveModel's recommended-fallback) resolves to.
         assertEquals(1, LOCAL_CLEANUP_MODEL_CATALOG.count { it.recommended })
+        assertEquals(LOCAL_CLEANUP_MODEL, LOCAL_CLEANUP_MODEL_CATALOG.first { it.recommended })
+    }
+
+    @Test fun `mumble-cleanup model is sourced from a real Hugging Face URL with a distinct archive and file name`() {
+        assertTrue(MUMBLE_CLEANUP_MODEL.sourceUrl!!.startsWith("https://huggingface.co/"))
+        assertTrue(MUMBLE_CLEANUP_MODEL.sourceUrl!!.endsWith(".gguf"))
+        assertEquals("mumble-cleanup-2stage-q4km.gguf", MUMBLE_CLEANUP_MODEL.fileName)
+        assertFalse(MUMBLE_CLEANUP_MODEL.recommended)
+        assertNotEquals(LOCAL_CLEANUP_MODEL.archive, MUMBLE_CLEANUP_MODEL.archive)
+        assertNotEquals(LOCAL_CLEANUP_MODEL.fileName, MUMBLE_CLEANUP_MODEL.fileName)
     }
 
     @Test fun `local cleanup model is sourced from a real Hugging Face URL, not the sherpa-onnx release host`() {
