@@ -45,6 +45,19 @@ fun shouldUseStreamingPreview(settingEnabled: Boolean, streamingModelInstalled: 
     settingEnabled && streamingModelInstalled
 
 /**
+ * Whether a live streaming partial should render inside the floating feedback bubble instead of
+ * writing directly to the real accessibility field (bug fix, live-preview + preview-before-insert
+ * interaction). When Preview-before-insert is on, the real field must stay completely untouched
+ * until the user explicitly commits (or the preview safety-timeout auto-commits the raw
+ * fallback) -- otherwise a discarded/timed-out preview can leave stale streamed text sitting in
+ * the target app with nothing left to reconcile it against. When Preview-before-insert is off,
+ * this returns false and [WhisperAccessibilityService.maybeInjectPartial] keeps writing straight
+ * into the field exactly as it always has.
+ */
+fun shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled: Boolean): Boolean =
+    previewBeforeInjectEnabled
+
+/**
  * Formats a raw partial hypothesis for display only (#42). The bundled streaming model
  * (`sherpa-onnx-streaming-zipformer-en-20M-2023-02-17`, see [StreamingTranscriber]) is trained
  * purely on LibriSpeech, whose recipes commonly use an uppercase-only, unpunctuated token

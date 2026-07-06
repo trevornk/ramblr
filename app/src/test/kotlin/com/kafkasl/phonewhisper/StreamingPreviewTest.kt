@@ -123,6 +123,19 @@ class StreamingPreviewTest {
         assertFalse(shouldUseStreamingPreview(settingEnabled = false, streamingModelInstalled = false))
     }
 
+    // --- shouldRouteStreamingPartialToBubble (live-preview + preview-before-insert interaction fix) ---
+
+    @Test fun `partials are routed to the bubble when Preview-before-insert is on`() {
+        // The real field must never be touched pre-commit once Preview-before-insert is enabled,
+        // so live partials render in the floating feedback bubble instead of the field.
+        assertTrue(shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled = true))
+    }
+
+    @Test fun `partials keep writing straight to the field when Preview-before-insert is off`() {
+        // Today's default: no behavior change at all when the toggle is off.
+        assertFalse(shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled = false))
+    }
+
     // --- smartCapitalize (display-only sentence case, #42) ---
 
     @Test fun `empty string stays empty`() {

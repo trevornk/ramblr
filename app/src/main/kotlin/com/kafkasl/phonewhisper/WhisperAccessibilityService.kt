@@ -245,6 +245,17 @@ class WhisperAccessibilityService : AccessibilityService() {
     )
     private var streamingSession: StreamingPreviewSession? = null
 
+    // Live-preview *bubble* routing (bug fix: live-preview + preview-before-insert interaction) --
+    // when PreviewBeforeInjectToggle is on, streaming partials must never touch the real field
+    // pre-commit, so they're mirrored into the feedback bubble instead via this separate, much
+    // lighter throttling state (mirrors StreamingPreviewSession's lastInjectedText/At but holds no
+    // AccessibilityNodeInfo at all -- nothing here needs recycling). Reset at the start of every
+    // recording alongside endStreamingSession()/flushPendingStreamingHandoff(); left completely
+    // unused (always null/0L) on the Preview-before-insert-off path, which still writes to the
+    // real field via [streamingSession] exactly as before this fix.
+    private var lastBubblePartialText: String? = null
+    private var lastBubblePartialAtMs: Long = 0L
+
     // Captured once a recording concludes (#45): the streaming session's tracked span, preserved
     // here (instead of recycled outright) so the eventual final injection can still reconcile it
     // even when that injection is delayed behind a preview-before-inject commit (#40) that runs
@@ -1168,6 +1179,8 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         endStreamingSession()
         flushPendingStreamingHandoff()
+        lastBubblePartialText = null
+        lastBubblePartialAtMs = 0L
         val streamingActive = streamingTranscriberSlot.get() != null
         if (streamingActive) streamingTranscriberSlot.use { it.beginSession() }
 
@@ -1663,6 +1676,15 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (text.isBlank()) return
         val now = System.currentTimeMillis()
 
+        // Bug fix (live-preview + preview-before-insert interaction): when Preview-before-insert
+        // is on, the real field must never be touched until the user explicitly commits, so route
+        // the live partial into the floating feedback bubble instead of the field. When it's off,
+        // fall through to the existing direct-field-write behavior completely unchanged.
+        if (shouldRouteStreamingPartialToBubble(PreviewBeforeInjectToggle.isEnabled(this))) {
+            updateLivePreviewBubble(text, now)
+            return
+        }
+
         val session = streamingSession
         if (session == null) {
             val candidate = findDirectInjectionCandidate() ?: return
@@ -1687,6 +1709,25 @@ class WhisperAccessibilityService : AccessibilityService() {
         session.lastPartialLength = displayText.length
         session.lastInjectedText = text
         session.lastInjectedAtMs = now
+    }
+
+    /**
+     * Mirrors the live streaming partial into the feedback bubble instead of the real field
+     * (bug fix, live-preview + preview-before-insert interaction) -- reuses [showFeedback] with a
+     * long-ish duration (comfortably longer than the throttle interval) so the bubble doesn't
+     * flicker to hidden between two rapid partials. This is purely a "watch it type" display: it
+     * never touches [pendingPreview] or the [PREVIEW_TIMEOUT_MS] commit/discard clock, which only
+     * start once recording stops and cleanup actually produces a candidate (see [beginPreview]).
+     * Not touchable, since there's nothing to commit yet at this stage.
+     */
+    private fun updateLivePreviewBubble(text: String, nowMs: Long) {
+        if (!shouldInjectPartial(text, lastBubblePartialText, lastBubblePartialAtMs, nowMs, STREAMING_PARTIAL_MIN_INTERVAL_MS)) return
+        lastBubblePartialText = text
+        lastBubblePartialAtMs = nowMs
+        val displayText = smartCapitalize(text)
+        val truncated = displayText.take(PREVIEW_PREVIEW_CHARS)
+        val suffix = if (displayText.length > truncated.length) "…" else ""
+        showFeedback("$truncated$suffix", STREAMING_PARTIAL_MIN_INTERVAL_MS * 3, touchable = false)
     }
 
     /** First candidate from [findInjectionCandidates] that supports direct (ACTION_SET_TEXT)
