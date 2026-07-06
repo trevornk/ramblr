@@ -451,13 +451,39 @@ class LocalLlmWaterfallStepTest {
         assertEquals(0, transport.requestedUrls.size)
     }
 
-    @Test fun `the local step receives its own tighter step budget, not the full waterfall deadline`() {
-        // #98: the LOCAL_LLM step is bounded by LOCAL_LLM_STEP_BUDGET_MS specifically so a
-        // slow/aborted local attempt can't consume the whole waterfall deadline and starve a
-        // subsequent cloud step of its own timeout window.
+    @Test fun `a single LOCAL_LLM step -- the last step in the waterfall -- gets the full deadline, not the tighter budget`() {
+        // #37 follow-up: Trevor's real Local-only cleanup choice is exactly this shape (one
+        // LOCAL_LLM step, nothing after it). The tighter LOCAL_LLM_STEP_BUDGET_MS exists only to
+        // protect a *subsequent* step's own timeout window -- with no subsequent step, applying
+        // it anyway just turns a healthy-but-slightly-slower completion into a hard failure with
+        // llama_decode aborting mid-generation, which is the exact bug Trevor hit live on-device.
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("ok")))
         val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+
+        val before = System.currentTimeMillis()
+        execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
+        val after = System.currentTimeMillis()
+
+        val deadline = engine.deadlines.single()
+        // Full CLEANUP_WATERFALL_HARD_CAP_MS budget, not the tighter LOCAL_LLM_STEP_BUDGET_MS.
+        assertTrue(deadline >= before + CLEANUP_WATERFALL_HARD_CAP_MS)
+        assertTrue(deadline <= after + CLEANUP_WATERFALL_HARD_CAP_MS)
+    }
+
+    @Test fun `a LOCAL_LLM step followed by another step gets the tighter step budget, not the full waterfall deadline`() {
+        // #98: the LOCAL_LLM step is bounded by LOCAL_LLM_STEP_BUDGET_MS specifically so a
+        // slow/aborted local attempt can't consume the whole waterfall deadline and starve a
+        // subsequent cloud step of its own timeout window -- this still applies when a real
+        // fallback step follows it (unlike the single-step case above).
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned via cloud")))
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("ok")))
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
+            )
+        )
 
         val before = System.currentTimeMillis()
         execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
@@ -585,6 +611,43 @@ class LocalLlmWaterfallStepTest {
 
         assertEquals("cleaned via fallback", result.text)
         assertEquals(1, transport.requestedUrls.size)
+    }
+}
+
+/** Pure unit tests for [localLlmStepDeadline] (#37 follow-up) -- the exact bug Trevor hit live:
+ *  a single-step Local-only cleanup chain got the tight LOCAL_LLM_STEP_BUDGET_MS budget meant to
+ *  protect a subsequent step that didn't exist, causing llama_decode to abort mid-generation on
+ *  a genuinely healthy completion. */
+class LocalLlmStepDeadlineTest {
+    @Test fun `not the last step gets the tighter budget, capped at the overall deadline`() {
+        val now = 1_000_000L
+        val overallDeadline = now + CLEANUP_WATERFALL_HARD_CAP_MS
+        val deadline = localLlmStepDeadline(overallDeadline, now, isLastStep = false)
+        assertEquals(now + LOCAL_LLM_STEP_BUDGET_MS, deadline)
+    }
+
+    @Test fun `the last step gets the full overall deadline, not the tighter budget`() {
+        val now = 1_000_000L
+        val overallDeadline = now + CLEANUP_WATERFALL_HARD_CAP_MS
+        val deadline = localLlmStepDeadline(overallDeadline, now, isLastStep = true)
+        assertEquals(overallDeadline, deadline)
+    }
+
+    @Test fun `not the last step never exceeds the overall deadline even if the tighter budget would`() {
+        // If the overall waterfall deadline is already closer than LOCAL_LLM_STEP_BUDGET_MS away
+        // (e.g. a retry deep into an already-long-running waterfall), the local step must still
+        // respect the smaller of the two -- never run past the overall hard cap.
+        val now = 1_000_000L
+        val overallDeadline = now + 1_000L // less than LOCAL_LLM_STEP_BUDGET_MS (4000ms)
+        val deadline = localLlmStepDeadline(overallDeadline, now, isLastStep = false)
+        assertEquals(overallDeadline, deadline)
+    }
+
+    @Test fun `the last step ignores the tighter budget entirely, even when it would be smaller`() {
+        val now = 1_000_000L
+        val overallDeadline = now + 1_000L // less than LOCAL_LLM_STEP_BUDGET_MS
+        val deadline = localLlmStepDeadline(overallDeadline, now, isLastStep = true)
+        assertEquals(overallDeadline, deadline)
     }
 }
 

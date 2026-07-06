@@ -47,6 +47,20 @@ const val CLEANUP_WATERFALL_HARD_CAP_MS = 15_000L
 const val LOCAL_LLM_STEP_BUDGET_MS = 4_000L
 
 /**
+ * The actual wall-clock deadline a LOCAL_LLM step gets for one completion attempt (#37 follow-up,
+ * Trevor hit this directly with a single-step Local-only chain): [LOCAL_LLM_STEP_BUDGET_MS]
+ * exists to guarantee a *subsequent* step gets real time to run after a slow/stuck local attempt
+ * aborts -- but when the LOCAL_LLM step is the LAST step in the whole waterfall (no fallback
+ * follows it, e.g. a user's simple "Local" cleanup choice with nothing else configured), that
+ * same tight 4s budget serves no purpose: there's no later step it's protecting, so it just
+ * turns a genuinely healthy but slightly slower completion into an outright failure with no
+ * safety net. When [isLastStep] is true, this returns the full remaining [overallDeadlineAtMs]
+ * instead (matching every other step group's behavior, which always gets the real deadline).
+ */
+fun localLlmStepDeadline(overallDeadlineAtMs: Long, nowMs: Long, isLastStep: Boolean): Long =
+    if (isLastStep) overallDeadlineAtMs else minOf(overallDeadlineAtMs, nowMs + LOCAL_LLM_STEP_BUDGET_MS)
+
+/**
  * Pure grouping/ordering logic for [CleanupWaterfall.steps], split out from the network-calling
  * executor so it's independently unit-testable without any I/O. Groups consecutive steps that
  * share a [CleanupStepGroup] into one fail-fast unit: if the first step in a group fails due to
@@ -416,7 +430,7 @@ object CleanupWaterfallExecutor {
                 return
             }
 
-            performStep(steps[index], text, prompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs) { outcome ->
+            performStep(steps[index], text, prompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
                         cursor.recordSuccess(index, System.currentTimeMillis())
@@ -452,6 +466,7 @@ object CleanupWaterfallExecutor {
         localModelPath: () -> String?,
         cancelHolder: InFlightCall,
         deadlineAtMs: Long,
+        isLastStep: Boolean,
         callback: (CleanupStepOutcome) -> Unit,
     ) {
         // LOCAL_LLM branches before the credential check below: it's the one group with no
@@ -463,11 +478,12 @@ object CleanupWaterfallExecutor {
                 callback(CleanupStepOutcome.StepFailed("Local cleanup model not downloaded"))
                 return
             }
-            // Bounded to LOCAL_LLM_STEP_BUDGET_MS (#98), never further than the overall
-            // waterfall deadline -- so a slow/aborted local attempt still leaves real time for a
-            // subsequent cloud step's own CleanupStepTimeouts to run, instead of consuming the
-            // whole waterfall budget the way a single shared deadline previously did.
-            val localDeadlineAtMs = minOf(deadlineAtMs, System.currentTimeMillis() + LOCAL_LLM_STEP_BUDGET_MS)
+            // Bounded to LOCAL_LLM_STEP_BUDGET_MS (#98) so a slow/aborted local attempt still
+            // leaves real time for a subsequent cloud step's own CleanupStepTimeouts to run --
+            // except when this LOCAL_LLM step is the LAST step in the whole waterfall (#37
+            // follow-up: Trevor's simple "Local" cleanup choice has nothing after it to protect),
+            // in which case it gets the real remaining deadline like every other step group.
+            val localDeadlineAtMs = localLlmStepDeadline(deadlineAtMs, System.currentTimeMillis(), isLastStep)
             callback(
                 when (val result = localInference.complete(prompt, text, modelPath, localDeadlineAtMs, { cancelHolder.isCancelled })) {
                     is LocalInferenceResult.Success -> {
