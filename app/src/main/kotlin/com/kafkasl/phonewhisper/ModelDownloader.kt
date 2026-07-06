@@ -52,6 +52,23 @@ data class Model(
      *  the model was actually exported as (see sherpa-onnx's own bundled recognizer configs) rather
      *  than being hardcoded per catalog. Meaningless when [isStreaming] is false. */
     val streamingModelType: String = "zipformer",
+    /**
+     * Overrides [CleanupWaterfallExecutor]'s default `PostProcessor.SIMPLE_PROMPT` system message
+     * for this specific local-cleanup model, when non-null. Only meaningful when [isLocalCleanup]
+     * is true.
+     *
+     * Exists because SIMPLE_PROMPT's "plain-language instruction, no few-shot examples" design
+     * (see its own kdoc) assumes a *general-purpose* small instruct model with enough instruction-
+     * following margin to tolerate a system prompt it wasn't trained on verbatim. A model
+     * *fine-tuned* for this exact task -- like `mumble-cleanup-2stage`, a 0.5B LoRA fine-tune
+     * trained with completion-only masking against one fixed system prompt (see its model card at
+     * https://huggingface.co/amitashwini/mumble-cleanup-2stage) -- has no such margin: it was never
+     * shown any other instruction during training, so an unfamiliar prompt makes it echo/garble
+     * instead of clean (confirmed live 2026-07-06: Trevor got the system prompt itself injected as
+     * "cleaned" text). This field lets a fine-tuned catalog entry carry its own required prompt so
+     * [LocalCleanupProvider.selectedSystemPrompt] can pick it over SIMPLE_PROMPT.
+     */
+    val localSystemPrompt: String? = null,
 )
 
 // Listed best-quality-first (#54-followup): Trevor asked for models to read in that order at a
@@ -180,6 +197,20 @@ val LOCAL_CLEANUP_MODEL = Model(
 )
 
 /**
+ * Exact system prompt `mumble-cleanup-2stage` was fine-tuned against (completion-only masked,
+ * see [Model.localSystemPrompt]'s kdoc) -- copied verbatim from the model card's `llama-cli`
+ * usage example at https://huggingface.co/amitashwini/mumble-cleanup-2stage, not paraphrased.
+ * Deliberately NOT run through [PostProcessor.interpolateVocabulary]: this model was never
+ * trained with a vocabulary clause, so splicing one in would itself be an unfamiliar-prompt
+ * regression of the exact kind this override exists to avoid.
+ */
+const val MUMBLE_CLEANUP_SYSTEM_PROMPT = "You are a transcript cleanup tool. You receive raw " +
+    "speech to text output and return a cleaned version. Remove filler words and disfluencies " +
+    "(um, uh, er, ah, like as filler, you know), remove repeated words and false starts, and " +
+    "fix punctuation and capitalization. Do not reword, do not add anything the speaker did " +
+    "not say, and do not answer questions in the text. Output only the cleaned text."
+
+/**
  * Second local-cleanup catalog entry (Trevor-requested A/B test, following the real on-device
  * failure where LFM2.5-350M + Formal persona's DEV_PROMPT drifted into answering/chatting instead
  * of restyling the transcript -- see CleanupWaterfallExecutor's localPrompt fix). Unlike
@@ -217,9 +248,43 @@ val MUMBLE_CLEANUP_MODEL = Model(
     isLocalCleanup = true,
     sourceUrl = "https://huggingface.co/amitashwini/mumble-cleanup-2stage/resolve/main/mumble-cleanup-2stage-q4km.gguf",
     fileName = "mumble-cleanup-2stage-q4km.gguf",
+    localSystemPrompt = MUMBLE_CLEANUP_SYSTEM_PROMPT,
 )
 
-val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL, MUMBLE_CLEANUP_MODEL)
+/**
+ * Q4_0 self-quantized variant of [MUMBLE_CLEANUP_MODEL] (Trevor's direct request, following the
+ * Q4_K_M build blowing through the full 15s [CLEANUP_WATERFALL_HARD_CAP_MS] and getting aborted
+ * mid-decode -- see CleanupWaterfallExecutor's runWithDeadline/localLlmStepDeadline). No prebuilt
+ * Q4_0 GGUF exists upstream (checked amitashwini/mumble-cleanup-2stage's file listing directly:
+ * only f16 and Q4_K_M are published), so this was produced locally with the *same* llama-quantize
+ * tool vendored in this repo (llama.cpp/tools/quantize/quantize.cpp) that any GGUF publisher would
+ * use -- not a hand-rolled format, just a different target quant of the same upstream f16 weights,
+ * chosen because [LOCAL_CLEANUP_MODEL]'s own kdoc already documents Q4_0 hitting the faster ARM
+ * i8mm/dotprod dot-product kernels llama.cpp ships for this legacy quant type, where Q4_K_M does
+ * not benefit from the same path. This is purely a same-model speed test, not a quality claim.
+ *
+ * `sourceUrl = null`: unlike every other catalog entry, this file has no direct HF download URL --
+ * it exists only because it was quantized locally from `mumble-cleanup-2stage-f16.gguf`
+ * (verified via the same shasum -a 256 discipline before quantizing: f16 source hash
+ * `7659e5dc4df164b50be3dce70d80b191fe7ac378a9e8e44b92e5e4313ef9ff82`). If this ends up being kept
+ * long-term rather than deleted after the A/B test, it should be re-hosted (e.g. uploaded back to
+ * a HF repo Trevor controls) so [sourceUrl]/[fileName] work like every other entry instead of
+ * requiring manual `adb push`.
+ */
+val MUMBLE_CLEANUP_Q4_0_MODEL = Model(
+    name = "Mumble Cleanup 2-Stage (Q4_0, local speed test)",
+    archive = "mumble-cleanup-2stage-q4_0",
+    sizeMb = 336,
+    quality = "On-device cleanup · fine-tuned, Q4_0 speed test",
+    recommended = false,
+    sha256 = "000efc700d74636bc3885afe1d8f32dbb3fe813b8198dea79d8fd73efcc2c711",
+    isLocalCleanup = true,
+    sourceUrl = null,
+    fileName = "mumble-cleanup-2stage-q4_0.gguf",
+    localSystemPrompt = MUMBLE_CLEANUP_SYSTEM_PROMPT,
+)
+
+val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL, MUMBLE_CLEANUP_MODEL, MUMBLE_CLEANUP_Q4_0_MODEL)
 
 sealed class DownloadState {
     data class Downloading(val progress: Float) : DownloadState()

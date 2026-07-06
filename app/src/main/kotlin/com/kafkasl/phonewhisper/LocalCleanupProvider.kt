@@ -28,6 +28,16 @@ object LocalCleanupProvider {
         return ModelDownloader.resolveActiveModel(LOCAL_CLEANUP_MODEL_CATALOG, archive)
     }
 
+    /**
+     * The system prompt [CleanupWaterfallExecutor]'s LOCAL_LLM step should actually send for the
+     * currently [selectedModel] -- that model's own [Model.localSystemPrompt] when it declares
+     * one (a fine-tuned model like `mumble-cleanup-2stage` that requires its exact training
+     * prompt), otherwise [PostProcessor.SIMPLE_PROMPT] (the general-purpose default every other
+     * local model -- e.g. LFM2.5 -- is prompted with).
+     */
+    fun selectedSystemPrompt(ctx: Context): String =
+        selectedModel(ctx).localSystemPrompt ?: PostProcessor.SIMPLE_PROMPT
+
     // A `run(text, prompt, modelPath, engine)` helper used to live here, kdoc-claiming the
     // Settings "Test" button drove local steps through it -- it never had a production caller
     // (Test goes through PostProcessor.processWaterfall like everything else), and its trim was

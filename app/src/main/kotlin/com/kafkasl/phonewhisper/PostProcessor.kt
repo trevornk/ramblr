@@ -328,6 +328,10 @@ explanations, headers, or comments about your edits.
         cancelHolder: InFlightCall,
         credentialLookup: (ProviderKind) -> String,
         localModelPath: () -> String? = { null },
+        // See [CleanupWaterfallExecutor.execute]'s localPrompt param -- passed straight through so
+        // a fine-tuned local model (e.g. mumble-cleanup-2stage) can override SIMPLE_PROMPT with its
+        // own required training prompt via [LocalCleanupProvider.selectedSystemPrompt].
+        localPrompt: String = SIMPLE_PROMPT,
         callback: (Result) -> Unit,
     ) {
         val waterfall = ProviderChainRuntime.cleanupWaterfallFor(chain)
@@ -360,6 +364,7 @@ explanations, headers, or comments about your edits.
             legacyBaseUrl = DEFAULT_BASE_URL,
             credentialLookup = { slot -> credentialLookup(ProviderChainRuntime.providerKindForCleanupSlot(slot)) },
             localModelPath = localModelPath,
+            localPrompt = localPrompt,
             callback = callback,
         )
     }
