@@ -302,6 +302,7 @@ class CleanupActivity : BaseSettingsActivity() {
             prefs().edit().putString("post_processing_prompt", saved).apply()
         } else {
             val persona = CleanupPersonas.fromKey(key)
+            PerAppPersonaStore.record(this, WhisperAccessibilityService.foregroundPackageNameOrNull(), persona)
             prefs().edit()
                 .putString("cleanup_style", persona.key)
                 .putString("post_processing_prompt", CleanupPersonas.promptForExplicitSelection(persona))

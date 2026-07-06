@@ -49,6 +49,7 @@ import kotlin.concurrent.thread
 class AdvancedActivity : BaseSettingsActivity() {
 
     private lateinit var debugVisibilitySwitch: MaterialSwitch
+    private lateinit var perAppPersonaSwitch: MaterialSwitch
     private lateinit var vocabularyRowSub: TextView
     private lateinit var historyEnabledSwitch: MaterialSwitch
 
@@ -110,6 +111,21 @@ class AdvancedActivity : BaseSettingsActivity() {
             debugVisibilitySwitch.isChecked = newVal
         }
         root.addView(debugVisibilityRow)
+
+        perAppPersonaSwitch = MaterialSwitch(this).apply {
+            isChecked = PerAppPersonaToggle.isEnabled(this@AdvancedActivity)
+            isClickable = false
+        }
+        val perAppPersonaRow = settingsRow(
+            "Remember cleanup style per app",
+            "Auto-selects the last style you picked for each app instead of always using your global default",
+            perAppPersonaSwitch
+        ) {
+            val newVal = !perAppPersonaSwitch.isChecked
+            PerAppPersonaToggle.setEnabled(this, newVal)
+            perAppPersonaSwitch.isChecked = newVal
+        }
+        root.addView(perAppPersonaRow)
 
         // --- Overlay appearance (#43/#53) ---
         root.addView(sectionHeader("Overlay appearance"))
