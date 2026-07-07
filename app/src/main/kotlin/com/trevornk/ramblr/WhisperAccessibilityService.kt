@@ -1132,7 +1132,15 @@ class WhisperAccessibilityService : AccessibilityService() {
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
 
-        val menu = buildStyleMenuContent()
+        val menu = buildStyleMenuContent().apply {
+            // Invisible until positioned (see menu.post below) -- WRAP_CONTENT's real size isn't
+            // known until after this first layout pass, so the window is added at a provisional
+            // ring-anchored x/y (usually the right screen edge) purely to let it measure itself.
+            // Without this, that provisional position was visibly rendered for one frame: a brief
+            // flash of the menu box in the wrong spot before it jumped to its real position above
+            // the ring.
+            visibility = View.INVISIBLE
+        }
         val menuParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -1157,6 +1165,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             if (styleMenuView !== menu) return@post // dismissed already
             positionStyleMenu(menuParams, ringParams, ringSize, menu.width, menu.height)
             wm.updateViewLayout(menu, menuParams)
+            menu.visibility = View.VISIBLE
         }
     }
 
