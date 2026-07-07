@@ -1,6 +1,6 @@
 # Privacy Policy for Ramblr
 
-Ramblr is an Android dictation app that records speech, transcribes it, and inserts the result into text fields across apps. Ramblr is a private fork of [kafkasl/phone-whisper](https://github.com/kafkasl/phone-whisper).
+Ramblr is an Android dictation app that records speech, transcribes it, and inserts the result into text fields across apps.
 
 ## Data handling
 
@@ -73,4 +73,4 @@ Third-party services you choose to use, such as OpenAI, may process data accordi
 
 ## Contact
 
-For questions about privacy, contact: pol.avms@gmail.com
+For questions about privacy, contact: trevor@nashkellermedia.com
