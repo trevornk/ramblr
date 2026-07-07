@@ -8,6 +8,20 @@ import android.content.SharedPreferences
  * Transparently migrates any legacy plaintext value from the old
  * "ramblr" prefs file the first time the key is read, then clears
  * the plaintext copy.
+ *
+ * Also mirrors every write into [ProviderCredentialStore]'s OPENAI slot (see [setApiKey]).
+ * Without this, a key entered here (e.g. via the onboarding wizard's "Step 3/4: OpenAI API Key"
+ * dialog, or Settings' shared cloud-key row) can silently never reach the provider chain: on a
+ * fresh install [WhisperAccessibilityService.ensureProviderChainMigrated] runs
+ * [ProviderChainMigration.migrate] the moment Accessibility is turned on -- Step 2, BEFORE the
+ * user is ever asked for a key at Step 3/4 -- and that migration is a permanent one-shot flagged
+ * by [ProviderChainMigration.isMigrated]. It reads whatever's in this store at that instant (still
+ * blank), seeds nothing into [ProviderCredentialStore], and never runs again. The key then saves
+ * successfully into this store a moment later, but [ProviderCredentialStore] -- what the actual
+ * provider chain / [com.trevornk.ramblr.CloudProviderActivity] reads at runtime -- never learns
+ * about it, so cloud transcription/cleanup silently falls through to the next configured provider
+ * with no error. Mirroring on every write (both a real key and an explicit clear) keeps the two
+ * stores from ever drifting again, regardless of onboarding step ordering.
  */
 object ApiKeyStore {
     private const val KEY_API_KEY = "api_key"
@@ -22,6 +36,7 @@ object ApiKeyStore {
 
     fun setApiKey(context: Context, apiKey: String) {
         securePrefs(context).edit().putString(KEY_API_KEY, apiKey).apply()
+        ProviderCredentialStore.set(context, ProviderKind.OPENAI, apiKey)
     }
 
     fun maskForDisplay(apiKey: String): String = when {
