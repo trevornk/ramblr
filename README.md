@@ -148,14 +148,14 @@ OMNIROUTE_BASE_URL=https://your-gateway.example/v1
 ```
 
 Leave it unset and the option simply doesn't appear in the "Add provider" picker; nothing else
-about the app changes. See `app/src/main/kotlin/com/kafkasl/phonewhisper/OmniRoute.kt`.
+about the app changes. See `app/src/main/kotlin/com/trevornk/ramblr/OmniRoute.kt`.
 
 ## Local models
 
 Models are downloaded on demand and stored in app-private storage under:
 
 ```
-/data/data/com.kafkasl.phonewhisper/files/models/
+/data/data/com.trevornk.ramblr/files/models/
 ```
 
 Current transcription catalog:
@@ -253,7 +253,7 @@ prompts side by side, there's a manual eval harness:
   that's already clean and needs no restructuring). `eval_samples/NOTES.md` is a human-reference
   companion (not read by the harness) noting what a *good* cleanup output should preserve or fix
   for each sample — use it when judging a report.
-- The harness itself is `app/src/test/kotlin/com/kafkasl/phonewhisper/tools/EvalHarness.kt`, a
+- The harness itself is `app/src/test/kotlin/com/trevornk/ramblr/tools/EvalHarness.kt`, a
   standalone `main()` — **not** a JUnit test. It compiles as part of `make test`'s Kotlin
   compilation (so it's checked for compile errors), but JUnit never discovers or runs it, so it
   has no effect on `make test`, `make build`, or CI.
@@ -358,7 +358,7 @@ export JAVA_HOME=/path/to/jdk-17
 ```
 
 Please keep diffs focused and add/update tests for any new logic — see existing tests under
-`app/src/test/kotlin/com/kafkasl/phonewhisper/` for the project's conventions (small, well-named
+`app/src/test/kotlin/com/trevornk/ramblr/` for the project's conventions (small, well-named
 `@Test` functions, one behavior per test, pure logic factored out of Android classes wherever
 possible so it's unit-testable without Robolectric).
 

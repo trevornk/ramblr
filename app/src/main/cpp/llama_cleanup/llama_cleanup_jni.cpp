@@ -4,7 +4,7 @@
 //
 // Adaptation from the original (diff summary -- see #37 closing comment for the full diff):
 //   - JNI symbol names renamed from Java_io_shubham0204_smollm_SmolLM_* to
-//     Java_com_kafkasl_phonewhisper_LlamaCppInference_*, matching this app's package/class.
+//     Java_com_trevornk_ramblr_LlamaCppInference_*, matching this app's package/class.
 //   - startCompletion() no longer returns jboolean (Jinja-vs-legacy template info); Ramblr's
 //     Kotlin wrapper (see LlamaCppInference.kt) doesn't surface that distinction, so the
 //     original two functions (jboolean-returning startCompletion + separate
@@ -23,7 +23,7 @@
 #include <jni.h>
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_kafkasl_phonewhisper_LlamaCppInference_loadModel(JNIEnv* env, jobject thiz, jstring modelPath, jfloat minP,
+Java_com_trevornk_ramblr_LlamaCppInference_loadModel(JNIEnv* env, jobject thiz, jstring modelPath, jfloat minP,
                                                            jfloat temperature, jboolean storeChats, jlong contextSize,
                                                            jstring chatTemplate, jint nThreads, jboolean useMmap,
                                                            jboolean useMlock) {
@@ -52,7 +52,7 @@ Java_com_kafkasl_phonewhisper_LlamaCppInference_loadModel(JNIEnv* env, jobject t
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_kafkasl_phonewhisper_LlamaCppInference_addChatMessage(JNIEnv* env, jobject thiz, jlong modelPtr,
+Java_com_trevornk_ramblr_LlamaCppInference_addChatMessage(JNIEnv* env, jobject thiz, jlong modelPtr,
                                                                 jstring message, jstring role) {
     jboolean    isCopy       = true;
     const char* messageCstr  = env->GetStringUTFChars(message, &isCopy);
@@ -64,20 +64,20 @@ Java_com_kafkasl_phonewhisper_LlamaCppInference_addChatMessage(JNIEnv* env, jobj
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_kafkasl_phonewhisper_LlamaCppInference_close(JNIEnv* env, jobject thiz, jlong modelPtr) {
+Java_com_trevornk_ramblr_LlamaCppInference_close(JNIEnv* env, jobject thiz, jlong modelPtr) {
     auto* llmInference = reinterpret_cast<LLMInference*>(modelPtr);
     delete llmInference;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_kafkasl_phonewhisper_LlamaCppInference_setInferenceBudgetMs(JNIEnv* env, jobject thiz, jlong modelPtr,
+Java_com_trevornk_ramblr_LlamaCppInference_setInferenceBudgetMs(JNIEnv* env, jobject thiz, jlong modelPtr,
                                                                      jlong budgetMs) {
     auto* llmInference = reinterpret_cast<LLMInference*>(modelPtr);
     llmInference->setInferenceBudgetMs(budgetMs);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_kafkasl_phonewhisper_LlamaCppInference_startCompletion(JNIEnv* env, jobject thiz, jlong modelPtr,
+Java_com_trevornk_ramblr_LlamaCppInference_startCompletion(JNIEnv* env, jobject thiz, jlong modelPtr,
                                                                  jstring prompt) {
     jboolean    isCopy       = true;
     const char* promptCstr   = env->GetStringUTFChars(prompt, &isCopy);
@@ -93,7 +93,7 @@ Java_com_kafkasl_phonewhisper_LlamaCppInference_startCompletion(JNIEnv* env, job
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_kafkasl_phonewhisper_LlamaCppInference_completionLoop(JNIEnv* env, jobject thiz, jlong modelPtr) {
+Java_com_trevornk_ramblr_LlamaCppInference_completionLoop(JNIEnv* env, jobject thiz, jlong modelPtr) {
     auto* llmInference = reinterpret_cast<LLMInference*>(modelPtr);
     try {
         std::string response = llmInference->completionLoop();
@@ -115,7 +115,7 @@ Java_com_kafkasl_phonewhisper_LlamaCppInference_completionLoop(JNIEnv* env, jobj
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_kafkasl_phonewhisper_LlamaCppInference_stopCompletion(JNIEnv* env, jobject thiz, jlong modelPtr) {
+Java_com_trevornk_ramblr_LlamaCppInference_stopCompletion(JNIEnv* env, jobject thiz, jlong modelPtr) {
     auto* llmInference = reinterpret_cast<LLMInference*>(modelPtr);
     llmInference->stopCompletion();
 }

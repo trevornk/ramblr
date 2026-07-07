@@ -1,5 +1,5 @@
 // Drives the real, production LLMInference.cpp exactly the way LlamaCppInference.kt's complete()
-// does (see app/src/main/kotlin/com/kafkasl/phonewhisper/LlamaCppInference.kt): one addChatMessage
+// does (see app/src/main/kotlin/com/trevornk/ramblr/LlamaCppInference.kt): one addChatMessage
 // call for the system prompt, then startCompletion for the user text, then completionLoop until
 // "[EOG]" -- capped at the same 512 pieces MAX_RESPONSE_TOKENS enforces (#60/#87). Same defaults
 // LlamaCppInference.kt hardcodes (minP/temperature/contextSize/nThreads/useMmap/useMlock) so this
