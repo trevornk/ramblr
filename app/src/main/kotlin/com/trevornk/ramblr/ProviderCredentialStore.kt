@@ -17,11 +17,13 @@ import android.content.SharedPreferences
  * [androidx.security.crypto.EncryptedSharedPreferences] via [SecurePrefsFactory], and the same
  * masking convention (last 4 chars, "***xxxx").
  *
- * Deliberately does NOT delete or supersede [ApiKeyStore]/[CleanupCredentialStore] yet -- both
- * are still read directly by live production code ([WhisperAccessibilityService],
- * [CleanupWaterfallExecutor]) until Phase 2 rewires those call sites onto this store and the new
- * resolver. This store is populated by [ProviderChainMigration] and is otherwise unused until
- * Phase 2 lands.
+ * Deliberately does not delete [ApiKeyStore]/[CleanupCredentialStore]'s underlying encrypted
+ * prefs files on disk (a user's already-stored secrets stay put, no silent data loss) -- but as
+ * of the #95 Phase 3 restructure, no live code reads or writes either of those two stores
+ * anymore. [ApiKeyStore] survives only as [ProviderChainMigration]'s one-time legacy input;
+ * [CleanupCredentialStore]'s three slots are likewise migration-only. This store is populated by
+ * [ProviderChainMigration] and is the sole live credential source for every provider going
+ * forward.
  */
 object ProviderCredentialStore {
     private const val SECURE_PREFS_NAME = "ramblr_provider_credentials"

@@ -149,48 +149,6 @@ abstract class BaseSettingsActivity : AppCompatActivity() {
             .show()
     }
 
-    /** Subtitle text for the shared OpenAI API key row (#49/#93) -- identical wherever the row is
-     *  shown, since it's the same [ApiKeyStore]-backed value regardless of which screen shows it. */
-    protected fun apiKeyRowSubtitleText(): String {
-        val apiKey = ApiKeyStore.getApiKey(this)
-        return if (apiKey.isBlank()) "Tap to set" else ApiKeyStore.maskForDisplay(apiKey)
-    }
-
-    /**
-     * The OpenAI API key dialog (#49), factored out so it can be shown identically from both
-     * TranscriptionActivity's cloud sub-section and CleanupActivity's cloud sub-section (#93) --
-     * one underlying [ApiKeyStore] value, shown contextually wherever it's actually relevant,
-     * instead of living in one physical place a Cloud-Cleanup user had to go hunting for.
-     */
-    protected fun promptApiKey(onSaved: () -> Unit) {
-        val existingKey = ApiKeyStore.getApiKey(this)
-        val input = android.widget.EditText(this).apply {
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-            hint = if (existingKey.isBlank()) "sk-..." else ApiKeyStore.maskForDisplay(existingKey)
-        }
-        android.app.AlertDialog.Builder(this)
-            .setTitle("OpenAI API Key")
-            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
-            .setPositiveButton("Save") { _, _ ->
-                val entered = input.text.toString().trim()
-                when {
-                    entered.isNotBlank() -> {
-                        ApiKeyStore.setApiKey(this, entered)
-                        onSaved()
-                    }
-                    // Saving blank over a stored key is the only way to remove it -- once
-                    // stored, a secret used to stay in encrypted prefs forever (#89).
-                    existingKey.isNotBlank() -> confirmRemoveSecret("OpenAI API key") {
-                        ApiKeyStore.setApiKey(this, "")
-                        onSaved()
-                    }
-                    else -> onSaved()
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
     companion object {
         const val LP_MATCH = LinearLayout.LayoutParams.MATCH_PARENT
         const val LP_WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
