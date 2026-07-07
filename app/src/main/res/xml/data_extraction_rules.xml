@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  API 31+ data extraction rules, covering both cloud backup (Google account, new-device restore
+  after reinstall) and device-to-device transfer (Android's "Copy your data" flow). Mirrors
+  backup_rules.xml's include/exclude decisions; see that file's doc comment for the full
+  rationale on why the EncryptedSharedPreferences files must never be included.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="sharedpref" path="ramblr.xml" />
+        <include domain="file" path="overlay_icon.png" />
+
+        <exclude domain="sharedpref" path="ramblr_secure.xml" />
+        <exclude domain="sharedpref" path="ramblr_provider_credentials.xml" />
+        <exclude domain="sharedpref" path="ramblr_cleanup_credentials.xml" />
+    </cloud-backup>
+
+    <device-transfer>
+        <include domain="sharedpref" path="ramblr.xml" />
+        <include domain="file" path="overlay_icon.png" />
+
+        <exclude domain="sharedpref" path="ramblr_secure.xml" />
+        <exclude domain="sharedpref" path="ramblr_provider_credentials.xml" />
+        <exclude domain="sharedpref" path="ramblr_cleanup_credentials.xml" />
+    </device-transfer>
+</data-extraction-rules>
