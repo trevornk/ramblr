@@ -70,7 +70,3 @@ Ramblr is not designed to monitor browsing, collect screen content for analytics
 I do not run a backend for Ramblr and do not collect user accounts, analytics, or uploaded recordings myself.
 
 Third-party services you choose to use, such as OpenAI, may process data according to their own terms and privacy policies.
-
-## Contact
-
-For questions about privacy, contact: trevor@nashkellermedia.com

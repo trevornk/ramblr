@@ -1,7 +1,7 @@
 # Ramblr — STT Dictation Product & Architecture Plan
 
 **Date:** 2026-07-02
-**Repo:** `trevornk/ramblr` (private fork of `kafkasl/phone-whisper`)
+**Repo:** `trevornk/ramblr` 
 **Status:** Approved planning baseline. Issues #1–#23 existed before this plan; issues #24+ were created by it. GitHub milestones M1–M4 mirror the milestones below.
 
 ## 1. Product goal

@@ -18,12 +18,12 @@ val localProperties = Properties().apply {
 val omniRouteBaseUrl: String = (localProperties.getProperty("OMNIROUTE_BASE_URL") ?: "").trim()
 
 android {
-    namespace = "com.kafkasl.phonewhisper"
+    namespace = "com.trevornk.ramblr"
     compileSdk = 34
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "com.kafkasl.phonewhisper"
+        applicationId = "com.trevornk.ramblr"
         minSdk = 30
         targetSdk = 34
         versionCode = 2
@@ -95,7 +95,7 @@ tasks.register<JavaExec>("runEvalHarness") {
         "the real OpenAI API and writes a before/after report. Costs real API credits; " +
         "not part of build/test/check."
     dependsOn("compileDebugUnitTestKotlin")
-    mainClass.set("com.kafkasl.phonewhisper.tools.EvalHarnessKt")
+    mainClass.set("com.trevornk.ramblr.tools.EvalHarnessKt")
     classpath = tasks.named<Test>("testDebugUnitTest").get().classpath
 }
 
