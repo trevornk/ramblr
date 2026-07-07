@@ -1,6 +1,7 @@
 package com.trevornk.ramblr
 
 import android.accessibilityservice.AccessibilityService
+import android.app.KeyguardManager
 import android.content.ClipboardManager
 import android.content.ComponentCallbacks2
 import android.content.Context
@@ -197,6 +198,11 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     /** Registered in [registerNetworkCallback]; null when registration failed or after teardown. */
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    /** Registered in [registerScreenStateReceiver]; null when registration failed or after
+     *  teardown. Reapplies overlay visibility on SCREEN_ON/SCREEN_OFF/USER_PRESENT so the ring
+     *  hides the instant the device locks and reappears right after unlock (see
+     *  [overlayShouldBeVisible]'s keyguard doc). */
+    private var screenStateReceiver: android.content.BroadcastReceiver? = null
     @Volatile private var activeToken: Int = 0
     private val handler = Handler(Looper.getMainLooper())
     private val hideFeedback = Runnable {
@@ -289,6 +295,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         CustomPersonaStore.ensureLegacySeeded(this)
         showOverlay()
         registerNetworkCallback()
+        registerScreenStateReceiver()
         thread { cleanupOrphanedRecordings() }
         thread { ModelDownloader.pruneOrphanedModelDirs(this) }
         // Try to load local model in background
@@ -345,6 +352,44 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Reapplies overlay visibility on SCREEN_ON, SCREEN_OFF, and USER_PRESENT so the ring hides
+     * the instant the device locks and reappears right after unlock, closing the window where a
+     * TYPE_ACCESSIBILITY_OVERLAY would otherwise sit visible and tappable over the lock screen
+     * (see [overlayShouldBeVisible]'s doc for the security rationale). SCREEN_OFF is included
+     * (not just USER_PRESENT/SCREEN_ON) because [KeyguardManager.isKeyguardLocked] can already be
+     * true the instant the screen turns off, and there's no reason to wait for the next event to
+     * hide it. All three are sticky-free protected broadcasts, so no permission is required.
+     */
+    private fun registerScreenStateReceiver() {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                applyOverlayVisibility()
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        try {
+            registerReceiver(receiver, filter)
+            screenStateReceiver = receiver
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not register screen state receiver; overlay may stay visible over the lock screen", e)
+        }
+    }
+
+    private fun unregisterScreenStateReceiver() {
+        val receiver = screenStateReceiver ?: return
+        screenStateReceiver = null
+        try {
+            unregisterReceiver(receiver)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to unregister screen state receiver", e)
+        }
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
 
@@ -362,6 +407,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         instance = null
         unregisterNetworkCallback()
+        unregisterScreenStateReceiver()
         // If a recording is in progress, force the reader thread off RECORDING/TRANSCRIBING so
         // it tears down the AudioRecord and discards buffered PCM instead of leaking the mic or
         // silently continuing to record after the service appears off.
@@ -738,15 +784,18 @@ class WhisperAccessibilityService : AccessibilityService() {
     /**
      * Applies [overlayShouldBeVisible] to the live overlay views (#35, Feature B): hides the ring
      * (draw + touch) and dismisses the feedback bubble and any open style menu (#53) while
-     * MainActivity is foregrounded OR the user has explicitly hidden the icon via the long-press
-     * "Hide icon" row ([IconHiddenState]). This only toggles presentation -- [layoutParams] and
-     * [feedbackLayoutParams] stay non-null throughout, so drag-to-reposition is untouched and the
-     * overlay reappears exactly where it was left. Recording/transcription state is never touched
-     * here. Internal (not private) so [RestoreIconReceiver] can re-apply visibility immediately
-     * after flipping [IconHiddenState] back off from outside this class.
+     * MainActivity is foregrounded, the user has explicitly hidden the icon via the long-press
+     * "Hide icon" row ([IconHiddenState]), OR the device is currently locked at the keyguard (see
+     * [isKeyguardLocked] -- closes a real unauthorized-mic-activation gap, since
+     * TYPE_ACCESSIBILITY_OVERLAY windows otherwise draw on top of the lock screen by design). This
+     * only toggles presentation -- [layoutParams] and [feedbackLayoutParams] stay non-null
+     * throughout, so drag-to-reposition is untouched and the overlay reappears exactly where it
+     * was left. Recording/transcription state is never touched here. Internal (not private) so
+     * [RestoreIconReceiver] can re-apply visibility immediately after flipping [IconHiddenState]
+     * back off from outside this class.
      */
     internal fun applyOverlayVisibility() {
-        val visible = overlayShouldBeVisible(mainActivityForeground, IconHiddenState.isHidden(this))
+        val visible = overlayShouldBeVisible(mainActivityForeground, IconHiddenState.isHidden(this), isKeyguardLocked())
         setOverlayTouchable(visible)
         overlayView?.visibility = if (visible) View.VISIBLE else View.GONE
         if (!visible) {
@@ -754,6 +803,15 @@ class WhisperAccessibilityService : AccessibilityService() {
             dismissStyleMenu()
         }
     }
+
+    /** Whether the device is currently locked at the keyguard -- see [overlayShouldBeVisible]'s
+     *  doc for why this gates overlay visibility. Uses [KeyguardManager.isKeyguardLocked], which
+     *  covers both a secure lock (PIN/pattern/biometric) and a plain swipe-to-unlock keyguard;
+     *  fails open to "not locked" only if the system service is somehow unavailable, since an
+     *  overlay staying hidden a moment too long is a far smaller problem than one appearing where
+     *  it shouldn't. */
+    private fun isKeyguardLocked(): Boolean =
+        (getSystemService(KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked ?: false
 
     /** Adds/removes FLAG_NOT_TOUCHABLE on the ring window so a hidden overlay (#35) lets touches
      *  fall through to whatever's underneath -- e.g. MainActivity's Settings switches -- instead
