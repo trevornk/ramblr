@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Legacy Auto Backup rules, used on API 30 (Ramblr's minSdk) through API 30. API 31+ devices use
+  data_extraction_rules.xml instead (see android:dataExtractionRules in AndroidManifest.xml), but
+  this file is kept as the pre-31 fallback and because some OEM backup agents still consult it.
+
+  Everything in the plain "ramblr" SharedPreferences file is safe and desirable to restore to a
+  new device: Advanced settings (auto-hide delay/toggle, peek sliver size, raw-text retry, history
+  enabled), overlay appearance, personas, provider chain ordering, and per-app persona mappings all
+  live there and have zero device-specific state baked in.
+
+  The Keystore-backed EncryptedSharedPreferences files are deliberately excluded (there are three:
+  ramblr_secure.xml for the legacy single OpenAI key, ramblr_provider_credentials.xml for the
+  cloud provider chain's per-provider keys, and ramblr_cleanup_credentials.xml for cleanup-specific
+  credentials (see ApiKeyStore/ProviderCredentialStore/CleanupCredentialStore). All three are
+  encrypted with a key generated in, and never leaving, this specific device's Android Keystore
+  (hardware-backed on most devices). If their ciphertext were restored to a new phone, the new
+  device's Keystore has no way to produce the same key, so every read would either come back empty
+  or throw: silently broken cloud credentials at best, a crash on first read at worst. Excluding
+  them means the user re-enters their API key(s) once on a new device, which is the correct/safe
+  behavior anyway.
+
+  Note this file uses include-only semantics: once any <include> is present, everything NOT
+  explicitly included is already omitted by default. The <exclude> lines below are kept anyway,
+  as an explicit, self-documenting guard against ever regressing this by accident (e.g. a future
+  wildcard include). ramblr_model_catalog_cache.xml (a plain, non-secret network cache) is
+  intentionally omitted from both the include and exclude lists: there's nothing sensitive in it,
+  but it's a cache and will simply refetch, so it isn't worth restoring either.
+-->
+<full-backup-content>
+    <include domain="sharedpref" path="ramblr.xml" />
+
+    <!-- User's chosen custom overlay icon (#43/#53): a small PNG in app-private files storage,
+         not device-specific, safe and desirable to carry over to a new device. -->
+    <include domain="file" path="overlay_icon.png" />
+
+    <exclude domain="sharedpref" path="ramblr_secure.xml" />
+    <exclude domain="sharedpref" path="ramblr_provider_credentials.xml" />
+    <exclude domain="sharedpref" path="ramblr_cleanup_credentials.xml" />
+</full-backup-content>
