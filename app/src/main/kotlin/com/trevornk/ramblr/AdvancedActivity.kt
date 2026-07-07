@@ -51,6 +51,7 @@ class AdvancedActivity : BaseSettingsActivity() {
     private lateinit var debugVisibilitySwitch: MaterialSwitch
     private lateinit var perAppPersonaSwitch: MaterialSwitch
     private lateinit var hideIconSwitch: MaterialSwitch
+    private lateinit var autoPeekSwitch: MaterialSwitch
     private lateinit var vocabularyRowSub: TextView
     private lateinit var historyEnabledSwitch: MaterialSwitch
 
@@ -142,6 +143,22 @@ class AdvancedActivity : BaseSettingsActivity() {
             hideIconSwitch.isChecked = newVal
         }
         root.addView(hideIconRow)
+
+        autoPeekSwitch = MaterialSwitch(this).apply {
+            isChecked = AutoPeekToggle.isEnabled(this@AdvancedActivity)
+            isClickable = false
+        }
+        val autoPeekRow = settingsRow(
+            "Auto-hide icon when idle",
+            "Slides the icon toward the screen edge after a few seconds of inactivity. Turn off to keep it fully visible at all times",
+            autoPeekSwitch
+        ) {
+            val newVal = !autoPeekSwitch.isChecked
+            AutoPeekToggle.setEnabled(this, newVal)
+            autoPeekSwitch.isChecked = newVal
+            if (!newVal) WhisperAccessibilityService.instance?.restoreFromPeekIfPeeked()
+        }
+        root.addView(autoPeekRow)
 
         // Fallback restore path (#Feature B): if the icon is currently hidden -- including for
         // someone who turns the toggle above off while already hidden -- give them a way back

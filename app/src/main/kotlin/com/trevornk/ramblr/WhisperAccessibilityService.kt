@@ -10,6 +10,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.net.ConnectivityManager
@@ -668,6 +669,27 @@ class WhisperAccessibilityService : AccessibilityService() {
         applyButtonAppearance(COLOR_IDLE)
         applyOverlayVisibility()
         armIdlePeekTimer()
+        applyGestureExclusion(overlay, ringSize)
+    }
+
+    /**
+     * Reserves the ring's own bounds as a system-gesture-exclusion zone so a tap that lands on it
+     * near the screen edge (especially while peeked -- see RingPeek/attemptAutoPeek, which parks
+     * most of the ring off-screen on purpose) is delivered to this overlay instead of being
+     * eligible for the system edge-swipe-for-home/recents gesture to steal first. Confirmed via a
+     * real on-device logcat capture: without this, a tap on the peeked ring (parked at
+     * screenW - 14dp, deep inside the edge gesture inset) was consumed by
+     * `InputDispatcher: Channel [Gesture Monitor] swipe-up is stealing input gesture`, backgrounding
+     * the foreground app into the recents/home transition instead of ever reaching our
+     * OnTouchListener -- our overlay never saw the touch at all, so `restoreFromPeek()` never fired
+     * and the ring was left exactly where it was, which read as "it just disappears and comes back
+     * still hidden." The exclusion rect is in the view's own local coordinate space (0,0 to its own
+     * width/height), so it travels with the window automatically across drag-to-reposition, peek,
+     * and fold/rotation repositioning without needing to be reapplied on every layout change.
+     * Requires API 29+ (minSdk is 30, see build.gradle.kts) so no version guard is needed.
+     */
+    private fun applyGestureExclusion(overlay: View, ringSize: Int) {
+        overlay.setSystemGestureExclusionRects(listOf(Rect(0, 0, ringSize, ringSize)))
     }
 
     /** Scales [valueDp] (one of [BTN_DP]/[PAD_DP], defined against the [RING_DP] reference size)
@@ -758,9 +780,13 @@ class WhisperAccessibilityService : AccessibilityService() {
     /** Fires once [RingPeek.IDLE_TIMEOUT_MS] has elapsed with no ring interaction. Never peeks
      *  while actively recording or while cleanup/transcription is in flight (RingPeek.shouldAutoPeek),
      *  nor while the ring itself isn't currently showing (e.g. MainActivity foregrounded, #35) or
-     *  already peeked. */
+     *  already peeked, nor at all while the user has turned auto-peek off in Advanced settings
+     *  (see [AutoPeekToggle]) -- the idle timer keeps re-arming itself in that case so the ring is
+     *  ready to peek again the moment the setting is turned back on, without needing a service
+     *  restart. */
     private fun attemptAutoPeek() {
         if (isPeeked) return
+        if (!AutoPeekToggle.isEnabled(this)) { armIdlePeekTimer(); return }
         if (!RingPeek.shouldAutoPeek(stateMachine.current())) { armIdlePeekTimer(); return }
         val overlay = overlayView ?: return
         if (overlay.visibility != View.VISIBLE) { armIdlePeekTimer(); return }
@@ -787,6 +813,15 @@ class WhisperAccessibilityService : AccessibilityService() {
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         animateRingX(params, wm, targetX)
         armIdlePeekTimer()
+    }
+
+    /** Called from [AdvancedActivity] right after the user flips [AutoPeekToggle] off, so a ring
+     *  that's already peeked at that moment snaps back to full visibility immediately instead of
+     *  silently staying peeked until the next unrelated touch happens to restore it. No-ops if the
+     *  ring isn't currently peeked. Internal (not private) for the same cross-class-call reason as
+     *  [applyOverlayVisibility]. */
+    internal fun restoreFromPeekIfPeeked() {
+        if (isPeeked) restoreFromPeek()
     }
 
     /** Animates the ring window's x from its current value to [targetX], keeping the feedback
