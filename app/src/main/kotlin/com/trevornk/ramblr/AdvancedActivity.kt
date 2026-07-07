@@ -52,6 +52,9 @@ class AdvancedActivity : BaseSettingsActivity() {
     private lateinit var perAppPersonaSwitch: MaterialSwitch
     private lateinit var hideIconSwitch: MaterialSwitch
     private lateinit var autoPeekSwitch: MaterialSwitch
+    private lateinit var autoPeekDelayRow: LinearLayout
+    private lateinit var peekSizeRow: LinearLayout
+    private lateinit var rawTextRetrySwitch: MaterialSwitch
     private lateinit var vocabularyRowSub: TextView
     private lateinit var historyEnabledSwitch: MaterialSwitch
 
@@ -160,6 +163,35 @@ class AdvancedActivity : BaseSettingsActivity() {
         }
         root.addView(autoPeekRow)
 
+        autoPeekDelayRow = settingsRow(
+            "Auto-hide delay",
+            autoPeekDelaySummary(),
+            indent = 1
+        ) { promptAutoPeekDelay() }
+        root.addView(autoPeekDelayRow)
+
+        peekSizeRow = settingsRow(
+            "Peeked sliver size",
+            peekSizeSummary(),
+            indent = 1
+        ) { promptPeekSize() }
+        root.addView(peekSizeRow)
+
+        rawTextRetrySwitch = MaterialSwitch(this).apply {
+            isChecked = RawTextRetryToggle.isEnabled(this@AdvancedActivity)
+            isClickable = false
+        }
+        val rawTextRetryRow = settingsRow(
+            "Offer raw text after cleanup",
+            "Shows a \"Tap to use raw text\" bubble for a few seconds after cleanup changes your wording, so you can undo it with one tap",
+            rawTextRetrySwitch
+        ) {
+            val newVal = !rawTextRetrySwitch.isChecked
+            RawTextRetryToggle.setEnabled(this, newVal)
+            rawTextRetrySwitch.isChecked = newVal
+        }
+        root.addView(rawTextRetryRow)
+
         // Fallback restore path (#Feature B): if the icon is currently hidden -- including for
         // someone who turns the toggle above off while already hidden -- give them a way back
         // that doesn't depend on the notification still being around.
@@ -267,6 +299,8 @@ class AdvancedActivity : BaseSettingsActivity() {
         debugVisibilitySwitch.isChecked = DebugVisibilityToggle.isEnabled(this)
         vocabularyRowSub.text = vocabularySummary()
         historyEnabledSwitch.isChecked = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
+        autoPeekDelayRow.findViewWithTag<TextView>("subtitle").text = autoPeekDelaySummary()
+        peekSizeRow.findViewWithTag<TextView>("subtitle").text = peekSizeSummary()
         // Included here (not just onCreate) so background work finishing after a fold/rotation
         // -- e.g. pickOverlayIcon's thread -- doesn't leave a stale overlay-appearance row (#89).
         refreshOverlayAppearanceRows()
@@ -281,6 +315,65 @@ class AdvancedActivity : BaseSettingsActivity() {
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         })
         finish()
+    }
+
+    // --- Auto-hide delay (Feature A follow-up) ---
+
+    private fun autoPeekDelaySummary(): String {
+        val seconds = AutoPeekDelay.secondsOrDefault(this)
+        return "$seconds second${if (seconds == 1) "" else "s"} of inactivity before it slides to the edge"
+    }
+
+    /** Numeric picker for the auto-peek idle delay, entered in whole seconds and clamped to
+     *  [AutoPeekDelay.MIN_SECONDS]..[AutoPeekDelay.MAX_SECONDS]. Takes effect on the very next
+     *  idle-timer arm in [WhisperAccessibilityService] -- no service restart needed, matching the
+     *  existing [AutoPeekToggle] pattern. */
+    private fun promptAutoPeekDelay() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(AutoPeekDelay.secondsOrDefault(this@AdvancedActivity).toString())
+            setSelection(text.length)
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Auto-hide delay")
+            .setMessage("Seconds of inactivity before the icon slides to the edge (${AutoPeekDelay.MIN_SECONDS}-${AutoPeekDelay.MAX_SECONDS}).")
+            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
+            .setPositiveButton("Save") { _, _ ->
+                val seconds = input.text.toString().toIntOrNull()
+                if (seconds != null) AutoPeekDelay.setSeconds(this, seconds)
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun peekSizeSummary(): String {
+        val dpValue = PeekVisibleSize.dpOrDefault(this)
+        return "${dpValue}dp of the icon stays visible/tappable at the edge once peeked. Bigger is easier to hit"
+    }
+
+    /** Numeric picker for how much of the ring stays visible/tappable once peeked, entered in
+     *  whole dp and clamped to [PeekVisibleSize.MIN_DP]..[PeekVisibleSize.MAX_DP]. A bigger sliver
+     *  is a bigger, easier-to-hit restore target -- the same tradeoff that drove the shipped
+     *  default up from 14dp to [RingPeek.PEEK_VISIBLE_DP] after the SchildiChat peek-restore bug
+     *  (see [RingPeek]'s doc). Takes effect on the next auto-peek, no service restart needed. */
+    private fun promptPeekSize() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(PeekVisibleSize.dpOrDefault(this@AdvancedActivity).toString())
+            setSelection(text.length)
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Peeked sliver size")
+            .setMessage("How many dp of the icon stay visible and tappable at the edge once peeked (${PeekVisibleSize.MIN_DP}-${PeekVisibleSize.MAX_DP}). Bigger is easier to tap but shows more of the icon.")
+            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
+            .setPositiveButton("Save") { _, _ ->
+                val dpValue = input.text.toString().toIntOrNull()
+                if (dpValue != null) PeekVisibleSize.setDp(this, dpValue)
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     // --- Personal vocabulary (#26) ---

@@ -1,11 +1,10 @@
 package com.trevornk.ramblr
 
 /**
- * Auto-hide-to-peek pure logic: after [IDLE_TIMEOUT_MS] of no interaction with the floating mic
- * ring, it slides toward whichever edge it's snapped to, leaving a small on-screen sliver
- * ([PEEK_VISIBLE_DP]) instead of sitting at full width over whatever's underneath. This is
- * always-on behavior (no Advanced toggle) -- only the timeout is centralized here so it's easy to
- * tune later, per Trevor's request.
+ * Auto-hide-to-peek pure logic: after idling (see [AutoPeekDelay] for the user-configurable
+ * duration, defaulting to [IDLE_TIMEOUT_MS]) with no interaction with the floating mic ring, it
+ * slides toward whichever edge it's snapped to, leaving a small on-screen sliver
+ * ([PEEK_VISIBLE_DP]) instead of sitting at full width over whatever's underneath.
  *
  * Kept as a standalone object of pure functions (no Android/WindowManager dependency) so the
  * edge-detection and peek-position math are directly unit testable, mirroring the existing
@@ -13,11 +12,13 @@ package com.trevornk.ramblr
  * in WhisperAccessibilityService's touch listener.
  */
 object RingPeek {
-    /** How long the ring must sit untouched before it auto-peeks. */
+    /** Default idle delay in millis before the ring auto-peeks, used when the user hasn't
+     *  overridden it via [AutoPeekDelay] in Advanced settings. */
     const val IDLE_TIMEOUT_MS = 4_000L
 
-    /** How much of the ring stays visible on-screen once peeked. */
-    const val PEEK_VISIBLE_DP = 14
+    /** Default visible sliver size in dp once peeked, used when the user hasn't overridden it via
+     *  [PeekVisibleSize] in Advanced settings. */
+    const val PEEK_VISIBLE_DP = 20
 
     /** Duration of the slide animation in either direction. */
     const val ANIM_DURATION_MS = 220L
