@@ -365,7 +365,10 @@ class MainActivity : BaseSettingsActivity() {
     /** Shared cloud-API-key entry point for both the Transcription and Cleanup onboarding steps
      *  (#52) -- both ultimately read [ApiKeyStore]'s one key (see TranscriptionActivity's/
      *  CleanupActivity's own contextual key rows), so a user who already entered it for one isn't
-     *  asked again for the other. */
+     *  asked again for the other. OpenAI-specific; kept as-is (not folded into
+     *  [promptOnboardingProviderKey]) since [ApiKeyStore] is the legacy store other call sites
+     *  (Transcription's own key row) still read directly -- see [ApiKeyStore]'s kdoc on why it
+     *  mirrors into [ProviderCredentialStore] rather than being replaced outright. */
     private fun promptOnboardingApiKey(onDone: () -> Unit) {
         if (ApiKeyStore.getApiKey(this).isNotBlank()) {
             onDone()
@@ -390,18 +393,56 @@ class MainActivity : BaseSettingsActivity() {
             .show()
     }
 
+    /** Cloud-credential entry point for [showOnboardingCloudProviderChoiceStep] (#98 revision):
+     *  generalizes [promptOnboardingApiKey] to any addable [ProviderKind]. OpenAI still delegates
+     *  to [promptOnboardingApiKey] so its existing [ApiKeyStore] mirror-write behavior (relied on
+     *  by Transcription's own key row) is unaffected; Gemini writes straight into
+     *  [ProviderCredentialStore], the store the provider chain actually reads at runtime. */
+    private fun promptOnboardingProviderKey(kind: ProviderKind, onDone: () -> Unit) {
+        if (kind == ProviderKind.OPENAI) {
+            promptOnboardingApiKey(onDone)
+            return
+        }
+        if (ProviderCredentialStore.isConfigured(this, kind)) {
+            onDone()
+            return
+        }
+        val label = when (kind) {
+            ProviderKind.GEMINI -> "Gemini"
+            ProviderKind.ANTHROPIC -> "Anthropic"
+            ProviderKind.OMNIROUTE -> "OmniRoute"
+            else -> kind.name
+        }
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            hint = "Paste key"
+        }
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("$label API Key")
+            .setMessage("Used only to call $label's API directly from your phone — billed pay-per-use to your own account.")
+            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
+            .setCancelable(false)
+            .setPositiveButton("Save") { _, _ ->
+                val entered = input.text.toString().trim()
+                if (entered.isNotBlank()) ProviderCredentialStore.set(this, kind, entered)
+                refresh()
+                onDone()
+            }
+            .setNegativeButton("Skip") { _, _ -> dismissOnboarding(); onDone() }
+            .show()
+    }
+
     /**
-     * Cleanup onboarding step (#98): optional, off by default, same Local/Cloud shape as
-     * Transcription. Cloud is now the RECOMMENDED default (was previously Local) -- following
-     * real on-device measurement this session: Trevor's phone was independently confirmed to be
-     * under persistent, real memory pressure (LowMemoryKiller actively killing background apps,
-     * MemAvailable as low as 1.1-1.4GB even after the LFM2.5-350M model swap cut local cleanup's
-     * own footprint from 651MB to ~450MB), and local cleanup generation reliably could not finish
-     * within its time budget under those conditions -- not a one-off, a persistent state of this
-     * device. Cloud cleanup has zero local memory footprint and consistent latency regardless of
-     * what else is running, so it's the more reliable default for a phone that's also a normal
-     * daily driver running many other apps. Local remains available and fully supported for
-     * anyone who prefers it or is offline-first, just no longer the recommended path.
+     * Cleanup onboarding step (#98, revised): optional, off by default, same Local/Cloud shape
+     * as Transcription. Neither Cloud nor On-device is labeled "recommended" here -- there is no
+     * verified latency data comparing Gemini vs OpenAI (the "Gemini is faster" idea floating
+     * around this project traced back to an unverifiable eval-report reference that turned out
+     * not to exist in the repo, and a real live side-by-side check found Gemini's latency
+     * inconsistent, sometimes much slower, not clearly faster). Cloud vs Local is described
+     * factually (cloud needs a key and network; on-device can be slow on a phone under memory
+     * pressure, as Trevor's was independently measured to be) without a speed claim on either
+     * side; if Cloud is chosen, [showOnboardingCloudProviderChoiceStep] lets the user pick
+     * Gemini or OpenAI directly with no bias toward either.
      */
     private fun showOnboardingCleanupStep() {
         val recommendedLocal = LOCAL_CLEANUP_MODEL_CATALOG.firstOrNull { it.recommended } ?: LOCAL_CLEANUP_MODEL_CATALOG.first()
@@ -409,17 +450,16 @@ class MainActivity : BaseSettingsActivity() {
             .setTitle("Step 4 of 5: Clean up dictation with AI? (optional)")
             .setMessage(
                 "Cleanup rewrites your raw dictation to fix grammar, punctuation, and filler words — " +
-                    "off by default.\n\nCloud (recommended): uses your own API key -- no download, " +
-                    "consistently fast, and doesn't compete with your phone's other apps for memory.\n\n" +
+                    "off by default.\n\nCloud: uses your own API key (Gemini or OpenAI, your choice) -- " +
+                    "no download, and doesn't compete with your phone's other apps for memory.\n\n" +
                     "On-device: downloads \"${recommendedLocal.name}\" and keeps the text on this phone, " +
                     "but on a phone that's also running lots of other apps, it can sometimes be too slow " +
                     "to finish and fall back to raw text."
             )
             .setCancelable(false)
-            .setPositiveButton("Use cloud (recommended)") { _, _ ->
+            .setPositiveButton("Use cloud") { _, _ ->
                 dismissOnboarding()
-                enableOnboardingCleanupCloud()
-                promptOnboardingApiKey { showOnboardingStreamingStep() }
+                showOnboardingCloudProviderChoiceStep()
             }
             .setNegativeButton("Use on-device") { _, _ ->
                 dismissOnboarding()
@@ -427,6 +467,31 @@ class MainActivity : BaseSettingsActivity() {
                 showOnboardingStreamingStep()
             }
             .setNeutralButton("Skip (leave off)") { _, _ -> dismissOnboarding(); showOnboardingStreamingStep() }
+            .show()
+    }
+
+    /** Sub-step of [showOnboardingCleanupStep]'s Cloud choice (#98 revision): lets the user pick
+     *  Gemini or OpenAI directly, with neither marked "recommended" -- see the kdoc above for why
+     *  no latency claim is made either way. Both are legitimate, inexpensive choices; picking
+     *  whichever account the user already has (or wants to try) is a perfectly good reason. */
+    private fun showOnboardingCloudProviderChoiceStep() {
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Step 4b of 5: Choose a cloud cleanup provider")
+            .setMessage(
+                "Gemini and OpenAI are both good, inexpensive choices for cleanup. Pick whichever " +
+                    "you'd like to use -- e.g. one you already have an account or API key for."
+            )
+            .setCancelable(false)
+            .setPositiveButton("Gemini") { _, _ ->
+                dismissOnboarding()
+                enableOnboardingCleanupCloud(ProviderKind.GEMINI)
+                promptOnboardingProviderKey(ProviderKind.GEMINI) { showOnboardingStreamingStep() }
+            }
+            .setNegativeButton("OpenAI") { _, _ ->
+                dismissOnboarding()
+                enableOnboardingCleanupCloud(ProviderKind.OPENAI)
+                promptOnboardingProviderKey(ProviderKind.OPENAI) { showOnboardingStreamingStep() }
+            }
             .show()
     }
 
@@ -450,24 +515,43 @@ class MainActivity : BaseSettingsActivity() {
     /** The dialog in [showOnboardingCleanupStep] already explains that Cloud cleanup sends text
      *  off-device even when transcription stays local, so this also marks that one-time consent
      *  (#23) satisfied -- otherwise Settings' own toggle would show the same warning again right
-     *  after onboarding finishes. */
-    private fun enableOnboardingCleanupCloud() {
+     *  after onboarding finishes. [kind] is whichever provider the user picked in
+     *  [showOnboardingCloudProviderChoiceStep] (Gemini or OpenAI) -- neither is defaulted to
+     *  automatically; the model id used is that provider's catalog-recommended entry, falling
+     *  back to its hardcoded default constant if the catalog is somehow unavailable. */
+    private fun enableOnboardingCleanupCloud(kind: ProviderKind) {
         prefs().edit()
             .putBoolean("use_post_processing", true)
             .putBoolean(KEY_LOCAL_CLEANUP_CONSENT, true)
             .apply()
-        // #37/#52 follow-up: seed a default OpenAI entry only if the chain has no cloud-capable
-        // entry yet -- same non-destructive rule as CleanupActivity.onSelectSimpleCleanup.
+        // #37/#52 follow-up: seed a default entry for the chosen provider only if the chain has
+        // no cloud-capable entry yet -- same non-destructive rule as
+        // CleanupActivity.onSelectSimpleCleanup.
         val chain = ProviderChainStore.load(this)
         if (chain.capableEntriesFor(needsTranscription = false).none { it.kind != ProviderKind.LOCAL }) {
-            ProviderChainStore.save(this, ProviderChain(chain.entries + ProviderChainEntry(ProviderKind.OPENAI, PostProcessor.DEFAULT_MODEL)))
+            val catalog = ModelCatalogStore.currentCatalog(this)
+            val model = ModelCatalogResolver.recommendedEntryFor(catalog, kind)?.modelId
+                ?: when (kind) {
+                    ProviderKind.GEMINI -> GeminiCleanupProvider.DEFAULT_MODEL
+                    else -> PostProcessor.DEFAULT_MODEL
+                }
+            ProviderChainStore.save(this, ProviderChain(chain.entries + ProviderChainEntry(kind, model)))
         }
         CloudFeatureToggle.setCleanupEnabled(this, true)
         refresh()
     }
 
-    /** Streaming live-preview onboarding step (#52): a plain on/off toggle, not a Local/Cloud
-     *  choice -- the streaming path is always on-device (#29), there is no cloud option to offer. */
+    /** Streaming live-preview onboarding step (#52, revised): a plain on/off toggle, not a
+     *  Local/Cloud choice -- the streaming path is always on-device (#29), there is no cloud
+     *  option to offer. "Skip (leave off)" is now the recommended choice: live preview runs a
+     *  second on-device model continuously throughout the whole recording, competing for CPU
+     *  with local (Parakeet) transcription right as that transcription needs to run at full
+     *  speed the moment recording stops -- real, code-confirmed contention (see
+     *  StreamingTranscriber's numThreads=2 decode running the entire time the user is talking),
+     *  not a guess. This delays the whole pipeline (transcribe -> cleanup -> inject), which is
+     *  what actually produces the "cleanup feels slower" perception some users report -- cleanup
+     *  itself (a network call) isn't affected by local CPU load, but it starts later when local
+     *  transcription had to compete with the streaming model for the phone's cores. */
     private fun showOnboardingStreamingStep() {
         val recommended = STREAMING_MODEL_CATALOG.firstOrNull { it.recommended } ?: STREAMING_MODEL_CATALOG.first()
         onboardingDialog = android.app.AlertDialog.Builder(this)
@@ -477,7 +561,10 @@ class MainActivity : BaseSettingsActivity() {
                     "on-device model — always local, nothing is ever sent anywhere for this. The final " +
                     "text after you stop recording still comes from your Transcription + Cleanup " +
                     "settings above; this only changes what's shown while recording.\n\n" +
-                    "Turning this on downloads \"${recommended.name}\" now."
+                    "Recommended off: this model runs continuously while you talk, competing for your " +
+                    "phone's CPU with transcription right when recording stops -- it can make the final " +
+                    "text feel slower to appear, especially if you're also using on-device " +
+                    "transcription.\n\nTurning this on downloads \"${recommended.name}\" now."
             )
             .setCancelable(false)
             .setPositiveButton("Turn on") { _, _ ->
@@ -485,7 +572,7 @@ class MainActivity : BaseSettingsActivity() {
                 enableOnboardingStreaming(recommended)
                 showOnboardingTryStep()
             }
-            .setNegativeButton("Skip (leave off)") { _, _ -> dismissOnboarding(); showOnboardingTryStep() }
+            .setNegativeButton("Skip (recommended)") { _, _ -> dismissOnboarding(); showOnboardingTryStep() }
             .show()
     }
 
