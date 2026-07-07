@@ -829,13 +829,15 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     /** Any interaction with the ring (drag, tap, long-press) calls this to re-arm the idle timer,
      *  cancelling whatever peek was previously scheduled and restoring the ring if it was already
-     *  peeked when the new interaction began. */
+     *  peeked when the new interaction began. Delay is read fresh from [AutoPeekDelay] each call
+     *  (rather than cached) so a change in Advanced settings takes effect on the very next
+     *  interaction, no service restart needed -- same pattern as [AutoPeekToggle]. */
     private fun armIdlePeekTimer() {
         handler.removeCallbacks(idlePeekRunnable)
-        handler.postDelayed(idlePeekRunnable, RingPeek.IDLE_TIMEOUT_MS)
+        handler.postDelayed(idlePeekRunnable, AutoPeekDelay.millisOrDefault(this))
     }
 
-    /** Fires once [RingPeek.IDLE_TIMEOUT_MS] has elapsed with no ring interaction. Never peeks
+    /** Fires once the configured [AutoPeekDelay] has elapsed with no ring interaction. Never peeks
      *  while actively recording or while cleanup/transcription is in flight (RingPeek.shouldAutoPeek),
      *  nor while the ring itself isn't currently showing (e.g. MainActivity foregrounded, #35) or
      *  already peeked, nor at all while the user has turned auto-peek off in Advanced settings
@@ -852,7 +854,7 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val ringSize = params.width
-        val peekVisiblePx = (RingPeek.PEEK_VISIBLE_DP * dp).toInt()
+        val peekVisiblePx = (PeekVisibleSize.dpOrDefault(this) * dp).toInt()
         val targetX = RingPeek.peekedX(params.x, screenW, ringSize, peekVisiblePx)
 
         prePeekX = params.x
@@ -2219,7 +2221,8 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         updatePendingInjection(method, injectedText = text, rawText = rawText ?: text, priorClipboard, priorNodeText, injectedNode, historyTimestamp)
 
-        val retryRawOffered = method != InjectMethod.NONE && rawText != null && rawText != text
+        val retryRawOffered = method != InjectMethod.NONE && rawText != null && rawText != text &&
+            RawTextRetryToggle.isEnabled(this)
         val isFallback = method == InjectMethod.NONE
         fallbackClipboardText = if (isFallback) text else null
 
