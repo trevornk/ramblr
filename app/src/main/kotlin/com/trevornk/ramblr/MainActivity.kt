@@ -169,7 +169,7 @@ class MainActivity : BaseSettingsActivity() {
         val audio = hasPerm(Manifest.permission.RECORD_AUDIO)
         val acc = WhisperAccessibilityService.instance != null
         val useLocal = prefs().getBoolean("use_local", true)
-        val hasKey = ApiKeyStore.getApiKey(this).isNotBlank()
+        val hasKey = ProviderCredentialStore.isConfigured(this, ProviderKind.OPENAI)
         val hasModel = LocalTranscriber.availableModels(this).isNotEmpty()
 
         setupRowSub.text = SetupActivity.subtitle(hasAudio = audio, hasAccessibility = acc)
@@ -234,7 +234,7 @@ class MainActivity : BaseSettingsActivity() {
             accessibilityEnabled = WhisperAccessibilityService.instance != null,
             transcriptionLocal = prefs().getBoolean("use_local", true),
             hasLocalModel = LocalTranscriber.availableModels(this).isNotEmpty(),
-            hasApiKey = ApiKeyStore.getApiKey(this).isNotBlank(),
+            hasApiKey = ProviderCredentialStore.isConfigured(this, ProviderKind.OPENAI),
         )
         if (!ready) startWalkthrough()
     }
@@ -356,58 +356,26 @@ class MainActivity : BaseSettingsActivity() {
                 dismissOnboarding()
                 prefs().edit().putBoolean("use_local", false).apply()
                 refresh()
-                promptOnboardingApiKey { showOnboardingCleanupStep() }
+                promptOnboardingProviderKey(ProviderKind.OPENAI) { showOnboardingCleanupStep() }
             }
             .setNeutralButton("Not now") { _, _ -> dismissOnboarding() }
             .show()
     }
 
-    /** Shared cloud-API-key entry point for both the Transcription and Cleanup onboarding steps
-     *  (#52) -- both ultimately read [ApiKeyStore]'s one key (see TranscriptionActivity's/
-     *  CleanupActivity's own contextual key rows), so a user who already entered it for one isn't
-     *  asked again for the other. OpenAI-specific; kept as-is (not folded into
-     *  [promptOnboardingProviderKey]) since [ApiKeyStore] is the legacy store other call sites
-     *  (Transcription's own key row) still read directly -- see [ApiKeyStore]'s kdoc on why it
-     *  mirrors into [ProviderCredentialStore] rather than being replaced outright. */
-    private fun promptOnboardingApiKey(onDone: () -> Unit) {
-        if (ApiKeyStore.getApiKey(this).isNotBlank()) {
-            onDone()
-            return
-        }
-        val input = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            hint = "sk-..."
-        }
-        onboardingDialog = android.app.AlertDialog.Builder(this)
-            .setTitle("OpenAI API Key")
-            .setMessage("Used only to call OpenAI's API directly from your phone — billed pay-per-use to your own account.")
-            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
-            .setCancelable(false)
-            .setPositiveButton("Save") { _, _ ->
-                val entered = input.text.toString().trim()
-                if (entered.isNotBlank()) ApiKeyStore.setApiKey(this, entered)
-                refresh()
-                onDone()
-            }
-            .setNegativeButton("Skip") { _, _ -> dismissOnboarding(); onDone() }
-            .show()
-    }
-
-    /** Cloud-credential entry point for [showOnboardingCloudProviderChoiceStep] (#98 revision):
-     *  generalizes [promptOnboardingApiKey] to any addable [ProviderKind]. OpenAI still delegates
-     *  to [promptOnboardingApiKey] so its existing [ApiKeyStore] mirror-write behavior (relied on
-     *  by Transcription's own key row) is unaffected; Gemini writes straight into
-     *  [ProviderCredentialStore], the store the provider chain actually reads at runtime. */
+    /** Cloud-credential entry point for [showOnboardingCloudProviderChoiceStep] (#98 revision,
+     *  unified post-spaghetti-cleanup): one path for every addable [ProviderKind], including
+     *  OpenAI. Reads/writes [ProviderCredentialStore] exclusively -- the same store
+     *  [CloudProviderActivity] and the live provider chain read at runtime -- so onboarding can
+     *  never leave OpenAI's key sitting only in the legacy [ApiKeyStore] out of sync with what
+     *  dictation actually uses. [ApiKeyStore] itself is now purely a one-time legacy-migration
+     *  input (see [ProviderChainMigration]); nothing live reads or writes it anymore. */
     private fun promptOnboardingProviderKey(kind: ProviderKind, onDone: () -> Unit) {
-        if (kind == ProviderKind.OPENAI) {
-            promptOnboardingApiKey(onDone)
-            return
-        }
         if (ProviderCredentialStore.isConfigured(this, kind)) {
             onDone()
             return
         }
         val label = when (kind) {
+            ProviderKind.OPENAI -> "OpenAI"
             ProviderKind.GEMINI -> "Gemini"
             ProviderKind.ANTHROPIC -> "Anthropic"
             ProviderKind.OMNIROUTE -> "OmniRoute"
