@@ -20,19 +20,6 @@ It supports:
   ones
 - A personal vocabulary list so cleanup stops mangling your project names and jargon
 
-Ramblr is a private fork of [kafkasl/phone-whisper](https://github.com/kafkasl/phone-whisper).
-
-## Why I built this
-
-- I like SwiftKey and want to keep it as my keyboard, but...
-- Most keyboard dictation felt too inaccurate
-- Gemini's voice input auto-submits your transcription (which is pretty bad) so you can't edit
-  it before sending
-- Post-processing yields much better results, especially with a list of keywords and technical
-  terms you often use
-- Inserting text into the field you're already using lets you keep editing it like any other
-  draft
-
 ## Install
 
 ### Easiest: download the APK
@@ -377,10 +364,9 @@ possible so it's unit-testable without Robolectric).
 
 ## Attribution
 
-Ramblr is a private fork of [kafkasl/phone-whisper](https://github.com/kafkasl/phone-whisper),
-which this project is built on top of. Transcription is powered by
-[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) and on-device cleanup by
-[llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT), used as a git submodule.
+Transcription is powered by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0)
+and on-device cleanup by [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT), used as a git
+submodule. See [NOTICE](NOTICE) for full third-party attribution.
 
 ## License
 
