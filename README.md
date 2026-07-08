@@ -10,6 +10,10 @@ Ramblr lets you speak into most apps without switching keyboards. Tap the floati
 speak, tap again, and your text is inserted into the currently focused text field when the app
 exposes a standard Android input field.
 
+<p align="center">
+  <img src="docs/screenshots/floating-icon-hero.png" width="280" alt="Ramblr's floating dictation button over a text field">
+</p>
+
 It supports:
 
 - **Local on-device transcription and cleanup** — nothing has to leave the phone
@@ -19,6 +23,15 @@ It supports:
 - Per-style "Formal / Casual / Notes / Email / Concise" cleanup presets, plus your own custom
   ones
 - A personal vocabulary list so cleanup stops mangling your project names and jargon
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/main.png" width="200" alt="Ramblr main settings screen">
+  <img src="docs/screenshots/cleanup.png" width="200" alt="Cleanup style settings">
+  <img src="docs/screenshots/cloud-providers.png" width="200" alt="Cloud provider chain settings">
+  <img src="docs/screenshots/advanced.png" width="200" alt="Advanced overlay behavior settings">
+</p>
 
 ## Install
 
