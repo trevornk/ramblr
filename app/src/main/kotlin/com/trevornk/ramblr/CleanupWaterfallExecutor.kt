@@ -95,6 +95,18 @@ object CleanupWaterfallPlanner {
     fun flattenIndex(groups: List<List<CleanupStep>>): List<CleanupStep> = groups.flatten()
 }
 
+/**
+ * Stable identity signature of a waterfall's step list (each step's group + model + base-URL
+ * override, in order), used to detect when the provider chain has been reshaped in Settings. The
+ * [CleanupWaterfallCursor] stores a raw index into the step list, so an add/remove/reorder/toggle
+ * that changes the list under it would otherwise let the next cleanup resume at a step that now sits
+ * at a different position -- skipping newly-added free/local steps and mis-attributing success to
+ * the wrong step (M3). The service compares this signature across dictations and resets the cursor
+ * when it changes, since it can't observe Settings edits directly across component boundaries.
+ */
+fun cleanupWaterfallSignature(waterfall: CleanupWaterfall): String =
+    waterfall.steps.joinToString("|") { "${it.group.name}~${it.model}~${it.baseUrlOverride ?: ""}" }
+
 /** Why a waterfall step did not produce a result. Distinguishes connection-level failures
  *  (which disqualify the rest of that step's group) from step-level failures (which don't). */
 sealed class CleanupStepOutcome {

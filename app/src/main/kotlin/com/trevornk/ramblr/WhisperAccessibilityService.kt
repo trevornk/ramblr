@@ -191,6 +191,9 @@ class WhisperAccessibilityService : AccessibilityService() {
     private var isPeeked = false
     private var prePeekX: Int? = null
     private var peekAnimator: android.animation.ValueAnimator? = null
+    /** The currently-armed transcription watchdog (#L14), held so it can be removed on normal
+     *  completion/teardown instead of one accumulating in the handler queue per dictation. */
+    private var watchdogRunnable: Runnable? = null
     private val idlePeekRunnable = Runnable { attemptAutoPeek() }
     // screenW/screenH as of the last time the ring's position was computed (#41) -- the baseline
     // handleScreenSizeChange() diffs against to detect a fold/unfold. Set alongside layoutParams
@@ -201,6 +204,10 @@ class WhisperAccessibilityService : AccessibilityService() {
     private val guard = TranscriptionGuard()
     private val inFlightCall = InFlightCall()
     private val cleanupCursor = CleanupWaterfallCursor()
+    /** Signature of the cleanup waterfall the [cleanupCursor]'s index was last recorded against, so
+     *  a chain edit in Settings (which reshapes the step list) resets the position-based cursor
+     *  rather than resuming at a now-different step (M3). */
+    private var lastCleanupWaterfallSignature: String? = null
 
     /** Registered in [registerNetworkCallback]; null when registration failed or after teardown. */
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -407,6 +414,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         stateMachine.reset()
         recordingEngine?.awaitTeardown()
         recordingEngine = null
+        cancelWatchdog()
         guard.cancel()
         inFlightCall.cancel()
         // The cancel above makes any in-flight local completion abort at its next piece check
@@ -415,6 +423,15 @@ class WhisperAccessibilityService : AccessibilityService() {
         LocalCleanupModelHolder.releaseAsync()
         teardownStreamingPreview()
         flushPendingStreamingHandoff()
+        // Release the native transcriber recognizers too (M7): like onTrimMemory, replace(null) can
+        // block on an in-flight transcription, so it runs off the main thread. Without this, a
+        // service destroy/recreate in the same process (accessibility toggle off/on) leaves the old
+        // instance's recognizers (batch model up to 465MB) resident alongside the new ones until
+        // process death.
+        thread {
+            transcriberSlot.replace(null)
+            streamingTranscriberSlot.replace(null)
+        }
         handler.removeCallbacks(expirePendingInjection)
         pendingInjection?.node?.recycle()
         pendingInjection = null
@@ -661,6 +678,11 @@ class WhisperAccessibilityService : AccessibilityService() {
                     } else {
                         params.x = if (params.x + ringSize / 2 > screenW / 2)
                             screenW - ringSize - margin else margin
+                        // Clamp y into the on-screen band too (M1): FLAG_LAYOUT_NO_LIMITS disables
+                        // WindowManager's own clamping (needed for peek), so a drag that ends near
+                        // the top/bottom edge could otherwise park the ring wholly off-screen with
+                        // no on-screen affordance left to recover it.
+                        params.y = params.y.coerceIn(margin, (screenH - ringSize - margin).coerceAtLeast(margin))
                         wm.updateViewLayout(v, params)
                         feedbackLayoutParams?.let {
                             positionFeedback(it, params, feedbackView?.height ?: 0)
@@ -928,6 +950,11 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     private fun removeOverlay() {
+        // Cancel any in-flight peek/restore animation first (M2): its per-frame update listener
+        // calls wm.updateViewLayout(overlay, …), which throws IllegalArgumentException ("View not
+        // attached") on the main thread if it fires after the views below are removed.
+        peekAnimator?.cancel()
+        peekAnimator = null
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         overlayView?.let {
             wm.removeView(it)
@@ -1489,7 +1516,13 @@ class WhisperAccessibilityService : AccessibilityService() {
             onFinished = { result -> onRecordingFinished(engine, result) },
             onChunk = if (streamingActive) ::handleStreamingChunk else { _, _ -> }
         )
-        if (!started) { toast("Couldn't start recording — mic busy?"); return }
+        if (!started) {
+            // End the streaming session so a failed recorder start doesn't leak the OnlineStream
+            // opened by beginSession() above until the next recording (L11).
+            if (streamingActive) endStreamingSession()
+            toast("Couldn't start recording — mic busy?")
+            return
+        }
 
         recordingEngine = engine
         setBusy(false)
@@ -1572,17 +1605,31 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     /** Backstop for a callback that never arrives (stalled socket, hung local model, etc). See #20. */
     private fun armWatchdog(token: Int) {
-        handler.postDelayed({
+        // Remove any previously-armed watchdog so a fresh arm (e.g. the transcribe->cleanup handoff
+        // arms a second one) doesn't leave the first runnable sitting in the handler queue for its
+        // full 400s (L14). The runnable is held so resetToIdle/onDestroy can remove it on normal
+        // completion instead of letting one accumulate per dictation.
+        cancelWatchdog()
+        val runnable = Runnable {
+            watchdogRunnable = null
             if (guard.isCurrent(token)) {
                 inFlightCall.cancel()
                 resetToIdle()
                 toast("Transcription timed out")
             }
-        }, WATCHDOG_TIMEOUT_MS)
+        }
+        watchdogRunnable = runnable
+        handler.postDelayed(runnable, WATCHDOG_TIMEOUT_MS)
+    }
+
+    private fun cancelWatchdog() {
+        watchdogRunnable?.let { handler.removeCallbacks(it) }
+        watchdogRunnable = null
     }
 
     /** Common teardown for every path back to IDLE: normal completion, cancel, or watchdog. */
     private fun resetToIdle() {
+        cancelWatchdog()
         guard.cancel()
         activeToken = 0
         stateMachine.reset()
@@ -1845,6 +1892,16 @@ class WhisperAccessibilityService : AccessibilityService() {
                 ProviderChainStore.load(this), CloudFeatureToggle.cleanupEnabled(this), DictationModeToggle.allowLocalFallback(this)
             )
             val cleanupWaterfall = ProviderChainRuntime.cleanupWaterfallFor(providerChain)
+
+            // Reset the position-based waterfall cursor whenever the chain reshapes since the last
+            // cleanup (add/remove/reorder/toggle in Settings), so a cached raw index can't resume at
+            // a step that now occupies a different position -- which would skip newly-added free/
+            // local steps and mis-attribute success to the wrong step (M3).
+            val waterfallSignature = cleanupWaterfallSignature(cleanupWaterfall)
+            if (waterfallSignature != lastCleanupWaterfallSignature) {
+                cleanupCursor.reset()
+                lastCleanupWaterfallSignature = waterfallSignature
+            }
 
             // A zero-step provider chain means the user explicitly removed every executable cleanup
             // step: cleanup is disabled, so inject raw instead of falling back to any legacy store.
