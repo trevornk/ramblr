@@ -18,11 +18,16 @@ import org.json.JSONObject
 object GeminiCleanupProvider {
     const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
-    /** Gemini's REST API key auth is a `?key=` query parameter, not a header -- see
-     *  https://ai.google.dev/gemini-api/docs/api-key. [model] is bare (e.g. "gemini-2.5-flash"),
-     *  not the "models/..." resource name; this builds the full resource path. */
-    fun endpointUrl(model: String, key: String): String =
-        "$BASE_URL/models/${model.ifBlank { DEFAULT_MODEL }}:generateContent?key=$key"
+    /** [model] is bare (e.g. "gemini-2.5-flash"), not the "models/..." resource name; this builds
+     *  the full resource path. No `?key=` query string: the key travels in the [headers] below
+     *  instead, so it can't leak through a malformed-URL exception message or a logged URL (M-3). */
+    fun endpointUrl(model: String): String =
+        "$BASE_URL/models/${model.ifBlank { DEFAULT_MODEL }}:generateContent"
+
+    /** Gemini accepts the API key in an `x-goog-api-key` header as an alternative to the `?key=`
+     *  query parameter (https://ai.google.dev/gemini-api/docs/api-key). Using the header keeps the
+     *  key out of the URL entirely, mirroring [AnthropicCleanupProvider.headers]'s `x-api-key`. */
+    fun headers(key: String): Map<String, String> = mapOf("x-goog-api-key" to key)
 
     const val DEFAULT_MODEL = "gemini-2.5-flash"
 

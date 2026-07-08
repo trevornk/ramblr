@@ -115,7 +115,8 @@ private fun callGemini(apiKey: String, model: String, prompt: String, text: Stri
     val body = GeminiCleanupProvider.buildRequestBody(text, prompt).toString()
         .toRequestBody("application/json".toMediaType())
     val request = Request.Builder()
-        .url(GeminiCleanupProvider.endpointUrl(model, apiKey))
+        .url(GeminiCleanupProvider.endpointUrl(model))
+        .header("x-goog-api-key", apiKey)
         .post(body)
         .build()
 
