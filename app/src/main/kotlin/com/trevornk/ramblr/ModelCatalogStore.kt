@@ -4,6 +4,7 @@ import android.content.Context
 import okhttp3.Request
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Owns the Context/network side of the remote-updatable model catalog (#98): caches a
@@ -32,6 +33,31 @@ object ModelCatalogStore {
     private const val PREFS_NAME = "ramblr_model_catalog_cache"
     private const val KEY_CACHED_JSON = "cached_json"
     private const val KEY_CACHED_AT = "cached_at"
+
+    /** Hard cap on the fetched catalog body (L6): the real catalog is a few KB of JSON, so anything
+     *  approaching this is either a wrong URL or a hostile response and must not be buffered whole. */
+    private const val MAX_CATALOG_BYTES = 512L * 1024
+
+    /** After a failed background refresh the cache timestamp isn't advanced, so [load]/[currentCatalog]
+     *  stay "stale" and would otherwise respawn a fetch on literally every call; only re-attempt once
+     *  this backoff has elapsed since the last attempt (L6). */
+    private val FETCH_RETRY_BACKOFF_MS = TimeUnit.MINUTES.toMillis(5)
+
+    /** True while a background refresh thread is running, so [currentCatalog] launches at most one
+     *  at a time instead of piling up an unbounded number all racing to write the same cache (L6). */
+    private val fetchInFlight = AtomicBoolean(false)
+
+    @Volatile private var lastFetchAttemptAtMs = 0L
+
+    /** Pure decision for whether [currentCatalog] should kick off a background refresh: only when the
+     *  cache is stale, no refresh is already running, and we're past the post-attempt backoff window. */
+    fun shouldStartBackgroundFetch(
+        isStale: Boolean,
+        fetchInFlight: Boolean,
+        nowMs: Long,
+        lastAttemptAtMs: Long,
+        backoffMs: Long,
+    ): Boolean = isStale && !fetchInFlight && (nowMs - lastAttemptAtMs >= backoffMs)
 
     /** Short timeout, separate from [NetworkClients.shared]'s multi-minute dictation timeouts --
      *  a catalog fetch is a small JSON GET that should fail fast rather than block a Settings
@@ -87,9 +113,16 @@ object ModelCatalogStore {
     fun currentCatalog(context: Context): List<ModelCatalogEntry> {
         val cached = loadCached(context)
         val immediate = ModelCatalogResolver.resolve(BUNDLED_DEFAULT_MODEL_CATALOG, cached, fresh = null)
-        if (ModelCatalogResolver.isCacheStale(cachedFetchedAtMs(context), System.currentTimeMillis(), CACHE_TTL_MS)) {
+        val now = System.currentTimeMillis()
+        val stale = ModelCatalogResolver.isCacheStale(cachedFetchedAtMs(context), now, CACHE_TTL_MS)
+        if (shouldStartBackgroundFetch(stale, fetchInFlight.get(), now, lastFetchAttemptAtMs, FETCH_RETRY_BACKOFF_MS) &&
+            fetchInFlight.compareAndSet(false, true)
+        ) {
+            lastFetchAttemptAtMs = now
             val appContext = context.applicationContext
-            Thread { fetchAndCacheSync(appContext) }.start()
+            Thread {
+                try { fetchAndCacheSync(appContext) } finally { fetchInFlight.set(false) }
+            }.start()
         }
         return immediate
     }
@@ -106,7 +139,11 @@ object ModelCatalogStore {
         val request = Request.Builder().url(CATALOG_URL).get().build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return null
-            val body = response.body?.string() ?: return null
+            val declaredLength = response.body?.contentLength() ?: -1L
+            if (declaredLength > MAX_CATALOG_BYTES) return null
+            // peekBody caps how much is read into memory even when the length isn't declared
+            // (chunked); an over-cap body simply fails to parse below and degrades to the cache (L6).
+            val body = response.peekBody(MAX_CATALOG_BYTES).string()
             ModelCatalogJson.deserialize(body)
         }
     } catch (e: IOException) {
