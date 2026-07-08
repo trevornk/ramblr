@@ -35,6 +35,15 @@ words directly into the focused field the moment you're done talking.
   <img src="docs/screenshots/advanced.png" width="200" alt="Advanced overlay behavior settings">
 </p>
 
+The floating icon overlay, in its three states — idle, recording, and auto-hidden (peeked) at
+the screen edge:
+
+<p align="center">
+  <img src="docs/screenshots/overlay-idle.png" width="200" alt="Floating icon idle, ready to tap">
+  <img src="docs/screenshots/overlay-recording.png" width="200" alt="Floating icon while recording dictation">
+  <img src="docs/screenshots/overlay-peeked.png" width="200" alt="Floating icon auto-hidden, peeking from the screen edge">
+</p>
+
 ## Install
 
 ### Easiest: download the APK

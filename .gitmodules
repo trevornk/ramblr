@@ -1,3 +1,6 @@
 [submodule "llama.cpp"]
 	path = llama.cpp
 	url = https://github.com/ggml-org/llama.cpp.git
+[submodule "sherpa-onnx"]
+	path = sherpa-onnx
+	url = https://github.com/k2-fsa/sherpa-onnx.git
