@@ -47,7 +47,6 @@ class ProviderChainRuntimeCleanupAdapterTest {
             ),
             waterfall.steps,
         )
-        assertFalse(ProviderKind.GEMINI in ProviderChainRuntime.cleanupKindsNotImplemented)
     }
 
     @Test fun `single OpenAI cleanup chain uses simple path predicate`() {

@@ -84,12 +84,6 @@ data class ProviderChainEntry(
  */
 data class ProviderChain(val entries: List<ProviderChainEntry>) {
 
-    /** True when every configured entry is [ProviderKind.LOCAL] -- mirrors
-     *  [CleanupWaterfall.isLocalOnly]'s semantics generalized to the unified model. An empty
-     *  chain is not "local only": it means no entries are configured at all. */
-    fun isLocalOnly(): Boolean =
-        entries.isNotEmpty() && entries.all { it.kind == ProviderKind.LOCAL }
-
     /** True when at least one configured entry is [ProviderKind.LOCAL] -- mirrors
      *  [CleanupWaterfall.usesLocalLlm]'s semantics generalized to the unified model. */
     fun usesLocalLlm(): Boolean =

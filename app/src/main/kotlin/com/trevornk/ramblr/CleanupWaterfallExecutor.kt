@@ -87,12 +87,6 @@ object CleanupWaterfallPlanner {
         }
         return result
     }
-
-    /**
-     * Flattens [groups] back into a single ordered index -> step list, used to translate a
-     * cursor position (see [CleanupWaterfallCursor]) into "which step to start at".
-     */
-    fun flattenIndex(groups: List<List<CleanupStep>>): List<CleanupStep> = groups.flatten()
 }
 
 /**

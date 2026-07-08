@@ -59,41 +59,6 @@ class CleanupStepGroupIsPaidFallbackTest {
     }
 }
 
-class CleanupWaterfallIsLocalOnlyTest {
-
-    @Test fun `a single LOCAL_LLM step is local only`() {
-        assertTrue(CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, "qwen2.5-0.5b-instruct-q4_k_m"))).isLocalOnly())
-    }
-
-    @Test fun `multiple LOCAL_LLM steps are still local only`() {
-        val waterfall = CleanupWaterfall(
-            listOf(
-                CleanupStep(CleanupStepGroup.LOCAL_LLM, "qwen2.5-1.5b-instruct-q4_k_m"),
-                CleanupStep(CleanupStepGroup.LOCAL_LLM, "smollm2-360m-instruct-q4_k_m"),
-            )
-        )
-        assertTrue(waterfall.isLocalOnly())
-    }
-
-    @Test fun `a waterfall mixing local and any network group is not local only`() {
-        val waterfall = CleanupWaterfall(
-            listOf(
-                CleanupStep(CleanupStepGroup.LOCAL_LLM, "qwen2.5-0.5b-instruct-q4_k_m"),
-                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
-            )
-        )
-        assertFalse(waterfall.isLocalOnly())
-    }
-
-    @Test fun `the default legacy waterfall is not local only`() {
-        assertFalse(CleanupWaterfall.LEGACY_SINGLE_STEP.isLocalOnly())
-    }
-
-    @Test fun `an empty waterfall is not local only`() {
-        assertFalse(CleanupWaterfall(emptyList()).isLocalOnly())
-    }
-}
-
 class CleanupWaterfallUsesLocalLlmTest {
 
     @Test fun `a single LOCAL_LLM step uses local llm`() {

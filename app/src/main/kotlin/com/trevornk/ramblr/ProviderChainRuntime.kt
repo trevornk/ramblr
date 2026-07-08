@@ -7,13 +7,12 @@ package com.trevornk.ramblr
  * are the high-risk part of Trevor's live dictation path.
  */
 object ProviderChainRuntime {
-    /** Provider-chain kinds that are modeled as capable but are not implemented by the live HTTP
-     *  clients yet. Both are empty as of #96: Gemini's cleanup and transcription transports are
-     *  wired up (see [GeminiCleanupProvider]/[GeminiTranscriberClient]). Kept as explicit sets
-     *  (rather than deleted outright) so a future provider kind added to [ProviderKind] ahead of
-     *  its transport has the same "skip explicitly, don't crash or misroute" escape hatch this
-     *  used for Gemini during Phase 1/2. */
-    val cleanupKindsNotImplemented: Set<ProviderKind> = emptySet()
+    /** Transcription provider-chain kinds modeled as capable but not implemented by a live HTTP
+     *  client yet. Empty as of #96 (Gemini's transcription transport is wired up, see
+     *  [GeminiTranscriberClient]). Kept as an explicit set (rather than deleted outright) so a
+     *  future provider kind added to [ProviderKind] ahead of its transport has the same "skip
+     *  explicitly, don't crash or misroute" escape hatch this used for Gemini during Phase 1/2 --
+     *  see its use in [transcriptionCandidates]. */
     val transcriptionKindsNotImplemented: Set<ProviderKind> = emptySet()
 
     /**

@@ -75,18 +75,10 @@ data class CleanupStep(
  * (see [CleanupWaterfallExecutor]) treats consecutive same-group steps as one fail-fast unit.
  */
 data class CleanupWaterfall(val steps: List<CleanupStep>) {
-    /** True when every configured step runs on-device (#37/#65) — running this waterfall can
-     *  never send the transcript anywhere, so the off-device consent prompt
-     *  ([LocalCleanupConsent]) is meaningless for it. An empty waterfall is not "local only":
-     *  it means the user explicitly disabled cleanup by removing every step (#82), and callers
-     *  skip cleanup entirely rather than run it. */
-    fun isLocalOnly(): Boolean =
-        steps.isNotEmpty() && steps.all { it.group == CleanupStepGroup.LOCAL_LLM }
-
     /** True when at least one configured step would run through [CleanupStepGroup.LOCAL_LLM]
      *  (#95) -- used to decide whether pre-warming the local model at recording-start is worth
-     *  doing at all. A waterfall can be a mix of local and cloud steps, so this is deliberately
-     *  weaker than [isLocalOnly]: even one LOCAL_LLM step justifies paying the warm-up cost. */
+     *  doing at all. A waterfall can be a mix of local and cloud steps: even one LOCAL_LLM step
+     *  justifies paying the warm-up cost. */
     fun usesLocalLlm(): Boolean =
         steps.any { it.group == CleanupStepGroup.LOCAL_LLM }
 
