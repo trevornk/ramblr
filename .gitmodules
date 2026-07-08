@@ -4,3 +4,18 @@
 [submodule "sherpa-onnx"]
 	path = sherpa-onnx
 	url = https://github.com/k2-fsa/sherpa-onnx.git
+[submodule "app/src/main/cpp/sherpa_onnx/deps/kaldi-native-fbank"]
+	path = app/src/main/cpp/sherpa_onnx/deps/kaldi-native-fbank
+	url = https://github.com/csukuangfj/kaldi-native-fbank.git
+[submodule "app/src/main/cpp/sherpa_onnx/deps/kaldi-decoder"]
+	path = app/src/main/cpp/sherpa_onnx/deps/kaldi-decoder
+	url = https://github.com/k2-fsa/kaldi-decoder.git
+[submodule "app/src/main/cpp/sherpa_onnx/deps/openfst"]
+	path = app/src/main/cpp/sherpa_onnx/deps/openfst
+	url = https://github.com/csukuangfj/openfst.git
+[submodule "app/src/main/cpp/sherpa_onnx/deps/simple-sentencepiece"]
+	path = app/src/main/cpp/sherpa_onnx/deps/simple-sentencepiece
+	url = https://github.com/pkufool/simple-sentencepiece.git
+[submodule "app/src/main/cpp/sherpa_onnx/deps/json"]
+	path = app/src/main/cpp/sherpa_onnx/deps/json
+	url = https://github.com/nlohmann/json.git

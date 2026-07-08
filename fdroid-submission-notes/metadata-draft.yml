@@ -1,0 +1,96 @@
+Categories:
+  - Writing
+  - Keyboard & IME
+License: GPL-3.0-only
+AuthorName: Trevor NK
+SourceCode: https://github.com/trevornk/ramblr
+IssueTracker: https://github.com/trevornk/ramblr/issues
+Changelog: https://github.com/trevornk/ramblr/releases
+
+AutoName: Ramblr
+
+# --- AntiFeatures ---------------------------------------------------------
+# JUDGMENT CALL (see NOTES.md "AntiFeatures" for full reasoning): Ramblr
+# offers OPTIONAL cloud cleanup/transcription providers (OpenAI, Anthropic,
+# Gemini) that the user must explicitly configure with their OWN API key.
+# No provider is enabled or contacted by default; on-device Whisper/
+# sherpa-onnx transcription + on-device llama.cpp cleanup is the out-of-
+# the-box behavior with zero network calls. Per fdroiddata's own
+# config/antiFeatures.yml, NonFreeNet is defined as: "This app promotes or
+# depends entirely on a non-free network service." Ramblr does not depend
+# entirely on any non-free network service (core transcription + cleanup
+# work fully offline), and does not promote a specific non-free service
+# over the free/on-device path -- cloud providers are one of several
+# opt-in destinations the user can wire up, off by default. Conclusion:
+# NonFreeNet is NOT warranted here. No AntiFeatures tag applied.
+# UNVERIFIED: this is our best-effort reading of fdroiddata's own
+# antiFeatures.yml description text; it has not been confirmed against
+# actual F-Droid maintainer precedent/rulings for comparable BYO-cloud-key
+# apps. Flag for human review before submission -- see NOTES.md.
+
+# --- Builds ----------------------------------------------------------------
+RepoType: git
+Repo: https://github.com/trevornk/ramblr.git
+
+Builds:
+  - versionName: '1.0.1'
+    versionCode: 4
+    # JUDGMENT CALL (see NOTES.md "Build commit"): this is the full commit
+    # hash for d61a4a2, which is AHEAD of the v1.0.1 tag. The v1.0.1 tag
+    # itself still points at the OLD prebuilt-AAR-from-GitHub-Releases
+    # native libs and must NOT be used as the F-Droid build commit -- it
+    # would reintroduce the exact non-free-prebuilt blocker this whole
+    # submission exists to clear. Upstream should cut a new tag (e.g.
+    # v1.0.2) on/after d61a4a2 before actual submission to fdroiddata;
+    # using a raw commit hash instead of a tag works for `fdroid build`
+    # but is atypical for a first submission and reviewers may ask for a
+    # tagged release. UNRESOLVED until upstream tags.
+    commit: d61a4a2820f0d8a47f83256cc3ebcb62604f1675
+    subdir: app
+    submodules: true
+
+    # --- FetchContent-at-configure-time fix -----------------------------
+    # sherpa-onnx's own CMake (cmake/kaldi-native-fbank.cmake,
+    # cmake/kaldi-decoder.cmake, cmake/openfst.cmake,
+    # cmake/simple-sentencepiece.cmake, cmake/json.cmake -- verified by
+    # reading each file directly) calls FetchContent_Declare() for 5 small
+    # SOURCE tarballs at CMake configure time (openfst was a 5th dep missed
+    # in the original research pass -- confirmed present and pinnable at
+    # its own tag). F-Droid's build server has NO network access during
+    # the sandboxed build step, so this breaks an F-Droid build as-is.
+    #
+    # STATUS: IMPLEMENTED (not just planned) as of this draft's update.
+    # All 5 deps are vendored as additional pinned git submodules under
+    # app/src/main/cpp/sherpa_onnx/deps/{kaldi-native-fbank,kaldi-decoder,
+    # openfst,simple-sentencepiece,json}, each checked out at the exact
+    # tag/hash each .cmake file's FetchContent_Declare() targets (verified
+    # via `git describe --tags` per submodule). The CMake wiring lives in
+    # app/src/main/cpp/sherpa_onnx/CMakeLists.txt, which sets
+    # FETCHCONTENT_SOURCE_DIR_<NAME> for each dep before add_subdirectory()
+    # pulls in the sherpa-onnx submodule -- CMake's own FetchContent
+    # override mechanism, requiring zero changes to sherpa-onnx's own
+    # CMakeLists.txt.
+    #
+    # IMPORTANT CORRECTNESS NOTE (verified empirically against the
+    # installed CMake 4.3.4 module, not assumed): FETCHCONTENT_SOURCE_DIR_
+    # <NAME> uses a LITERAL string(TOUPPER ...) of the FetchContent_Declare()
+    # name -- NOT a hyphen-to-underscore substitution. For
+    # simple-sentencepiece the correct variable is
+    # FETCHCONTENT_SOURCE_DIR_SIMPLE-SENTENCEPIECE (hyphen preserved). An
+    # underscore version silently falls through to a real network fetch
+    # attempt instead of erroring, which would have been a subtle,
+    # hard-to-notice F-Droid build failure. A local CMake reproduction
+    # confirmed both the working (hyphen) and broken (underscore) forms.
+    #
+    # No prebuild: hook is needed for this fix -- the submodules are
+    # already checked out at their pinned commits by `submodules: true`
+    # above, and CMakeLists.txt itself references app/src/main/cpp/
+    # sherpa_onnx/deps/<name> directly.
+    gradle:
+      - yes
+    output: build/outputs/apk/release/app-release-unsigned.apk
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: '1.0.1'
+CurrentVersionCode: 4

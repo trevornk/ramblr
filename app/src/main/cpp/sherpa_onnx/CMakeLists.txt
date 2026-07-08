@@ -76,6 +76,37 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 # common-page-size to match the llama_cleanup shim.
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
 
+# --- Offline FetchContent deps (F-Droid: no network during build) ------------------
+#
+# sherpa-onnx's own cmake/*.cmake files FetchContent_Declare() 5 small source deps at
+# CMake configure time (kaldi-native-fbank, kaldi-decoder, openfst, simple-sentencepiece,
+# json -- read directly from cmake/kaldi-native-fbank.cmake, cmake/kaldi-decoder.cmake,
+# cmake/openfst.cmake, cmake/simple-sentencepiece.cmake, cmake/json.cmake). F-Droid's
+# build sandbox has no network, so this breaks configure as-is.
+#
+# Each is vendored here as an additional pinned git submodule (deps/<name>, see
+# .gitmodules), at the exact tag each .cmake file's FetchContent_Declare() targets.
+# FETCHCONTENT_SOURCE_DIR_<NAME> is CMake's own FetchContent override mechanism: when
+# set, FetchContent_GetProperties()/_Populate() skip the network/URL entirely and treat
+# the given path as already-populated -- no changes to sherpa-onnx's own CMakeLists.txt
+# needed. <NAME> is the exact FetchContent_Declare()'d name run through CMake's own
+# string(TOUPPER ...) (see FetchContent.cmake's __FetchContent_Populate) -- a LITERAL
+# uppercase, NOT a hyphen-to-underscore substitution. Verified empirically against the
+# installed CMake 4.3.4 module: a -DFETCHCONTENT_SOURCE_DIR_SIMPLE_SENTENCEPIECE= with
+# underscores silently falls through to a real network fetch attempt; only the
+# hyphen-preserving -DFETCHCONTENT_SOURCE_DIR_SIMPLE-SENTENCEPIECE= is honored:
+#   kaldi_native_fbank   -> FETCHCONTENT_SOURCE_DIR_KALDI_NATIVE_FBANK
+#   kaldi_decoder        -> FETCHCONTENT_SOURCE_DIR_KALDI_DECODER
+#   openfst              -> FETCHCONTENT_SOURCE_DIR_OPENFST
+#   simple-sentencepiece -> FETCHCONTENT_SOURCE_DIR_SIMPLE-SENTENCEPIECE  (hyphen kept!)
+#   json                 -> FETCHCONTENT_SOURCE_DIR_JSON
+set(_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps")
+set(FETCHCONTENT_SOURCE_DIR_KALDI_NATIVE_FBANK      "${_DEPS_DIR}/kaldi-native-fbank"   CACHE PATH "" FORCE)
+set(FETCHCONTENT_SOURCE_DIR_KALDI_DECODER           "${_DEPS_DIR}/kaldi-decoder"        CACHE PATH "" FORCE)
+set(FETCHCONTENT_SOURCE_DIR_OPENFST                 "${_DEPS_DIR}/openfst"              CACHE PATH "" FORCE)
+set(FETCHCONTENT_SOURCE_DIR_SIMPLE-SENTENCEPIECE    "${_DEPS_DIR}/simple-sentencepiece" CACHE PATH "" FORCE)
+set(FETCHCONTENT_SOURCE_DIR_JSON                    "${_DEPS_DIR}/json"                 CACHE PATH "" FORCE)
+
 # 5 levels up from app/src/main/cpp/sherpa_onnx/ lands at the repo root, where the
 # sherpa-onnx submodule lives (a sibling of llama.cpp; see .gitmodules).
 get_filename_component(SHERPA_ONNX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../sherpa-onnx" ABSOLUTE)
