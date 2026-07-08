@@ -40,6 +40,16 @@ fun ProviderKind.supportsTranscription(): Boolean = when (this) {
 fun ProviderKind.supportsCleanup(): Boolean = true
 
 /**
+ * True when [chain] has at least one non-LOCAL, transcription-capable entry whose credential is
+ * configured -- i.e. cloud transcription is actually usable, regardless of which provider. Setup
+ * readiness previously hardcoded OpenAI, so a fully-supported Gemini-only cloud-transcription user
+ * was stuck on "Setup required" forever (M8). [isConfigured] is the caller's seam onto the
+ * credential store, keeping this pure and testable.
+ */
+fun hasConfiguredCloudTranscription(chain: ProviderChain, isConfigured: (ProviderKind) -> Boolean): Boolean =
+    chain.entries.any { it.kind != ProviderKind.LOCAL && it.kind.supportsTranscription() && isConfigured(it.kind) }
+
+/**
  * One entry in the user's [ProviderChain]. Deliberately mirrors the shape of [CleanupStep]
  * (a [kind] instead of a [CleanupStepGroup], the same [model]/[baseUrlOverride] fields) so
  * mapping between the two models (see [ProviderChainRuntime.cleanupWaterfallFor]) stays a
