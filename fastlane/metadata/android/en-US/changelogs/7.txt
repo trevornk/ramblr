@@ -1,0 +1,1 @@
+Fixed a Pixel Fold display bug: unfolding/folding the device while Ramblr's overlay was active could trigger a Pixel OS bug causing the screen to stay black for a couple seconds. The overlay no longer attaches a hidden view synchronously at the moment it's added to the screen, which avoids the OS-level trigger condition.
