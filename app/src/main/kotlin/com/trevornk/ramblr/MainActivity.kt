@@ -231,6 +231,9 @@ class MainActivity : BaseSettingsActivity() {
     private fun startWalkthrough() {
         walkthroughForced = true
         onboardingIntroShown = false
+        // A deliberate "redo" starts the callback-chained steps over from the mode step rather than
+        // resuming at whatever step a prior incomplete run left persisted (#L15).
+        markOnboardingStep(STEP_MODE)
         advanceOnboardingStep(force = true)
     }
 
@@ -247,8 +250,20 @@ class MainActivity : BaseSettingsActivity() {
             }
             !hasPerm(Manifest.permission.RECORD_AUDIO) -> showOnboardingMicStep()
             !accessibilityEnabled -> showOnboardingAccessibilityStep()
-            else -> showOnboardingModeStep()
+            // Resume the callback-chained steps 4/5 at the furthest one reached, so process death
+            // mid-onboarding doesn't drop the user back to the mode step (#L15).
+            else -> when (prefs().getString(KEY_ONBOARDING_STEP, STEP_MODE)) {
+                STEP_TRY -> showOnboardingTryStep()
+                STEP_STREAMING -> showOnboardingStreamingStep()
+                STEP_CLEANUP -> showOnboardingCleanupStep()
+                else -> showOnboardingModeStep()
+            }
         }
+    }
+
+    /** Persists the furthest onboarding dialog reached so it can be resumed after process death (#L15). */
+    private fun markOnboardingStep(step: String) {
+        prefs().edit().putString(KEY_ONBOARDING_STEP, step).apply()
     }
 
     /** Whether the Status row's "tap to finish setup" affordance should do anything (#52) --
@@ -277,7 +292,7 @@ class MainActivity : BaseSettingsActivity() {
     }
 
     private fun finishOnboarding() {
-        prefs().edit().putBoolean(KEY_ONBOARDING_COMPLETE, true).apply()
+        prefs().edit().putBoolean(KEY_ONBOARDING_COMPLETE, true).remove(KEY_ONBOARDING_STEP).apply()
         // #98: belt-and-suspenders alongside the OnboardingWizard.shouldAdvance fix -- resetting
         // this here means even a future logic change to shouldAdvance can't silently reintroduce
         // the same "wizard state never clears" class of bug.
@@ -406,6 +421,7 @@ class MainActivity : BaseSettingsActivity() {
     }
 
     private fun showOnboardingModeStep() {
+        markOnboardingStep(STEP_MODE)
         val recommended = MODEL_CATALOG.firstOrNull { it.recommended } ?: MODEL_CATALOG.first()
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Step 3 of 5: Choose transcription mode")
@@ -501,6 +517,7 @@ class MainActivity : BaseSettingsActivity() {
      * Gemini or OpenAI directly with no bias toward either.
      */
     private fun showOnboardingCleanupStep() {
+        markOnboardingStep(STEP_CLEANUP)
         val recommendedLocal = LOCAL_CLEANUP_MODEL_CATALOG.firstOrNull { it.recommended } ?: LOCAL_CLEANUP_MODEL_CATALOG.first()
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Step 4 of 5: Clean up dictation with AI? (optional)")
@@ -613,6 +630,7 @@ class MainActivity : BaseSettingsActivity() {
      *  itself (a network call) isn't affected by local CPU load, but it starts later when local
      *  transcription had to compete with the streaming model for the phone's cores. */
     private fun showOnboardingStreamingStep() {
+        markOnboardingStep(STEP_STREAMING)
         val recommended = STREAMING_MODEL_CATALOG.firstOrNull { it.recommended } ?: STREAMING_MODEL_CATALOG.first()
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Step 5 of 5: Show live text while you speak? (optional)")
@@ -667,6 +685,7 @@ class MainActivity : BaseSettingsActivity() {
     }
 
     private fun showOnboardingTryStep() {
+        markOnboardingStep(STEP_TRY)
         val testField = EditText(this).apply {
             hint = "Tap here, then use the floating button to dictate a test phrase"
             setPadding(dp(24), dp(16), dp(24), dp(16))
@@ -703,6 +722,16 @@ class MainActivity : BaseSettingsActivity() {
         private const val KEY_STREAMING_PREVIEW = "streaming_preview_enabled"
         private const val KEY_STREAMING_MODEL_NAME = "streaming_model_name"
         private const val KEY_LOCAL_CLEANUP_MODEL_NAME = "local_cleanup_model_name"
+
+        /** Furthest onboarding dialog reached, persisted so the callback-chained steps 4/5 resume
+         *  at the right place after process death rather than restarting from the mode step (#L15).
+         *  The earlier steps (intro/mic/accessibility) are already state-driven and resume on their
+         *  own. Cleared in [finishOnboarding]. */
+        private const val KEY_ONBOARDING_STEP = "onboarding_step"
+        private const val STEP_MODE = "mode"
+        private const val STEP_CLEANUP = "cleanup"
+        private const val STEP_STREAMING = "streaming"
+        private const val STEP_TRY = "try"
 
         /** Intent extra AdvancedActivity sets when handing off "Redo setup walkthrough" back to
          *  this Activity (#93) -- see [handleWalkthroughIntent]. */
