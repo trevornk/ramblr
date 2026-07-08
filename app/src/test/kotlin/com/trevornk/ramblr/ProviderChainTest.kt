@@ -165,3 +165,33 @@ class ProviderChainWithLocalFloorTest {
         )
     }
 }
+
+class HasConfiguredCloudTranscriptionTest {
+    private val allConfigured: (ProviderKind) -> Boolean = { true }
+    private val noneConfigured: (ProviderKind) -> Boolean = { false }
+
+    @Test fun `true when a configured non-LOCAL transcription provider is present (M8)`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.GEMINI, "gemini-2.5-flash")))
+        assertTrue(hasConfiguredCloudTranscription(chain, allConfigured))
+    }
+
+    @Test fun `a Gemini-only chain counts, not just OpenAI (M8)`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.GEMINI, "gemini-2.5-flash")))
+        assertTrue(hasConfiguredCloudTranscription(chain) { it == ProviderKind.GEMINI })
+    }
+
+    @Test fun `false when the only transcription provider is LOCAL`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.LOCAL, "model-a")))
+        assertFalse(hasConfiguredCloudTranscription(chain, allConfigured))
+    }
+
+    @Test fun `false when a cloud transcription provider is present but unconfigured`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "whisper-1")))
+        assertFalse(hasConfiguredCloudTranscription(chain, noneConfigured))
+    }
+
+    @Test fun `false when the only cloud entry is cleanup-only (Anthropic cannot transcribe)`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5")))
+        assertFalse(hasConfiguredCloudTranscription(chain, allConfigured))
+    }
+}

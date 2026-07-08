@@ -128,14 +128,19 @@ class MainActivity : BaseSettingsActivity() {
             accessibilityEnabled = WhisperAccessibilityService.instance != null,
             onboardingComplete = prefs().getBoolean(KEY_ONBOARDING_COMPLETE, false)
         )
-        if (alreadyOnboarded && !hasPerm(Manifest.permission.RECORD_AUDIO)) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
-        }
-        // Independent of the mic grant above: needed for model-download progress/result
-        // notifications (#56) to actually display on API 33+. Never blocks a download if
-        // declined -- see DownloadNotifications.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPerm(Manifest.permission.POST_NOTIFICATIONS)) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        // Only auto-request permissions for a returning (already-onboarded) user: during onboarding
+        // the wizard owns the mic ask, and the notification ask is deferred until after onboarding.
+        // Mic + notifications go in ONE requestPermissions call (M13): two back-to-back calls both
+        // using request code 1 could cancel each other on some Android versions, so the mic prompt
+        // might never appear. Notifications (#56) never block a download if declined -- see
+        // DownloadNotifications.
+        if (alreadyOnboarded) {
+            val needed = mutableListOf<String>()
+            if (!hasPerm(Manifest.permission.RECORD_AUDIO)) needed += Manifest.permission.RECORD_AUDIO
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPerm(Manifest.permission.POST_NOTIFICATIONS)) {
+                needed += Manifest.permission.POST_NOTIFICATIONS
+            }
+            if (needed.isNotEmpty()) ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1)
         }
 
         handleWalkthroughIntent(intent)
@@ -184,7 +189,11 @@ class MainActivity : BaseSettingsActivity() {
         val audio = hasPerm(Manifest.permission.RECORD_AUDIO)
         val acc = WhisperAccessibilityService.instance != null
         val useLocal = prefs().getBoolean("use_local", true)
-        val hasKey = ProviderCredentialStore.isConfigured(this, ProviderKind.OPENAI)
+        // Any configured non-LOCAL transcription-capable provider counts as "has a cloud key", not
+        // just OpenAI, so a Gemini-only cloud-transcription user isn't stuck on "Setup required" (M8).
+        val hasKey = hasConfiguredCloudTranscription(ProviderChainStore.load(this)) {
+            ProviderCredentialStore.isConfigured(this, it)
+        }
         val hasModel = LocalTranscriber.availableModels(this).isNotEmpty()
 
         setupRowSub.text = SetupActivity.subtitle(hasAudio = audio, hasAccessibility = acc)
@@ -250,7 +259,9 @@ class MainActivity : BaseSettingsActivity() {
             accessibilityEnabled = WhisperAccessibilityService.instance != null,
             transcriptionLocal = prefs().getBoolean("use_local", true),
             hasLocalModel = LocalTranscriber.availableModels(this).isNotEmpty(),
-            hasApiKey = ProviderCredentialStore.isConfigured(this, ProviderKind.OPENAI),
+            hasApiKey = hasConfiguredCloudTranscription(ProviderChainStore.load(this)) {
+                ProviderCredentialStore.isConfigured(this, it)
+            },
         )
         if (!ready) startWalkthrough()
     }
