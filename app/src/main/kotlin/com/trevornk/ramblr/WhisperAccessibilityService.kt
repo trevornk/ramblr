@@ -1512,7 +1512,6 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         val engine = RecordingEngine(cacheDir, stateMachine)
         val started = engine.start(
-            onMaxDuration = { /* handled in startMaxDurationTranscription on the main thread */ },
             onFinished = { result -> onRecordingFinished(engine, result) },
             onChunk = if (streamingActive) ::handleStreamingChunk else { _, _ -> }
         )
@@ -1711,7 +1710,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         val allowCloudFallback = DictationModeToggle.allowCloudFallback(this)
 
         when {
-            useLocal && transcriberSlot.get() != null -> transcribeLocal(file, token, allowCloudFallback)
+            useLocal && transcriberSlot.get() != null -> transcribeLocal(file, token)
             // #98 UX follow-up: previously this fell straight through to transcribeApi() whenever
             // the local model wasn't loaded yet, regardless of *why* -- including the real-world
             // case of a fresh install where onboarding's model download is still in progress.
@@ -1739,7 +1738,7 @@ class WhisperAccessibilityService : AccessibilityService() {
      * accepts one full FloatArray per stream — there's no incremental/chunked accept in the
      * vendored bindings — so this remains the single largest allocation on this path.
      */
-    private fun transcribeLocal(file: File, token: Int, allowCloudFallback: Boolean) {
+    private fun transcribeLocal(file: File, token: Int) {
         thread {
             try {
                 val samples = try { PcmFileBuffer.readAsFloatArray(file) } finally { file.delete() }
@@ -1855,7 +1854,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 }
                 ProviderKind.LOCAL -> {
                     Log.i(TAG, "Transcription via ProviderChain provider=${entry.kind}")
-                    transcribeLocal(file, token, allowCloudFallback = false)
+                    transcribeLocal(file, token)
                 }
                 ProviderKind.GEMINI -> {
                     val apiKey = ProviderCredentialStore.get(this, ProviderKind.GEMINI)

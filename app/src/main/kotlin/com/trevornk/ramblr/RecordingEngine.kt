@@ -63,8 +63,9 @@ class RecordingEngine(
      * Validates the mic and starts the reader thread synchronously. Returns false with no side
      * effects if the AudioRecord could not be acquired (mic busy, permission race, bad
      * buffer size) — the caller should surface that as user feedback ("mic busy") rather than
-     * crash. [onMaxDuration] and [onFinished] run on the reader thread; callers must hop back to
-     * the main thread themselves before touching UI. [onChunk] is an optional tee (#29): called
+     * crash. [onFinished] runs on the reader thread; callers must hop back to the main thread
+     * themselves before touching UI (a MAX_DURATION stop is signalled via [Result.stopReason], not
+     * a separate callback). [onChunk] is an optional tee (#29): called
      * with each freshly-read buffer and its valid length right after every successful
      * `AudioRecord.read`, before it's written to [PcmFileBuffer] — e.g. to feed live audio to a
      * streaming recognizer. Defaults to a no-op so callers that don't need it (the common case)
@@ -72,7 +73,6 @@ class RecordingEngine(
      * recording, since a bug in an optional preview feature must never break base recording.
      */
     fun start(
-        onMaxDuration: () -> Unit,
         onFinished: (Result) -> Unit,
         onChunk: (ByteArray, Int) -> Unit = { _, _ -> }
     ): Boolean {
@@ -208,7 +208,6 @@ class RecordingEngine(
             // the reader thread can synchronously re-open the PCM file while its FileOutputStream
             // is still open.
             if (result.pcmFile == null) pcmFile.delete()
-            if (!result.discarded && result.stopReason == StopReason.MAX_DURATION) onMaxDuration()
             onFinished(result)
         }
         return true
