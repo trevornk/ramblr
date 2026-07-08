@@ -66,14 +66,22 @@ class AdvancedActivity : BaseSettingsActivity() {
     private lateinit var overlayGlyphColorRow: LinearLayout
     private lateinit var overlayCustomIconRow: LinearLayout
     private lateinit var overlayRemoveCustomIconRow: LinearLayout
+    // Built unconditionally and shown/hidden in refresh() (#L16): building it only when hidden at
+    // onCreate meant hiding the icon via the overlay while this screen was paused left no way back
+    // on resume, and it relied on recreate() as a refresh hammer.
+    private lateinit var iconHiddenRow: LinearLayout
 
     // Modern Photo Picker (#43): registered unconditionally during field init, per the Activity
     // Result API.
     private val pickOverlayIcon = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@registerForActivityResult
+        // Decode/save on the application context so the background work doesn't pin this Activity
+        // past destruction, and skip the UI update if the Activity is already gone (#L16).
+        val appContext = applicationContext
         thread {
-            val saved = OverlayIconStore.save(this, uri)
+            val saved = OverlayIconStore.save(appContext, uri)
             runOnUiThread {
+                if (isDestroyed || isFinishing) return@runOnUiThread
                 if (saved) {
                     OverlayAppearancePrefs.setHasCustomIcon(this, true)
                     onOverlayAppearanceChanged()
@@ -194,17 +202,16 @@ class AdvancedActivity : BaseSettingsActivity() {
 
         // Fallback restore path (#Feature B): if the icon is currently hidden -- including for
         // someone who turns the toggle above off while already hidden -- give them a way back
-        // that doesn't depend on the notification still being around.
-        if (IconHiddenState.isHidden(this)) {
-            root.addView(
-                settingsRow("Icon is currently hidden", "Tap to show it again") {
-                    IconHiddenState.setHidden(this, false)
-                    WhisperAccessibilityService.instance?.applyOverlayVisibility()
-                    IconVisibilityNotifications.cancel(this)
-                    recreate()
-                }
-            )
+        // that doesn't depend on the notification still being around. Built unconditionally and
+        // shown/hidden in refresh() so hiding the icon while this screen is backgrounded still
+        // surfaces the row on resume (#L16).
+        iconHiddenRow = settingsRow("Icon is currently hidden", "Tap to show it again") {
+            IconHiddenState.setHidden(this, false)
+            WhisperAccessibilityService.instance?.applyOverlayVisibility()
+            IconVisibilityNotifications.cancel(this)
+            refresh()
         }
+        root.addView(iconHiddenRow)
 
         // --- Overlay appearance (#43/#53) ---
         root.addView(sectionHeader("Overlay appearance"))
@@ -296,6 +303,7 @@ class AdvancedActivity : BaseSettingsActivity() {
     }
 
     private fun refresh() {
+        iconHiddenRow.visibility = if (IconHiddenState.isHidden(this)) View.VISIBLE else View.GONE
         debugVisibilitySwitch.isChecked = DebugVisibilityToggle.isEnabled(this)
         vocabularyRowSub.text = vocabularySummary()
         historyEnabledSwitch.isChecked = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
