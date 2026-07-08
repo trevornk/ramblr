@@ -19,10 +19,10 @@
 #     them from GGUF metadata at runtime, since it ships exactly one curated model; see
 #     ModelDownloader.kt's LOCAL_CLEANUP_MODEL).
 #
-# To actually build this: `add_subdirectory` below expects a `llama.cpp` checkout two levels up
-# (mirroring SmolChat-Android's git submodule at `smollm/llama.cpp`) -- pin it to a specific
-# llama.cpp release tag (e.g. the "b9867" tag referenced in this repo's #37 research) and fetch
-# it via a Gradle task the same shape as fetchSherpaOnnxNativeLibs in app/build.gradle.kts.
+# To actually build this: `add_subdirectory` below expects a `llama.cpp` checkout two levels up.
+# It's a git submodule (see .gitmodules), pinned to a specific llama.cpp release tag (e.g. the
+# "b9867" tag referenced in this repo's #37 research) -- the same source-submodule pattern the
+# sherpa_onnx module (../sherpa_onnx/CMakeLists.txt) uses for its own native dependency.
 
 cmake_minimum_required(VERSION 3.22.1)
 project("llama_cleanup")
