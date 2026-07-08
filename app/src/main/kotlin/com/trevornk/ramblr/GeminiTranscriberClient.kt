@@ -102,14 +102,17 @@ object GeminiTranscriberClient {
         // A malformed key/model (or one OkHttp otherwise rejects) throws IllegalArgumentException
         // from Request.Builder().url() rather than failing the call -- caught so it reports
         // through the same Result/callback path as a network failure, instead of crashing (see
-        // PostProcessor.process's identical handling of a bad custom base URL, #4).
+        // PostProcessor.process's identical handling of a bad custom base URL, #4). The key rides
+        // in the x-goog-api-key header (M-3), not the URL, and the message is query-redacted for
+        // defense in depth so nothing echoed from the URL can leak a secret.
         val request = try {
             Request.Builder()
-                .url(GeminiCleanupProvider.endpointUrl(model, apiKey))
+                .url(GeminiCleanupProvider.endpointUrl(model))
+                .header("x-goog-api-key", apiKey)
                 .post(body)
                 .build()
         } catch (e: IllegalArgumentException) {
-            callback(Result(null, "Invalid Gemini endpoint: ${e.message}"))
+            callback(Result(null, "Invalid Gemini endpoint: ${UrlRedaction.redact(e.message)}"))
             return
         }
 

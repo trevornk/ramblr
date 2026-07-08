@@ -344,7 +344,9 @@ object RealCleanupHttpTransport : CleanupHttpTransport {
         val request = try {
             requestBuilder.build()
         } catch (e: IllegalArgumentException) {
-            callback(CleanupHttpOutcome.ConnectionFailure(e.message))
+            // Query-redact: the exception message echoes the full URL, which must never carry a
+            // credential into logcat/toast even if a future endpoint puts one in a query (M-3).
+            callback(CleanupHttpOutcome.ConnectionFailure(UrlRedaction.redact(e.message)))
             return
         }
 
@@ -580,8 +582,8 @@ object CleanupWaterfallExecutor {
 
         if (step.group == CleanupStepGroup.GEMINI_DIRECT) {
             transport.send(
-                GeminiCleanupProvider.endpointUrl(step.model, apiKey),
-                emptyMap(),
+                GeminiCleanupProvider.endpointUrl(step.model),
+                GeminiCleanupProvider.headers(apiKey),
                 GeminiCleanupProvider.buildRequestBody(text, prompt).toString(),
                 CleanupStepTimeouts.DEFAULT,
                 cancelHolder,
