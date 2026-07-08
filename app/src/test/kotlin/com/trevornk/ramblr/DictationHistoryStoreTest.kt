@@ -215,6 +215,22 @@ class DictationHistoryStoreTest {
     }
 }
 
+class DictationHistoryStoreAtomicWriteTest {
+    @Test fun `atomic write leaves no leftover temp file (L8)`() {
+        val file = File.createTempFile("dictation_history_atomic_", ".jsonl").apply { delete() }
+        val store = DictationHistoryStore(file)
+        store.add(DictationHistoryEntry(timestamp = 1, rawText = "hello", cleanedText = "Hello."))
+        store.add(DictationHistoryEntry(timestamp = 2, rawText = "world", cleanedText = "World."))
+
+        // The temp sibling used for the atomic rename must not survive a successful write.
+        val tmp = File(file.parentFile, "${file.name}.tmp")
+        assertFalse(tmp.exists())
+        // And the content round-trips through the rename unchanged.
+        assertEquals(2, store.all().size)
+        file.delete()
+    }
+}
+
 class ShouldShowPaidFallbackBadgeTest {
     private fun entry(paidFallbackGroup: CleanupStepGroup?) =
         DictationHistoryEntry(timestamp = 1, rawText = "raw", cleanedText = "cleaned", paidFallbackGroup = paidFallbackGroup)

@@ -26,9 +26,12 @@ fun shouldShowPaidFallbackBadge(debugVisibilityEnabled: Boolean, entry: Dictatio
 /**
  * Local-only, file-backed log of past dictations (see #25) so a transcript survives even if
  * injection fails and the user misses the clipboard-fallback toast. Stored as JSON-lines in
- * app-private storage (excluded from backup, `allowBackup` is false); capped at [maxEntries] with
- * the oldest entries evicted on write. Plain [File] I/O, no Android framework dependency, so this
- * is unit-testable against a temp file.
+ * app-private storage; capped at [maxEntries] with the oldest entries evicted on write. Plain
+ * [File] I/O, no Android framework dependency, so this is unit-testable against a temp file.
+ *
+ * Excluded from backup even though the manifest sets `allowBackup="true"`: backup_rules.xml /
+ * data_extraction_rules.xml use include-only semantics (only ramblr.xml + overlay_icon.png), so
+ * dictation_history.jsonl is never backed up (security audit L-6).
  */
 class DictationHistoryStore(private val file: File, private val maxEntries: Int = DEFAULT_MAX_ENTRIES) {
 
@@ -108,7 +111,17 @@ class DictationHistoryStore(private val file: File, private val maxEntries: Int 
     private fun writeAll(entries: List<DictationHistoryEntry>) {
         file.parentFile?.mkdirs()
         val body = entries.joinToString("") { serialize(it) + "\n" }
-        file.writeText(body)
+        // Write to a temp sibling then atomically rename over the target (bugs audit L8): a plain
+        // truncate-then-write loses the whole history if the process dies mid-write, whereas a
+        // rename either fully replaces the file or leaves the previous version intact.
+        val tmp = File(file.parentFile, "${file.name}.tmp")
+        tmp.writeText(body)
+        if (!tmp.renameTo(file)) {
+            // renameTo can fail across some filesystems even on the same dir; fall back to a
+            // direct write so a rename quirk never silently drops the update.
+            file.writeText(body)
+            tmp.delete()
+        }
     }
 
     private fun serialize(entry: DictationHistoryEntry): String =
