@@ -30,6 +30,7 @@ words directly into the focused field the moment you're done talking.
 <p align="center">
   <img src="docs/screenshots/main.png" width="200" alt="Ramblr main settings screen">
   <img src="docs/screenshots/cleanup.png" width="200" alt="Cleanup style settings">
+  <img src="docs/screenshots/live-preview.png" width="200" alt="Live Preview settings">
   <img src="docs/screenshots/cloud-providers.png" width="200" alt="Cloud provider chain settings">
   <img src="docs/screenshots/advanced.png" width="200" alt="Advanced overlay behavior settings">
 </p>
