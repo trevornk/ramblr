@@ -15,14 +15,12 @@ class LocalCleanupModelSlotTest {
 
     @Test fun `an empty slot needs a load for any path`() {
         val slot = LocalCleanupModelSlot()
-        assertFalse(slot.isLoaded)
         assertTrue(slot.needsReload("/models/qwen.gguf"))
     }
 
     @Test fun `the held model is reused for the same path`() {
         val slot = LocalCleanupModelSlot()
         slot.recordLoaded("/models/qwen.gguf", nowMs = 1_000L)
-        assertTrue(slot.isLoaded)
         assertFalse(slot.needsReload("/models/qwen.gguf"))
     }
 
@@ -39,7 +37,6 @@ class LocalCleanupModelSlotTest {
         val slot = LocalCleanupModelSlot()
         slot.recordLoaded("/models/qwen.gguf", nowMs = 1_000L)
         slot.recordReleased()
-        assertFalse(slot.isLoaded)
         assertTrue(slot.needsReload("/models/qwen.gguf"))
     }
 

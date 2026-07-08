@@ -68,16 +68,6 @@ class CleanupWaterfallPlannerTest {
         val groups = CleanupWaterfallPlanner.groupConsecutive(steps)
         assertEquals(3, groups.size)
     }
-
-    @Test fun `flattenIndex reverses groupConsecutive`() {
-        val steps = listOf(
-            CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
-            CleanupStep(CleanupStepGroup.OMNIROUTE, "cx/gpt-5.5"),
-            CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
-        )
-        val groups = CleanupWaterfallPlanner.groupConsecutive(steps)
-        assertEquals(steps, CleanupWaterfallPlanner.flattenIndex(groups))
-    }
 }
 
 class CleanupWaterfallCursorTest {

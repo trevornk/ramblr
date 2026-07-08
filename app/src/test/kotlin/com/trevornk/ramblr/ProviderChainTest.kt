@@ -84,31 +84,27 @@ class ProviderChainCapableEntriesForTest {
     }
 }
 
-class ProviderChainIsLocalOnlyAndUsesLocalLlmTest {
+class ProviderChainUsesLocalLlmTest {
 
-    @Test fun `a single LOCAL entry is local only`() {
-        assertTrue(ProviderChain(listOf(ProviderChainEntry(ProviderKind.LOCAL, "m"))).isLocalOnly())
+    @Test fun `a single LOCAL entry uses local llm`() {
+        assertTrue(ProviderChain(listOf(ProviderChainEntry(ProviderKind.LOCAL, "m"))).usesLocalLlm())
     }
 
-    @Test fun `mixing local and network entries is not local only but does use local llm`() {
+    @Test fun `mixing local and network entries uses local llm`() {
         val chain = ProviderChain(
             listOf(
                 ProviderChainEntry(ProviderKind.LOCAL, "m"),
                 ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-mini"),
             )
         )
-        assertFalse(chain.isLocalOnly())
         assertTrue(chain.usesLocalLlm())
     }
 
-    @Test fun `an empty chain is neither local only nor uses local llm`() {
-        val chain = ProviderChain(emptyList())
-        assertFalse(chain.isLocalOnly())
-        assertFalse(chain.usesLocalLlm())
+    @Test fun `an empty chain does not use local llm`() {
+        assertFalse(ProviderChain(emptyList()).usesLocalLlm())
     }
 
-    @Test fun `the default chain is not local only and does not use local llm`() {
-        assertFalse(ProviderChain.DEFAULT_SINGLE_OPENAI_ENTRY.isLocalOnly())
+    @Test fun `the default chain does not use local llm`() {
         assertFalse(ProviderChain.DEFAULT_SINGLE_OPENAI_ENTRY.usesLocalLlm())
     }
 }

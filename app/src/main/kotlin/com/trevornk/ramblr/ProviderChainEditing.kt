@@ -31,27 +31,14 @@ object ProviderChainEditing {
         }
     }
 
-    /** Swaps [index] with its predecessor. No-op if [index] is already first or out of range. */
-    fun moveUp(entries: List<ProviderChainEntry>, index: Int): List<ProviderChainEntry> {
-        if (index !in entries.indices || index == 0) return entries
-        return entries.toMutableList().apply { add(index - 1, removeAt(index)) }
-    }
-
-    /** Swaps [index] with its successor. No-op if [index] is already last or out of range. */
-    fun moveDown(entries: List<ProviderChainEntry>, index: Int): List<ProviderChainEntry> {
-        if (index !in entries.indices || index == entries.lastIndex) return entries
-        return entries.toMutableList().apply { add(index + 1, removeAt(index)) }
-    }
-
     /**
-     * Like [moveUp], but swaps with the nearest preceding entry that is NOT [ProviderKind.LOCAL]
-     * (skipping over it if one sits directly in between) instead of the literal predecessor.
-     * [CloudProviderActivity] only ever displays cloud-capable entries -- if a LOCAL floor entry
-     * happens to sit between two cloud entries (e.g. added chain order was cloud, then Local, then
-     * a second cloud provider), a plain index-based [moveUp] would silently swap the tapped entry
-     * past the invisible LOCAL entry instead of past its visible cloud neighbor, producing zero
-     * visible change and a confusing "the button did nothing" bug. No-op if there is no earlier
-     * cloud entry or [index] is out of range.
+     * Swaps [index] with the nearest preceding entry that is NOT [ProviderKind.LOCAL] (skipping
+     * over it if one sits directly in between). [CloudProviderActivity] only ever displays
+     * cloud-capable entries -- if a LOCAL floor entry happens to sit between two cloud entries
+     * (e.g. added chain order was cloud, then Local, then a second cloud provider), a plain
+     * index-based swap would silently move the tapped entry past the invisible LOCAL entry instead
+     * of past its visible cloud neighbor, producing zero visible change and a confusing "the button
+     * did nothing" bug. No-op if there is no earlier cloud entry or [index] is out of range.
      */
     fun moveCloudUp(entries: List<ProviderChainEntry>, index: Int): List<ProviderChainEntry> {
         if (index !in entries.indices) return entries

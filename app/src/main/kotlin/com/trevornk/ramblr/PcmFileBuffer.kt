@@ -40,8 +40,6 @@ class PcmFileBuffer(private val file: File, private val maxBytes: Long) : AutoCl
 
     override fun close() { out.close() }
 
-    fun deleteFile() { file.delete() }
-
     companion object {
         // Kept even so a chunk never splits a 16-bit sample across two reads.
         private const val CHUNK_BYTES = 64 * 1024

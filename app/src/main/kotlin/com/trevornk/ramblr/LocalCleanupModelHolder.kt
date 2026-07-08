@@ -20,8 +20,6 @@ class LocalCleanupModelSlot(private val idleUnloadMs: Long = IDLE_UNLOAD_MS) {
     private var loadedPath: String? = null
     private var lastUsedAtMs: Long = 0L
 
-    val isLoaded: Boolean get() = loadedPath != null
-
     /** True when serving [requestedPath] requires a (re)load: nothing is held, or a different
      *  model is held (the user switched models in Settings since the last dictation). */
     fun needsReload(requestedPath: String): Boolean = loadedPath != requestedPath

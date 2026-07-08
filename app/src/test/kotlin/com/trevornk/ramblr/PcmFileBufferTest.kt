@@ -80,16 +80,6 @@ class PcmFileBufferTest {
         assertEquals(4L, buffer.bytesWritten)
     }
 
-    @Test fun `deleteFile removes the backing file`() {
-        val file = tempFile()
-        val buffer = PcmFileBuffer(file, maxBytes = 1000)
-        buffer.write(byteArrayOf(1), 0, 1)
-        buffer.close()
-
-        assertTrue(file.exists())
-        buffer.deleteFile()
-        assertFalse(file.exists())
-    }
 
     // -- readAsFloatArray --
 
