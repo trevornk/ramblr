@@ -158,6 +158,31 @@ class ModelDownloaderTest {
         assertTrue(MUMBLE_CLEANUP_Q4_0_MODEL.sha256!!.matches(Regex("[0-9a-f]{64}")))
     }
 
+    // -- sideload-only classification (#H7) --
+
+    @Test fun `a local-cleanup model with no sourceUrl is sideload-only`() {
+        assertTrue(ModelDownloader.isSideloadOnly(MUMBLE_CLEANUP_Q4_0_MODEL))
+    }
+
+    @Test fun `a local-cleanup model with a real sourceUrl is downloadable, not sideload-only`() {
+        assertFalse(ModelDownloader.isSideloadOnly(LOCAL_CLEANUP_MODEL))
+    }
+
+    @Test fun `an ASR model (not local-cleanup) is never sideload-only even though its sourceUrl is null`() {
+        // Offline/streaming models legitimately have sourceUrl == null -- they resolve to the
+        // sherpa-onnx release BASE_URL. isSideloadOnly must apply only to local-cleanup entries.
+        val asr = MODEL_CATALOG.first { it.sourceUrl == null }
+        assertFalse(ModelDownloader.isSideloadOnly(asr))
+    }
+
+    @Test fun `a sideload-only download failure is classified terminal, not a 404 retry loop`() {
+        // download() short-circuits a sideload-only model to DownloadState.Error with no
+        // IOException cause; shouldRetry must then treat it as terminal (no retries) rather than
+        // the transient-IO 404 loop the old BASE_URL fallback produced (#H7).
+        val sideloadError = DownloadState.Error("sideload-only", cause = null)
+        assertFalse(ModelDownloadWorker.shouldRetry(sideloadError.cause, runAttemptCount = 0))
+    }
+
     // -- orphaned model dir pruning (post-Q4_K_M-removal cleanup) --
 
     @Test fun `orphanedArchives flags installed dirs no longer in the catalog`() {

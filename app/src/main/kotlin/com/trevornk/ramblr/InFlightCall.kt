@@ -38,6 +38,7 @@ class InFlightCall {
 
     /** Cancels the in-flight call, if any, and clears the reference. Safe to call with nothing in flight. */
     fun cancel() {
+        cancelled = true
         ref.getAndSet(null)?.cancel()
     }
 }

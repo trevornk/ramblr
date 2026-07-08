@@ -400,12 +400,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         unregisterScreenStateReceiver()
         // If a recording is in progress, force the reader thread off RECORDING/TRANSCRIBING so
         // it tears down the AudioRecord and discards buffered PCM instead of leaking the mic or
-        // silently continuing to record after the service appears off.
-        recordingEngine?.let { engine ->
-            stateMachine.reset()
-            engine.awaitTeardown()
-            recordingEngine = null
-        }
+        // silently continuing to record after the service appears off. reset() runs
+        // unconditionally (H2): even if recordingEngine reads null here, a late old-session
+        // handoff could have raced our read of it while a reader is still live, so we must always
+        // walk the shared state machine out of RECORDING/TRANSCRIBING.
+        stateMachine.reset()
+        recordingEngine?.awaitTeardown()
+        recordingEngine = null
         guard.cancel()
         inFlightCall.cancel()
         // The cancel above makes any in-flight local completion abort at its next piece check
@@ -457,8 +458,15 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             LocalCleanupModelHolder.releaseAsync()
             transcribersTrimmed = true
-            transcriberSlot.replace(null)
-            streamingTranscriberSlot.replace(null)
+            // replace(null) takes the slot's write lock, which blocks until any in-flight
+            // transcription (a full batch on a background thread, up to a 10-minute recording)
+            // finishes. onTrimMemory runs on the main thread, so doing this inline would ANR the
+            // accessibility service exactly when memory pressure coincides with active
+            // transcription. Hop to a background thread, mirroring reloadModel() (H3).
+            thread {
+                transcriberSlot.replace(null)
+                streamingTranscriberSlot.replace(null)
+            }
         }
     }
 
@@ -1478,7 +1486,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         val engine = RecordingEngine(cacheDir, stateMachine)
         val started = engine.start(
             onMaxDuration = { /* handled in startMaxDurationTranscription on the main thread */ },
-            onFinished = { result -> onRecordingFinished(result) },
+            onFinished = { result -> onRecordingFinished(engine, result) },
             onChunk = if (streamingActive) ::handleStreamingChunk else { _, _ -> }
         )
         if (!started) { toast("Couldn't start recording — mic busy?"); return }
@@ -1584,8 +1592,11 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     /** Called on the reader thread once the AudioRecord has been drained and released. */
-    private fun onRecordingFinished(result: RecordingEngine.Result) {
-        recordingEngine = null
+    private fun onRecordingFinished(engine: RecordingEngine, result: RecordingEngine.Result) {
+        // Clear the reference only if it still points at THIS engine (H2): a late old-session
+        // handoff must not null out the *new* engine's reference, or onDestroy would skip its
+        // teardown and leave the new reader keeping the mic hot after the service appears off.
+        if (recordingEngine === engine) recordingEngine = null
         if (result.discarded) return // service destroyed / recording forced off — nothing to transcribe
 
         val token = when {
@@ -1728,57 +1739,80 @@ class WhisperAccessibilityService : AccessibilityService() {
                 return
             }
             val entry = candidates[index]
+
+            // A candidate failed to produce a transcript (unusable, HTTP error, timeout, or empty).
+            // Fall through to the next configured candidate -- Gemini, or the on-device LOCAL floor
+            // -- instead of losing the dictation. Only once every candidate is exhausted do we
+            // delete the audio and reset with the last real error. The PCM file is kept alive
+            // across the whole walk precisely so a later candidate can still use it (#H1). Runs on
+            // whatever thread the failing candidate's callback used; hop to the main thread and
+            // re-check the guard first so a cancel/watchdog reset stops the walk.
+            fun advanceOrGiveUp(error: String?) {
+                handler.post {
+                    if (!guard.isCurrent(token)) {
+                        // Cancelled or watchdog already reset the UI: nothing more to try, but the
+                        // PCM is still ours to clean up.
+                        file.delete()
+                        return@post
+                    }
+                    if (TranscriptionChain.hasNextCandidate(index, candidates.size)) {
+                        Log.w(TAG, "Transcription candidate #$index (${entry.kind}) failed: ${error ?: "unusable"}; trying next candidate")
+                        attempt(index + 1)
+                    } else {
+                        file.delete()
+                        reset("Error: ${error ?: "transcription failed"}")
+                    }
+                }
+            }
+
+            val localLoaded = transcriberSlot.get() != null
+            val hasCredential = when (entry.kind) {
+                ProviderKind.OPENAI -> ProviderCredentialStore.get(this, ProviderKind.OPENAI).isNotBlank()
+                ProviderKind.GEMINI -> ProviderCredentialStore.get(this, ProviderKind.GEMINI).isNotBlank()
+                else -> false
+            }
+            if (TranscriptionChain.precheck(entry.kind, hasCredential, localLoaded) == TranscriptionChain.Precheck.SKIP) {
+                when (entry.kind) {
+                    ProviderKind.LOCAL ->
+                        // A LOCAL entry whose model hasn't loaded advances to the next candidate;
+                        // only if it's the last one do we surface "still downloading" (#H1).
+                        advanceOrGiveUp("Local model still downloading -- try again once it finishes")
+                    else -> {
+                        Log.w(TAG, "Skipping transcription provider ${entry.kind}: not usable (no credential / not implemented)")
+                        attempt(index + 1)
+                    }
+                }
+                return
+            }
+
             when (entry.kind) {
                 ProviderKind.OPENAI -> {
                     val apiKey = ProviderCredentialStore.get(this, ProviderKind.OPENAI)
-                    if (apiKey.isBlank()) {
-                        Log.w(TAG, "Skipping OpenAI transcription provider: no ProviderCredentialStore.OPENAI credential configured")
-                        attempt(index + 1)
-                        return
-                    }
                     Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (OpenAI audio/transcriptions)")
                     val transcribeStartMs = System.currentTimeMillis()
                     TranscriberClient.transcribe(file, apiKey, inFlightCall) { result ->
                         Log.i(TAG, "OpenAI transcription HTTP round-trip took ${System.currentTimeMillis() - transcribeStartMs}ms")
-                        file.delete()
                         if (result.text != null && result.text.isNotBlank()) {
+                            file.delete()
                             handleTranscriptionResult(result.text, token)
                         } else {
-                            handler.post {
-                                if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
-                                toast("Error: ${result.error ?: "empty transcript"}")
-                                resetToIdle()
-                            }
+                            advanceOrGiveUp(result.error ?: "empty transcript")
                         }
                     }
                 }
                 ProviderKind.LOCAL -> {
-                    if (transcriberSlot.get() != null) {
-                        Log.i(TAG, "Transcription via ProviderChain provider=${entry.kind}")
-                        transcribeLocal(file, token, allowCloudFallback = false)
-                    } else {
-                        file.delete()
-                        reset("Local model still downloading -- try again once it finishes")
-                    }
+                    Log.i(TAG, "Transcription via ProviderChain provider=${entry.kind}")
+                    transcribeLocal(file, token, allowCloudFallback = false)
                 }
                 ProviderKind.GEMINI -> {
                     val apiKey = ProviderCredentialStore.get(this, ProviderKind.GEMINI)
-                    if (apiKey.isBlank()) {
-                        Log.w(TAG, "Skipping Gemini transcription provider: no ProviderCredentialStore.GEMINI credential configured")
-                        attempt(index + 1)
-                        return
-                    }
                     Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (Gemini generateContent audio)")
                     GeminiTranscriberClient.transcribe(file, apiKey, entry.model.ifBlank { GeminiTranscriberClient.DEFAULT_MODEL }, inFlightCall) { result ->
-                        file.delete()
                         if (result.text != null && result.text.isNotBlank()) {
+                            file.delete()
                             handleTranscriptionResult(result.text, token)
                         } else {
-                            handler.post {
-                                if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
-                                toast("Error: ${result.error ?: "empty transcript"}")
-                                resetToIdle()
-                            }
+                            advanceOrGiveUp(result.error ?: "empty transcript")
                         }
                     }
                 }

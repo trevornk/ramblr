@@ -35,13 +35,31 @@ internal object SecurePrefsFactory {
         val prefs = try {
             create(appContext, fileName)
         } catch (first: Exception) {
-            Log.e(TAG, "Encrypted prefs '$fileName' unusable; deleting corrupt file and recreating empty", first)
-            appContext.deleteSharedPreferences(fileName)
+            // Keystore failures are frequently transient (keystore daemon busy, key just unlocked,
+            // OEM keymaster hiccup). Retry once before doing anything destructive -- wiping every
+            // stored credential over a transient fault is far worse than a brief stall (H8).
             try {
                 create(appContext, fileName)
             } catch (second: Exception) {
-                Log.e(TAG, "Keystore unusable even after reset for '$fileName'; secrets are session-only in-memory until restart", second)
-                TransientPrefs()
+                if (SecurePrefsRecovery.isCorruptionShaped(second)) {
+                    // The keyset really does look corrupt (it lives inside this same prefs file):
+                    // deleting and recreating empty -- losing stored keys -- beats a permanent
+                    // crash loop the user can only escape by clearing app data.
+                    Log.e(TAG, "Encrypted prefs '$fileName' corrupt; deleting and recreating empty", second)
+                    appContext.deleteSharedPreferences(fileName)
+                    try {
+                        create(appContext, fileName)
+                    } catch (third: Exception) {
+                        Log.e(TAG, "Keystore unusable even after reset for '$fileName'; secrets are session-only in-memory until restart", third)
+                        TransientPrefs()
+                    }
+                } else {
+                    // Not corruption-shaped: assume a still-transient Keystore fault and DON'T
+                    // destroy stored keys. Serve a session-only store; the next process restart
+                    // gets a fresh chance to read the real (still intact) encrypted prefs.
+                    Log.e(TAG, "Encrypted prefs '$fileName' unavailable (likely transient); keeping stored file, secrets session-only until restart", second)
+                    TransientPrefs()
+                }
             }
         }
         cache[fileName] = prefs
@@ -59,6 +77,43 @@ internal object SecurePrefsFactory {
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
         )
+    }
+}
+
+/**
+ * Pure decision for whether an [EncryptedSharedPreferences.create] failure is corruption-shaped
+ * (the keyset/ciphertext is genuinely unrecoverable and the only fix is to wipe and recreate) as
+ * opposed to a transient Keystore fault (daemon busy, key just unlocked, OEM keymaster hiccup)
+ * that a retry or a later process restart will clear (H8). Only corruption-shaped failures justify
+ * destroying the user's stored API keys. Matched by class simple name across the whole cause chain
+ * so this stays a plain JVM-testable function with no Tink/crypto dependency.
+ */
+internal object SecurePrefsRecovery {
+    // AEADBadTagException: authenticated-decryption tag mismatch (value ciphertext no longer
+    // decrypts under the keyset). InvalidProtocolBufferException: the Tink keyset itself can't be
+    // parsed. Both mean the stored bytes are unusable, not that the Keystore is momentarily busy.
+    private val CORRUPTION_TYPES = setOf(
+        "AEADBadTagException",
+        "InvalidProtocolBufferException",
+    )
+
+    private val CORRUPTION_MESSAGE_HINTS = listOf(
+        "corrupt",
+        "invalid keyset",
+        "decryption failed",
+        "invalid tag",
+    )
+
+    fun isCorruptionShaped(t: Throwable): Boolean {
+        var cause: Throwable? = t
+        val seen = HashSet<Throwable>()
+        while (cause != null && seen.add(cause)) {
+            if (cause.javaClass.simpleName in CORRUPTION_TYPES) return true
+            val message = cause.message?.lowercase()
+            if (message != null && CORRUPTION_MESSAGE_HINTS.any { it in message }) return true
+            cause = cause.cause
+        }
+        return false
     }
 }
 

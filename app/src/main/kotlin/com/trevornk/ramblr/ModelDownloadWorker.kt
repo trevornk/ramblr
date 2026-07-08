@@ -68,6 +68,7 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
 
         val failed = failure ?: run {
             DownloadNotifications.postSuccess(applicationContext, archive, model.name)
+            notifyServiceModelReady(archive)
             return Result.success()
         }
 
@@ -103,6 +104,31 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
 
     private fun errorData(message: String) = Data.Builder().putString(KEY_ERROR, message).build()
 
+    /**
+     * Tell the running accessibility service (if any) to load a model that just finished
+     * downloading (#H5). Before this, the only things that reloaded a model into the live service
+     * were service-connect, an explicit settings-screen reload, and a memory-trim warm-up -- so a
+     * model whose download completed while nothing was observing WorkManager (most importantly an
+     * onboarding download after the wizard was closed) never activated, and a fresh local-mode user
+     * got "Local model still downloading" until they happened to reopen a settings screen. The
+     * service re-reads its own selected-model prefs on reload, so this changes no user selection.
+     * A LOCAL_CLEANUP model needs no reload -- it's loaded on demand by file path at cleanup time.
+     * No-op when the service isn't running (the next service connect loads it anyway).
+     */
+    private fun notifyServiceModelReady(archive: String) {
+        val service = WhisperAccessibilityService.instance ?: return
+        when (reloadKindFor(archive)) {
+            ModelReloadKind.TRANSCRIPTION -> service.reloadModel()
+            ModelReloadKind.STREAMING -> service.reloadStreamingModel()
+            ModelReloadKind.LOCAL_CLEANUP, null -> {}
+        }
+    }
+
+    /** Which running-service reload a freshly-downloaded model needs, keyed by which catalog it's
+     *  in. TRANSCRIPTION and STREAMING are held in native slots that must be reloaded; LOCAL_CLEANUP
+     *  is loaded on demand by path so it needs none. */
+    enum class ModelReloadKind { TRANSCRIPTION, STREAMING, LOCAL_CLEANUP }
+
     companion object {
         const val KEY_ARCHIVE = "archive"
         const val KEY_PHASE = "phase"
@@ -122,6 +148,17 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
          *  ignore it anyway) and to keep a stray tap from resetting live progress. */
         fun isInFlight(state: WorkInfo.State?): Boolean =
             state == WorkInfo.State.ENQUEUED || state == WorkInfo.State.RUNNING
+
+        /** Which running-service reload (if any) a freshly-downloaded [archive] needs (#H5),
+         *  determined by which catalog owns it. Streaming and local-cleanup catalogs are checked
+         *  first since their archive names are disjoint from the offline catalog; an unknown
+         *  archive returns null (nothing to reload). */
+        fun reloadKindFor(archive: String): ModelReloadKind? = when {
+            STREAMING_MODEL_CATALOG.any { it.archive == archive } -> ModelReloadKind.STREAMING
+            LOCAL_CLEANUP_MODEL_CATALOG.any { it.archive == archive } -> ModelReloadKind.LOCAL_CLEANUP
+            MODEL_CATALOG.any { it.archive == archive } -> ModelReloadKind.TRANSCRIPTION
+            else -> null
+        }
 
         /** Give up after this many attempts of a transient failure -- bounded so a
          *  persistently-broken URL (404 reads as an IOException) can't retry forever (#86). */

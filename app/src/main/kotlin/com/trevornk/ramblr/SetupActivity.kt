@@ -59,7 +59,38 @@ class SetupActivity : BaseSettingsActivity() {
 
     override fun onRequestPermissionsResult(c: Int, p: Array<String>, r: IntArray) {
         super.onRequestPermissionsResult(c, p, r)
+        // #H6: a permanently-denied mic ("don't ask again") makes requestPermissions a silent
+        // no-op -- the row would then visibly do nothing forever, with no path to App info. When
+        // the denial result comes back and Android won't show a rationale again, offer App info so
+        // the user isn't stuck. (A soft first denial leaves shouldShow == true, so no dialog then.)
+        if (!hasPerm(Manifest.permission.RECORD_AUDIO) &&
+            !ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.RECORD_AUDIO)
+        ) {
+            showMicPermanentlyDeniedDialog()
+        }
         refresh()
+    }
+
+    /** Routes a permanently-denied mic permission to App info (#H6), since the system permission
+     *  prompt will never appear again from an in-app request. */
+    private fun showMicPermanentlyDeniedDialog() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Microphone access needed")
+            .setMessage(
+                "Microphone access is turned off for Ramblr, and Android won't ask again from " +
+                    "here. Ramblr can't record without it.\n\n" +
+                    "Open Ramblr's App info, then choose Permissions → Microphone → Allow."
+            )
+            .setPositiveButton("Open App info") { _, _ ->
+                startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.fromParts("package", packageName, null),
+                    )
+                )
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun refresh() {

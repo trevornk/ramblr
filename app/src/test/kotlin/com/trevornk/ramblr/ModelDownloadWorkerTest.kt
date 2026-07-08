@@ -30,6 +30,46 @@ class ModelDownloadWorkerTest {
         assertEquals(MODEL_CATALOG.first(), all.firstOrNull { it.archive == MODEL_CATALOG.first().archive })
     }
 
+    // -- reload-kind classification for post-download service activation (#H5) --
+
+    @Test fun `a downloaded offline model needs a transcription reload`() {
+        assertEquals(
+            ModelDownloadWorker.ModelReloadKind.TRANSCRIPTION,
+            ModelDownloadWorker.reloadKindFor(MODEL_CATALOG.first().archive)
+        )
+    }
+
+    @Test fun `a downloaded streaming model needs a streaming reload`() {
+        assertEquals(
+            ModelDownloadWorker.ModelReloadKind.STREAMING,
+            ModelDownloadWorker.reloadKindFor(STREAMING_MODEL.archive)
+        )
+    }
+
+    @Test fun `a downloaded local-cleanup model needs no native reload`() {
+        // Local-cleanup models are loaded on demand by file path at cleanup time, so there is no
+        // slot to reload -- but the archive must still be recognized (not null).
+        assertEquals(
+            ModelDownloadWorker.ModelReloadKind.LOCAL_CLEANUP,
+            ModelDownloadWorker.reloadKindFor(LOCAL_CLEANUP_MODEL.archive)
+        )
+    }
+
+    @Test fun `an unknown archive maps to no reload`() {
+        assertEquals(null, ModelDownloadWorker.reloadKindFor("not-a-real-archive"))
+    }
+
+    @Test fun `every downloadable catalog model classifies to a non-null reload kind`() {
+        // Guards against a future catalog addition that the post-download activation path would
+        // silently ignore (never reloading it into the running service, reviving the #H5 bug).
+        (MODEL_CATALOG + STREAMING_MODEL_CATALOG + LOCAL_CLEANUP_MODEL_CATALOG).forEach { model ->
+            assertTrue(
+                "no reload kind for ${model.archive}",
+                ModelDownloadWorker.reloadKindFor(model.archive) != null
+            )
+        }
+    }
+
     @Test fun `workName is stable for the same archive, so re-enqueuing targets the same unique work`() {
         val a = ModelDownloadWorker.workName("sherpa-onnx-whisper-base.en")
         val b = ModelDownloadWorker.workName("sherpa-onnx-whisper-base.en")

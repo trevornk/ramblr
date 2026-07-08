@@ -350,6 +350,9 @@ object RealCleanupHttpTransport : CleanupHttpTransport {
 
         val call = client.newCall(request)
         cancelHolder.set(call)
+        // Close the set-after-cancel race: if cancel() already ran before this call was registered,
+        // abort it immediately so it doesn't run to completion (and get billed) unnoticed (#83).
+        if (cancelHolder.isCancelled) call.cancel()
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 cancelHolder.clear(call)
@@ -445,6 +448,13 @@ object CleanupWaterfallExecutor {
         fun attempt(index: Int) {
             if (index >= steps.size) {
                 callback(PostProcessor.Result(null, "All cleanup steps failed"))
+                return
+            }
+            // A cancel that landed in the gap between steps (after clear(call), before the next
+            // set(call)) has no Call to abort, so catch it here before starting a fresh — possibly
+            // paid — step, the #63 fall-through this flag exists to prevent (#83).
+            if (cancelHolder.isCancelled) {
+                callback(PostProcessor.Result(null, "Cleanup cancelled"))
                 return
             }
             if (System.currentTimeMillis() - startedAtMs >= CLEANUP_WATERFALL_HARD_CAP_MS) {
