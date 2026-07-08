@@ -67,6 +67,16 @@ class WavWriterTest {
         assertEquals(36 + 5_000_000, readInt(header, 4))
     }
 
+    @Test(expected = IllegalArgumentException::class)
+    fun `header rejects a pcm size that would overflow the 32-bit size field (L13)`() {
+        WavWriter.header(Int.MAX_VALUE.toLong() + 1)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `header rejects a negative pcm size (L13)`() {
+        WavWriter.header(-1L)
+    }
+
     private fun readInt(buf: ByteArray, off: Int): Int =
         (buf[off].toInt() and 0xFF) or
         ((buf[off + 1].toInt() and 0xFF) shl 8) or

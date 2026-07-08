@@ -20,9 +20,15 @@ object InferenceBudget {
     /**
      * Remaining budget for a completion that must finish by [deadlineAtMs] (a
      * [System.currentTimeMillis] wall-clock value), evaluated at [nowMs]. [Long.MAX_VALUE] means
-     * "no deadline" and maps to [NO_DEADLINE]; anything else is the signed millisecond remainder,
-     * which is deliberately allowed to go negative when the deadline has already passed.
+     * "no deadline" and maps to [NO_DEADLINE]; a future deadline maps to its positive millisecond
+     * remainder. A deadline that is exactly now or already past maps to `-1`, never `0`: a `0`
+     * would collide with the [NO_DEADLINE] sentinel and tell the native side "no deadline" for a
+     * budget that is actually spent -- the opposite of intended -- so any non-positive remainder is
+     * clamped to `-1` ("abort at the first check") instead (L1).
      */
-    fun budgetMs(deadlineAtMs: Long, nowMs: Long): Long =
-        if (deadlineAtMs == Long.MAX_VALUE) NO_DEADLINE else deadlineAtMs - nowMs
+    fun budgetMs(deadlineAtMs: Long, nowMs: Long): Long {
+        if (deadlineAtMs == Long.MAX_VALUE) return NO_DEADLINE
+        val remaining = deadlineAtMs - nowMs
+        return if (remaining <= 0) -1 else remaining
+    }
 }

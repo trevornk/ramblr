@@ -61,6 +61,20 @@ class DownloadNotificationsTest {
         }
     }
 
+    @Test fun `notificationId stays non-negative even for an Int MIN_VALUE hashCode, and its plus-one never overflows (L7)`() {
+        // "polygenelubricants" is the canonical String whose hashCode() is Int.MIN_VALUE, where the
+        // old abs()-based id overflowed back to a negative value and resultNotificationId's +1 could
+        // wrap. The mask keeps both non-negative.
+        val worstCase = "polygenelubricants"
+        assertEquals(Int.MIN_VALUE, worstCase.hashCode())
+        assertTrue(DownloadNotifications.notificationId(worstCase) >= 0)
+        assertTrue(DownloadNotifications.resultNotificationId(worstCase) >= 0)
+        assertNotEquals(
+            DownloadNotifications.notificationId(worstCase),
+            DownloadNotifications.resultNotificationId(worstCase),
+        )
+    }
+
     @Test fun `resultNotificationId differs from the in-progress id, so WorkManager tearing down the foreground notification can't race-cancel it`() {
         val all = MODEL_CATALOG + STREAMING_MODEL_CATALOG + LOCAL_CLEANUP_MODEL_CATALOG
         for (model in all) {

@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.content.Context
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import kotlin.math.abs
 
 /**
  * Notification support for [ModelDownloadWorker] (#56). Progress was previously only visible via
@@ -29,8 +28,10 @@ object DownloadNotifications {
 
     /** Stable per-archive notification id, so two different models downloading at once (e.g. an
      *  offline model and the streaming preview model, #29) get distinct notifications instead of
-     *  overwriting each other. */
-    fun notificationId(archive: String): Int = abs(archive.hashCode())
+     *  overwriting each other. Masks off the sign bit *and* the low bit rather than `abs()`:
+     *  `abs(Int.MIN_VALUE)` is still negative (overflow), and keeping the id even guarantees
+     *  [resultNotificationId]'s `+ 1` never overflows into a negative id either (L7). */
+    fun notificationId(archive: String): Int = archive.hashCode() and 0x7FFFFFFE
 
     /** Terminal (success/failure) notifications use a distinct id from the in-progress one, so
      *  WorkManager tearing down the foreground service's own notification when doWork() returns
