@@ -28,4 +28,27 @@ class TranscriberClientTest {
         assertNull(r.text)
         assertNotNull(r.error)
     }
+
+    // -- endpoint construction honors the base-URL override (M5) --
+
+    @Test fun `default base url resolves to OpenAI's transcriptions endpoint`() {
+        assertEquals(
+            "https://api.openai.com/v1/audio/transcriptions",
+            TranscriberClient.transcriptionEndpoint(PostProcessor.DEFAULT_BASE_URL),
+        )
+    }
+
+    @Test fun `a proxy base url is honored, not hardcoded to api openai com (M5)`() {
+        assertEquals(
+            "https://proxy.example.com/v1/audio/transcriptions",
+            TranscriberClient.transcriptionEndpoint("https://proxy.example.com/v1"),
+        )
+    }
+
+    @Test fun `a blank base url falls back to the OpenAI default`() {
+        assertEquals(
+            "https://api.openai.com/v1/audio/transcriptions",
+            TranscriberClient.transcriptionEndpoint(""),
+        )
+    }
 }

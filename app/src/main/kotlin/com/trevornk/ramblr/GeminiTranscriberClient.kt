@@ -29,6 +29,16 @@ object GeminiTranscriberClient {
     const val DEFAULT_MODEL = "gemini-2.5-flash"
     const val TRANSCRIBE_PROMPT = "Transcribe this audio exactly as spoken. Return only the transcript text, with no commentary, labels, or extra formatting."
 
+    /** Max PCM file size this inline-audio path will accept (M6): base64 + JSON string + request
+     *  body copy buffers the recording ~4x in memory (a max-length 19.2MB PCM ≈ ~100MB transient),
+     *  stacked on the resident STT/cleanup models -- a plausible OOM exactly when memory is tight.
+     *  ~10MB PCM (~5 min at 16kHz mono 16-bit) bounds the transient to a safer band; above it the
+     *  caller falls through to the next transcription candidate rather than risk the OOM. */
+    const val MAX_INLINE_PCM_BYTES = 10L * 1024 * 1024
+
+    /** True when [pcmBytes] is small enough for the inline-audio path (see [MAX_INLINE_PCM_BYTES]). */
+    fun canInlineAudio(pcmBytes: Long): Boolean = pcmBytes <= MAX_INLINE_PCM_BYTES
+
     /**
      * Builds the generateContent request body with the WAV audio bytes inlined as base64
      * `inline_data` (see https://ai.google.dev/gemini-api/docs/audio#inline-audio). [wavBytes]

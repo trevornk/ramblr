@@ -89,3 +89,21 @@ class GeminiCleanupProviderTest {
         assertTrue(result.error != null)
     }
 }
+
+class GeminiTranscriberClientTest {
+
+    @Test fun `parses a candidates transcript`() {
+        val r = GeminiTranscriberClient.parseResponse("""{"candidates":[{"content":{"parts":[{"text":"hi there"}]}}]}""")
+        assertEquals("hi there", r.text)
+        assertNull(r.error)
+    }
+
+    @Test fun `small recordings are allowed on the inline-audio path (M6)`() {
+        assertTrue(GeminiTranscriberClient.canInlineAudio(1L))
+        assertTrue(GeminiTranscriberClient.canInlineAudio(GeminiTranscriberClient.MAX_INLINE_PCM_BYTES))
+    }
+
+    @Test fun `an oversized recording falls off the inline-audio path (M6)`() {
+        assertFalse(GeminiTranscriberClient.canInlineAudio(GeminiTranscriberClient.MAX_INLINE_PCM_BYTES + 1))
+    }
+}

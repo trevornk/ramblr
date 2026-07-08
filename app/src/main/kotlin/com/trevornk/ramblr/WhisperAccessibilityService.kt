@@ -1837,7 +1837,13 @@ class WhisperAccessibilityService : AccessibilityService() {
                     val apiKey = ProviderCredentialStore.get(this, ProviderKind.OPENAI)
                     Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (OpenAI audio/transcriptions)")
                     val transcribeStartMs = System.currentTimeMillis()
-                    TranscriberClient.transcribe(file, apiKey, inFlightCall) { result ->
+                    // Honor the entry's base-URL override and model so a proxy/self-hosted user's
+                    // audio goes where they configured, not always api.openai.com/whisper-1 (M5).
+                    TranscriberClient.transcribe(
+                        file, apiKey, inFlightCall,
+                        baseUrl = entry.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL,
+                        model = entry.model,
+                    ) { result ->
                         Log.i(TAG, "OpenAI transcription HTTP round-trip took ${System.currentTimeMillis() - transcribeStartMs}ms")
                         if (result.text != null && result.text.isNotBlank()) {
                             file.delete()
@@ -1853,13 +1859,21 @@ class WhisperAccessibilityService : AccessibilityService() {
                 }
                 ProviderKind.GEMINI -> {
                     val apiKey = ProviderCredentialStore.get(this, ProviderKind.GEMINI)
-                    Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (Gemini generateContent audio)")
-                    GeminiTranscriberClient.transcribe(file, apiKey, entry.model.ifBlank { GeminiTranscriberClient.DEFAULT_MODEL }, inFlightCall) { result ->
-                        if (result.text != null && result.text.isNotBlank()) {
-                            file.delete()
-                            handleTranscriptionResult(result.text, token)
-                        } else {
-                            advanceOrGiveUp(result.error ?: "empty transcript")
+                    // Gemini's inline-audio path buffers the recording ~4x in memory, so gate it by
+                    // size: above the threshold, fall through to the next candidate rather than risk
+                    // an OOM stacked on the resident STT/cleanup models (M6).
+                    if (!GeminiTranscriberClient.canInlineAudio(file.length())) {
+                        Log.w(TAG, "Recording too large for Gemini inline audio (${file.length()} bytes); trying next candidate")
+                        advanceOrGiveUp("Recording too large for Gemini transcription")
+                    } else {
+                        Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (Gemini generateContent audio)")
+                        GeminiTranscriberClient.transcribe(file, apiKey, entry.model.ifBlank { GeminiTranscriberClient.DEFAULT_MODEL }, inFlightCall) { result ->
+                            if (result.text != null && result.text.isNotBlank()) {
+                                file.delete()
+                                handleTranscriptionResult(result.text, token)
+                            } else {
+                                advanceOrGiveUp(result.error ?: "empty transcript")
+                            }
                         }
                     }
                 }

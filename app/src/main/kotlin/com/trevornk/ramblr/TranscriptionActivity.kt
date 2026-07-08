@@ -145,22 +145,22 @@ class TranscriptionActivity : BaseSettingsActivity() {
             return
         }
 
-        val declineCleanup = {
-            prefs().edit()
-                .putBoolean("use_local", useLocal)
-                .putBoolean("use_post_processing", false)
-                .apply()
-            refresh()
+        // Declining consent here is declining a *transcription* mode change, not a cleanup change:
+        // revert the transcription toggle and leave cleanup untouched, rather than silently turning
+        // cleanup off (which was surprising and unannounced) (M11).
+        val declineChange = {
+            toast("Kept your current transcription mode — cleanup unchanged")
+            refresh() // no pref written, so the switch snaps back to its persisted state
         }
 
         android.app.AlertDialog.Builder(this)
             .setTitle("Cleanup sends text off-device")
             .setMessage(
                 "Local transcription keeps audio on your phone, but cleanup sends the " +
-                    "transcribed text to ${PostProcessor.destinationHost(cleanupBaseUrl())} to fix " +
-                    "grammar and punctuation. Enable cleanup anyway?"
+                    "transcribed text to ${CleanupDestination.consentHost(ProviderChainStore.load(this))} to fix " +
+                    "grammar and punctuation. Switch to local transcription anyway?"
             )
-            .setPositiveButton("Enable cleanup") { _, _ ->
+            .setPositiveButton("Switch anyway") { _, _ ->
                 prefs().edit()
                     .putBoolean("use_local", useLocal)
                     .putBoolean("use_post_processing", true)
@@ -168,12 +168,10 @@ class TranscriptionActivity : BaseSettingsActivity() {
                     .apply()
                 refresh()
             }
-            .setNegativeButton("Keep cleanup off") { _, _ -> declineCleanup() }
-            .setOnCancelListener { declineCleanup() }
+            .setNegativeButton("Cancel") { _, _ -> declineChange() }
+            .setOnCancelListener { declineChange() }
             .show()
     }
-
-    private fun cleanupBaseUrl() = prefs().getString("cleanup_base_url", PostProcessor.DEFAULT_BASE_URL) ?: PostProcessor.DEFAULT_BASE_URL
 
     // --- Model Rows (verbatim from MainActivity, #93) ---
 
@@ -346,7 +344,11 @@ class TranscriptionActivity : BaseSettingsActivity() {
         fun subtitle(context: android.content.Context): String {
             val prefs = context.getSharedPreferences("ramblr", android.content.Context.MODE_PRIVATE)
             val useLocal = prefs.getBoolean("use_local", true)
-            if (!useLocal) return "Cloud · OpenAI"
+            if (!useLocal) {
+                // Name the real transcription provider from the chain, not a hardcoded "OpenAI" (M9).
+                val entry = CleanupDestination.firstCloudTranscription(ProviderChainStore.load(context))
+                return if (entry != null) "Cloud · ${CleanupDestination.label(entry.kind)}" else "Cloud · set up a provider"
+            }
             val archive = prefs.getString("model_name", "") ?: ""
             val model = MODEL_CATALOG.firstOrNull { it.archive == archive && ModelDownloader.isInstalled(context, it) }
             return if (model != null) "Local · ${model.name}" else "Local · no model installed yet"
