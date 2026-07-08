@@ -1,0 +1,1 @@
+Vendored two additional native build dependencies (kissfft, kaldifst) so the app builds fully offline, with no network access required at build time.
