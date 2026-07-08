@@ -84,28 +84,50 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size
 # cmake/openfst.cmake, cmake/simple-sentencepiece.cmake, cmake/json.cmake). F-Droid's
 # build sandbox has no network, so this breaks configure as-is.
 #
+# A 7th, further-transitive dep surfaced on the SAME network-isolation build test after
+# fixing kissfft: kaldi-decoder's own CMakeLists.txt (not sherpa-onnx's) does an
+# unconditional `include(kaldifst)` -> kaldi-decoder/cmake/kaldifst.cmake
+# FetchContent_Declare()s k2-fsa/kaldifst v1.8.0. Vendored the same way.
+#
+# NOTE ON VERSION SKEW (documented, not hidden): kaldifst v1.8.0's OWN
+# cmake/openfst.cmake pins openfst tag v1.8.5-2026-04-10 (hash c3549...), one day
+# earlier than sherpa-onnx's own cmake/openfst.cmake pin of v1.8.5-2026-04-11 (hash
+# 57fbc..., already vendored above). CMake's FetchContent_Declare() is idempotent per
+# content name -- whichever include(openfst) runs first "wins" and the second
+# redeclaration for the same name is a no-op -- so with FETCHCONTENT_SOURCE_DIR_OPENFST
+# already overridden to our single vendored openfst submodule, BOTH consumers end up
+# using the v1.8.5-2026-04-11 checkout, not kaldifst's originally-requested -04-10. This
+# is a deliberate, low-risk choice (one-day-apart patch republish of the same fork, not
+# a different major/minor version) rather than maintaining two separate openfst
+# checkouts for a one-day tag skew.
+#
 # Each is vendored here as an additional pinned git submodule (deps/<name>, see
-# .gitmodules), at the exact tag each .cmake file's FetchContent_Declare() targets.
-# FETCHCONTENT_SOURCE_DIR_<NAME> is CMake's own FetchContent override mechanism: when
-# set, FetchContent_GetProperties()/_Populate() skip the network/URL entirely and treat
-# the given path as already-populated -- no changes to sherpa-onnx's own CMakeLists.txt
-# needed. <NAME> is the exact FetchContent_Declare()'d name run through CMake's own
-# string(TOUPPER ...) (see FetchContent.cmake's __FetchContent_Populate) -- a LITERAL
-# uppercase, NOT a hyphen-to-underscore substitution. Verified empirically against the
-# installed CMake 4.3.4 module: a -DFETCHCONTENT_SOURCE_DIR_SIMPLE_SENTENCEPIECE= with
-# underscores silently falls through to a real network fetch attempt; only the
-# hyphen-preserving -DFETCHCONTENT_SOURCE_DIR_SIMPLE-SENTENCEPIECE= is honored:
+# .gitmodules), at the exact tag/commit each .cmake file's FetchContent_Declare()
+# targets. FETCHCONTENT_SOURCE_DIR_<NAME> is CMake's own FetchContent override mechanism:
+# when set, FetchContent_GetProperties()/_Populate() skip the network/URL entirely and
+# treat the given path as already-populated -- no changes to sherpa-onnx's,
+# kaldi-native-fbank's, or kaldi-decoder's own CMakeLists.txt needed. <NAME> is the exact
+# FetchContent_Declare()'d name run through CMake's own string(TOUPPER ...) (see
+# FetchContent.cmake's __FetchContent_Populate) -- a LITERAL uppercase, NOT a
+# hyphen-to-underscore substitution. Verified empirically against the installed CMake
+# 4.3.4 module: a -DFETCHCONTENT_SOURCE_DIR_SIMPLE_SENTENCEPIECE= with underscores
+# silently falls through to a real network fetch attempt; only the hyphen-preserving
+# -DFETCHCONTENT_SOURCE_DIR_SIMPLE-SENTENCEPIECE= is honored:
 #   kaldi_native_fbank   -> FETCHCONTENT_SOURCE_DIR_KALDI_NATIVE_FBANK
 #   kaldi_decoder        -> FETCHCONTENT_SOURCE_DIR_KALDI_DECODER
 #   openfst              -> FETCHCONTENT_SOURCE_DIR_OPENFST
 #   simple-sentencepiece -> FETCHCONTENT_SOURCE_DIR_SIMPLE-SENTENCEPIECE  (hyphen kept!)
 #   json                 -> FETCHCONTENT_SOURCE_DIR_JSON
+#   kissfft              -> FETCHCONTENT_SOURCE_DIR_KISSFFT
+#   kaldifst             -> FETCHCONTENT_SOURCE_DIR_KALDIFST
 set(_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps")
 set(FETCHCONTENT_SOURCE_DIR_KALDI_NATIVE_FBANK      "${_DEPS_DIR}/kaldi-native-fbank"   CACHE PATH "" FORCE)
 set(FETCHCONTENT_SOURCE_DIR_KALDI_DECODER           "${_DEPS_DIR}/kaldi-decoder"        CACHE PATH "" FORCE)
 set(FETCHCONTENT_SOURCE_DIR_OPENFST                 "${_DEPS_DIR}/openfst"              CACHE PATH "" FORCE)
 set(FETCHCONTENT_SOURCE_DIR_SIMPLE-SENTENCEPIECE    "${_DEPS_DIR}/simple-sentencepiece" CACHE PATH "" FORCE)
 set(FETCHCONTENT_SOURCE_DIR_JSON                    "${_DEPS_DIR}/json"                 CACHE PATH "" FORCE)
+set(FETCHCONTENT_SOURCE_DIR_KISSFFT                 "${_DEPS_DIR}/kissfft"              CACHE PATH "" FORCE)
+set(FETCHCONTENT_SOURCE_DIR_KALDIFST                "${_DEPS_DIR}/kaldifst"             CACHE PATH "" FORCE)
 
 # 5 levels up from app/src/main/cpp/sherpa_onnx/ lands at the repo root, where the
 # sherpa-onnx submodule lives (a sibling of llama.cpp; see .gitmodules).

@@ -19,3 +19,9 @@
 [submodule "app/src/main/cpp/sherpa_onnx/deps/json"]
 	path = app/src/main/cpp/sherpa_onnx/deps/json
 	url = https://github.com/nlohmann/json.git
+[submodule "app/src/main/cpp/sherpa_onnx/deps/kissfft"]
+	path = app/src/main/cpp/sherpa_onnx/deps/kissfft
+	url = https://github.com/mborgerding/kissfft.git
+[submodule "app/src/main/cpp/sherpa_onnx/deps/kaldifst"]
+	path = app/src/main/cpp/sherpa_onnx/deps/kaldifst
+	url = https://github.com/k2-fsa/kaldifst.git
