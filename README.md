@@ -4,25 +4,30 @@
 
 # Ramblr
 
-Tap-to-dictate for Android.
+**Speak it. Tap once, ramble, tap again — clean text lands wherever your cursor is.**
 
-Ramblr lets you speak into most apps without switching keyboards. Tap the floating button,
-speak, tap again, and your text is inserted into the currently focused text field when the app
-exposes a standard Android input field.
+No keyboard swap, no separate app to paste out of. Ramblr floats a single button over
+whatever you're already doing — Slack, Discord, a code editor, an email — and inserts your
+words directly into the focused field the moment you're done talking.
 
 <p align="center">
   <img src="docs/screenshots/floating-icon-hero.png" width="280" alt="Ramblr's floating dictation button over a text field">
 </p>
 
-It supports:
-
-- **Local on-device transcription and cleanup** — nothing has to leave the phone
-- **Cloud transcription** (OpenAI Whisper today) and **cloud cleanup** across OpenAI, Anthropic,
-  and Gemini, in whatever order you configure
-- A **Fastest** mode — instant local transcription, cloud cleanup for the best text quality
-- Per-style "Formal / Casual / Notes / Email / Concise" cleanup presets, plus your own custom
-  ones
-- A personal vocabulary list so cleanup stops mangling your project names and jargon
+- **Tap, ramble, tap.** One button, everywhere. No mode switching, no separate transcript to
+  copy-paste.
+- **Fully offline if you want it.** On-device transcription and on-device cleanup — nothing
+  ever has to touch the network.
+- **Or route it through the best cloud models.** OpenAI, Anthropic, and Gemini for cleanup,
+  OpenAI Whisper for transcription — chained in whatever fallback order you configure, your own
+  API keys, no relay server in between.
+- **Fastest of both worlds.** Instant on-device transcription, cloud-grade cleanup — dictation
+  feels instant and still reads like you actually meant to write it.
+- **Cleanup styles that match how you actually talk.** Formal, Casual, Notes & lists, Email,
+  Concise — or write your own. Ramblr strips the "ums," collapses your self-corrections, and
+  keeps your meaning, not just your words.
+- **It learns your vocabulary.** Feed it your project names and jargon once; cleanup stops
+  mangling them forever.
 
 ## Screenshots
 
