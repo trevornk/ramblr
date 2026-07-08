@@ -126,4 +126,8 @@ class ModelDownloadWorkerTest {
         assertFalse(ModelDownloadWorker.shouldRetry(IllegalArgumentException("Path traversal"), runAttemptCount = 0))
         assertFalse(ModelDownloadWorker.shouldRetry(null, runAttemptCount = 0))
     }
+
+    @Test fun `a cancelled download is terminal, never retried by the backoff (L10)`() {
+        assertFalse(ModelDownloadWorker.shouldRetry(DownloadCancelledException(), runAttemptCount = 0))
+    }
 }

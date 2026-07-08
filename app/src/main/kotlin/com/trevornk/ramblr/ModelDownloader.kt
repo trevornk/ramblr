@@ -294,6 +294,11 @@ class ChecksumMismatchException(expected: String, actual: String) : IOException(
     "Checksum mismatch: expected $expected, got $actual"
 )
 
+/** Thrown when a download is aborted because the WorkManager job was cancelled (L10). A distinct
+ *  type so [ModelDownloadWorker.shouldRetry] classifies it terminal -- a user-cancelled download
+ *  must not be retried by WorkManager's backoff. */
+class DownloadCancelledException : IOException("Download cancelled")
+
 object ModelDownloader {
     private const val BASE_URL =
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
@@ -388,6 +393,16 @@ object ModelDownloader {
     fun isSideloadOnly(model: Model): Boolean = model.isLocalCleanup && model.sourceUrl == null
 
     /**
+     * True when a checksum mismatch should trigger one automatic clean restart rather than failing
+     * terminally: only when the failed attempt *resumed* a partial file ([resumedBytes] > 0), whose
+     * on-disk bytes can be a mix of an old and a changed-upstream asset -- the checksum correctly
+     * rejects that, but the self-heal is a fresh from-scratch download, not a manual re-tap (M16). A
+     * from-scratch download that still mismatches is a genuine upstream/catalog mismatch and stays
+     * terminal.
+     */
+    fun shouldCleanRetryAfterChecksumMismatch(resumedBytes: Long): Boolean = resumedBytes > 0
+
+    /**
      * Download and extract model, blocking the calling thread until done (or
      * failed). Callbacks fire synchronously on the calling thread. Callers
      * (currently [ModelDownloadWorker]) are responsible for running this off
@@ -396,7 +411,7 @@ object ModelDownloader {
      * [tmpFile] -- that single-flight guarantee is enforced by the caller
      * (WorkManager unique work), not here.
      */
-    fun download(ctx: Context, model: Model, onState: (DownloadState) -> Unit) {
+    fun download(ctx: Context, model: Model, isCancelled: () -> Boolean = { false }, onState: (DownloadState) -> Unit) {
         // A sideload-only local-cleanup model (isLocalCleanup && sourceUrl == null) has no host to
         // download from -- the BASE_URL fallback below would 404 and get retried three times before
         // failing (#H7). Fail fast and terminal instead. The Error carries no IOException cause, so
@@ -424,13 +439,24 @@ object ModelDownloader {
                     availableBytes,
                 )
             }
-            downloadFile(url, tmpFile, onState)
+            downloadFile(url, tmpFile, isCancelled, onState)
             downloadComplete = true
             // IllegalStateException, not IOException: a missing pinned hash is a catalog bug,
             // terminal for retry-classification purposes (#86), not a network condition.
             val expected = model.sha256
                 ?: throw IllegalStateException("No checksum configured for ${model.archive}; refusing to install unverified")
-            verifyChecksum(tmpFile, expected)
+            try {
+                verifyChecksum(tmpFile, expected)
+            } catch (e: ChecksumMismatchException) {
+                // A resumed partial can carry a mix of old and changed-upstream bytes; rather than
+                // fail terminally and force a manual re-tap, delete the stale partial and retry once
+                // cleanly from byte 0 (M16). A from-scratch download that still mismatches is a real
+                // upstream/catalog mismatch and propagates as terminal.
+                if (!shouldCleanRetryAfterChecksumMismatch(resumedBytes)) throw e
+                tmpFile.delete()
+                downloadFile(url, tmpFile, isCancelled, onState)
+                verifyChecksum(tmpFile, expected)
+            }
             if (model.isLocalCleanup) {
                 onState(DownloadState.Extracting) // no real extraction, but keeps the UI phase consistent
                 installSingleFile(tmpFile, finalDir, model.fileName ?: model.archive)
@@ -677,7 +703,7 @@ object ModelDownloader {
     }
 
     private fun downloadFile(
-        url: String, dest: File, onState: (DownloadState) -> Unit
+        url: String, dest: File, isCancelled: () -> Boolean, onState: (DownloadState) -> Unit
     ) {
         val existingLength = if (dest.isFile) dest.length() else 0L
         val requestBuilder = Request.Builder().url(url)
@@ -692,7 +718,7 @@ object ModelDownloader {
                 // forever and every future attempt fails with "HTTP 416" (#68).
                 response.close()
                 dest.delete()
-                downloadFile(url, dest, onState) // recurses at most once: no partial -> no Range header
+                downloadFile(url, dest, isCancelled, onState) // recurses at most once: no partial -> no Range header
                 return
             }
             if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
@@ -707,6 +733,9 @@ object ModelDownloader {
                     val buf = ByteArray(16384)
                     var n: Int
                     while (src.read(buf).also { n = it } != -1) {
+                        // Abort promptly on cancellation (L10): the partial file is left on disk so a
+                        // later re-download resumes it via Range instead of restarting from byte 0.
+                        if (isCancelled()) throw DownloadCancelledException()
                         dst.write(buf, 0, n)
                         downloaded += n
                         if (total > 0)

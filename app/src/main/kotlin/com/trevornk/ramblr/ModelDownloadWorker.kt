@@ -37,7 +37,7 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
         var lastNotifiedPercent = -100
         var lastProgressPercent = -100
         var failure: DownloadState.Error? = null
-        ModelDownloader.download(applicationContext, model) { state ->
+        ModelDownloader.download(applicationContext, model, isCancelled = { isStopped }) { state ->
             when (state) {
                 is DownloadState.Downloading -> {
                     val percent = (state.progress * 100).toInt().coerceIn(0, 100)
@@ -66,8 +66,19 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
             }
         }
 
+        // A user-cancelled download surfaces as a terminal DownloadCancelledException; WorkManager
+        // has already marked the work CANCELLED, so return quietly without a failure notification.
+        if (isStopped) return Result.failure()
+
         val failed = failure ?: run {
             DownloadNotifications.postSuccess(applicationContext, archive, model.name)
+            if (model.isLocalCleanup) {
+                // A re-download replaces the GGUF in place, but LocalCleanupModelHolder still holds
+                // an mmap of the previous file keyed by the (unchanged) path and would serve stale
+                // weights until the 5-minute idle unload. Drop the held instance so the next cleanup
+                // loads the freshly downloaded file (L9).
+                LocalCleanupModelHolder.releaseAsync()
+            }
             notifyServiceModelReady(archive)
             return Result.success()
         }
@@ -174,7 +185,9 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
         fun shouldRetry(cause: Exception?, runAttemptCount: Int): Boolean {
             if (runAttemptCount >= MAX_ATTEMPTS - 1) return false
             return when (cause) {
-                is ChecksumMismatchException, is NotEnoughSpaceException -> false
+                // DownloadCancelledException is terminal: a user cancel must not be retried by the
+                // backoff (L10). ChecksumMismatch/NotEnoughSpace are terminal for their own reasons.
+                is DownloadCancelledException, is ChecksumMismatchException, is NotEnoughSpaceException -> false
                 is IOException -> true
                 else -> false
             }
@@ -191,6 +204,13 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
                 .build()
             WorkManager.getInstance(ctx)
                 .enqueueUniqueWork(workName(model.archive), ExistingWorkPolicy.KEEP, request)
+        }
+
+        /** Cancels an in-flight (or queued) download for [model]. WorkManager sets the worker's
+         *  isStopped, which [ModelDownloader.download]'s per-chunk check honors to abort promptly;
+         *  the partial file is kept so a later re-download resumes it (L10). */
+        fun cancel(ctx: Context, model: Model) {
+            WorkManager.getInstance(ctx).cancelUniqueWork(workName(model.archive))
         }
     }
 }
