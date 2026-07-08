@@ -1,6 +1,7 @@
 package com.trevornk.ramblr
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -21,13 +22,17 @@ class InferenceBudgetTest {
         assertEquals(15_000L, InferenceBudget.budgetMs(deadlineAtMs = 65_000L, nowMs = 50_000L))
     }
 
-    @Test fun `an already-passed deadline maps to a negative budget so decoding aborts immediately`() {
+    @Test fun `an already-passed deadline maps to -1 so decoding aborts immediately`() {
         val budget = InferenceBudget.budgetMs(deadlineAtMs = 50_000L, nowMs = 65_000L)
         assertTrue("expected a negative budget, was $budget", budget < 0)
-        assertEquals(-15_000L, budget)
+        assertEquals(-1L, budget)
     }
 
-    @Test fun `a deadline exactly now maps to zero`() {
-        assertEquals(0L, InferenceBudget.budgetMs(deadlineAtMs = 50_000L, nowMs = 50_000L))
+    @Test fun `a deadline exactly now maps to -1, not zero, so it never collides with NO_DEADLINE`() {
+        // 0 is the NO_DEADLINE sentinel; a spent budget must abort at the first check (-1), not be
+        // read as "no deadline at all" (L1).
+        val budget = InferenceBudget.budgetMs(deadlineAtMs = 50_000L, nowMs = 50_000L)
+        assertEquals(-1L, budget)
+        assertNotEquals(InferenceBudget.NO_DEADLINE, budget)
     }
 }

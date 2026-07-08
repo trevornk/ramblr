@@ -16,9 +16,23 @@ class PcmFileBuffer(private val file: File, private val maxBytes: Long) : AutoCl
     var bytesWritten: Long = 0
         private set
 
-    /** Writes [len] bytes from [buf] starting at [offset]. Returns false if the cap was hit (nothing is written). */
+    /**
+     * Writes [len] bytes from [buf] starting at [offset]. Returns true if the whole chunk fit, or
+     * false once the cap is reached. When only part of the chunk fits, that fitting prefix is still
+     * written (floored to an even byte count so a 16-bit sample is never split) before returning
+     * false — previously the entire final chunk was dropped, losing up to ~50ms of audio right at
+     * the 10-minute duration cap (L13).
+     */
     fun write(buf: ByteArray, offset: Int, len: Int): Boolean {
-        if (bytesWritten + len > maxBytes) return false
+        if (bytesWritten + len > maxBytes) {
+            val remaining = (maxBytes - bytesWritten).coerceAtLeast(0L).toInt()
+            val fits = minOf(len, remaining).let { it - (it % 2) }
+            if (fits > 0) {
+                out.write(buf, offset, fits)
+                bytesWritten += fits
+            }
+            return false
+        }
         out.write(buf, offset, len)
         bytesWritten += len
         return true

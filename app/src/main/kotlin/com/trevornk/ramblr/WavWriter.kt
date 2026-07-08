@@ -4,6 +4,12 @@ package com.trevornk.ramblr
 object WavWriter {
     /** Builds just the 44-byte WAV header for [pcmSize] bytes of PCM data that follow it. */
     fun header(pcmSize: Long, sampleRate: Int = 16000, channels: Int = 1, bitsPerSample: Int = 16): ByteArray {
+        // WAV's RIFF/data size fields are unsigned 32-bit; pcmSize.toInt() would silently truncate
+        // for a >2GB payload (unreachable today given the recording duration cap, but guard it so a
+        // future cap change can't produce a corrupt header) (L13).
+        require(pcmSize in 0..(Int.MAX_VALUE - 44).toLong()) {
+            "PCM size $pcmSize exceeds WAV's 32-bit size field"
+        }
         val byteRate = sampleRate * channels * bitsPerSample / 8
         val blockAlign = channels * bitsPerSample / 8
         val header = ByteArray(44)

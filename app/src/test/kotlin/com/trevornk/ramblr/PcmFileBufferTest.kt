@@ -44,6 +44,32 @@ class PcmFileBufferTest {
         assertArrayEquals(byteArrayOf(1, 2, 3, 4), file.readBytes())
     }
 
+    @Test fun `writes the fitting even prefix when a chunk only partly fits, then reports the cap (L13)`() {
+        val file = tempFile()
+        val buffer = PcmFileBuffer(file, maxBytes = 6)
+
+        assertTrue(buffer.write(byteArrayOf(1, 2), 0, 2))
+        // 4 bytes of room left; a 6-byte chunk only partly fits -> writes the first 4, returns false.
+        assertFalse(buffer.write(byteArrayOf(3, 4, 5, 6, 7, 8), 0, 6))
+        buffer.close()
+
+        assertEquals(6L, buffer.bytesWritten)
+        assertArrayEquals(byteArrayOf(1, 2, 3, 4, 5, 6), file.readBytes())
+    }
+
+    @Test fun `partial write floors to an even byte count so a 16-bit sample is never split (L13)`() {
+        val file = tempFile()
+        val buffer = PcmFileBuffer(file, maxBytes = 5)
+
+        assertTrue(buffer.write(byteArrayOf(1, 2), 0, 2))
+        // 3 bytes of room left, but writing 3 would split a sample -> only the even 2 are written.
+        assertFalse(buffer.write(byteArrayOf(3, 4, 5, 6), 0, 4))
+        buffer.close()
+
+        assertEquals(4L, buffer.bytesWritten)
+        assertArrayEquals(byteArrayOf(1, 2, 3, 4), file.readBytes())
+    }
+
     @Test fun `allows a write landing exactly on the cap`() {
         val file = tempFile()
         val buffer = PcmFileBuffer(file, maxBytes = 4)
