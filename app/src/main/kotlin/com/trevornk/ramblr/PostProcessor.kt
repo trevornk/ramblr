@@ -320,10 +320,10 @@ explanations, headers, or comments about your edits.
 
     /**
      * Provider-chain entry point for Phase 2 (#95). A single OPENAI entry deliberately runs through
-     * the same simple [process] path as the old LEGACY_SINGLE_STEP mode, but with the OpenAI secret
-     * resolved from [ProviderCredentialStore] by the caller. Any real multi-step chain is adapted
-     * to [CleanupWaterfall] and executed by [CleanupWaterfallExecutor] unchanged, preserving its
-     * fail-fast grouping, cursor resume, and bounded local-inference deadline behavior.
+     * the same simple [process] path, with the OpenAI secret resolved from [ProviderCredentialStore]
+     * by the caller. Any real multi-step chain is adapted to [CleanupWaterfall] and executed by
+     * [CleanupWaterfallExecutor] unchanged, preserving its fail-fast grouping, cursor resume, and
+     * bounded local-inference deadline behavior.
      */
     fun processProviderChain(
         text: String,
@@ -365,8 +365,6 @@ explanations, headers, or comments about your edits.
             waterfall = waterfall,
             cursor = cursor,
             cancelHolder = cancelHolder,
-            legacyApiKey = credentialLookup(ProviderKind.OPENAI),
-            legacyBaseUrl = DEFAULT_BASE_URL,
             credentialLookup = { slot -> credentialLookup(ProviderChainRuntime.providerKindForCleanupSlot(slot)) },
             localModelPath = localModelPath,
             localPrompt = localPrompt,

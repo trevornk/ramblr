@@ -7,8 +7,8 @@ import java.io.File
 /**
  * One past dictation: the raw transcript, and the cleaned version if cleanup ran and succeeded.
  * [paidFallbackGroup] is only ever set when cleanup was served by a pay-per-token direct
- * provider (see [CleanupStepGroup.isPaidFallback], issue #33) -- null for LEGACY/OMNIROUTE/
- * LOCAL_LLM and for entries with no cleanup at all, so the common case and existing history
+ * provider (see [CleanupStepGroup.isPaidFallback], issue #33) -- null for OMNIROUTE/LOCAL_LLM
+ * and for entries with no cleanup at all, so the common case and existing history
  * entries (predating this field) stay indistinguishable from each other.
  */
 data class DictationHistoryEntry(

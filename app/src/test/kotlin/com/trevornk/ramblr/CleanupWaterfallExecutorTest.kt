@@ -13,7 +13,7 @@ class CleanupWaterfallPlannerTest {
     }
 
     @Test fun `single step is its own group`() {
-        val steps = listOf(CleanupStep(CleanupStepGroup.LEGACY, "gpt-4o-mini"))
+        val steps = listOf(CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"))
         val groups = CleanupWaterfallPlanner.groupConsecutive(steps)
         assertEquals(1, groups.size)
         assertEquals(steps, groups[0])
@@ -177,8 +177,6 @@ class CleanupWaterfallExecutorTest {
             waterfall = waterfall,
             cursor = cursor,
             cancelHolder = cancelHolder,
-            legacyApiKey = "legacy-key",
-            legacyBaseUrl = PostProcessor.DEFAULT_BASE_URL,
             credentialLookup = { slot -> credentials[slot] ?: "" },
             transport = transport,
             localInference = localInference,
@@ -457,7 +455,6 @@ class LocalLlmWaterfallStepTest {
         transport: CleanupHttpTransport,
         localInference: LocalInferenceEngine,
         localModelPath: () -> String?,
-        legacyApiKey: String = "",
         credentialLookup: (CleanupCredentialSlot) -> String = { "" },
         localPrompt: String = PostProcessor.SIMPLE_PROMPT,
     ): PostProcessor.Result {
@@ -468,8 +465,6 @@ class LocalLlmWaterfallStepTest {
             waterfall = waterfall,
             cursor = CleanupWaterfallCursor(),
             cancelHolder = cancelHolder,
-            legacyApiKey = legacyApiKey,
-            legacyBaseUrl = PostProcessor.DEFAULT_BASE_URL,
             credentialLookup = credentialLookup,
             transport = transport,
             localInference = localInference,
@@ -787,8 +782,6 @@ class CleanupWaterfallExecutorCancellationTest {
             waterfall = waterfall,
             cursor = CleanupWaterfallCursor(),
             cancelHolder = InFlightCall(),
-            legacyApiKey = "legacy-key",
-            legacyBaseUrl = PostProcessor.DEFAULT_BASE_URL,
             credentialLookup = { "some-key" },
             transport = transport,
             localInference = LocalInferenceEngine { _, _, _, _, _ -> error("no local step expected") },

@@ -136,11 +136,9 @@ data class ProviderChain(val entries: List<ProviderChainEntry>) {
     companion object {
         /**
          * Default chain for a fresh install or any state that hasn't been explicitly configured
-         * yet: a single OPENAI entry using [PostProcessor.DEFAULT_MODEL]. This mirrors
-         * [CleanupWaterfall.LEGACY_SINGLE_STEP] and today's actual zero-config
-         * behavior (cloud transcription + cleanup both go through the single legacy OpenAI key) --
-         * it is expressed as a normal OPENAI entry rather than a special LEGACY case, since
-         * collapsing that special case into the unified model is the entire point of this phase.
+         * yet: a single OPENAI entry using [PostProcessor.DEFAULT_MODEL] -- the zero-config behavior
+         * where cloud transcription + cleanup both go through one OpenAI key, expressed as a normal
+         * OPENAI entry in the unified model.
          */
         val DEFAULT_SINGLE_OPENAI_ENTRY = ProviderChain(
             entries = listOf(ProviderChainEntry(ProviderKind.OPENAI, PostProcessor.DEFAULT_MODEL))

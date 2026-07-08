@@ -413,8 +413,6 @@ object CleanupWaterfallExecutor {
         waterfall: CleanupWaterfall,
         cursor: CleanupWaterfallCursor,
         cancelHolder: InFlightCall,
-        legacyApiKey: String,
-        legacyBaseUrl: String,
         credentialLookup: (CleanupCredentialSlot) -> String,
         transport: CleanupHttpTransport = RealCleanupHttpTransport,
         localInference: LocalInferenceEngine = RealLocalInferenceEngine,
@@ -474,7 +472,7 @@ object CleanupWaterfallExecutor {
                 return
             }
 
-            performStep(steps[index], text, prompt, localPrompt, legacyApiKey, legacyBaseUrl, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
+            performStep(steps[index], text, prompt, localPrompt, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
                 logStepOutcome(steps[index], startedAtMs, outcome)
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
@@ -522,8 +520,6 @@ object CleanupWaterfallExecutor {
         text: String,
         prompt: String,
         localPrompt: String,
-        legacyApiKey: String,
-        legacyBaseUrl: String,
         credentialLookup: (CleanupCredentialSlot) -> String,
         transport: CleanupHttpTransport,
         localInference: LocalInferenceEngine,
@@ -567,11 +563,7 @@ object CleanupWaterfallExecutor {
             return
         }
 
-        val apiKey = if (step.group == CleanupStepGroup.LEGACY) {
-            legacyApiKey
-        } else {
-            step.credentialSlot()?.let(credentialLookup) ?: ""
-        }
+        val apiKey = step.credentialSlot()?.let(credentialLookup) ?: ""
         if (apiKey.isBlank()) {
             // No live host was ever contacted, so this is a step-level (not connection-level)
             // failure: it only skips this one step, not the rest of its group.
@@ -602,7 +594,6 @@ object CleanupWaterfallExecutor {
         }
 
         val baseUrl = when (step.group) {
-            CleanupStepGroup.LEGACY -> legacyBaseUrl
             CleanupStepGroup.OMNIROUTE -> OmniRoute.BASE_URL
             CleanupStepGroup.OPENAI_DIRECT -> step.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL
             CleanupStepGroup.ANTHROPIC_DIRECT -> "" // unreachable, handled above

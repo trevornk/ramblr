@@ -1927,10 +1927,10 @@ class WhisperAccessibilityService : AccessibilityService() {
                 return
             }
 
-            // The simple migrated single-OpenAI chain keeps the old LEGACY_SINGLE_STEP behavior:
-            // fail before making a network call if the one required credential is missing. Real
-            // multi-step chains resolve credentials inside CleanupWaterfallExecutor and can fall
-            // through past an unconfigured cloud step to another provider (including LOCAL).
+            // The simple single-OpenAI chain fails before making a network call if its one required
+            // credential is missing. Real multi-step chains resolve credentials inside
+            // CleanupWaterfallExecutor and can fall through past an unconfigured cloud step to
+            // another provider (including LOCAL).
             if (!ProviderChainRuntime.shouldUseCleanupExecutor(providerChain) &&
                 ProviderCredentialStore.get(this, ProviderKind.OPENAI).isBlank()) {
                 handler.post {
