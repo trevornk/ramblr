@@ -5,24 +5,24 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#FFFFFFFF"
+        android:fillColor="@color/launcher_icon_foreground"
         android:pathData="M54,20c-7.73,0 -14,6.27 -14,14v18c0,7.73 6.27,14 14,14s14,-6.27 14,-14V34c0,-7.73 -6.27,-14 -14,-14z" />
     <path
         android:fillColor="#00000000"
         android:pathData="M30,52c0,13.25 10.75,24 24,24s24,-10.75 24,-24"
-        android:strokeColor="#FFFFFFFF"
+        android:strokeColor="@color/launcher_icon_foreground"
         android:strokeLineCap="round"
         android:strokeWidth="6" />
     <path
         android:fillColor="#00000000"
         android:pathData="M54,76v12"
-        android:strokeColor="#FFFFFFFF"
+        android:strokeColor="@color/launcher_icon_foreground"
         android:strokeLineCap="round"
         android:strokeWidth="6" />
     <path
         android:fillColor="#00000000"
         android:pathData="M42,90h24"
-        android:strokeColor="#FFFFFFFF"
+        android:strokeColor="@color/launcher_icon_foreground"
         android:strokeLineCap="round"
         android:strokeWidth="6" />
 </vector>
