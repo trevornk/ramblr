@@ -1,6 +1,7 @@
 package com.trevornk.ramblr
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -275,6 +276,34 @@ class CleanupWaterfallExecutorTest {
         val result = execute(waterfall, transport)
         assertNull(result.text)
         assertTrue("expected the last failure detail in '${result.error}'", result.error!!.contains("rate limit exceeded"))
+    }
+
+    @Test fun `waterfall signature changes when a step is added, reordered, or its model edited (M3)`() {
+        val base = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+        val same = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+        val reordered = CleanupWaterfall(base.steps.asReversed())
+        val modelEdited = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-opus-4-8"),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            )
+        )
+        val extraStep = CleanupWaterfall(base.steps + CleanupStep(CleanupStepGroup.LOCAL_LLM, ""))
+
+        assertEquals(cleanupWaterfallSignature(base), cleanupWaterfallSignature(same))
+        assertNotEquals(cleanupWaterfallSignature(base), cleanupWaterfallSignature(reordered))
+        assertNotEquals(cleanupWaterfallSignature(base), cleanupWaterfallSignature(modelEdited))
+        assertNotEquals(cleanupWaterfallSignature(base), cleanupWaterfallSignature(extraStep))
     }
 
     @Test fun `a missing credential fails that step without ever calling the transport`() {
