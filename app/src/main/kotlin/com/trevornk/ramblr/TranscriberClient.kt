@@ -13,6 +13,13 @@ object TranscriberClient {
 
     private val client = NetworkClients.shared
 
+    const val DEFAULT_MODEL = "whisper-1"
+
+    /** The `/audio/transcriptions` endpoint for [baseUrl], normalized the same way the cleanup path
+     *  normalizes its base URL (M5). A blank/malformed base falls back to OpenAI's default. */
+    fun transcriptionEndpoint(baseUrl: String): String =
+        (PostProcessor.normalizeBaseUrl(baseUrl) ?: PostProcessor.DEFAULT_BASE_URL) + "/audio/transcriptions"
+
     fun parseResponse(json: String): Result = try {
         val obj = JSONObject(json)
         when {
@@ -28,19 +35,39 @@ object TranscriberClient {
      * Streams [pcmFile]'s bytes into the multipart upload as a WAV file without ever holding the
      * full audio as one contiguous byte array: [PcmWavRequestBody] writes the 44-byte header
      * directly to the sink, then streams the PCM file's bytes straight through.
+     *
+     * [baseUrl]/[model] are honored so a proxy/self-hosted user's recordings actually go to their
+     * configured OpenAI-compatible endpoint and model, not always api.openai.com/whisper-1 (M5) --
+     * the cleanup path already honors the per-provider override, and [NetworkWarmup] even pre-warms
+     * the override host, but the audio upload itself was hardcoded.
      */
-    fun transcribe(pcmFile: File, apiKey: String, cancelHolder: InFlightCall, callback: (Result) -> Unit) {
+    fun transcribe(
+        pcmFile: File,
+        apiKey: String,
+        cancelHolder: InFlightCall,
+        baseUrl: String = PostProcessor.DEFAULT_BASE_URL,
+        model: String = DEFAULT_MODEL,
+        callback: (Result) -> Unit,
+    ) {
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart("model", "whisper-1")
+            .addFormDataPart("model", model.ifBlank { DEFAULT_MODEL })
             .addFormDataPart("file", "audio.wav", PcmWavRequestBody(pcmFile))
             .build()
 
-        val request = Request.Builder()
-            .url("https://api.openai.com/v1/audio/transcriptions")
-            .header("Authorization", "Bearer $apiKey")
-            .post(body)
-            .build()
+        val endpoint = transcriptionEndpoint(baseUrl)
+        // A malformed override URL throws IllegalArgumentException from url(); report it through the
+        // same Result/callback path (query-redacted) instead of crashing (mirrors GeminiTranscriberClient).
+        val request = try {
+            Request.Builder()
+                .url(endpoint)
+                .header("Authorization", "Bearer $apiKey")
+                .post(body)
+                .build()
+        } catch (e: IllegalArgumentException) {
+            callback(Result(null, "Invalid transcription endpoint: ${UrlRedaction.redact(e.message)}"))
+            return
+        }
 
         val call = client.newCall(request)
         cancelHolder.set(call)

@@ -45,6 +45,20 @@ class CleanupDestinationTest {
         val c = ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-mini", baseUrlOverride = "https://proxy.example.com/v1")
         assertEquals("proxy.example.com", CleanupDestination.hostFor(c))
     }
+
+    @Test fun `first cloud transcription skips LOCAL and cleanup-only providers (M9)`() {
+        val c = chain(
+            ProviderChainEntry(ProviderKind.LOCAL, "m"),
+            ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5"), // cleanup-only, can't transcribe
+            ProviderChainEntry(ProviderKind.OPENAI, "whisper-1"),
+        )
+        assertEquals(ProviderKind.OPENAI, CleanupDestination.firstCloudTranscription(c)?.kind)
+    }
+
+    @Test fun `no cloud transcription entry when only cleanup-only providers are present`() {
+        val c = chain(ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5"))
+        assertNull(CleanupDestination.firstCloudTranscription(c))
+    }
 }
 
 class CanFallBackToCloudCleanupTest {

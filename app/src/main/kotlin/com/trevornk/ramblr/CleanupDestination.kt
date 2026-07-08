@@ -13,6 +13,11 @@ object CleanupDestination {
     fun firstCloudEntry(chain: ProviderChain): ProviderChainEntry? =
         chain.entries.firstOrNull { it.kind != ProviderKind.LOCAL }
 
+    /** The entry that would actually serve cloud transcription: the first non-LOCAL,
+     *  transcription-capable entry (M9), or null when none is configured. */
+    fun firstCloudTranscription(chain: ProviderChain): ProviderChainEntry? =
+        chain.entries.firstOrNull { it.kind != ProviderKind.LOCAL && it.kind.supportsTranscription() }
+
     /** Network host cloud cleanup would contact for [entry], e.g. "api.openai.com". */
     fun hostFor(entry: ProviderChainEntry): String = when (entry.kind) {
         ProviderKind.OPENAI -> PostProcessor.destinationHost(entry.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL)
