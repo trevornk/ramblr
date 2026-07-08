@@ -447,9 +447,13 @@ object CleanupWaterfallExecutor {
             return range.last + 1
         }
 
-        fun attempt(index: Int) {
+        fun attempt(index: Int, lastFailure: String?) {
             if (index >= steps.size) {
-                callback(PostProcessor.Result(null, "All cleanup steps failed"))
+                // Carry the last step's failure detail (which now includes the provider's own error
+                // message, see toStepOutcome) into the final result, so an all-steps-failed outcome
+                // is diagnosable instead of an opaque "All cleanup steps failed" (L2).
+                val message = lastFailure?.let { "All cleanup steps failed: $it" } ?: "All cleanup steps failed"
+                callback(PostProcessor.Result(null, message))
                 return
             }
             // A cancel that landed in the gap between steps (after clear(call), before the next
@@ -471,14 +475,14 @@ object CleanupWaterfallExecutor {
                         cursor.recordSuccess(index, System.currentTimeMillis())
                         callback(PostProcessor.Result(outcome.text, null))
                     }
-                    is CleanupStepOutcome.StepFailed -> attempt(index + 1)
-                    is CleanupStepOutcome.ConnectionFailed -> attempt(nextGroupStart(index))
+                    is CleanupStepOutcome.StepFailed -> attempt(index + 1, outcome.message)
+                    is CleanupStepOutcome.ConnectionFailed -> attempt(nextGroupStart(index), outcome.message)
                     is CleanupStepOutcome.Cancelled -> callback(PostProcessor.Result(null, "Cleanup cancelled"))
                 }
             }
         }
 
-        attempt(startIndex)
+        attempt(startIndex, null)
     }
 
     /**
@@ -612,11 +616,27 @@ object CleanupWaterfallExecutor {
         when (httpOutcome) {
             is CleanupHttpOutcome.Cancelled -> CleanupStepOutcome.Cancelled
             is CleanupHttpOutcome.ConnectionFailure -> CleanupStepOutcome.ConnectionFailed(httpOutcome.message)
-            is CleanupHttpOutcome.HttpError -> CleanupStepOutcome.StepFailed("HTTP ${httpOutcome.code}")
+            is CleanupHttpOutcome.HttpError ->
+                // Include the provider's own error message (e.g. "invalid x-api-key"), not just the
+                // bare status code, so a failed waterfall step is diagnosable instead of an opaque
+                // "HTTP 401" (L2). Every provider returns a {"error":{"message":...}} envelope; a
+                // body that isn't one falls back to a truncated raw snippet.
+                CleanupStepOutcome.StepFailed("HTTP ${httpOutcome.code}: ${errorDetail(httpOutcome.body)}")
             is CleanupHttpOutcome.Ok -> {
                 val result = parse(httpOutcome.body)
                 if (!result.text.isNullOrBlank()) CleanupStepOutcome.Success(result.text)
                 else CleanupStepOutcome.StepFailed(result.error)
             }
         }
+
+    /** Best-effort human-readable detail from a non-2xx response body: the provider error
+     *  envelope's message if present, otherwise a whitespace-collapsed, truncated raw snippet. */
+    private fun errorDetail(body: String): String {
+        val fromEnvelope = runCatching {
+            org.json.JSONObject(body).optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
+        }.getOrNull()
+        if (fromEnvelope != null) return fromEnvelope
+        val snippet = body.trim().replace(Regex("\\s+"), " ")
+        return if (snippet.isEmpty()) "no response body" else snippet.take(200)
+    }
 }

@@ -238,6 +238,45 @@ class CleanupWaterfallExecutorTest {
         assertEquals(transport.requestedUrls[0], transport.requestedUrls[1]) // both hit the OmniRoute host
     }
 
+    @Test fun `a failing step surfaces the provider error message, not just the status code (L2)`() {
+        val transport = FakeCleanupHttpTransport(
+            mutableListOf(CleanupHttpOutcome.HttpError(401, """{"error":{"message":"invalid x-api-key"}}"""))
+        )
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.ANTHROPIC_DIRECT, "claude-haiku-4-5")))
+        val result = execute(waterfall, transport)
+        assertNull(result.text)
+        assertTrue("expected provider detail in '${result.error}'", result.error!!.contains("invalid x-api-key"))
+        assertTrue("expected the status code too", result.error!!.contains("401"))
+    }
+
+    @Test fun `a failing step with an unparseable error body falls back to a truncated raw snippet (L2)`() {
+        val transport = FakeCleanupHttpTransport(
+            mutableListOf(CleanupHttpOutcome.HttpError(502, "<html><body>Bad Gateway</body></html>"))
+        )
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.ANTHROPIC_DIRECT, "claude-haiku-4-5")))
+        val result = execute(waterfall, transport)
+        assertNull(result.text)
+        assertTrue("expected raw snippet in '${result.error}'", result.error!!.contains("Bad Gateway"))
+    }
+
+    @Test fun `an all-steps-failed result carries the last step's failure detail (L2)`() {
+        val transport = FakeCleanupHttpTransport(
+            mutableListOf(
+                CleanupHttpOutcome.ConnectionFailure("dead host"),
+                CleanupHttpOutcome.HttpError(429, """{"error":{"message":"rate limit exceeded"}}"""),
+            )
+        )
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
+                CleanupStep(CleanupStepGroup.ANTHROPIC_DIRECT, "claude-haiku-4-5"),
+            )
+        )
+        val result = execute(waterfall, transport)
+        assertNull(result.text)
+        assertTrue("expected the last failure detail in '${result.error}'", result.error!!.contains("rate limit exceeded"))
+    }
+
     @Test fun `a missing credential fails that step without ever calling the transport`() {
         val transport = FakeCleanupHttpTransport(
             mutableListOf(CleanupHttpOutcome.Ok("""{"content":[{"type":"text","text":"fell through to anthropic"}]}"""))

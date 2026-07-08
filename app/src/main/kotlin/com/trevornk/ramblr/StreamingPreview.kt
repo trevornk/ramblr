@@ -1,5 +1,7 @@
 package com.trevornk.ramblr
 
+import java.util.Locale
+
 /**
  * Whether a new partial hypothesis from the streaming recognizer should be pushed into the
  * focused field right now (#29). Injecting on every audio chunk would hammer the target app's
@@ -69,7 +71,9 @@ fun shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled: Boolean): Bo
  */
 fun smartCapitalize(text: String): String {
     if (text.isEmpty()) return text
-    val chars = text.lowercase().toCharArray()
+    // Locale.ROOT, not the default locale: a Turkish device would otherwise lowercase 'I' to the
+    // dotless 'ı' (and uppercase 'i' to 'İ'), mangling the English live-preview string (L12).
+    val chars = text.lowercase(Locale.ROOT).toCharArray()
     var capitalizeNext = true
     for (i in chars.indices) {
         val c = chars[i]

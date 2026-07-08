@@ -43,6 +43,10 @@ object CleanupStepStatusStore {
     fun healthFor(context: Context, step: CleanupStep): CleanupStepHealth =
         parse(prefs(context).getString(KEY_STATUS, null))[keyFor(step)] ?: CleanupStepHealth.UNTESTED
 
+    // @Synchronized so two concurrent records (e.g. a background cleanup success and a "Test"
+    // button press) can't interleave their read-modify-write of the single status blob and drop
+    // one update; the store is an object, so the lock is process-wide (L4).
+    @Synchronized
     fun record(context: Context, step: CleanupStep, health: CleanupStepHealth) {
         val store = prefs(context)
         val updated = parse(store.getString(KEY_STATUS, null)).toMutableMap()
