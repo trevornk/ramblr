@@ -1,0 +1,14 @@
+No keyboard swap, no separate app to paste out of. Ramblr floats a single button over whatever you're already doing — Slack, Discord, a code editor, an email — and inserts your words directly into the focused field the moment you're done talking.
+
+<ul>
+<li>Tap, ramble, tap. One button, everywhere. No mode switching, no separate transcript to copy-paste.</li>
+<li>Fully offline if you want it. On-device transcription and on-device cleanup — nothing ever has to touch the network.</li>
+<li>Or route it through the best cloud models. OpenAI, Anthropic, and Gemini for cleanup, OpenAI Whisper for transcription — chained in whatever fallback order you configure, your own API keys, no relay server in between.</li>
+<li>Fastest of both worlds. Instant on-device transcription, cloud-grade cleanup — dictation feels instant and still reads like you actually meant to write it.</li>
+<li>Cleanup styles that match how you actually talk. Formal, Casual, Notes and lists, Email, Concise — or write your own. Ramblr strips the "ums," collapses your self-corrections, and keeps your meaning, not just your words.</li>
+<li>It learns your vocabulary. Feed it your project names and jargon once; cleanup stops mangling them forever.</li>
+</ul>
+
+Ramblr uses Android's Accessibility Service for one narrow reason: to insert dictated text into the currently focused text field across apps. It does not replace your keyboard. It does not run background automation. It only acts after you explicitly tap the overlay button.
+
+<b>Privacy:</b> combine local transcription with local cleanup and nothing ever leaves the device. There is no backend for this app — in every cloud mode, requests go straight from your phone to the provider using your own API key, with no relay server in the middle. Cloud providers (OpenAI, Anthropic, Gemini, or a self-hosted OpenAI-compatible endpoint you point it at yourself) are entirely optional, off by default, and require you to supply your own API key.
