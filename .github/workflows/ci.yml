@@ -6,12 +6,19 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege GITHUB_TOKEN: nothing in this workflow writes to the repo (contrast release.yml,
+# which scopes `contents: write` into its own push-only workflow). Mirrors that discipline (L-1).
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # Actions pinned to full commit SHAs, not mutable tags, so a compromised tag can't
+        # silently swap the action out from under CI (L-3). Trailing comment records the version.
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # llama.cpp (#37) is a git submodule the native cleanup build depends on -- without
           # this, CI's checkout leaves it as an empty directory and CMake fails configuring
@@ -19,16 +26,19 @@ jobs:
           submodules: recursive
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
       - name: Unit tests
         run: ./gradlew testDebugUnitTest
@@ -37,7 +47,7 @@ jobs:
         run: ./gradlew assembleDebug
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
