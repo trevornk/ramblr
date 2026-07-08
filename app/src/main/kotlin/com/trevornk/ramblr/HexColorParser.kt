@@ -5,8 +5,8 @@ package com.trevornk.ramblr
  * picker hex field). Pulled out as a standalone, Context-free, Android-framework-free object
  * (rather than android.graphics.Color.parseColor, which isn't available/mockable in this
  * project's plain JVM unit tests -- no Robolectric) so the parsing itself is directly
- * unit-testable, matching how CleanupWaterfallStore.deserialize/PostProcessor.interpolateVocabulary
- * keep their pure logic separate from any Android-bound caller.
+ * unit-testable, matching how PostProcessor.interpolateVocabulary keeps its pure logic separate
+ * from any Android-bound caller.
  */
 object HexColorParser {
     /**

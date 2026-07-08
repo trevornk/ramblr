@@ -5,12 +5,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Persists the unified [ProviderChain] as JSON in the same plain (not encrypted) "ramblr"
- * SharedPreferences file used by [CleanupWaterfallStore], under a new key so the legacy
- * "cleanup_waterfall_steps" value is left untouched (still read by the live
- * [CleanupWaterfallExecutor] until Phase 2). Mirrors [CleanupWaterfallStore]'s
- * serialize()/deserialize()/load()/save() pattern exactly: the entries themselves aren't secrets
- * -- credentials live in [ProviderCredentialStore].
+ * Persists the unified [ProviderChain] as JSON in the plain (not encrypted) "ramblr"
+ * SharedPreferences file. The entries themselves aren't secrets -- credentials live in
+ * [ProviderCredentialStore].
  */
 object ProviderChainStore {
     private const val PREFS_NAME = "ramblr"
@@ -30,9 +27,8 @@ object ProviderChainStore {
 
     /**
      * Returns null if [raw] is blank (never configured) or malformed, so [load] falls back to
-     * [ProviderChain.DEFAULT_SINGLE_OPENAI_ENTRY]. A valid empty array is not null -- mirrors
-     * [CleanupWaterfallStore.deserialize]'s "explicitly emptied is not never-configured"
-     * contract: an explicitly-emptied chain loads as zero entries, not the default.
+     * [ProviderChain.DEFAULT_SINGLE_OPENAI_ENTRY]. A valid empty array is not null: an
+     * explicitly-emptied chain loads as zero entries, not the default.
      */
     fun deserialize(raw: String?): ProviderChain? {
         if (raw.isNullOrBlank()) return null

@@ -390,7 +390,8 @@ object RealCleanupHttpTransport : CleanupHttpTransport {
  * host. No retries: this is a foreground call blocking a user waiting on their transcript.
  *
  * Deliberately takes no [android.content.Context] — [credentialLookup] is the caller's seam onto
- * [CleanupCredentialStore] (see [PostProcessor.processWaterfall]), and [transport] is the seam
+ * the credential store (via [ProviderChainRuntime.providerKindForCleanupSlot] +
+ * [ProviderCredentialStore], see [PostProcessor.processProviderChain]), and [transport] is the seam
  * onto the network. Both let this object's step-sequencing logic run in a plain JVM unit test
  * with fakes, with no real I/O and no Android framework dependency.
  */

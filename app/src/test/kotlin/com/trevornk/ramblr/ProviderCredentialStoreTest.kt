@@ -5,8 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Pure-logic coverage for [ProviderCredentialStore]'s pref-key mapping -- the encrypted-prefs
- *  parts need a real Context/Keystore and can't be JVM-tested (same caveat as
- *  [CleanupCredentialStore], see [CleanupCredentialStoreTest]). */
+ *  parts need a real Context/Keystore and can't be JVM-tested. */
 class ProviderCredentialStoreTest {
 
     @Test fun `each non-local provider kind maps to its own distinct pref key`() {

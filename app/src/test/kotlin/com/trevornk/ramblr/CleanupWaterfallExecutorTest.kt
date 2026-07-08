@@ -713,27 +713,6 @@ class LocalLlmStepDeadlineTest {
     }
 }
 
-class PostProcessorWaterfallGatingTest {
-    @Test fun `the pre-waterfall legacy single step does not trigger the executor`() {
-        assertEquals(false, PostProcessor.shouldUseWaterfallExecutor(CleanupWaterfall.LEGACY_SINGLE_STEP))
-    }
-
-    @Test fun `any non-LEGACY step triggers the executor`() {
-        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6")))
-        assertEquals(true, PostProcessor.shouldUseWaterfallExecutor(waterfall))
-    }
-
-    @Test fun `more than one LEGACY step also triggers the executor`() {
-        val waterfall = CleanupWaterfall(
-            listOf(
-                CleanupStep(CleanupStepGroup.LEGACY, "gpt-4o-mini"),
-                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
-            )
-        )
-        assertEquals(true, PostProcessor.shouldUseWaterfallExecutor(waterfall))
-    }
-}
-
 /** #63: a cancelled in-flight call must stop the waterfall outright — previously it reported
  *  through the same onFailure path as a dead host, so a user's cancel *advanced* the waterfall
  *  into the next (possibly paid) group for a result the guard token would discard anyway. */

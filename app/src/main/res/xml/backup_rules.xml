@@ -10,9 +10,9 @@
   live there and have zero device-specific state baked in.
 
   The Keystore-backed EncryptedSharedPreferences files are deliberately excluded (there are three:
-  ramblr_secure.xml for the legacy single OpenAI key, ramblr_provider_credentials.xml for the
-  cloud provider chain's per-provider keys, and ramblr_cleanup_credentials.xml for cleanup-specific
-  credentials (see ApiKeyStore/ProviderCredentialStore/CleanupCredentialStore). All three are
+  ramblr_secure.xml and ramblr_cleanup_credentials.xml are legacy files from stores that have since
+  been deleted as dead code, and ramblr_provider_credentials.xml is the live unified
+  ProviderCredentialStore holding every provider's key today). All three are
   encrypted with a key generated in, and never leaving, this specific device's Android Keystore
   (hardware-backed on most devices). If their ciphertext were restored to a new phone, the new
   device's Keystore has no way to produce the same key, so every read would either come back empty

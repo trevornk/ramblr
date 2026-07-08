@@ -38,7 +38,8 @@ object ProviderChainRuntime {
         return cleanupEntries.size == 1 && cleanupEntries[0].kind == ProviderKind.OPENAI
     }
 
-    /** Same predicate as [PostProcessor.shouldUseWaterfallExecutor], but for ProviderChain. */
+    /** True only when [chain] is exactly one OPENAI entry -- the simple single-provider path
+     *  that bypasses [CleanupWaterfallExecutor] entirely (see [PostProcessor.processProviderChain]). */
     fun shouldUseCleanupExecutor(chain: ProviderChain): Boolean = !isSingleOpenAiCleanup(chain)
 
     /** Maps executor credential slots to unified provider credential kinds. */

@@ -291,7 +291,6 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
-        ensureProviderChainMigrated()
         CustomPersonaStore.ensureLegacySeeded(this)
         showOverlay()
         registerNetworkCallback()
@@ -301,21 +300,6 @@ class WhisperAccessibilityService : AccessibilityService() {
         // Try to load local model in background
         thread { initLocalModel() }
         thread { initStreamingModel() }
-    }
-
-    /**
-     * Phase 2 provider-chain unification (#95): the live dictation paths below now read
-     * ProviderChain/ProviderCredentialStore only, so the one-time legacy migration must run before
-     * the first recording can resolve a provider. Kept in the AccessibilityService lifecycle (not
-     * an Activity) because this is the component that owns always-on dictation and may be started
-     * independently of settings UI.
-     */
-    private fun ensureProviderChainMigrated() {
-        try {
-            ProviderChainMigration.migrate(this)
-        } catch (e: Exception) {
-            Log.e(TAG, "Provider chain migration failed; falling back to ProviderChainStore defaults", e)
-        }
     }
 
     /**

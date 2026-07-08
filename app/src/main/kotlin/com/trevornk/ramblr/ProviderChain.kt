@@ -40,10 +40,10 @@ fun ProviderKind.supportsTranscription(): Boolean = when (this) {
 fun ProviderKind.supportsCleanup(): Boolean = true
 
 /**
- * One entry in the user's [ProviderChain]. Deliberately mirrors the shape of the legacy
- * [CleanupStep] (a [kind] instead of a [CleanupStepGroup], the same [model]/[baseUrlOverride]
- * fields) so migrating from the old waterfall model is a near 1:1 mapping rather than a
- * redesign -- see [ProviderChainMigration].
+ * One entry in the user's [ProviderChain]. Deliberately mirrors the shape of [CleanupStep]
+ * (a [kind] instead of a [CleanupStepGroup], the same [model]/[baseUrlOverride] fields) so
+ * mapping between the two models (see [ProviderChainRuntime.cleanupWaterfallFor]) stays a
+ * near 1:1 conversion rather than a redesign.
  */
 data class ProviderChainEntry(
     val kind: ProviderKind,
@@ -118,9 +118,9 @@ data class ProviderChain(val entries: List<ProviderChainEntry>) {
 
     companion object {
         /**
-         * Default chain for a fresh install or any state that hasn't gone through
-         * [ProviderChainMigration] yet: a single OPENAI entry using [PostProcessor.DEFAULT_MODEL].
-         * This mirrors [CleanupWaterfall.LEGACY_SINGLE_STEP] and today's actual zero-config
+         * Default chain for a fresh install or any state that hasn't been explicitly configured
+         * yet: a single OPENAI entry using [PostProcessor.DEFAULT_MODEL]. This mirrors
+         * [CleanupWaterfall.LEGACY_SINGLE_STEP] and today's actual zero-config
          * behavior (cloud transcription + cleanup both go through the single legacy OpenAI key) --
          * it is expressed as a normal OPENAI entry rather than a special LEGACY case, since
          * collapsing that special case into the unified model is the entire point of this phase.
