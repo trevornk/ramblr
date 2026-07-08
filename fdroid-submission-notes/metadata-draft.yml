@@ -33,19 +33,15 @@ RepoType: git
 Repo: https://github.com/trevornk/ramblr.git
 
 Builds:
-  - versionName: '1.0.1'
-    versionCode: 4
-    # JUDGMENT CALL (see NOTES.md "Build commit"): this is the full commit
-    # hash for d61a4a2, which is AHEAD of the v1.0.1 tag. The v1.0.1 tag
-    # itself still points at the OLD prebuilt-AAR-from-GitHub-Releases
-    # native libs and must NOT be used as the F-Droid build commit -- it
-    # would reintroduce the exact non-free-prebuilt blocker this whole
-    # submission exists to clear. Upstream should cut a new tag (e.g.
-    # v1.0.2) on/after d61a4a2 before actual submission to fdroiddata;
-    # using a raw commit hash instead of a tag works for `fdroid build`
-    # but is atypical for a first submission and reviewers may ask for a
-    # tagged release. UNRESOLVED until upstream tags.
-    commit: d61a4a2820f0d8a47f83256cc3ebcb62604f1675
+  - versionName: '1.0.2'
+    versionCode: 5
+    # UPDATED: v1.0.2 tags the commit that lands the FetchContent submodule
+    # fix (see NOTES.md "IMPLEMENTATION UPDATE"), so this tag -- not a raw
+    # commit hash -- is the correct Builds: reference for a first fdroiddata
+    # submission. versionCode/versionName re-verified directly against
+    # app/build.gradle.kts at this tag (previously only carried over from
+    # the v1.0.1 release without independent verification).
+    commit: v1.0.2
     subdir: app
     submodules: true
 
@@ -92,5 +88,5 @@ Builds:
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: '1.0.1'
-CurrentVersionCode: 4
+CurrentVersion: '1.0.2'
+CurrentVersionCode: 5
