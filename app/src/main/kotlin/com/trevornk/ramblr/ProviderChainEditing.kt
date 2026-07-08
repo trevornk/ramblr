@@ -1,13 +1,11 @@
 package com.trevornk.ramblr
 
 /**
- * Pure add/remove/reorder logic for the unified Cloud provider-chain screen (#95 Phase 3) --
- * the exact same list-editing shape as [CleanupWaterfallEditing], just operating on
- * [ProviderChainEntry] instead of [CleanupStep]. Kept as a separate object rather than making
- * [CleanupWaterfallEditing] generic: the two element types are otherwise unrelated data classes
- * (different fields would be a coincidence, not a real generalization), and duplicating ~20 lines
- * of trivial list-splicing logic is cheaper than a shared abstraction two different legacy/new
- * models would both have to fit.
+ * Pure add/remove/reorder logic for the unified Cloud provider-chain screen (#95 Phase 3),
+ * operating on [ProviderChainEntry]. Kept as a standalone object rather than a generic
+ * abstraction shared with any legacy step-editing shape: [ProviderChainEntry]'s fields don't
+ * generalize cleanly, and duplicating ~20 lines of trivial list-splicing logic is cheaper than a
+ * shared abstraction two different models would both have to fit.
  */
 object ProviderChainEditing {
     /**

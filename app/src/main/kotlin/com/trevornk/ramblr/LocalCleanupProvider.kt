@@ -40,7 +40,7 @@ object LocalCleanupProvider {
 
     // A `run(text, prompt, modelPath, engine)` helper used to live here, kdoc-claiming the
     // Settings "Test" button drove local steps through it -- it never had a production caller
-    // (Test goes through PostProcessor.processWaterfall like everything else), and its trim was
+    // (Test goes through PostProcessor.processProviderChain like everything else), and its trim was
     // the only trimming local path while the executor injected untrimmed output. Deleted in #84;
     // the executor's LOCAL_LLM branch now trims, matching the cloud parsers.
 }

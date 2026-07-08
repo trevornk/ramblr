@@ -8,7 +8,7 @@ enum class CleanupStepHealth { UNTESTED, SUCCESS, FAILURE }
 
 /**
  * Tracks [CleanupStepHealth] per waterfall step across app restarts, in the same plain
- * "ramblr" prefs file as [CleanupWaterfallStore] (health isn't a secret). Keyed by
+ * "ramblr" prefs file used for other non-secret settings. Keyed by
  * [keyFor] -- group + model + base URL override -- rather than list position or object identity,
  * since steps are freely reordered/added/removed in Settings and health should follow "this
  * OmniRoute Claude step" across a reorder, not "whatever now sits at index 2".

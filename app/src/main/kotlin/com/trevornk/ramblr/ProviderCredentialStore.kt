@@ -4,26 +4,21 @@ import android.content.Context
 import android.content.SharedPreferences
 
 /**
- * Unified credential storage for the provider-chain model (Phase 1 of the provider-chain
- * unification): exactly one secret slot PER [ProviderKind], not per feature and not per
- * feature-provider pair. This replaces the split brain of the legacy model, where the same
- * logical "OpenAI key" concept was spread across [ApiKeyStore] (transcription + legacy cleanup)
- * and [CleanupCredentialStore]'s OPENAI_DIRECT slot (a power user's separate waterfall key).
+ * Unified credential storage for the provider-chain model: exactly one secret slot PER
+ * [ProviderKind], not per feature and not per feature-provider pair. Replaced an earlier split
+ * brain where the same logical "OpenAI key" concept was spread across a legacy transcription key
+ * store and a separate cleanup-waterfall credential store.
  *
  * [ProviderKind.LOCAL] intentionally has no slot here -- on-device inference has nothing to
- * authenticate against, mirroring today's LOCAL_LLM steps having no [CleanupCredentialSlot].
+ * authenticate against.
  *
- * Follows the exact same pattern as [CleanupCredentialStore]: cached
- * [androidx.security.crypto.EncryptedSharedPreferences] via [SecurePrefsFactory], and the same
- * masking convention (last 4 chars, "***xxxx").
+ * Cached [androidx.security.crypto.EncryptedSharedPreferences] via [SecurePrefsFactory], with a
+ * "***xxxx" (last 4 chars) masking convention for display.
  *
- * Deliberately does not delete [ApiKeyStore]/[CleanupCredentialStore]'s underlying encrypted
- * prefs files on disk (a user's already-stored secrets stay put, no silent data loss) -- but as
- * of the #95 Phase 3 restructure, no live code reads or writes either of those two stores
- * anymore. [ApiKeyStore] survives only as [ProviderChainMigration]'s one-time legacy input;
- * [CleanupCredentialStore]'s three slots are likewise migration-only. This store is populated by
- * [ProviderChainMigration] and is the sole live credential source for every provider going
- * forward.
+ * This is the sole live credential source for every provider (OpenAI, Gemini, Anthropic,
+ * OmniRoute); the legacy stores it superseded, and the one-time migration that seeded it from
+ * them, have since been deleted as dead code -- migration ran once on the only real device and
+ * is confirmed complete (see `provider_chain_migrated=true` in ramblr.xml).
  */
 object ProviderCredentialStore {
     private const val SECURE_PREFS_NAME = "ramblr_provider_credentials"
@@ -54,7 +49,7 @@ object ProviderCredentialStore {
     fun isConfigured(context: Context, kind: ProviderKind): Boolean =
         get(context, kind).isNotBlank()
 
-    /** Same masking convention as [CleanupCredentialStore.maskForDisplay]: last 4 chars only. */
+    /** Masking convention: last 4 chars only, e.g. "***cdef". */
     fun maskForDisplay(value: String): String = when {
         value.isBlank() -> ""
         value.length > 4 -> "***${value.takeLast(4)}"

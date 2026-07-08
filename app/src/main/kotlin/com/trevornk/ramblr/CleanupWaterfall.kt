@@ -1,16 +1,26 @@
 package com.trevornk.ramblr
 
 /**
+ * Which encrypted credential slot a cleanup-waterfall step authenticates against, resolved at
+ * runtime via [ProviderChainRuntime.providerKindForCleanupSlot] into the unified
+ * [ProviderCredentialStore]. OMNIROUTE covers three model sub-steps (Claude, OpenAI/Codex,
+ * Gemini) behind one shared consumer key and fixed base URL; OPENAI_DIRECT/ANTHROPIC_DIRECT/
+ * GEMINI_DIRECT are the pay-per-token fallbacks used when OmniRoute (home LAN/VPN only) is
+ * unreachable.
+ */
+enum class CleanupCredentialSlot { OMNIROUTE, OPENAI_DIRECT, ANTHROPIC_DIRECT, GEMINI_DIRECT }
+
+/**
  * Which physical service a waterfall step talks to. Steps sharing a [group] share a network
  * host and fail together: one connection failure to that host disqualifies every step in the
  * group for this call, instead of retrying each sub-step against the same dead host (see
  * ADR-0001 / docs/adr/0001-cleanup-waterfall.md, and the independent architecture review that
  * flagged this as the critical fix over a naive flat sequential waterfall).
  *
- * LEGACY is distinct from OPENAI_DIRECT on purpose: LEGACY reads from the existing
- * [ApiKeyStore]/[PostProcessor] single-key fields (issue #4's pre-waterfall config) so a fresh
- * install or an unmigrated user sees zero behavior change, while OPENAI_DIRECT reads from the
- * new [CleanupCredentialStore] slot a user explicitly configures as part of a real waterfall.
+ * LEGACY is distinct from OPENAI_DIRECT on purpose: LEGACY reads from [PostProcessor]'s existing
+ * single-key/base_url/model fields (issue #4's pre-waterfall config) so a fresh install sees
+ * zero behavior change, while OPENAI_DIRECT reads from a [CleanupCredentialSlot] a user
+ * explicitly configures as part of a real waterfall.
  *
  * LOCAL_LLM (#37) is the odd one out: it isn't a network host group at all -- it runs cleanup
  * on-device via llama.cpp (see [LocalCleanupProvider]/[LlamaCppInference]) against the one
@@ -47,8 +57,8 @@ data class CleanupStep(
     val model: String,
     val baseUrlOverride: String? = null,
 ) {
-    /** Null for LEGACY steps, which authenticate via [ApiKeyStore] instead, and for LOCAL_LLM
-     *  steps, which run on-device and have nothing to authenticate against (#37). */
+    /** Null for LEGACY steps, which authenticate via [PostProcessor]'s legacy key field instead,
+     *  and for LOCAL_LLM steps, which run on-device and have nothing to authenticate against (#37). */
     fun credentialSlot(): CleanupCredentialSlot? = when (group) {
         CleanupStepGroup.LEGACY -> null
         CleanupStepGroup.OMNIROUTE -> CleanupCredentialSlot.OMNIROUTE
@@ -84,8 +94,8 @@ data class CleanupWaterfall(val steps: List<CleanupStep>) {
         /**
          * Default out-of-box waterfall for a fresh install or anyone who hasn't configured the
          * waterfall feature: a single LEGACY step using today's existing OpenAI cloud key/
-         * base_url/model fields (see [PostProcessor.DEFAULT_BASE_URL]/[PostProcessor.DEFAULT_MODEL]
-         * and [ApiKeyStore]) — zero behavior change from pre-waterfall Ramblr.
+         * base_url/model fields (see [PostProcessor.DEFAULT_BASE_URL]/[PostProcessor.DEFAULT_MODEL])
+         * -- zero behavior change from pre-waterfall Ramblr.
          */
         val LEGACY_SINGLE_STEP = CleanupWaterfall(
             steps = listOf(CleanupStep(CleanupStepGroup.LEGACY, PostProcessor.DEFAULT_MODEL))

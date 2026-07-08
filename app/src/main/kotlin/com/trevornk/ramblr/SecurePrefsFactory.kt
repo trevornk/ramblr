@@ -7,8 +7,8 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
 /**
- * Builds and caches Keystore-backed [EncryptedSharedPreferences] instances for [ApiKeyStore] and
- * [CleanupCredentialStore] (#79).
+ * Builds and caches Keystore-backed [EncryptedSharedPreferences] instances for
+ * [ProviderCredentialStore] (#79).
  *
  * Two problems this exists to fix:
  *  - Both stores used to rebuild the [MasterKey] and call [EncryptedSharedPreferences.create] on

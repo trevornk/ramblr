@@ -365,10 +365,9 @@ class MainActivity : BaseSettingsActivity() {
     /** Cloud-credential entry point for [showOnboardingCloudProviderChoiceStep] (#98 revision,
      *  unified post-spaghetti-cleanup): one path for every addable [ProviderKind], including
      *  OpenAI. Reads/writes [ProviderCredentialStore] exclusively -- the same store
-     *  [CloudProviderActivity] and the live provider chain read at runtime -- so onboarding can
-     *  never leave OpenAI's key sitting only in the legacy [ApiKeyStore] out of sync with what
-     *  dictation actually uses. [ApiKeyStore] itself is now purely a one-time legacy-migration
-     *  input (see [ProviderChainMigration]); nothing live reads or writes it anymore. */
+     *  [CloudProviderActivity] and the live provider chain read at runtime. The legacy split
+     *  store this replaced (and the one-time migration that seeded from it) have since been
+     *  deleted as dead code. */
     private fun promptOnboardingProviderKey(kind: ProviderKind, onDone: () -> Unit) {
         if (ProviderCredentialStore.isConfigured(this, kind)) {
             onDone()

@@ -5,30 +5,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Pure-logic coverage for [CleanupCredentialStore] that doesn't need Android/Keystore. */
-class CleanupCredentialStoreTest {
-
-    @Test fun `maskForDisplay is blank for a blank value`() {
-        assertEquals("", CleanupCredentialStore.maskForDisplay(""))
-    }
-
-    @Test fun `maskForDisplay shows only the last 4 characters for a long value`() {
-        assertEquals("***cdef", CleanupCredentialStore.maskForDisplay("sk-abcdef"))
-    }
-
-    @Test fun `maskForDisplay does not crash on a short value`() {
-        assertEquals("***", CleanupCredentialStore.maskForDisplay("ab"))
-    }
-
-    @Test fun `each credential slot maps to its own distinct pref key`() {
-        val keys = CleanupCredentialSlot.values().map { CleanupCredentialStore.prefKeyFor(it) }
-        assertEquals(keys.size, keys.toSet().size)
-        assertEquals("omniroute_key", CleanupCredentialStore.prefKeyFor(CleanupCredentialSlot.OMNIROUTE))
-        assertEquals("openai_direct_key", CleanupCredentialStore.prefKeyFor(CleanupCredentialSlot.OPENAI_DIRECT))
-        assertEquals("anthropic_direct_key", CleanupCredentialStore.prefKeyFor(CleanupCredentialSlot.ANTHROPIC_DIRECT))
-    }
-}
-
 class CleanupStepTest {
 
     @Test fun `legacy step has no credential slot`() {
