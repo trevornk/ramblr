@@ -6,7 +6,7 @@ package com.trevornk.ramblr
  * user has explicitly hidden it via the long-press "Hide icon" menu row (Feature B), and whether
  * the device is currently locked at the keyguard. The ring is pinned to the right edge, vertically
  * centered -- the same region where Settings right-aligns its switches -- so there's no reason to
- * float a push-to-talk trigger over the app's own Settings screen while the user is looking at it,
+ * float a tap-to-dictate trigger over the app's own Settings screen while the user is looking at it,
  * and no reason to keep showing it once the user has intentionally asked for it to go away until
  * they restore it from the notification (or the Advanced screen fallback).
  *
