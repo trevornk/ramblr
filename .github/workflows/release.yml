@@ -57,6 +57,11 @@ jobs:
           TAG="v${VERSION_NAME}-dev.$(date -u +%Y%m%d%H%M).${SHORT_SHA}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          # app/build.gradle.kts renames the assembled APK to Ramblr-<versionName>-debug.apk
+          # (see the outputFileName override there), not Gradle's default app-debug.apk -- reuse
+          # the versionName we just parsed so the release-upload step points at a file that
+          # actually exists instead of the stale default name.
+          echo "apk_path=app/build/outputs/apk/debug/Ramblr-${VERSION_NAME}-debug.apk" >> "$GITHUB_OUTPUT"
 
       - name: Create release
         env:
@@ -69,7 +74,7 @@ jobs:
         # no untrusted external text anywhere in scope to interpolate in the first place.
         run: |
           gh release create "${{ steps.tag.outputs.tag }}" \
-            app/build/outputs/apk/debug/app-debug.apk \
+            "${{ steps.tag.outputs.apk_path }}" \
             --title "Ramblr ${{ steps.tag.outputs.tag }} (debug build)" \
             --notes "Automated debug sideload build from \`${{ steps.tag.outputs.short_sha }}\` on main.
 

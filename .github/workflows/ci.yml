@@ -50,5 +50,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          # app/build.gradle.kts renames the output to Ramblr-<versionName>-debug.apk (see the
+          # outputFileName override there), not Gradle's default app-debug.apk, so this has to be
+          # a glob rather than the literal default filename.
+          path: app/build/outputs/apk/debug/Ramblr-*-debug.apk
           if-no-files-found: error
