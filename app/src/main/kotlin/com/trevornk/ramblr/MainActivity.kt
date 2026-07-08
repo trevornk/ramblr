@@ -459,19 +459,33 @@ class MainActivity : BaseSettingsActivity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             hint = "Paste key"
         }
-        onboardingDialog = android.app.AlertDialog.Builder(this)
+        val dialog = android.app.AlertDialog.Builder(this)
             .setTitle("$label API Key")
             .setMessage("Used only to call $label's API directly from your phone — billed pay-per-use to your own account.")
             .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
             .setCancelable(false)
-            .setPositiveButton("Save") { _, _ ->
-                val entered = input.text.toString().trim()
-                if (entered.isNotBlank()) ProviderCredentialStore.set(this, kind, entered)
-                refresh()
-                onDone()
-            }
+            .setPositiveButton("Save", null) // real handler wired below so a blank key doesn't dismiss
             .setNegativeButton("Skip") { _, _ -> dismissOnboarding(); onDone() }
-            .show()
+            .create()
+        // Override Save so a blank entry shows an inline error and keeps the dialog open instead of
+        // silently proceeding with no key stored (which then leaves the user on "Setup required"
+        // with no explanation) -- "Skip" is the explicit no-key path (M12).
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val entered = input.text.toString().trim()
+                if (entered.isBlank()) {
+                    input.error = "Enter a key, or tap Skip"
+                } else {
+                    ProviderCredentialStore.set(this, kind, entered)
+                    dismissOnboarding()
+                    dialog.dismiss()
+                    refresh()
+                    onDone()
+                }
+            }
+        }
+        onboardingDialog = dialog
+        dialog.show()
     }
 
     /**
@@ -534,6 +548,10 @@ class MainActivity : BaseSettingsActivity() {
                 enableOnboardingCleanupCloud(ProviderKind.OPENAI)
                 promptOnboardingProviderKey(ProviderKind.OPENAI) { showOnboardingStreamingStep() }
             }
+            // Escape hatch (M12): a mistaken "Use cloud" tap on the previous step can otherwise
+            // not be backed out. "Back" re-shows the cleanup step (Local/Skip still available); no
+            // cloud config is seeded until a provider is actually picked above.
+            .setNeutralButton("Back") { _, _ -> dismissOnboarding(); showOnboardingCleanupStep() }
             .show()
     }
 
