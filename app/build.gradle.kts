@@ -1,7 +1,4 @@
-import java.net.URI
-import java.security.MessageDigest
 import java.util.Properties
-import java.util.zip.ZipFile
 
 plugins {
     id("com.android.application")
@@ -17,6 +14,22 @@ val localProperties = Properties().apply {
     if (file.exists()) file.inputStream().use { load(it) }
 }
 val omniRouteBaseUrl: String = (localProperties.getProperty("OMNIROUTE_BASE_URL") ?: "").trim()
+
+// onnxruntime for the sherpa-onnx speech-to-text native build (F-Droid prep, #36): the
+// official Microsoft artifact on Maven Central (a source F-Droid trusts, unlike GitHub
+// Releases). 1.24.3 is the exact version sherpa-onnx 1.13.3 builds/tests against (its
+// build-android-arm64-v8a.sh default) and byte-for-byte the libonnxruntime.so the old
+// prebuilt AAR shipped. Its .so is packaged into the APK by AGP; its headers + .so are
+// also extracted (see extractOnnxRuntimeNative below) for the from-source JNI link.
+val onnxRuntimeVersion = "1.24.3"
+
+// A separate resolvable configuration holding just the onnxruntime AAR, so the native
+// build can unzip its headers/ and arm64-v8a/libonnxruntime.so without disturbing the
+// normal `implementation` classpath.
+val onnxRuntimeAar: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
 
 android {
     namespace = "com.trevornk.ramblr"
@@ -37,15 +50,34 @@ android {
         externalNativeBuild {
             cmake {
                 abiFilters += "arm64-v8a"
+                // Point sherpa-onnx's from-source build at the Maven onnxruntime AAR's
+                // extracted headers + arm64 .so (see extractOnnxRuntimeNative below and
+                // src/main/cpp/sherpa_onnx/CMakeLists.txt). Uses toString() rather than
+                // .get().asFile so the path resolves lazily at task-graph time.
+                val onnxDir = layout.buildDirectory.dir("onnxruntime-$onnxRuntimeVersion")
+                arguments += "-DSHERPA_ONNXRUNTIME_INCLUDE_DIR=${onnxDir.get().asFile}/headers"
+                arguments += "-DSHERPA_ONNXRUNTIME_LIB_DIR=${onnxDir.get().asFile}/jni/arm64-v8a"
             }
         }
     }
 
-    // Builds the llama_cleanup JNI shim (#37) against the llama.cpp submodule pinned in
-    // ../llama.cpp (see llama_cleanup/CMakeLists.txt's add_subdirectory path).
+    // Both native components are built from source via CMake. AGP allows only one
+    // externalNativeBuild.cmake.path per module, so a thin root CMakeLists.txt
+    // add_subdirectory()s both: llama_cleanup (on-device LLM cleanup, #37, against the
+    // ../llama.cpp submodule) and sherpa_onnx (speech-to-text, F-Droid prep, against the
+    // ../sherpa-onnx submodule). See src/main/cpp/CMakeLists.txt.
     externalNativeBuild {
         cmake {
-            path = file("src/main/cpp/llama_cleanup/CMakeLists.txt")
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+
+    // The onnxruntime AAR bundles arm64-v8a/libonnxruntime4j_jni.so -- the JNI glue for
+    // onnxruntime's *own* Java API, which the app never touches (sherpa-onnx calls the C++
+    // API directly). Drop it so only the two .so files actually used ship in the APK.
+    packaging {
+        jniLibs {
+            excludes += "**/libonnxruntime4j_jni.so"
         }
     }
 
@@ -81,8 +113,36 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha07")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
+    // Packages arm64-v8a/libonnxruntime.so into the APK; the sherpa-onnx JNI lib (built
+    // from source) links against it at runtime. See onnxRuntimeVersion above.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:$onnxRuntimeVersion")
+    // Same artifact, resolved into a private configuration purely so the native build can
+    // read its headers + .so (the `@aar` classifier keeps transitive deps out).
+    onnxRuntimeAar("com.microsoft.onnxruntime:onnxruntime-android:$onnxRuntimeVersion@aar")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+}
+
+// Unzips the onnxruntime AAR's C/C++ headers and arm64-v8a libonnxruntime.so into
+// build/onnxruntime-<version>/ so the sherpa-onnx from-source CMake build can compile and
+// link against them (see src/main/cpp/sherpa_onnx/CMakeLists.txt). Hooked onto the CMake
+// configure/build tasks below (not preBuild) so it runs only for assemble*, never for
+// testDebugUnitTest, which doesn't touch the native build.
+val onnxRuntimeExtractDir = layout.buildDirectory.dir("onnxruntime-$onnxRuntimeVersion")
+val extractOnnxRuntimeNative = tasks.register<Copy>("extractOnnxRuntimeNative") {
+    description = "Extracts onnxruntime $onnxRuntimeVersion headers + arm64-v8a .so for " +
+        "the sherpa-onnx from-source native build (F-Droid prep, #36)."
+    from(onnxRuntimeAar.elements.map { it.map { artifact -> zipTree(artifact) } }) {
+        include("headers/**", "jni/arm64-v8a/libonnxruntime.so")
+    }
+    into(onnxRuntimeExtractDir)
+}
+
+tasks.matching {
+    it.name.startsWith("configureCMake") || it.name.startsWith("buildCMake")
+}.configureEach {
+    dependsOn(extractOnnxRuntimeNative)
 }
 
 // Manual dev tool (issue #2): compares PostProcessor prompts against the real OpenAI API.
@@ -100,77 +160,12 @@ tasks.register<JavaExec>("runEvalHarness") {
     classpath = tasks.named<Test>("testDebugUnitTest").get().classpath
 }
 
-// libsherpa-onnx-jni.so and libonnxruntime.so are required at runtime by the vendored
-// com.k2fsa.sherpa.onnx.* Kotlin bindings (app/src/main/kotlin/com/k2fsa/sherpa/), but that
-// groupId isn't published on Maven Central -- the only working source is the prebuilt aar on
-// GitHub Releases. Fetched here instead of committed, since app/.gitignore already excludes
-// jniLibs/ to keep ~50-60MB of binary out of git (see issue #36).
-val sherpaOnnxVersion = "1.13.3"
-val sherpaOnnxAarUrl =
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaOnnxVersion/sherpa-onnx-$sherpaOnnxVersion.aar"
-// GitHub release assets are mutable, so pin the AAR by SHA-256 and fail the build on mismatch --
-// otherwise a swapped upstream asset would be packaged into every CI/release APK unnoticed (H-1).
-// Matches the runtime model downloads' fail-closed hash discipline. Update when bumping the version.
-val sherpaOnnxAarSha256 = "243ad797a3b6e75ebbeaf7a2ab4aec0777e7d71b730685abb762a120940b07b6"
-val sherpaOnnxJniLibsDir = layout.projectDirectory.dir("src/main/jniLibs/arm64-v8a")
-val sherpaOnnxNativeLibs = listOf("libsherpa-onnx-jni.so", "libonnxruntime.so")
-
-tasks.register("fetchSherpaOnnxNativeLibs") {
-    description = "Downloads the sherpa-onnx $sherpaOnnxVersion release aar and extracts the " +
-        "arm64-v8a native libs into src/main/jniLibs/ (see issue #36)."
-    val outputDir = sherpaOnnxJniLibsDir.asFile
-    // Kept outside jniLibs/ so only the .so files themselves live in the dir Android packages.
-    val versionMarker = layout.buildDirectory.file("sherpaOnnx/.sherpa-onnx-version").get().asFile
-
-    onlyIf("native libs for sherpa-onnx $sherpaOnnxVersion already present") {
-        !(versionMarker.exists() && versionMarker.readText().trim() == sherpaOnnxVersion &&
-            sherpaOnnxNativeLibs.all { File(outputDir, it).exists() })
-    }
-
-    doLast {
-        outputDir.mkdirs()
-        versionMarker.parentFile.mkdirs()
-        val aarFile = File(temporaryDir, "sherpa-onnx-$sherpaOnnxVersion.aar")
-        logger.lifecycle("Fetching sherpa-onnx $sherpaOnnxVersion native libs from $sherpaOnnxAarUrl")
-        URI(sherpaOnnxAarUrl).toURL().openStream().use { input ->
-            aarFile.outputStream().use { output -> input.copyTo(output) }
-        }
-
-        val actualSha256 = MessageDigest.getInstance("SHA-256")
-            .digest(aarFile.readBytes())
-            .joinToString("") { byte -> "%02x".format(byte) }
-        if (actualSha256 != sherpaOnnxAarSha256) {
-            error(
-                "sherpa-onnx aar SHA-256 mismatch -- refusing to package an unverified native binary.\n" +
-                    "  url:      $sherpaOnnxAarUrl\n" +
-                    "  expected: $sherpaOnnxAarSha256\n" +
-                    "  actual:   $actualSha256\n" +
-                    "If you intentionally bumped sherpaOnnxVersion, update sherpaOnnxAarSha256 to match."
-            )
-        }
-
-        ZipFile(aarFile).use { zip ->
-            sherpaOnnxNativeLibs.forEach { libName ->
-                val entryPath = "jni/arm64-v8a/$libName"
-                val entry = zip.getEntry(entryPath)
-                    ?: error("$entryPath not found in $aarFile -- sherpa-onnx aar layout may have changed")
-                zip.getInputStream(entry).use { input ->
-                    File(outputDir, libName).outputStream().use { output -> input.copyTo(output) }
-                }
-            }
-        }
-        versionMarker.writeText(sherpaOnnxVersion)
-    }
-}
-
-// Hooked onto each variant's JNI-lib-merge step (not preBuild) so it only runs for
-// assembleDebug/assembleRelease packaging, not testDebugUnitTest, which never touches jniLibs/.
-tasks.matching { it.name.matches(Regex("merge[A-Za-z]+JniLibFolders")) }.configureEach {
-    dependsOn("fetchSherpaOnnxNativeLibs")
-}
-
-// llama.cpp native libs for on-device cleanup (#37): unlike sherpa-onnx above, there's no
-// prebuilt release artifact with this app's JNI entry points, so the shim in
-// app/src/main/cpp/llama_cleanup/ is built from source against the llama.cpp submodule (../llama.cpp)
-// via the externalNativeBuild/cmake block in the `android {}` block above. See
-// app/src/main/cpp/llama_cleanup/README.md for the full setup.
+// Native libs (#36/#37, F-Droid prep): both the speech-to-text lib (libsherpa-onnx-jni.so,
+// against the ../sherpa-onnx submodule) and the on-device LLM cleanup shim (against the
+// ../llama.cpp submodule) are built from source via the externalNativeBuild/cmake block in
+// the `android {}` block above (root CMakeLists at src/main/cpp/CMakeLists.txt). sherpa-onnx
+// used to be fetched as a prebuilt release AAR from GitHub Releases, but F-Droid disallows
+// prebuilt binaries from untrusted sources, so that fetchSherpaOnnxNativeLibs task and its
+// SHA-256 pin were removed in favour of this source build. onnxruntime now comes from Maven
+// Central (see onnxRuntimeVersion / extractOnnxRuntimeNative above). See
+// app/src/main/cpp/sherpa_onnx/README.md and llama_cleanup/README.md for the full setup.
