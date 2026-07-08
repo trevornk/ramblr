@@ -55,6 +55,9 @@ class LlamaCppInference : Closeable {
         if (!java.io.File(modelPath).isFile) {
             throw FileNotFoundException("Local cleanup model not found at $modelPath")
         }
+        // Release any previously loaded model first: a second load() over a live handle would
+        // otherwise overwrite nativePtr and leak the old native model (L5).
+        if (nativePtr != 0L) close()
         nativePtr = loadModel(
             modelPath,
             /* minP = */ DEFAULT_MIN_P,
@@ -93,15 +96,19 @@ class LlamaCppInference : Closeable {
         // become real control tokens and forge turn boundaries (#78).
         addChatMessage(nativePtr, SpecialTokenSanitizer.sanitize(systemPrompt), "system")
         startCompletion(nativePtr, SpecialTokenSanitizer.sanitize(userText))
-        // Arm the native wall-clock budget (#92): a single completionLoop() decode is one
-        // uninterruptible JNI call, so the accumulator's between-piece deadline check below can't
-        // stop a decode that runs pathologically long (mmap page-faults under memory pressure,
-        // thermal throttling). This gives ggml's abort callback the same deadline so it aborts
-        // mid-decode. A budget already in the past (deadline exceeded before we started) maps to a
-        // negative value, which the native side treats as "abort at the first check"; the default
-        // Long.MAX_VALUE deadline maps to 0, meaning "no native deadline" (tests / direct callers).
-        setInferenceBudgetMs(nativePtr, InferenceBudget.budgetMs(deadlineAtMs, System.currentTimeMillis()))
+        // stopCompletion is in the finally so it runs even if arming the budget below throws --
+        // once startCompletion has begun, the native completion state must be torn down cleanly on
+        // any failure, not just a normal/accumulator-thrown return (L5).
         try {
+            // Arm the native wall-clock budget (#92): a single completionLoop() decode is one
+            // uninterruptible JNI call, so the accumulator's between-piece deadline check below
+            // can't stop a decode that runs pathologically long (mmap page-faults under memory
+            // pressure, thermal throttling). This gives ggml's abort callback the same deadline so
+            // it aborts mid-decode. A budget already in the past (deadline exceeded before we
+            // started) maps to a negative value, which the native side treats as "abort at the
+            // first check"; the default Long.MAX_VALUE deadline maps to 0, meaning "no native
+            // deadline" (tests / direct callers).
+            setInferenceBudgetMs(nativePtr, InferenceBudget.budgetMs(deadlineAtMs, System.currentTimeMillis()))
             return LlamaCompletionAccumulator.accumulate(
                 maxPieces = MAX_RESPONSE_TOKENS,
                 endOfGeneration = END_OF_GENERATION,
