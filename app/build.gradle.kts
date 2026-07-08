@@ -1,4 +1,5 @@
 import java.net.URI
+import java.security.MessageDigest
 import java.util.Properties
 import java.util.zip.ZipFile
 
@@ -107,6 +108,10 @@ tasks.register<JavaExec>("runEvalHarness") {
 val sherpaOnnxVersion = "1.13.3"
 val sherpaOnnxAarUrl =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaOnnxVersion/sherpa-onnx-$sherpaOnnxVersion.aar"
+// GitHub release assets are mutable, so pin the AAR by SHA-256 and fail the build on mismatch --
+// otherwise a swapped upstream asset would be packaged into every CI/release APK unnoticed (H-1).
+// Matches the runtime model downloads' fail-closed hash discipline. Update when bumping the version.
+val sherpaOnnxAarSha256 = "243ad797a3b6e75ebbeaf7a2ab4aec0777e7d71b730685abb762a120940b07b6"
 val sherpaOnnxJniLibsDir = layout.projectDirectory.dir("src/main/jniLibs/arm64-v8a")
 val sherpaOnnxNativeLibs = listOf("libsherpa-onnx-jni.so", "libonnxruntime.so")
 
@@ -129,6 +134,19 @@ tasks.register("fetchSherpaOnnxNativeLibs") {
         logger.lifecycle("Fetching sherpa-onnx $sherpaOnnxVersion native libs from $sherpaOnnxAarUrl")
         URI(sherpaOnnxAarUrl).toURL().openStream().use { input ->
             aarFile.outputStream().use { output -> input.copyTo(output) }
+        }
+
+        val actualSha256 = MessageDigest.getInstance("SHA-256")
+            .digest(aarFile.readBytes())
+            .joinToString("") { byte -> "%02x".format(byte) }
+        if (actualSha256 != sherpaOnnxAarSha256) {
+            error(
+                "sherpa-onnx aar SHA-256 mismatch -- refusing to package an unverified native binary.\n" +
+                    "  url:      $sherpaOnnxAarUrl\n" +
+                    "  expected: $sherpaOnnxAarSha256\n" +
+                    "  actual:   $actualSha256\n" +
+                    "If you intentionally bumped sherpaOnnxVersion, update sherpaOnnxAarSha256 to match."
+            )
         }
 
         ZipFile(aarFile).use { zip ->
