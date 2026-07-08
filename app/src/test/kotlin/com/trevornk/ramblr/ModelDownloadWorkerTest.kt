@@ -17,17 +17,23 @@ class ModelDownloadWorkerTest {
         )
     }
 
-    @Test fun `workName differs for different archives, so unrelated model downloads don't collide`() {
-        val names = (MODEL_CATALOG + STREAMING_MODEL_CATALOG).map { ModelDownloadWorker.workName(it.archive) }
+    @Test fun `workName differs for different archives across all three catalogs, so downloads don't collide`() {
+        val names = (MODEL_CATALOG + STREAMING_MODEL_CATALOG + LOCAL_CLEANUP_MODEL_CATALOG)
+            .map { ModelDownloadWorker.workName(it.archive) }
         assertEquals(names.size, names.toSet().size)
     }
 
-    @Test fun `worker's model lookup covers both the offline and streaming catalogs`() {
-        // Mirrors ModelDownloadWorker.doWork()'s lookup so a download request for the streaming
-        // model (#29) is recognized, not rejected as "Unknown model".
-        val all = MODEL_CATALOG + STREAMING_MODEL_CATALOG
+    @Test fun `worker's model lookup covers the offline, streaming, and local-cleanup catalogs`() {
+        // Mirrors ModelDownloadWorker.doWork()'s lookup so a download request for a model in any of
+        // the three catalogs is recognized, not rejected as "Unknown model". Previously the third
+        // (local-cleanup) catalog wasn't exercised here (audit test-gap #7).
+        val all = MODEL_CATALOG + STREAMING_MODEL_CATALOG + LOCAL_CLEANUP_MODEL_CATALOG
         assertEquals(STREAMING_MODEL, all.firstOrNull { it.archive == STREAMING_MODEL.archive })
         assertEquals(MODEL_CATALOG.first(), all.firstOrNull { it.archive == MODEL_CATALOG.first().archive })
+        assertEquals(
+            LOCAL_CLEANUP_MODEL_CATALOG.first(),
+            all.firstOrNull { it.archive == LOCAL_CLEANUP_MODEL_CATALOG.first().archive },
+        )
     }
 
     // -- reload-kind classification for post-download service activation (#H5) --

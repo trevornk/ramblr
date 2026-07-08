@@ -294,6 +294,36 @@ class CleanupWaterfallExecutorTest {
         assertNotEquals(cleanupWaterfallSignature(base), cleanupWaterfallSignature(extraStep))
     }
 
+    @Test fun `the waterfall aborts with a time-budget error once the hard cap is exceeded mid-walk (test-gap #6)`() {
+        // Clock: startedAtMs and the first step's between-step check read "0" (under budget), then
+        // the next between-step check jumps past the hard cap so attempt(1) reports the budget error
+        // instead of trying the second step.
+        var calls = 0
+        val clock = { if (calls++ < 2) 0L else CLEANUP_WATERFALL_HARD_CAP_MS + 1L }
+        val transport = FakeCleanupHttpTransport(mutableListOf(CleanupHttpOutcome.HttpError(500, "")))
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
+                CleanupStep(CleanupStepGroup.OMNIROUTE, "cx/gpt-5.5"),
+            )
+        )
+        var captured: PostProcessor.Result? = null
+        CleanupWaterfallExecutor.execute(
+            text = "raw",
+            prompt = "clean",
+            waterfall = waterfall,
+            cursor = CleanupWaterfallCursor(),
+            cancelHolder = cancelHolder,
+            credentialLookup = { "omni-key" },
+            transport = transport,
+            nowMs = clock,
+            callback = { captured = it },
+        )
+        assertNull(captured?.text)
+        assertTrue("expected the time-budget error, was '${captured?.error}'", captured!!.error!!.contains("time budget"))
+        assertEquals(1, transport.requestedUrls.size) // only the first step ran before the cap tripped
+    }
+
     @Test fun `a missing credential fails that step without ever calling the transport`() {
         val transport = FakeCleanupHttpTransport(
             mutableListOf(CleanupHttpOutcome.Ok("""{"content":[{"type":"text","text":"fell through to anthropic"}]}"""))

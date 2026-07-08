@@ -428,6 +428,11 @@ object CleanupWaterfallExecutor {
         // once a properly fine-tuned local cleanup model replaces the current generic one -- is a
         // one-line change here, not a hunt through the executor.
         localPrompt: String = PostProcessor.SIMPLE_PROMPT,
+        // Injectable wall clock (defaults to the real one) so the hard-cap path is unit-testable
+        // without sleeping -- previously it read System.currentTimeMillis() directly, so the
+        // "exceeded time budget" branch had no deterministic test (audit test-gap #6). Its siblings
+        // (localLlmStepDeadline, BoundedBlockingCall) already take an injected now.
+        nowMs: () -> Long = { System.currentTimeMillis() },
         callback: (PostProcessor.Result) -> Unit,
     ) {
         val steps = waterfall.steps
@@ -438,7 +443,7 @@ object CleanupWaterfallExecutor {
 
         val groups = CleanupWaterfallPlanner.groupConsecutive(steps)
         val groupRanges = groupBoundaries(groups)
-        val startedAtMs = System.currentTimeMillis()
+        val startedAtMs = nowMs()
         val startIndex = cursor.startIndex(startedAtMs).takeIf { it in steps.indices } ?: 0
         // One waterfall run = one unit of cancellable work (#83): clear any cancel left over
         // from a previous dictation, and give the synchronous LOCAL_LLM step the same wall-clock
@@ -467,7 +472,7 @@ object CleanupWaterfallExecutor {
                 callback(PostProcessor.Result(null, "Cleanup cancelled"))
                 return
             }
-            if (System.currentTimeMillis() - startedAtMs >= CLEANUP_WATERFALL_HARD_CAP_MS) {
+            if (nowMs() - startedAtMs >= CLEANUP_WATERFALL_HARD_CAP_MS) {
                 callback(PostProcessor.Result(null, "Cleanup waterfall exceeded time budget"))
                 return
             }
@@ -476,7 +481,7 @@ object CleanupWaterfallExecutor {
                 logStepOutcome(steps[index], startedAtMs, outcome)
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
-                        cursor.recordSuccess(index, System.currentTimeMillis())
+                        cursor.recordSuccess(index, nowMs())
                         callback(PostProcessor.Result(outcome.text, null))
                     }
                     is CleanupStepOutcome.StepFailed -> attempt(index + 1, outcome.message)
