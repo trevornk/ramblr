@@ -528,7 +528,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         }
         container.addView(keyInput)
 
-        android.app.AlertDialog.Builder(this)
+        val builder = android.app.AlertDialog.Builder(this)
             .setTitle(if (existing == null) "Add provider" else "Edit ${providerLabel(existing.kind)}")
             .setView(ScrollView(this).apply { addView(container) })
             .setPositiveButton("Save") { _, _ ->
@@ -549,7 +549,20 @@ class CloudProviderActivity : BaseSettingsActivity() {
                 onSave(ProviderChainEntry(kind, model, baseUrlOverride))
             }
             .setNegativeButton("Cancel", null)
-            .show()
+        // Give the user a way to actually delete a stored key from the device (M10): a blank Save
+        // deliberately keeps the old key, and removing a chain entry keeps the credential too, so
+        // without this there was no removal path anywhere. Only offered when editing an entry whose
+        // key is actually set.
+        if (existing != null && ProviderCredentialStore.isConfigured(this, existing.kind)) {
+            builder.setNeutralButton("Remove key") { _, _ ->
+                confirmRemoveSecret("${providerLabel(existing.kind)} API key") {
+                    ProviderCredentialStore.clear(this, existing.kind)
+                    toast("${providerLabel(existing.kind)} key removed")
+                    refresh()
+                }
+            }
+        }
+        builder.show()
     }
 
     // --- Use cloud for Transcription / Cleanup ---
@@ -559,14 +572,26 @@ class CloudProviderActivity : BaseSettingsActivity() {
         if (useLocal) return "Off -- transcription runs on-device"
         val chain = currentChain()
         val hasCandidate = ProviderChainRuntime.transcriptionCandidates(chain).any { it.kind != ProviderKind.LOCAL }
-        return if (hasCandidate) "On -- uses the chain above" else "On, but no configured provider supports transcription yet -- falls back to on-device"
+        // Capability alone isn't enough -- a provider with no key set won't actually work (L17).
+        val hasConfigured = hasConfiguredCloudTranscription(chain) { ProviderCredentialStore.isConfigured(this, it) }
+        return when {
+            hasConfigured -> "On -- uses the chain above"
+            hasCandidate -> "On, but no key is set for a transcription provider yet -- falls back to on-device"
+            else -> "On, but no configured provider supports transcription yet -- falls back to on-device"
+        }
     }
 
     private fun cloudCleanupSubtitle(): String {
         if (!CloudFeatureToggle.cleanupEnabled(this)) return "Off -- cleanup runs on-device (or is skipped if no local model is set)"
         val chain = currentChain()
-        val hasCandidate = chain.capableEntriesFor(needsTranscription = false).any { it.kind != ProviderKind.LOCAL }
-        return if (hasCandidate) "On -- uses the chain above" else "On, but no cloud provider is configured yet"
+        val cloudEntries = chain.capableEntriesFor(needsTranscription = false).filter { it.kind != ProviderKind.LOCAL }
+        // Capability alone isn't enough -- a provider with no key set won't actually work (L17).
+        val hasConfigured = cloudEntries.any { ProviderCredentialStore.isConfigured(this, it.kind) }
+        return when {
+            hasConfigured -> "On -- uses the chain above"
+            cloudEntries.isNotEmpty() -> "On, but no key is set for a cloud cleanup provider yet"
+            else -> "On, but no cloud provider is configured yet"
+        }
     }
 
     private fun onToggleCloudTranscription(newCloud: Boolean) {

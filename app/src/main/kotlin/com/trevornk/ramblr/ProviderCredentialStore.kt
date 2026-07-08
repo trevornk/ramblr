@@ -49,6 +49,12 @@ object ProviderCredentialStore {
     fun isConfigured(context: Context, kind: ProviderKind): Boolean =
         get(context, kind).isNotBlank()
 
+    /** Deletes the stored credential for [kind] from the device (M10). No-op if none was stored. */
+    fun clear(context: Context, kind: ProviderKind) {
+        val key = prefKeyFor(kind) ?: return
+        securePrefs(context).edit().remove(key).apply()
+    }
+
     /** Masking convention: last 4 chars only, e.g. "***cdef". */
     fun maskForDisplay(value: String): String = when {
         value.isBlank() -> ""
