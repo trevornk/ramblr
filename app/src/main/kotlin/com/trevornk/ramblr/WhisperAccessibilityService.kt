@@ -2505,20 +2505,26 @@ class WhisperAccessibilityService : AccessibilityService() {
         setNodeText(session.node, cleared)
     }
 
+    /**
+     * Tries direct text injection before clipboard-based paste wherever possible (#111): a
+     * classic editable node (isEditable / EditText-like) supports ACTION_SET_TEXT directly, no
+     * clipboard round-trip required, so it's tried first now. Paste (a custom paste action, or
+     * ACTION_PASTE) is reserved for nodes that don't look like a normal editable field -- some
+     * Compose-based text fields report isEditable=false but still expose a working custom paste
+     * action, which is the actual reason paste used to run first for every node.
+     *
+     * This matters beyond a code-path preference: every clipboard-based injection (FROM_CLIPBOARD)
+     * makes Ramblr write the cleaned text to the clipboard and the target app read it back, and
+     * Android 12+ shows a system "X pasted from your clipboard" toast for that cross-app read --
+     * cosmetic noise at best, but it also visibly sits over the just-injected text in some apps
+     * (Trevor hit this in Discord). Landing on ACTION_SET_TEXT first for ordinary editable fields
+     * (which covers most apps, including Discord's message box) avoids the clipboard entirely and
+     * with it that toast, while apps that genuinely need paste still get it as the fallback.
+     */
     private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String): InjectAttempt {
         logNode("Trying node", node)
 
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-
-        findCustomPasteAction(node)?.let { action ->
-            val ok = node.performAction(action.id)
-            Log.i(TAG, "Custom action '${action.label}' (${action.id}) => $ok")
-            if (ok) return InjectAttempt(InjectMethod.FROM_CLIPBOARD)
-        }
-
-        val pasteOk = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-        Log.i(TAG, "ACTION_PASTE => $pasteOk")
-        if (pasteOk) return InjectAttempt(InjectMethod.FROM_CLIPBOARD)
 
         if (node.isEditable || node.className?.toString()?.contains("EditText") == true) {
             val current = resolveRealText(node.text?.toString(), node.isShowingHintText)
@@ -2531,6 +2537,16 @@ class WhisperAccessibilityService : AccessibilityService() {
             Log.i(TAG, "ACTION_SET_TEXT => $setTextOk")
             if (setTextOk) return InjectAttempt(InjectMethod.DIRECT, priorText = current)
         }
+
+        findCustomPasteAction(node)?.let { action ->
+            val ok = node.performAction(action.id)
+            Log.i(TAG, "Custom action '${action.label}' (${action.id}) => $ok")
+            if (ok) return InjectAttempt(InjectMethod.FROM_CLIPBOARD)
+        }
+
+        val pasteOk = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        Log.i(TAG, "ACTION_PASTE => $pasteOk")
+        if (pasteOk) return InjectAttempt(InjectMethod.FROM_CLIPBOARD)
 
         return InjectAttempt(InjectMethod.NONE)
     }
