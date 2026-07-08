@@ -163,6 +163,12 @@ class WhisperAccessibilityService : AccessibilityService() {
          *  picked a custom glyph color (#43), so an unconfigured install renders identically. */
         private const val COLOR_GLYPH_DEFAULT = 0xFFFFFFFF.toInt()
 
+        /** Default overlay border color for a fresh install (no explicit [OverlayAppearance]
+         *  override yet) -- neon magenta, matching the public launcher icon's accent color and
+         *  Trevor's own long-standing manual override, made the shipped default so new installs
+         *  see the same look out of the box instead of a borderless ring. */
+        private const val COLOR_BORDER_DEFAULT = 0xFFFF00FF.toInt()
+
         /** Anonymous [ViewOutlineProvider]s can't be `const`, but this one never varies per-view,
          *  so a single shared instance is used to clip a custom icon image (#43) into a circle
          *  matching its own bounds, whatever size the ring is currently configured to. */
@@ -950,7 +956,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         btn.setImageResource(R.drawable.ic_mic)
         btn.imageTintList = ColorStateList.valueOf(appearance.glyphColor ?: COLOR_GLYPH_DEFAULT)
         val fill = if (stateColor == COLOR_IDLE) (appearance.fillColor ?: COLOR_IDLE) else stateColor
-        btn.background = circleWithBorder(fill, appearance.borderColor ?: Color.TRANSPARENT)
+        btn.background = circleWithBorder(fill, appearance.borderColor ?: COLOR_BORDER_DEFAULT)
     }
 
     private fun setAppearance(color: Int) {
