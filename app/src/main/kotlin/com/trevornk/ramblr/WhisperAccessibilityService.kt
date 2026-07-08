@@ -556,11 +556,20 @@ class WhisperAccessibilityService : AccessibilityService() {
         // on top of the button's OWN fill color (whatever COLOR_BUSY/custom appearance fill is
         // active) makes contrast fully within this app's control regardless of what's behind the
         // overlay -- no host-app background can ever show through it again.
+        // visibility is left at its VISIBLE default here and deferred to a post{} below, rather
+        // than set to GONE inline before attach (Pixel Fold display-delay bug, reported by Trevor
+        // /w r/PixelFold thread https://www.reddit.com/r/PixelFold/comments/1ficw8u/ as reference):
+        // Pixel OS has a confirmed bug (root-caused by the Quick Cursor dev, filed against Google)
+        // where a view attached to the WindowManager with visibility=GONE already set at attach
+        // time causes a ~2s black-screen delay on the NEXT fold/unfold. Deferring the GONE
+        // assignment to the following frame via post{} keeps the view VISIBLE for the single
+        // attach frame (imperceptible -- it's 0-alpha/no drawable difference either way since
+        // isIndeterminate hasn't started spinning) while avoiding the OS-level trigger condition.
         val ring = ProgressBar(this).apply {
             isIndeterminate = true
             indeterminateTintList = ColorStateList.valueOf(COLOR_RING)
-            visibility = View.GONE
         }
+        ring.post { ring.visibility = View.GONE }
 
         val img = ImageView(this).apply {
             setPadding(pad, pad, pad, pad)
@@ -702,16 +711,22 @@ class WhisperAccessibilityService : AccessibilityService() {
         // Tapping the feedback bubble either retries with the raw (pre-cleanup) transcript (#27)
         // or, on a clipboard fallback, re-copies the text (#5); only touchable while one of those
         // is actually on offer — see setFeedbackTouchable.
+        // Same Pixel Fold display-delay avoidance as `ring` above (see its comment): visibility is
+        // left VISIBLE at construction and deferred to post{} instead of set GONE before attach --
+        // this view becomes its own top-level WindowManager window via the second wm.addView call
+        // below, so it's just as much a trigger candidate as `ring` is. alpha stays 0f here (that's
+        // not the OS trigger condition, only `visibility=GONE` at attach time is), so nothing is
+        // visibly drawn for the deferred frame regardless.
         val feedback = TextView(this).apply {
             textSize = 13f
             setTextColor(0xFFFFFFFF.toInt())
             setPadding((12 * dp).toInt(), (8 * dp).toInt(), (12 * dp).toInt(), (8 * dp).toInt())
             background = pill(COLOR_FEEDBACK_BG)
             alpha = 0f
-            visibility = View.GONE
             isClickable = true
             setOnClickListener { onFeedbackTapped() }
         }
+        feedback.post { feedback.visibility = View.GONE }
 
         val feedbackParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
