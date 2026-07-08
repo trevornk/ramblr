@@ -7,42 +7,12 @@ import org.junit.Test
 
 class SettingsVisibilityTest {
 
-    @Test fun `cloud transcription always needs the key regardless of cleanup`() {
-        assertTrue(shouldShowOpenAiKeyRow(useLocalTranscription = false, cleanupEnabled = false, cleanupChoice = SimpleCleanupChoice.LOCAL))
-        assertTrue(shouldShowOpenAiKeyRow(useLocalTranscription = false, cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.LOCAL))
-    }
-
-    @Test fun `local transcription with cleanup off hides the key`() {
-        assertFalse(shouldShowOpenAiKeyRow(useLocalTranscription = true, cleanupEnabled = false, cleanupChoice = SimpleCleanupChoice.LOCAL))
-    }
-
-    @Test fun `local transcription with local cleanup hides the key`() {
-        assertFalse(shouldShowOpenAiKeyRow(useLocalTranscription = true, cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.LOCAL))
-    }
-
-    @Test fun `local transcription with cloud cleanup shows the key`() {
-        assertTrue(shouldShowOpenAiKeyRow(useLocalTranscription = true, cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.CLOUD))
-    }
-
-    @Test fun `local transcription with custom cleanup waterfall shows the key`() {
-        assertTrue(shouldShowOpenAiKeyRow(useLocalTranscription = true, cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.CUSTOM))
-    }
-
-    // --- shouldShowOpenAiKeyRowForTranscription / ...ForCleanup (#93) ---
-    // Each new per-category Activity shows its own contextual copy of the key row instead of one
-    // physically-shared location; these are the two independent halves that used to be OR'd
-    // together into shouldShowOpenAiKeyRow above.
+    // --- shouldShowOpenAiKeyRowForTranscription (#93) ---
+    // The transcription screen shows its own contextual copy of the key row.
 
     @Test fun `transcription-scoped row shows only when transcription itself is cloud`() {
         assertTrue(shouldShowOpenAiKeyRowForTranscription(useLocalTranscription = false))
         assertFalse(shouldShowOpenAiKeyRowForTranscription(useLocalTranscription = true))
-    }
-
-    @Test fun `cleanup-scoped row shows only when cleanup is on and its choice is cloud`() {
-        assertTrue(shouldShowOpenAiKeyRowForCleanup(cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.CLOUD))
-        assertFalse(shouldShowOpenAiKeyRowForCleanup(cleanupEnabled = false, cleanupChoice = SimpleCleanupChoice.CLOUD))
-        assertFalse(shouldShowOpenAiKeyRowForCleanup(cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.LOCAL))
-        assertFalse(shouldShowOpenAiKeyRowForCleanup(cleanupEnabled = true, cleanupChoice = SimpleCleanupChoice.CUSTOM))
     }
 
     // --- displayedCleanupChoice (#55) ---
