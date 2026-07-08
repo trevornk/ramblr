@@ -7,3 +7,10 @@ local.properties
 *.apk
 app/src/main/jniLibs/
 eval-reports/
+
+# Signing material / service config -- never commit these to a public repo (L-2).
+*.jks
+*.keystore
+*.p12
+keystore.properties
+google-services.json
