@@ -735,7 +735,6 @@ class AdvancedActivity : BaseSettingsActivity() {
     // for rendering old dictation-history "paid fallback" badges) ---
 
     private fun groupLabel(group: CleanupStepGroup) = when (group) {
-        CleanupStepGroup.LEGACY -> "Legacy"
         CleanupStepGroup.OMNIROUTE -> "OmniRoute"
         CleanupStepGroup.OPENAI_DIRECT -> "Direct OpenAI"
         CleanupStepGroup.ANTHROPIC_DIRECT -> "Direct Anthropic"

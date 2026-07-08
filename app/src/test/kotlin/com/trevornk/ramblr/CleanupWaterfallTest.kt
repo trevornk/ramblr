@@ -7,11 +7,6 @@ import org.junit.Test
 
 class CleanupStepTest {
 
-    @Test fun `legacy step has no credential slot`() {
-        val step = CleanupStep(CleanupStepGroup.LEGACY, "gpt-4o-mini")
-        assertEquals(null, step.credentialSlot())
-    }
-
     @Test fun `omniroute step maps to the omniroute credential slot`() {
         val step = CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6")
         assertEquals(CleanupCredentialSlot.OMNIROUTE, step.credentialSlot())
@@ -27,16 +22,9 @@ class CleanupStepTest {
         assertEquals(CleanupCredentialSlot.ANTHROPIC_DIRECT, step.credentialSlot())
     }
 
-    @Test fun `local llm step has no credential slot, same as legacy (#37)`() {
+    @Test fun `local llm step has no credential slot (#37)`() {
         val step = CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)
         assertEquals(null, step.credentialSlot())
-    }
-
-    @Test fun `default waterfall is a single legacy step using the existing default model`() {
-        val waterfall = CleanupWaterfall.LEGACY_SINGLE_STEP
-        assertEquals(1, waterfall.steps.size)
-        assertEquals(CleanupStepGroup.LEGACY, waterfall.steps[0].group)
-        assertEquals(PostProcessor.DEFAULT_MODEL, waterfall.steps[0].model)
     }
 }
 
@@ -53,8 +41,7 @@ class CleanupStepGroupIsPaidFallbackTest {
         assertFalse(CleanupStepGroup.OMNIROUTE.isPaidFallback())
     }
 
-    @Test fun `legacy and local groups are not paid fallback groups`() {
-        assertFalse(CleanupStepGroup.LEGACY.isPaidFallback())
+    @Test fun `local group is not a paid fallback group`() {
         assertFalse(CleanupStepGroup.LOCAL_LLM.isPaidFallback())
     }
 }
@@ -76,7 +63,7 @@ class CleanupWaterfallUsesLocalLlmTest {
     }
 
     @Test fun `an all-cloud waterfall does not use local llm`() {
-        assertFalse(CleanupWaterfall.LEGACY_SINGLE_STEP.usesLocalLlm())
+        assertFalse(CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"))).usesLocalLlm())
         assertFalse(CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"))).usesLocalLlm())
     }
 
