@@ -4,7 +4,7 @@
 
 # Ramblr
 
-Push-to-talk dictation for Android.
+Tap-to-dictate for Android.
 
 Ramblr lets you speak into most apps without switching keyboards. Tap the floating button,
 speak, tap again, and your text is inserted into the currently focused text field when the app
