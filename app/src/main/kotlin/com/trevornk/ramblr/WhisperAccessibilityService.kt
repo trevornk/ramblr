@@ -744,6 +744,19 @@ class WhisperAccessibilityService : AccessibilityService() {
      * re-derived from the ring's new params exactly as drag-to-reposition already does, via
      * [positionFeedback]. Any open style menu (#53) is dismissed rather than repositioned, since
      * its anchor math would otherwise go stale mid-fold.
+     *
+     * Peek-aware (fold/peek interaction bug, reported by Trevor): [snappedXForScreenChange] always
+     * computes the DOCKED (fully visible) edge position -- fine when the ring isn't peeked, but
+     * wrong while it is. Before this fix, a fold/unfold while peeked forced the ring to that docked
+     * position on the new screen size while leaving [isPeeked] stuck true and [prePeekX] stuck at
+     * the OLD screen's docked x. That desync caused two bugs: (1) the next tap saw isPeeked==true
+     * and called [restoreFromPeek] using the stale, wrong-screen prePeekX, producing a pointless
+     * slide that looked like the ring "disappeared and came back"; (2) [attemptAutoPeek] bails
+     * immediately whenever isPeeked is true, so auto-peek could never fire again until the service
+     * restarted. Now, while peeked, [prePeekX] itself (the underlying docked x) is re-snapped for
+     * the new screen size, and the ring's actual window x is re-derived as the PEEKED position for
+     * that new docked x via [RingPeek.peekedX] -- so a fold/unfold while peeked keeps the ring
+     * peeked, correctly positioned for the new screen, with isPeeked/prePeekX staying consistent.
      */
     private fun handleScreenSizeChange() {
         dismissStyleMenu()
@@ -758,7 +771,18 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         val ringSize = params.width
         val margin = (MARGIN_DP * dp).toInt()
-        params.x = snappedXForScreenChange(params.x, lastScreenW, newScreenW, ringSize, margin)
+
+        if (isPeeked) {
+            val oldDockedX = prePeekX ?: params.x
+            val peekVisiblePx = (PeekVisibleSize.dpOrDefault(this) * dp).toInt()
+            val (newPeekedX, newDockedX) = peekedPositionForScreenChange(
+                oldDockedX, lastScreenW, newScreenW, ringSize, margin, peekVisiblePx
+            )
+            prePeekX = newDockedX
+            params.x = newPeekedX
+        } else {
+            params.x = snappedXForScreenChange(params.x, lastScreenW, newScreenW, ringSize, margin)
+        }
         params.y = proportionalYForScreenChange(params.y, lastScreenH, newScreenH, ringSize, margin)
         lastScreenW = newScreenW
         lastScreenH = newScreenH

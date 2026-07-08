@@ -75,4 +75,41 @@ class OverlayRepositionTest {
         assertTrue(newY >= margin)
         assertTrue(newY <= newScreenH - ringSize - margin)
     }
+
+    // --- peekedPositionForScreenChange ---
+
+    @Test fun `a peeked ring stays peeked on the correct edge after a fold change`() {
+        val ringSize = 168
+        val margin = 24
+        val peekVisiblePx = 60
+        val oldScreenW = 1080
+        val oldDockedX = oldScreenW - ringSize - margin // was docked to the right edge before peeking
+        val newScreenW = 2076
+
+        val (newPeekedX, newDockedX) = peekedPositionForScreenChange(
+            oldDockedX, oldScreenW, newScreenW, ringSize, margin, peekVisiblePx
+        )
+
+        // The re-derived docked x is still pinned to the right edge on the new screen.
+        assertEquals(newScreenW - ringSize - margin, newDockedX)
+        // The peeked x is the right-edge peek position for that docked x, not the docked x itself.
+        assertEquals(RingPeek.peekedX(newDockedX, newScreenW, ringSize, peekVisiblePx), newPeekedX)
+        assertEquals(newScreenW - peekVisiblePx, newPeekedX)
+    }
+
+    @Test fun `a peeked ring on the left edge stays pinned left after a fold change`() {
+        val ringSize = 168
+        val margin = 24
+        val peekVisiblePx = 60
+        val oldScreenW = 1080
+        val oldDockedX = margin // was docked to the left edge before peeking
+        val newScreenW = 2076
+
+        val (newPeekedX, newDockedX) = peekedPositionForScreenChange(
+            oldDockedX, oldScreenW, newScreenW, ringSize, margin, peekVisiblePx
+        )
+
+        assertEquals(margin, newDockedX)
+        assertEquals(peekVisiblePx - ringSize, newPeekedX)
+    }
 }

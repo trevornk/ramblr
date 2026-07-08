@@ -25,6 +25,32 @@ fun snappedXForScreenChange(oldX: Int, oldScreenW: Int, newScreenW: Int, ringSiz
 }
 
 /**
+ * Recomputes the ring's peeked window x after a fold/unfold screen-size change, given the
+ * previous docked (fully visible) x it was peeking from. [snappedXForScreenChange] only knows how
+ * to re-snap a DOCKED position to the new screen's edge; a peeked ring's actual window x is offset
+ * from that docked position (see [RingPeek.peekedX]), so re-snapping the peeked x directly would
+ * misclassify the edge for a screen size change (peeked windows sit almost entirely off-screen, so
+ * their raw x is nowhere near either edge's midpoint test). This re-snaps the underlying docked x
+ * instead, then re-derives the peeked x from that for the new screen -- keeping the ring visually
+ * peeked, on the correct edge, at the correct sliver position after the transition.
+ *
+ * Returns the new (peeked x, new docked x) pair so the caller can update its own peek-restore
+ * state ([prePeekX]) to match, instead of leaving it referencing the old screen's docked position.
+ */
+fun peekedPositionForScreenChange(
+    oldDockedX: Int,
+    oldScreenW: Int,
+    newScreenW: Int,
+    ringSize: Int,
+    margin: Int,
+    peekVisiblePx: Int,
+): Pair<Int, Int> {
+    val newDockedX = snappedXForScreenChange(oldDockedX, oldScreenW, newScreenW, ringSize, margin)
+    val newPeekedX = RingPeek.peekedX(newDockedX, newScreenW, ringSize, peekVisiblePx)
+    return newPeekedX to newDockedX
+}
+
+/**
  * Preserves the ring's vertical position proportionally across a fold/unfold screen-size change
  * (#41) -- e.g. a ring 30% down the old screen stays roughly 30% down the new one -- instead of
  * resetting to a hardcoded center, so a fold transition never fights a position the user dragged
