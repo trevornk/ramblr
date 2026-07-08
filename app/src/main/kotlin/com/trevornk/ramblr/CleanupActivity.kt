@@ -37,7 +37,6 @@ class CleanupActivity : BaseSettingsActivity() {
     private lateinit var styleSummaryRowTitle: TextView
     private lateinit var cleanupLocalRadio: MaterialRadioButton
     private lateinit var cleanupCloudRadio: MaterialRadioButton
-    private lateinit var cleanupChoiceCaption: TextView
     private lateinit var cleanupLocalGroup: View
     private lateinit var cleanupCloudGroup: View
     private lateinit var cloudLinkRowSub: TextView
@@ -135,15 +134,6 @@ class CleanupActivity : BaseSettingsActivity() {
         cleanupCloudGroup = cleanupCloudNested.outer
         cleanupDetailContainer.addView(cleanupCloudGroup)
 
-        cleanupChoiceCaption = TextView(this).apply {
-            text = "Doesn't match a simple choice — your existing configuration is preserved under Advanced."
-            textSize = 12f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(8))
-            visibility = View.GONE
-        }
-        cleanupDetailContainer.addView(cleanupChoiceCaption)
-
         previewBeforeInjectSwitch = MaterialSwitch(this).apply {
             isChecked = PreviewBeforeInjectToggle.isEnabled(this@CleanupActivity)
             isClickable = false
@@ -206,7 +196,6 @@ class CleanupActivity : BaseSettingsActivity() {
         val choice = displayedCleanupChoice(persistedChoice, pendingLocalCleanupSelection)
         cleanupLocalRadio.isChecked = choice == SimpleCleanupChoice.LOCAL
         cleanupCloudRadio.isChecked = choice == SimpleCleanupChoice.CLOUD
-        cleanupChoiceCaption.visibility = View.GONE
         cleanupLocalGroup.visibility = if (choice == SimpleCleanupChoice.LOCAL) View.VISIBLE else View.GONE
         cleanupCloudGroup.visibility = if (choice == SimpleCleanupChoice.CLOUD) View.VISIBLE else View.GONE
     }
@@ -508,7 +497,6 @@ class CleanupActivity : BaseSettingsActivity() {
                 CloudFeatureToggle.setCleanupEnabled(this, true)
                 refresh()
             }
-            SimpleCleanupChoice.CUSTOM -> return
         }
         refreshWaterfallDependentUi()
     }
