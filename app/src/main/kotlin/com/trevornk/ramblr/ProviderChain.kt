@@ -50,6 +50,19 @@ fun hasConfiguredCloudTranscription(chain: ProviderChain, isConfigured: (Provide
     chain.entries.any { it.kind != ProviderKind.LOCAL && it.kind.supportsTranscription() && isConfigured(it.kind) }
 
 /**
+ * True when switching cleanup to Cloud would land on a configured credential: any non-LOCAL entry in
+ * [chain] is configured, or -- if [chain] has no cloud entry yet -- the OpenAI default the Cloud
+ * switch would seed is configured. Used so deleting the active local cleanup model falls back to
+ * Cloud only when it would actually work, else turns cleanup off instead of seeding a config that
+ * fails at call time (M14).
+ */
+fun canFallBackToCloudCleanup(chain: ProviderChain, isConfigured: (ProviderKind) -> Boolean): Boolean {
+    val cloudEntries = chain.entries.filter { it.kind != ProviderKind.LOCAL }
+    return if (cloudEntries.isEmpty()) isConfigured(ProviderKind.OPENAI)
+    else cloudEntries.any { isConfigured(it.kind) }
+}
+
+/**
  * One entry in the user's [ProviderChain]. Deliberately mirrors the shape of [CleanupStep]
  * (a [kind] instead of a [CleanupStepGroup], the same [model]/[baseUrlOverride] fields) so
  * mapping between the two models (see [ProviderChainRuntime.cleanupWaterfallFor]) stays a

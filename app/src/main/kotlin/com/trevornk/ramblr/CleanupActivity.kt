@@ -237,7 +237,7 @@ class CleanupActivity : BaseSettingsActivity() {
             .setTitle("Cleanup sends text off-device")
             .setMessage(
                 "Local transcription keeps audio on your phone, but cleanup sends the " +
-                    "transcribed text to ${PostProcessor.destinationHost(cleanupBaseUrl())} to fix " +
+                    "transcribed text to ${CleanupDestination.consentHost(ProviderChainStore.load(this))} to fix " +
                     "grammar and punctuation. Enable cleanup anyway?"
             )
             .setPositiveButton("Enable cleanup") { _, _ ->
@@ -253,20 +253,24 @@ class CleanupActivity : BaseSettingsActivity() {
             .show()
     }
 
-    /** Subtitle for the cleanup toggle, always naming the actual network destination (#23, #4)
-     *  and, when that destination is OpenAI's own API, why it needs a key and what it costs (#6). */
+    /** Subtitle for the cleanup toggle, naming the actual network destination and the real provider
+     *  whose key it uses (#23, #4, #6) -- both derived from the live provider chain's first cloud
+     *  entry, not a legacy pref that always read OpenAI even when cleanup routed elsewhere (M9). */
     private fun cleanupSubtitle(): String {
+        if (!CloudFeatureToggle.cleanupEnabled(this)) {
+            return "Cleans up your dictation on-device — the text never leaves your phone"
+        }
         val useLocal = prefs().getBoolean("use_local", true)
-        val host = PostProcessor.destinationHost(cleanupBaseUrl())
+        val chain = ProviderChainStore.load(this)
+        val entry = CleanupDestination.firstCloudEntry(chain)
+        val host = entry?.let { CleanupDestination.hostFor(it) } ?: CleanupDestination.consentHost(chain)
         val base = if (useLocal) "Sends transcript over the network to $host, even though transcription stays on-device"
         else "Sends transcript to $host to fix grammar and punctuation"
-        val costNote = if (cleanupBaseUrl() == PostProcessor.DEFAULT_BASE_URL)
-            " Uses your OpenAI API key and is billed pay-per-use (typically a fraction of a cent per dictation)."
-        else ""
+        val costNote = entry?.let {
+            " Uses your ${CleanupDestination.label(it.kind)} API key and is billed pay-per-use (typically a fraction of a cent per dictation)."
+        } ?: ""
         return base + costNote
     }
-
-    private fun cleanupBaseUrl() = prefs().getString("cleanup_base_url", PostProcessor.DEFAULT_BASE_URL) ?: PostProcessor.DEFAULT_BASE_URL
 
     // --- Style summary (#103) ---
 
@@ -351,7 +355,13 @@ class CleanupActivity : BaseSettingsActivity() {
     private fun confirmDeleteCleanupModel(model: Model) {
         val isActive = !CloudFeatureToggle.cleanupEnabled(this) &&
             selectedCleanupModel().archive == model.archive
-        val activeNote = if (isActive) " Cleanup will switch back to Cloud." else ""
+        // Only promise a Cloud fallback if one would actually work; otherwise deleting the active
+        // model turns cleanup off rather than seeding a key-less cloud config that fails (M14).
+        val activeNote = if (!isActive) "" else if (canFallBackToCloud()) {
+            " Cleanup will switch back to Cloud."
+        } else {
+            " Cleanup will turn off (no cloud provider is configured)."
+        }
         android.app.AlertDialog.Builder(this)
             .setTitle("Delete ${model.name}?")
             .setMessage("This frees ${model.sizeMb} MB of storage.$activeNote You can download it again later.")
@@ -364,10 +374,22 @@ class CleanupActivity : BaseSettingsActivity() {
         val wasActive = !CloudFeatureToggle.cleanupEnabled(this) &&
             selectedCleanupModel().archive == model.archive
         ModelDownloader.delete(this, model)
-        if (wasActive) onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
+        if (wasActive) {
+            if (canFallBackToCloud()) {
+                onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
+            } else {
+                // No usable cloud credential: turn cleanup off instead of switching to a cloud
+                // config that would fail at call time for a local-only user (M14).
+                prefs().edit().putBoolean("use_post_processing", false).apply()
+                toast("Cleanup turned off — no cloud provider configured")
+            }
+        }
         toast("${model.name} deleted")
         refreshAllCleanupRows(); refresh()
     }
+
+    private fun canFallBackToCloud(): Boolean =
+        canFallBackToCloudCleanup(ProviderChainStore.load(this)) { ProviderCredentialStore.isConfigured(this, it) }
 
     private fun observeCleanupModelDownload(model: Model) {
         WorkManager.getInstance(this)
@@ -383,7 +405,13 @@ class CleanupActivity : BaseSettingsActivity() {
 
         when (info?.state) {
             WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> {
-                views.dlBtn.isEnabled = false
+                // While downloading, the download button becomes a cancel button (L10): tapping it
+                // cancels the WorkManager job, which aborts the download (the partial file is kept
+                // so a later re-download resumes it).
+                views.dlBtn.visibility = View.VISIBLE
+                views.dlBtn.isEnabled = true
+                views.dlBtn.text = "✕"
+                views.dlBtn.setOnClickListener { ModelDownloadWorker.cancel(this, model) }
                 views.progress.visibility = View.VISIBLE
                 val phase = info.progress.getString(ModelDownloadWorker.KEY_PHASE)
                 if (phase == ModelDownloadWorker.PHASE_EXTRACTING) {
@@ -410,6 +438,9 @@ class CleanupActivity : BaseSettingsActivity() {
             WorkInfo.State.FAILED -> {
                 views.progress.visibility = View.GONE
                 views.dlBtn.isEnabled = true
+                // Restore the download button (a prior RUNNING state may have swapped it to cancel, L10).
+                views.dlBtn.text = "↓"
+                views.dlBtn.setOnClickListener { onCleanupModelAction(model) }
                 val err = info.outputData.getString(ModelDownloadWorker.KEY_ERROR) ?: "Unknown error"
                 views.subtitle.text = "Error: $err"
             }
@@ -423,6 +454,10 @@ class CleanupActivity : BaseSettingsActivity() {
 
     private fun refreshCleanupModelRow(model: Model) {
         val views = cleanupModelRows[model.archive] ?: return
+        // Restore the download affordance whenever the row isn't mid-download (the in-flight branch
+        // in onCleanupModelWorkInfos swaps it to a cancel button) (L10).
+        views.dlBtn.text = "↓"
+        views.dlBtn.setOnClickListener { onCleanupModelAction(model) }
         val active = selectedCleanupModel().archive == model.archive
         val installed = ModelDownloader.isInstalled(this, model)
         // A sideload-only model has no download URL (#H7): showing its "↓" button guarantees a
@@ -512,8 +547,9 @@ class CleanupActivity : BaseSettingsActivity() {
                     ?: LOCAL_CLEANUP_MODEL_CATALOG.first()
                 "Local · ${model.name}"
             } else {
-                val model = prefs.getString("cleanup_model", PostProcessor.DEFAULT_MODEL) ?: PostProcessor.DEFAULT_MODEL
-                "Cloud · $model"
+                // Derive the provider + model from the live chain's first cloud entry, not the
+                // unwritten legacy "cleanup_model" pref that always read "gpt-4o-mini" (M9).
+                "Cloud · ${CleanupDestination.cloudSubtitleDetail(ProviderChainStore.load(context))}"
             }
         }
     }
