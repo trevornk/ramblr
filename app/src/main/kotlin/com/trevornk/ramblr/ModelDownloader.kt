@@ -379,6 +379,15 @@ object ModelDownloader {
     fun isInstalled(ctx: Context, model: Model) = isInstalledDir(modelDir(ctx, model))
 
     /**
+     * A local-cleanup [model] with no [Model.sourceUrl] is sideload-only (#H7): it exists on disk
+     * only via a manual `adb push` and was never hosted anywhere. Attempting to "download" it would
+     * fall through to the sherpa-onnx GitHub-release [BASE_URL] pattern, which 404s (then retries
+     * three times). Callers use this to fail such a download fast and to hide the download button
+     * for the entry entirely. [Model.sourceUrl]'s own kdoc requires a URL when isLocalCleanup.
+     */
+    fun isSideloadOnly(model: Model): Boolean = model.isLocalCleanup && model.sourceUrl == null
+
+    /**
      * Download and extract model, blocking the calling thread until done (or
      * failed). Callbacks fire synchronously on the calling thread. Callers
      * (currently [ModelDownloadWorker]) are responsible for running this off
@@ -388,6 +397,14 @@ object ModelDownloader {
      * (WorkManager unique work), not here.
      */
     fun download(ctx: Context, model: Model, onState: (DownloadState) -> Unit) {
+        // A sideload-only local-cleanup model (isLocalCleanup && sourceUrl == null) has no host to
+        // download from -- the BASE_URL fallback below would 404 and get retried three times before
+        // failing (#H7). Fail fast and terminal instead. The Error carries no IOException cause, so
+        // ModelDownloadWorker.shouldRetry classifies it terminal (no retries).
+        if (isSideloadOnly(model)) {
+            onState(DownloadState.Error("${model.name} is sideload-only — no download URL"))
+            return
+        }
         val url = model.sourceUrl ?: "$BASE_URL/${model.archive}.tar.bz2"
         val tmpFile = File(ctx.cacheDir, model.fileName ?: "${model.archive}.tar.bz2")
         val staging = stagingDir(ctx, model)

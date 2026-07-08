@@ -41,6 +41,21 @@ class MainActivity : BaseSettingsActivity() {
     private var onboardingIntroShown = false
     private var onboardingDialog: android.app.AlertDialog? = null
 
+    // Sticky forced re-entry (#H4). "Redo setup walkthrough" / a Status-row tap forces the intro
+    // via advanceOnboardingStep(force = true), but the intro's own "Get started" button (and the
+    // mic/accessibility steps that resume via onResume) call the *unforced* advance -- which, for a
+    // returning user whose onboarding_complete is already true, refuses to advance, dead-ending the
+    // wizard on screen 1. Keeping the forced flag for the whole re-entry session and OR-ing it into
+    // every advance call is what carries the user past the intro. Cleared when the wizard finishes
+    // or is explicitly abandoned, so it never re-nags on a later onResume.
+    private var walkthroughForced = false
+
+    // #H6: tracks whether we've already requested mic permission this session, so the mic step can
+    // tell a fresh never-asked state (shouldShowRequestPermissionRationale is also false there)
+    // apart from a permanent "don't ask again" denial -- the latter makes requestPermissions a
+    // silent no-op that would otherwise loop the wizard on the mic dialog forever.
+    private var micPermissionAsked = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -198,13 +213,14 @@ class MainActivity : BaseSettingsActivity() {
     /** Advances the wizard from wherever it's paused, called on every entry point (onResume) and
      *  point the Activity resumes control (onResume, permission results) so a step that requires
      *  leaving the app (mic prompt, Accessibility settings) picks back up automatically. */
-    private fun advanceOnboarding() = advanceOnboardingStep(force = false)
+    private fun advanceOnboarding() = advanceOnboardingStep(force = walkthroughForced)
 
     /** Re-enters the walkthrough on demand (#52) -- from the Status row when setup isn't fully
      *  done, or Advanced's "Redo setup walkthrough" row -- always starting from the intro, same
      *  as a fresh install, though steps already satisfied (permissions already granted) are
      *  skipped as usual by [advanceOnboardingStep]'s own `when`. */
     private fun startWalkthrough() {
+        walkthroughForced = true
         onboardingIntroShown = false
         advanceOnboardingStep(force = true)
     }
@@ -241,12 +257,21 @@ class MainActivity : BaseSettingsActivity() {
 
     private fun dismissOnboarding() { onboardingDialog = null }
 
+    /** A top-level "Not now" that abandons the wizard entirely (as opposed to a mid-wizard "Skip"
+     *  that continues to the next step): drops the forced-re-entry stickiness so a returning user
+     *  who bailed out isn't re-nagged on the next onResume (#H4). */
+    private fun abandonWalkthrough() {
+        walkthroughForced = false
+        dismissOnboarding()
+    }
+
     private fun finishOnboarding() {
         prefs().edit().putBoolean(KEY_ONBOARDING_COMPLETE, true).apply()
         // #98: belt-and-suspenders alongside the OnboardingWizard.shouldAdvance fix -- resetting
         // this here means even a future logic change to shouldAdvance can't silently reintroduce
         // the same "wizard state never clears" class of bug.
         onboardingIntroShown = false
+        walkthroughForced = false // #H4: forced re-entry ends when the wizard completes
         onboardingDialog = null
         refresh()
     }
@@ -265,20 +290,59 @@ class MainActivity : BaseSettingsActivity() {
             )
             .setCancelable(false)
             .setPositiveButton("Get started") { _, _ -> dismissOnboarding(); advanceOnboarding() }
-            .setNegativeButton("Not now") { _, _ -> dismissOnboarding() }
+            .setNegativeButton("Not now") { _, _ -> abandonWalkthrough() }
             .show()
     }
 
     private fun showOnboardingMicStep() {
+        // #H6: after a permanent denial ("don't ask again", or Android 11+'s second denial),
+        // requestPermissions is auto-denied with no dialog -- re-prompting would loop the wizard
+        // here forever. Detect it (we've asked at least once, the system won't show a rationale,
+        // and it's still denied) and route to App info instead, mirroring the restricted-settings
+        // Accessibility flow.
+        if (micPermissionAsked &&
+            !hasPerm(Manifest.permission.RECORD_AUDIO) &&
+            !ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.RECORD_AUDIO)
+        ) {
+            showOnboardingMicPermanentlyDeniedStep()
+            return
+        }
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Step 1 of 5: Microphone access")
             .setMessage("Ramblr needs the microphone to record what you say before transcribing it.")
             .setCancelable(false)
             .setPositiveButton("Continue") { _, _ ->
                 dismissOnboarding()
+                micPermissionAsked = true
                 ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
             }
-            .setNegativeButton("Not now") { _, _ -> dismissOnboarding() }
+            .setNegativeButton("Not now") { _, _ -> abandonWalkthrough() }
+            .show()
+    }
+
+    /** Mic step's dead-end recovery (#H6): the permission is permanently denied, so the only way
+     *  forward is App info -> Permissions -> Microphone -> Allow. Routes there instead of firing a
+     *  request that Android silently drops. */
+    private fun showOnboardingMicPermanentlyDeniedStep() {
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Step 1 of 5: Microphone access")
+            .setMessage(
+                "Microphone access is turned off for Ramblr, and Android won't ask again from " +
+                    "here. Ramblr can't record without it.\n\n" +
+                    "Tap below to open Ramblr's App info, then choose Permissions → Microphone " +
+                    "→ Allow, and come back here."
+            )
+            .setCancelable(false)
+            .setPositiveButton("Open App info") { _, _ ->
+                dismissOnboarding()
+                startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.fromParts("package", packageName, null),
+                    )
+                )
+            }
+            .setNegativeButton("Not now") { _, _ -> abandonWalkthrough() }
             .show()
     }
 
@@ -326,7 +390,7 @@ class MainActivity : BaseSettingsActivity() {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 }
             }
-            .setNegativeButton("Not now") { _, _ -> dismissOnboarding() }
+            .setNegativeButton("Not now") { _, _ -> abandonWalkthrough() }
             .show()
     }
 
@@ -358,7 +422,7 @@ class MainActivity : BaseSettingsActivity() {
                 refresh()
                 promptOnboardingProviderKey(ProviderKind.OPENAI) { showOnboardingCleanupStep() }
             }
-            .setNeutralButton("Not now") { _, _ -> dismissOnboarding() }
+            .setNeutralButton("Not now") { _, _ -> abandonWalkthrough() }
             .show()
     }
 

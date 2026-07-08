@@ -333,6 +333,12 @@ class CleanupActivity : BaseSettingsActivity() {
             selectCleanupModel(model.archive)
             return
         }
+        // A sideload-only entry (#H7) can't be downloaded -- its button is hidden, but guard the
+        // row-tap path too so a tap on the row itself never enqueues a guaranteed-404 download.
+        if (ModelDownloader.isSideloadOnly(model)) {
+            toast("${model.name} must be sideloaded manually — no download available")
+            return
+        }
         if (ModelDownloadWorker.isInFlight(cleanupModelDownloadState[model.archive])) return
         ModelDownloadWorker.enqueue(this, model)
     }
@@ -419,14 +425,21 @@ class CleanupActivity : BaseSettingsActivity() {
         val views = cleanupModelRows[model.archive] ?: return
         val active = selectedCleanupModel().archive == model.archive
         val installed = ModelDownloader.isInstalled(this, model)
+        // A sideload-only model has no download URL (#H7): showing its "↓" button guarantees a
+        // 404, so hide it and label the row "sideload only" until the file is pushed manually.
+        val sideloadOnly = ModelDownloader.isSideloadOnly(model)
 
         views.radio.isChecked = active
         views.radio.visibility = if (installed) View.VISIBLE else View.GONE
-        views.dlBtn.visibility = if (installed) View.GONE else View.VISIBLE
+        views.dlBtn.visibility = if (installed || sideloadOnly) View.GONE else View.VISIBLE
         views.deleteBtn.visibility = if (installed) View.VISIBLE else View.GONE
 
         if (views.progress.visibility == View.GONE) {
-            views.subtitle.text = "${model.quality} · ${model.sizeMb} MB"
+            views.subtitle.text = if (!installed && sideloadOnly) {
+                "${model.quality} · ${model.sizeMb} MB · sideload only"
+            } else {
+                "${model.quality} · ${model.sizeMb} MB"
+            }
         }
     }
 

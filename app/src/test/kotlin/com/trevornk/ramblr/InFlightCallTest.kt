@@ -40,6 +40,35 @@ class InFlightCallTest {
         holder.cancel() // must not throw
     }
 
+    @Test fun `cancel sets the sticky isCancelled flag`() {
+        val holder = InFlightCall()
+        assertFalse(holder.isCancelled)
+
+        holder.cancel()
+
+        assertTrue(holder.isCancelled)
+    }
+
+    @Test fun `cancel with nothing in flight still sets isCancelled so a between-step cancel is not lost`() {
+        // A cancel landing in the gap between HTTP steps (after clear, before the next set) has no
+        // Call to abort, but must still be observable by the next step's pre-check.
+        val holder = InFlightCall()
+
+        holder.cancel()
+
+        assertTrue(holder.isCancelled)
+    }
+
+    @Test fun `beginWork clears a prior cancel so isCancelled scopes to one logical unit of work`() {
+        val holder = InFlightCall()
+        holder.cancel()
+        assertTrue(holder.isCancelled)
+
+        holder.beginWork()
+
+        assertFalse(holder.isCancelled)
+    }
+
     @Test fun `clear only drops the reference if it still matches the given call`() {
         val holder = InFlightCall()
         val first = FakeCall()

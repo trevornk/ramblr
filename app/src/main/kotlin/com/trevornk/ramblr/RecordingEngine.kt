@@ -44,16 +44,20 @@ class RecordingEngine(
 
         // Backstop independent of the elapsed-time cap: 16kHz mono 16-bit is 32,000 bytes/sec.
         const val MAX_BYTES = 32_000L * (MAX_DURATION_MS / 1000L)
+
+        /** Monotonic id of the current recording session, shared across ALL RecordingEngine
+         *  instances (#88 item 6 / H2). The service creates a fresh engine per recording, so an
+         *  *instance*-private counter never changed across instances: an old reader stalled in
+         *  onChunk/read across a stop->cancel->new-tap sequence saw its own generation as still
+         *  current forever, then observed the shared state machine back in RECORDING (the NEW
+         *  session) and resumed feeding audio concurrently with the new reader (mic contention,
+         *  and it could CAS the new session's RECORDING->TRANSCRIBING, killing a live dictation).
+         *  A process-wide counter makes every new recording's start() supersede all prior readers,
+         *  so a resurrected reader sees generation != myGeneration and exits at its next check. */
+        private val sessionGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     }
 
     @Volatile private var readerThread: Thread? = null
-
-    /** Monotonic id of the current recording session (#88 item 6). The reader loop re-checks the
-     *  *shared* state machine, so an old reader stalled in onChunk across a stop->cancel->new-tap
-     *  sequence could observe the NEW session's RECORDING state and keep feeding audio
-     *  concurrently with the new reader. Each loop iteration also checks that its own session is
-     *  still the latest, so a resurrected reader exits at its next iteration instead. */
-    private val sessionGeneration = java.util.concurrent.atomic.AtomicInteger(0)
 
     /**
      * Validates the mic and starts the reader thread synchronously. Returns false with no side
@@ -139,8 +143,9 @@ class RecordingEngine(
                 Log.e(TAG, "Failed to open PCM buffer", e)
                 try { audioRecord.stop() } catch (_: Exception) {}
                 audioRecord.release()
-                stateMachine.tryStartTranscribing()
-                val discarded = stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING
+                val superseded = sessionGeneration.get() != myGeneration
+                if (RecorderHandoff.shouldClaimTranscribing(superseded)) stateMachine.tryStartTranscribing()
+                val discarded = RecorderHandoff.discarded(superseded, stateMachine.current())
                 pcmFile.delete()
                 onFinished(Result(null, 0L, discarded, StopReason.ERROR, e.message))
                 return@thread
@@ -181,8 +186,14 @@ class RecordingEngine(
                 // stop) — checking the *current* state afterwards, rather than this call's
                 // return value, is what lets both callers agree on the outcome instead of
                 // whoever loses the race being treated as "discarded".
-                stateMachine.tryStartTranscribing()
-                val discarded = stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING
+                //
+                // BUT a superseded reader (a newer recording has bumped the shared generation
+                // counter past ours) must NOT claim: that transition now belongs to the NEW
+                // session's RECORDING, and stealing it would discard the user's in-progress second
+                // dictation (H2). A superseded reader always discards its own audio instead.
+                val superseded = sessionGeneration.get() != myGeneration
+                if (RecorderHandoff.shouldClaimTranscribing(superseded)) stateMachine.tryStartTranscribing()
+                val discarded = RecorderHandoff.discarded(superseded, stateMachine.current())
                 val bytes = buffer.bytesWritten
                 Result(
                     pcmFile = if (!discarded && bytes > 0L) pcmFile else null,

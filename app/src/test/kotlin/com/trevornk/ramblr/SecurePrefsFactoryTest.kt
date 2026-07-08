@@ -71,4 +71,41 @@ class SecurePrefsFactoryTest {
         prefs.edit().putString("k2", "v2").apply()
         assertEquals(1, snapshot.size)
     }
+
+    // --- SecurePrefsRecovery: only corruption-shaped failures may wipe stored keys (H8) ---
+
+    private class AEADBadTagException(message: String? = null) : Exception(message)
+    private class InvalidProtocolBufferException(message: String? = null) : Exception(message)
+
+    @Test fun `a bad-tag decrypt failure is corruption-shaped`() {
+        assertTrue(SecurePrefsRecovery.isCorruptionShaped(AEADBadTagException()))
+    }
+
+    @Test fun `an unparseable keyset is corruption-shaped`() {
+        assertTrue(SecurePrefsRecovery.isCorruptionShaped(InvalidProtocolBufferException()))
+    }
+
+    @Test fun `corruption is detected through a wrapping cause chain`() {
+        val wrapped = RuntimeException("create failed", AEADBadTagException("bad tag"))
+        assertTrue(SecurePrefsRecovery.isCorruptionShaped(wrapped))
+    }
+
+    @Test fun `a message hint marks corruption even for a generic exception type`() {
+        assertTrue(SecurePrefsRecovery.isCorruptionShaped(IllegalStateException("keyset is corrupt")))
+    }
+
+    @Test fun `a transient Keystore failure is NOT corruption-shaped and must not wipe keys`() {
+        // The whole point of H8: a busy/just-unlocked Keystore throws a plain exception that must
+        // never trigger a wipe of the user's stored API keys.
+        assertFalse(SecurePrefsRecovery.isCorruptionShaped(
+            IllegalStateException("Keystore operation failed: keystore busy")))
+        assertFalse(SecurePrefsRecovery.isCorruptionShaped(RuntimeException("could not connect to keystore")))
+    }
+
+    @Test fun `a cyclic cause chain terminates instead of looping`() {
+        val a = RuntimeException("a")
+        val b = RuntimeException("b", a)
+        a.initCause(b) // a -> b -> a -> ...
+        assertFalse(SecurePrefsRecovery.isCorruptionShaped(a))
+    }
 }
