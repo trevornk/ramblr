@@ -546,6 +546,14 @@ class ModelDownloaderTest {
         assertFalse(ModelDownloader.shouldRestartAfterRangeNotSatisfiable(existingLength = 1000, responseCode = 500))
     }
 
+    @Test fun `a checksum mismatch after resuming a partial triggers one clean restart (M16)`() {
+        assertTrue(ModelDownloader.shouldCleanRetryAfterChecksumMismatch(resumedBytes = 1000))
+    }
+
+    @Test fun `a checksum mismatch on a from-scratch download stays terminal (M16)`() {
+        assertFalse(ModelDownloader.shouldCleanRetryAfterChecksumMismatch(resumedBytes = 0))
+    }
+
     // -- resume: total size computation --
 
     @Test fun `computeTotalBytes prefers the authoritative total from Content-Range`() {
