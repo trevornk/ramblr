@@ -16,6 +16,20 @@ fun centerCropRegion(width: Int, height: Int): CropRegion {
 }
 
 /**
+ * Largest power-of-two `inSampleSize` that still keeps the decoded image at least [targetPx] on its
+ * shorter side, so [OverlayIconStore.save] never fully decodes a 50-100MP photo into hundreds of MB
+ * just to produce a small square icon -- a full-resolution decode is an uncatchable
+ * [OutOfMemoryError] ([Error], not [Exception]), so it must be avoided, not caught (M15).
+ */
+fun overlayIconSampleSize(width: Int, height: Int, targetPx: Int): Int {
+    if (width <= 0 || height <= 0 || targetPx <= 0) return 1
+    var sample = 1
+    val shorter = minOf(width, height)
+    while (shorter / (sample * 2) >= targetPx) sample *= 2
+    return sample
+}
+
+/**
  * Persists a user-chosen custom overlay icon (#43/#53) into app-private storage rather than
  * holding onto the photo picker's content:// [Uri] long-term -- that read grant is scoped to the
  * picker call and can't be relied on to survive a process restart, so the image is decoded and
@@ -39,8 +53,23 @@ object OverlayIconStore {
      * decoded as an image, so a bad pick never leaves the overlay with no icon at all.
      */
     fun save(context: Context, uri: Uri): Boolean {
+        // First pass: read only the image's dimensions (inJustDecodeBounds allocates no pixels),
+        // then decode subsampled so a huge photo never lands full-resolution in the heap (M15).
+        val bounds = try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    .also { BitmapFactory.decodeStream(input, null, it) }
+            }
+        } catch (e: Exception) {
+            null
+        } ?: return false
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return false
+
         val source = try {
-            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = overlayIconSampleSize(bounds.outWidth, bounds.outHeight, STORED_SIZE_PX)
+            }
+            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
         } catch (e: Exception) {
             null
         } ?: return false
