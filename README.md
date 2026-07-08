@@ -10,10 +10,6 @@ No keyboard swap, no separate app to paste out of. Ramblr floats a single button
 whatever you're already doing — Slack, Discord, a code editor, an email — and inserts your
 words directly into the focused field the moment you're done talking.
 
-<p align="center">
-  <img src="docs/screenshots/floating-icon-hero.png" width="280" alt="Ramblr's floating dictation button over a text field">
-</p>
-
 - **Tap, ramble, tap.** One button, everywhere. No mode switching, no separate transcript to
   copy-paste.
 - **Fully offline if you want it.** On-device transcription and on-device cleanup — nothing
