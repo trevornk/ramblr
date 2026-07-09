@@ -220,9 +220,19 @@ class WhisperAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private val hideFeedback = Runnable {
         setFeedbackTouchable(false)
-        feedbackView?.animate()?.alpha(0f)?.setDuration(180)?.withEndAction {
-            feedbackView?.visibility = View.GONE
-        }?.start()
+        // alpha only, never GONE (real root cause, verified via UID/window-token-attributed
+        // BLASTSyncEngine analysis on-device: this window's WindowToken is type=2032
+        // TYPE_ACCESSIBILITY_OVERLAY, the only such token in the accessibility-service window
+        // set. On a fold-triggered screen-off display switch, WMS collects a synchronous BLAST
+        // sync across every window under that token and blocks screen-on for up to a fixed
+        // 2000ms waiting for each to draw a frame. A window whose root is View.GONE never draws,
+        // so it can never satisfy the sync -- it just eats the full 2s timeout every time,
+        // regardless of how the ring (the OTHER window under the same token) behaves. This is
+        // exactly why the earlier alpha-vs-GONE fix to the ring alone changed nothing: this
+        // feedback bubble was still going GONE every time it hid, and one non-drawing window is
+        // enough to stall the whole token's sync. See applyOverlayVisibility() for the same fix
+        // applied to the ring.
+        feedbackView?.animate()?.alpha(0f)?.setDuration(180)?.start()
     }
 
     // Long-press style/cleanup menu (#53) -- a scrim (catches an outside tap to dismiss) plus the
@@ -711,12 +721,17 @@ class WhisperAccessibilityService : AccessibilityService() {
         // Tapping the feedback bubble either retries with the raw (pre-cleanup) transcript (#27)
         // or, on a clipboard fallback, re-copies the text (#5); only touchable while one of those
         // is actually on offer — see setFeedbackTouchable.
-        // Same Pixel Fold display-delay avoidance as `ring` above (see its comment): visibility is
-        // left VISIBLE at construction and deferred to post{} instead of set GONE before attach --
-        // this view becomes its own top-level WindowManager window via the second wm.addView call
-        // below, so it's just as much a trigger candidate as `ring` is. alpha stays 0f here (that's
-        // not the OS trigger condition, only `visibility=GONE` at attach time is), so nothing is
-        // visibly drawn for the deferred frame regardless.
+        // Real root cause (verified via UID/window-token-attributed BLASTSyncEngine analysis on
+        // real device logs, not just timing correlation): this window becomes its own top-level
+        // WindowManager window via the second wm.addView call below, sharing the same
+        // TYPE_ACCESSIBILITY_OVERLAY WindowToken as `ring`. On a fold-triggered screen-off
+        // display switch, WMS synchronously BLAST-syncs every window under that token before
+        // allowing screen-on, with a fixed ~2000ms timeout. A window whose root is View.GONE
+        // never draws a frame and can never satisfy that sync, so it eats the full timeout on
+        // every such fold regardless of what alpha is set to. The root view is therefore kept
+        // VISIBLE permanently (see hideFeedback's comment) with alpha=0f expressing the hidden
+        // state instead -- alpha was already correctly identified as the safe axis here, GONE
+        // was the actual trigger, just not only "at attach time" as originally believed.
         val feedback = TextView(this).apply {
             textSize = 13f
             setTextColor(0xFFFFFFFF.toInt())
@@ -726,7 +741,13 @@ class WhisperAccessibilityService : AccessibilityService() {
             isClickable = true
             setOnClickListener { onFeedbackTapped() }
         }
-        feedback.post { feedback.visibility = View.GONE }
+        // No post-attach GONE assignment (real root cause fix -- see hideFeedback's comment
+        // above): this window's root view stays VISIBLE permanently; hidden state is expressed
+        // purely via alpha, matching the ring's fix. alpha is already 0f above so nothing is
+        // visibly drawn, and FLAG_NOT_TOUCHABLE / setFeedbackTouchable gate interaction, exactly
+        // as before -- only the window's participation in WMS's fold-triggered BLAST sync
+        // changes, since a permanently-attached VISIBLE window can actually draw a frame and
+        // satisfy the sync instead of stalling it for the full 2000ms timeout.
 
         val feedbackParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -833,10 +854,22 @@ class WhisperAccessibilityService : AccessibilityService() {
         lastScreenH = newScreenH
 
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        overlayView?.let { wm.updateViewLayout(it, params) }
-        feedbackLayoutParams?.let {
-            positionFeedback(it, params, feedbackView?.height ?: 0)
-            wm.updateViewLayout(feedbackView, it)
+        // Deferred via handler.post (Pixel Fold display-transition stall, same root cause as
+        // applyOverlayVisibility's alpha fix above): onConfigurationChanged fires *during* the
+        // OS's own WindowManager DeferredDisplayUpdater display-resize transition for the fold.
+        // Calling wm.updateViewLayout() synchronously here re-enters that in-flight transition
+        // with more overlay-window mutations, competing with it for the same window state right
+        // when WMS needs a stable snapshot to dispatch (Transition#sent) the resize. Posting to
+        // the main-thread handler runs this on the next looper iteration, after the OS's own
+        // transition has already been queued/dispatched, so the ring reposition no longer
+        // contends with it. The position math is unchanged -- only the WM mutation is deferred by
+        // one frame, which is imperceptible for a repositioning animation.
+        handler.post {
+            overlayView?.let { wm.updateViewLayout(it, params) }
+            feedbackLayoutParams?.let {
+                positionFeedback(it, params, feedbackView?.height ?: 0)
+                wm.updateViewLayout(feedbackView, it)
+            }
         }
     }
 
@@ -856,7 +889,21 @@ class WhisperAccessibilityService : AccessibilityService() {
     internal fun applyOverlayVisibility() {
         val visible = overlayShouldBeVisible(mainActivityForeground, IconHiddenState.isHidden(this), isKeyguardLocked())
         setOverlayTouchable(visible)
-        overlayView?.visibility = if (visible) View.VISIBLE else View.GONE
+        // alpha, not View.GONE (Pixel Fold display-transition stall, root-caused via Opus + real
+        // on-device logcat capture: this runs on the same SCREEN_ON/SCREEN_OFF/USER_PRESENT/
+        // keyguard events that drive a fold's own WindowManager DeferredDisplayUpdater display-
+        // resize transition. Setting the root overlay view to GONE tears down its window surface
+        // and drops it from the OS's accessibility window set; when that happens *during* the
+        // fold transition, WMS logs "Cannot find window which accessibility connection is added
+        // to" and the transition doesn't get dispatched (Transition#sent) for ~2s -- that stall
+        // *is* the black screen. It's worse while locked because GONE persists for the whole
+        // locked fold, so the window stays orphaned until an authenticated wake rebuilds it.
+        // alpha=0f keeps the window's surface alive and registered with WMS at all times, so the
+        // display transition never has to re-resolve it. Fully equivalent from a UX/security
+        // standpoint: setOverlayTouchable(visible) above already gates FLAG_NOT_TOUCHABLE, so a
+        // "hidden" overlay is alpha=0 (invisible) + non-touchable (can't be interacted with),
+        // preserving the exact same keyguard/hide-icon guarantees as the old GONE state.
+        overlayView?.alpha = if (visible) 1f else 0f
         if (!visible) {
             handler.post(hideFeedback)
             dismissStyleMenu()
@@ -908,7 +955,9 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (!AutoPeekToggle.isEnabled(this)) { armIdlePeekTimer(); return }
         if (!RingPeek.shouldAutoPeek(stateMachine.current())) { armIdlePeekTimer(); return }
         val overlay = overlayView ?: return
-        if (overlay.visibility != View.VISIBLE) { armIdlePeekTimer(); return }
+        // Mirrors applyOverlayVisibility's alpha-not-GONE fix (Pixel Fold display-transition
+        // stall): hidden state is now expressed as alpha=0f, not View.GONE.
+        if (overlay.alpha == 0f) { armIdlePeekTimer(); return }
         val params = layoutParams ?: return
 
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
