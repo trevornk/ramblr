@@ -1,0 +1,1 @@
+F-Droid build fix: added missing dependency-verification checksums for release-build lint tooling. No app-facing changes.
