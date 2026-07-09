@@ -1,0 +1,1 @@
+Added release signing support so official builds can be verified via F-Droid's reproducible-build check (Binaries + AllowedAPKSigningKeys). No app-facing behavior change.
