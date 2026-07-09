@@ -31,10 +31,41 @@ val onnxRuntimeAar: Configuration by configurations.creating {
     isCanBeResolved = true
 }
 
+// Release signing (F-Droid reproducible-build requirement, MR !42401): keystore.properties is
+// gitignored and machine-local, holding paths/passwords for the real release key. A public
+// clone or CI run without it still builds fine -- the release variant just falls back to the
+// debug signing config, producing an unsigned-for-distribution-but-buildable APK. The actual
+// key material lives only in 1Password ("Ramblr Android Release Signing Key", vault AI Server)
+// and the release-signed APK that F-Droid verifies against is published to GitHub Releases.
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val hasReleaseSigning = keystoreProperties.getProperty("storeFile") != null
+
 android {
     namespace = "com.trevornk.ramblr"
     compileSdk = 34
     ndkVersion = "27.2.12479018"
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
 
     defaultConfig {
         applicationId = "com.trevornk.ramblr"
