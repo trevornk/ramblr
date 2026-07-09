@@ -4,23 +4,20 @@
   after reinstall) and device-to-device transfer (Android's "Copy your data" flow). Mirrors
   backup_rules.xml's include/exclude decisions; see that file's doc comment for the full
   rationale on why the EncryptedSharedPreferences files must never be included.
+
+  Uses include-only semantics like backup_rules.xml: the three EncryptedSharedPreferences files
+  are excluded purely by omission from the include lists below, not via explicit exclude
+  entries; Android Lint's FullBackupContent check flags an exclude for a path that was never
+  included as an error (only surfaces on a release lintVital run).
 -->
 <data-extraction-rules>
     <cloud-backup>
         <include domain="sharedpref" path="ramblr.xml" />
         <include domain="file" path="overlay_icon.png" />
-
-        <exclude domain="sharedpref" path="ramblr_secure.xml" />
-        <exclude domain="sharedpref" path="ramblr_provider_credentials.xml" />
-        <exclude domain="sharedpref" path="ramblr_cleanup_credentials.xml" />
     </cloud-backup>
 
     <device-transfer>
         <include domain="sharedpref" path="ramblr.xml" />
         <include domain="file" path="overlay_icon.png" />
-
-        <exclude domain="sharedpref" path="ramblr_secure.xml" />
-        <exclude domain="sharedpref" path="ramblr_provider_credentials.xml" />
-        <exclude domain="sharedpref" path="ramblr_cleanup_credentials.xml" />
     </device-transfer>
 </data-extraction-rules>

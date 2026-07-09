@@ -1,0 +1,1 @@
+F-Droid build fixes: raised Gradle daemon heap/metaspace so the full release build doesn't run out of memory on constrained CI runners, and fixed two backup-rules XML files that had redundant exclude entries flagged as errors by Android Lint's release-only FullBackupContent check. No app-facing changes.

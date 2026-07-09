@@ -20,12 +20,16 @@
   them means the user re-enters their API key(s) once on a new device, which is the correct/safe
   behavior anyway.
 
-  Note this file uses include-only semantics: once any <include> is present, everything NOT
-  explicitly included is already omitted by default. The <exclude> lines below are kept anyway,
-  as an explicit, self-documenting guard against ever regressing this by accident (e.g. a future
-  wildcard include). ramblr_model_catalog_cache.xml (a plain, non-secret network cache) is
-  intentionally omitted from both the include and exclude lists: there's nothing sensitive in it,
-  but it's a cache and will simply refetch, so it isn't worth restoring either.
+  This file uses include-only semantics: once any &lt;include&gt; is present, everything NOT explicitly
+  included is already omitted by default, so the three files above are excluded purely by omission;
+  there is no exclude block for them. (An earlier version of this file added explicit exclude
+  entries for them as self-documentation, but Android Lint's FullBackupContent check flags an
+  exclude for a path that was never in any include path as an error, since it's a semantic
+  no-op; that only surfaces on a release lintVital run, which nothing had exercised until the first
+  F-Droid CI build. Removed rather than suppressed, since the doc comment above already captures the
+  rationale.) ramblr_model_catalog_cache.xml (a plain, non-secret network cache) is intentionally
+  omitted from the include list for the same reason: there's nothing sensitive in it, but it's a
+  cache and will simply refetch, so it isn't worth restoring either.
 -->
 <full-backup-content>
     <include domain="sharedpref" path="ramblr.xml" />
@@ -33,8 +37,4 @@
     <!-- User's chosen custom overlay icon (#43/#53): a small PNG in app-private files storage,
          not device-specific, safe and desirable to carry over to a new device. -->
     <include domain="file" path="overlay_icon.png" />
-
-    <exclude domain="sharedpref" path="ramblr_secure.xml" />
-    <exclude domain="sharedpref" path="ramblr_provider_credentials.xml" />
-    <exclude domain="sharedpref" path="ramblr_cleanup_credentials.xml" />
 </full-backup-content>
