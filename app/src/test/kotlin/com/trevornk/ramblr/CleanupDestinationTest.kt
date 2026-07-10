@@ -38,7 +38,7 @@ class CleanupDestinationTest {
 
     @Test fun `cloud subtitle detail fills a blank model with the provider default`() {
         val c = chain(ProviderChainEntry(ProviderKind.OPENAI, ""))
-        assertEquals("OpenAI · gpt-4o-mini", CleanupDestination.cloudSubtitleDetail(c))
+        assertEquals("OpenAI · gpt-5.4-mini", CleanupDestination.cloudSubtitleDetail(c))
     }
 
     @Test fun `an OpenAI base URL override reflects the overridden host`() {

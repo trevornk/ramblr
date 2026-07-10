@@ -100,26 +100,33 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
     ),
 
     // --- Gemini: only direct provider that's transcription-capable (multimodal audio-in) as
-    // well as cleanup-capable, so its entries are tagged BOTH. ---
+    // well as cleanup-capable, so its entries are tagged BOTH. 2.5-flash/-lite -> 3.1-flash-lite/
+    // 3.5-flash (2026-07-10): 2.5-flash and 2.5-flash-lite are both on Google's deprecation path
+    // (shutdown Oct 16, 2026); Google's own deprecation table maps 2.5-flash-lite ->
+    // 3.1-flash-lite and 2.5-flash -> 3.5-flash. 3.1-flash-lite's model card documents explicit
+    // "improved audio input... for ASR" gains, confirming it's safe for the transcription use
+    // case too. Note 3.5-flash carries a real ~6x price jump over 3.1-flash-lite (not a smooth
+    // one-tier step like the old 2.5-flash/-lite pair) -- flagged honestly below rather than
+    // understated, but it's still the officially documented stable migration target. ---
     ModelCatalogEntry(
         provider = ProviderKind.GEMINI,
-        modelId = "gemini-2.5-flash-lite",
-        displayName = "Gemini 2.5 Flash-Lite",
-        description = "Cheapest Gemini tier -- benchmark-confirmed on par with Flash for cleanup; handles audio transcription too.",
+        modelId = "gemini-3.1-flash-lite",
+        displayName = "Gemini 3.1 Flash-Lite",
+        description = "Cheapest Gemini tier -- Google's documented replacement for 2.5 Flash-Lite (which is deprecating); improved audio input for ASR, handles transcription too.",
         tier = ModelTier.RECOMMENDED,
         useCase = ModelUseCase.BOTH,
-        costPer1MInputUsd = 0.10,
-        costPer1MOutputUsd = 0.40,
+        costPer1MInputUsd = 0.25,
+        costPer1MOutputUsd = 1.50,
     ),
     ModelCatalogEntry(
         provider = ProviderKind.GEMINI,
-        modelId = "gemini-2.5-flash",
-        displayName = "Gemini 2.5 Flash",
-        description = "One tier up from Flash-Lite -- same real-world cleanup quality, costs more.",
+        modelId = "gemini-3.5-flash",
+        displayName = "Gemini 3.5 Flash",
+        description = "Google's documented replacement for 2.5 Flash (which is deprecating) -- meaningfully pricier than Flash-Lite (~6x), not a small step up; pick deliberately, not as a default.",
         tier = ModelTier.GOOD,
         useCase = ModelUseCase.BOTH,
-        costPer1MInputUsd = 0.30,
-        costPer1MOutputUsd = 2.50,
+        costPer1MInputUsd = 1.50,
+        costPer1MOutputUsd = 9.00,
     ),
 
     // --- Anthropic: cleanup-only power-user option (Claude has no audio-input capability at

@@ -29,7 +29,10 @@ object GeminiCleanupProvider {
      *  key out of the URL entirely, mirroring [AnthropicCleanupProvider.headers]'s `x-api-key`. */
     fun headers(key: String): Map<String, String> = mapOf("x-goog-api-key" to key)
 
-    const val DEFAULT_MODEL = "gemini-2.5-flash"
+    // gemini-2.5-flash -> gemini-3.1-flash-lite: 2.5-flash is on Google's deprecation path
+    // (shutdown Oct 16, 2026); 3.1-flash-lite is Google's own documented replacement for the
+    // flash-lite tier and matches ModelCatalogEntry's RECOMMENDED Gemini pick (2026-07-10).
+    const val DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
     /**
      * Builds the generateContent request body: [prompt] as `systemInstruction`, [text] as the

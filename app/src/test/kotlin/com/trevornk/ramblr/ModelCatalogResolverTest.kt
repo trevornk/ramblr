@@ -147,7 +147,7 @@ class BundledDefaultModelCatalogTest {
 
     @Test fun `Gemini's cheapest tier -- flash-lite -- is recommended and transcription-capable`() {
         val recommended = ModelCatalogResolver.recommendedEntryFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.GEMINI)
-        assertEquals("gemini-2.5-flash-lite", recommended?.modelId)
+        assertEquals("gemini-3.1-flash-lite", recommended?.modelId)
         assertTrue(recommended!!.useCase.supportsTranscription())
     }
 
