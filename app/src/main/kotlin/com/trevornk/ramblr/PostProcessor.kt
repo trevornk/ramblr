@@ -14,7 +14,11 @@ object PostProcessor {
 
     /** Default OpenAI-compatible base URL, used when the user hasn't configured a custom one (see #4). */
     const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
-    const val DEFAULT_MODEL = "gpt-4o-mini"
+    // gpt-4o-mini -> gpt-5.4-mini: matches the catalog's own tested GOOD-tier OpenAI cleanup
+    // recommendation (see ModelCatalogEntry's pass-2 216-call benchmark) rather than a stale
+    // pre-catalog default. GPT-5.6 Terra evaluated separately before being made the default --
+    // untested against Ramblr's actual cleanup prompts, so not swapped in blind (2026-07-10).
+    const val DEFAULT_MODEL = "gpt-5.4-mini"
 
     val ENDPOINT_URL = "$DEFAULT_BASE_URL/chat/completions"
 

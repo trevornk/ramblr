@@ -13,7 +13,11 @@ object TranscriberClient {
 
     private val client = NetworkClients.shared
 
-    const val DEFAULT_MODEL = "whisper-1"
+    // whisper-1 -> gpt-4o-transcribe: real 20-clip benchmark (2026-07-10) showed lower WER
+    // (2.86% vs 4.29%) and ~42% faster avg latency (0.81s vs 1.40s) on identical short
+    // push-to-talk-style audio, with zero dropped/wrong words on either model including a
+    // one-word clip -- the earlier "drops short words" concern did not reproduce.
+    const val DEFAULT_MODEL = "gpt-4o-transcribe"
 
     /** The `/audio/transcriptions` endpoint for [baseUrl], normalized the same way the cleanup path
      *  normalizes its base URL (M5). A blank/malformed base falls back to OpenAI's default. */
