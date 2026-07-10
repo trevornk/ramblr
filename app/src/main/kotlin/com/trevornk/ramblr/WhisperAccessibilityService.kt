@@ -315,6 +315,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         CustomPersonaStore.ensureLegacySeeded(this)
+        ProviderChainMigration.runIfNeeded(this)
         showOverlay()
         registerNetworkCallback()
         registerScreenStateReceiver()
