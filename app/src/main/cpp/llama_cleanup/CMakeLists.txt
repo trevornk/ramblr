@@ -35,6 +35,19 @@ project("llama_cleanup")
 # leaves an already-set cache variable alone) picks this up.
 set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
 
+# Reproducible builds (F-Droid MR fdroid/fdroiddata!42401): llama.cpp's build-info.cmake
+# derives LLAMA_BUILD_NUMBER/COMMIT from `git rev-list --count`/`rev-parse` and bakes them
+# into build-info.cpp (-> LLAMA_COMMIT string in the shipped JNI lib). The submodule is
+# commit-pinned, so git yields identical values on every host that HAS git -- but F-Droid's
+# build sandbox git availability is not something we control, and a host without git would
+# instead embed llama.cpp's "unknown"/0 fallback, diverging from a host that has it. Pin both
+# to llama.cpp's own canonical no-git fallback constants so the embedded build-info is
+# host-independent regardless. llama.cpp only fills these in when they are NOT already DEFINED
+# (see llama.cpp/CMakeLists.txt), so defining them here in the parent scope wins; the value's
+# real provenance is the pinned commit recorded in .gitmodules / `git submodule status`.
+set(LLAMA_BUILD_NUMBER 0)
+set(LLAMA_BUILD_COMMIT "unknown")
+
 # 16KB ELF alignment (#44): NDK r27 (pinned via android.ndkVersion) doesn't default to 16KB
 # page-size-aligned LOAD segments -- only r28+ does. Setting these here, before
 # add_subdirectory(), makes them ordinary (non-cache) CMake variables in this directory scope,
