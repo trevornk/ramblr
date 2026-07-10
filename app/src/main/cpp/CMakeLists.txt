@@ -77,6 +77,32 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--build-id=none")
     set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS} -Wl,--build-id=none")
 
+    # Relocation-table non-determinism (F-Droid MR follow-up, 2026-07-10): even with the
+    # path/debug-info fixes above, F-Droid's Vagrant rebuild and GitHub Actions' Ubuntu-runner
+    # rebuild produced byte-different libggml-base.so despite identical source commit and NDK
+    # version -- confirmed via llvm-readelf that the two .so files have IDENTICAL section
+    # headers (same layout) but DIFFERENT relocation target *values* in .rela.dyn once sorted,
+    # ruling out simple relocation-table reordering. Root cause: AGP's CMake/Ninja native build
+    # links objects in whatever order Ninja's parallel job scheduler happens to complete them,
+    # which is host-CPU-core-count-dependent -- GitHub's runner and F-Droid's Vagrant VM don't
+    # have the same core count, so the *link command's* file-list order differs between hosts,
+    # shifting internal symbol addresses (hence relocation values) even though every input byte
+    # is identical. Two fixes address this at its actual source:
+    #  1. Force a single-threaded linker invocation so lld can't reorder relocation-table
+    #     entries based on its own internal thread scheduling, independent of Ninja's job count.
+    #  2. Force deterministic `ar` archive creation (mtime/uid/gid zeroed, member order fixed)
+    #     for every static lib CMake creates on the way to the final .so -- ggml/llama.cpp/
+    #     sherpa-onnx and their vendored deps build several intermediate .a archives, and `ar`
+    #     is not deterministic by default (see CMake's own CMAKE_C_ARCHIVE_CREATE default).
+    #     This does NOT force single-threaded *compilation* (Ninja's -j is untouched, so build
+    #     time is unaffected) -- only archive creation and final linking are made deterministic.
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--threads=1")
+    set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS} -Wl,--threads=1")
+    set(CMAKE_C_ARCHIVE_CREATE   "<CMAKE_AR> qcD <TARGET> <LINK_FLAGS> <OBJECTS>")
+    set(CMAKE_C_ARCHIVE_FINISH   "<CMAKE_RANLIB> -D <TARGET>")
+    set(CMAKE_CXX_ARCHIVE_CREATE "<CMAKE_AR> qcD <TARGET> <LINK_FLAGS> <OBJECTS>")
+    set(CMAKE_CXX_ARCHIVE_FINISH "<CMAKE_RANLIB> -D <TARGET>")
+
     message(STATUS "Ramblr reproducible-build flags active (CMAKE_BUILD_TYPE='${CMAKE_BUILD_TYPE}', repo root '${RAMBLR_REPO_ROOT}')")
 endif()
 
