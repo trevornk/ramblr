@@ -16,7 +16,18 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: >-
+          Optional commit SHA/tag to check out instead of the triggering ref. Needed to rebuild
+          a specific already-tagged release's reference APK (e.g. for F-Droid Binaries: URL
+          verification) after this workflow file itself was added on a later commit --
+          workflow_dispatch requires the workflow file to exist at the dispatched ref, but the
+          embedded version-control-info in the built APK must match the exact metadata-pinned
+          commit, not just "whatever main/tag currently resolves the workflow file from".
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -29,6 +40,9 @@ jobs:
         # Actions pinned to full commit SHAs, not mutable tags (L-3); see ci.yml/release.yml.
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          # Empty string (unset input, or a plain `push` trigger) falls back to the actions/
+          # checkout default (the triggering ref) -- only override when explicitly given.
+          ref: ${{ inputs.ref || '' }}
           submodules: recursive
 
       - name: Set up JDK 17
