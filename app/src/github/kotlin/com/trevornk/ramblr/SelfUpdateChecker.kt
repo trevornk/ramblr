@@ -89,6 +89,20 @@ object SelfUpdateChecker {
         return SelfUpdateResolver.evaluate(release, com.trevornk.ramblr.BuildConfig.VERSION_CODE)
     }
 
+    /** Re-evaluates the *existing* cached response (no network call) against the running app's
+     *  current versionCode, for Settings UI (Part 3) to render a status row without forcing a
+     *  fetch on every screen open -- only an explicit "Check now" (or Part 5's periodic job)
+     *  should hit the network. Returns null if nothing has ever been cached yet. */
+    fun cachedResult(context: Context): UpdateCheckResult? {
+        val json = cachedJson(context) ?: return null
+        val release = SelfUpdateJson.parseLatestRelease(json)
+        return SelfUpdateResolver.evaluate(release, com.trevornk.ramblr.BuildConfig.VERSION_CODE)
+    }
+
+    /** When the cache was last actually fetched (not merely re-evaluated), for the Settings
+     *  status row's "last checked" line. Null if never checked. */
+    fun lastCheckedAtMs(context: Context): Long? = cachedFetchedAtMs(context)
+
     private fun fetchFresh(): String? = try {
         val request = Request.Builder().url(RELEASES_LATEST_URL).get().build()
         client.newCall(request).execute().use { response ->

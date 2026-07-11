@@ -264,8 +264,24 @@ class AdvancedActivity : BaseSettingsActivity() {
 
         refreshOverlayAppearanceRows()
 
-        // --- More (personal vocabulary, dictation history) ---
+        // --- More (personal vocabulary, dictation history, self-update settings) ---
         root.addView(sectionHeader("More"))
+
+        // Self-update (Part 3, github distribution flavor only): SelfUpdateSettingsActivity
+        // lives in src/github/kotlin/, so this Activity (src/main/, compiled into every flavor)
+        // can't reference it by class literal -- that reference would fail to resolve at compile
+        // time for the storefront flavor, whose compile task never sees that file at all (see
+        // SelfUpdateSettingsActivity's own kdoc for the full reasoning). Class.forName is the
+        // one way to conditionally launch a flavor-only Activity from shared code: it resolves
+        // at runtime, so it simply throws-and-is-caught (row never added) on storefront, and
+        // succeeds on github. android/src/github/AndroidManifest.xml registers the Activity only
+        // for the github flavor's manifest merge, so it's also never launchable outside it even
+        // if this lookup somehow succeeded in the wrong build.
+        selfUpdateSettingsActivityClass()?.let { activityClass ->
+            root.addView(settingsRow("Updates", "Check for and manage app updates") {
+                startActivity(Intent(this, activityClass))
+            })
+        }
 
         val vocabularyRow = settingsRow("Personal vocabulary", vocabularySummary()) { promptVocabulary() }
         vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
@@ -730,6 +746,16 @@ class AdvancedActivity : BaseSettingsActivity() {
     }
 
     private fun parseHexColor(raw: String): Int? = HexColorParser.parse(raw)
+
+    /** Resolves `com.trevornk.ramblr.SelfUpdateSettingsActivity` reflectively, returning null
+     *  (and thus hiding the row) on storefront builds where that class simply doesn't exist in
+     *  the compiled classes. See the call site's kdoc for why this can't be a direct reference. */
+    @Suppress("UNCHECKED_CAST")
+    private fun selfUpdateSettingsActivityClass(): Class<out android.app.Activity>? = try {
+        Class.forName("com.trevornk.ramblr.SelfUpdateSettingsActivity") as Class<out android.app.Activity>
+    } catch (_: ClassNotFoundException) {
+        null
+    }
 
     // --- History display helper (#95 Phase 3: waterfall editor removed, groupLabel kept only
     // for rendering old dictation-history "paid fallback" badges) ---

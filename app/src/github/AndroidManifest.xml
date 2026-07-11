@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Registers github-flavor-only Activities. This file is merged with app/src/main's
+         AndroidManifest.xml by Gradle/AGP's per-variant manifest merger for the "github" flavor
+         only; the "storefront" flavor's manifest merge never sees this file, so
+         SelfUpdateSettingsActivity is only ever declared (and therefore only ever launchable) in
+         github-flavor builds, matching the flavor-source-set isolation SelfUpdateChecker.kt's
+         AGENTS note establishes for the rest of this feature (Part 3, Settings UI). -->
+    <application>
+        <activity android:name=".SelfUpdateSettingsActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+    </application>
+</manifest>
