@@ -253,8 +253,8 @@ class CleanupActivity : BaseSettingsActivity() {
         val chain = ProviderChainStore.load(this)
         val entry = CleanupDestination.firstCloudEntry(chain)
         val host = entry?.let { CleanupDestination.hostFor(it) } ?: CleanupDestination.consentHost(chain)
-        val base = if (useLocal) "Sends transcript over the network to $host, even though transcription stays on-device"
-        else "Sends transcript to $host to fix grammar and punctuation"
+        val base = if (useLocal) "Sends transcript over the network to $host, even though transcription stays on-device."
+        else "Sends transcript to $host to fix grammar and punctuation."
         val costNote = entry?.let {
             " Uses your ${CleanupDestination.label(it.kind)} API key and is billed pay-per-use (typically a fraction of a cent per dictation)."
         } ?: ""
