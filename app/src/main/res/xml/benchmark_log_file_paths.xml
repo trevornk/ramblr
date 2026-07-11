@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider path spec for sharing benchmark_log.jsonl (GH #100). Only exposes the app's
+     internal filesDir root (files-path), not external/cache storage: the benchmark log is the
+     only file this app currently shares out via FileProvider. -->
+<paths>
+    <files-path name="benchmark_log" path="." />
+</paths>
