@@ -38,9 +38,13 @@ object SelfUpdatePrefs {
 
     fun setAutoInstallEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_INSTALL_ENABLED, enabled).apply()
-        // TODO(Part 4/5): nothing to wire yet -- the install pipeline (Part 4) and periodic
-        // worker (Part 5) are the ones that will actually read this flag to decide whether to
-        // auto-install a downloaded update vs. just notifying about it.
+        // TODO(Part 5): call SelfUpdateInstallWorker.enqueue(context) from the periodic check when
+        // SelfUpdateChecker.check(context) returns UpdateCheckResult.UpdateAvailable AND
+        // isAutoInstallEnabled(context) is true (SelfUpdateInstallWorker.cancel(context) when
+        // false, or once installed). The install pipeline itself (download, checksum verify,
+        // quiet-hours + idle-debounce gate, PackageInstaller silent/fallback install) is built --
+        // see SelfUpdateInstallWorker.kt -- only the periodic WorkManager trigger that decides
+        // *when* to call enqueue() is still missing.
     }
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

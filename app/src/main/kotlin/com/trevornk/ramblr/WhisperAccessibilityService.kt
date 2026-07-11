@@ -86,6 +86,14 @@ class WhisperAccessibilityService : AccessibilityService() {
     companion object {
         var instance: WhisperAccessibilityService? = null
 
+        /** Current [RecordingStateMachine.State] of the running service, or null if the service
+         *  isn't connected at all (mirrors the existing `instance?.` null-safe read pattern used
+         *  by e.g. [ModelDownloadWorker.notifyServiceModelReady] / LivePreviewActivity's
+         *  `reloadStreamingModel()` call). Added for the github-flavor self-update install gate
+         *  (Part 4, [SelfUpdateInstallGate]/[SelfUpdateInstallWorker]) to check "is dictation
+         *  idle right now" without exposing the private [stateMachine] field itself. */
+        fun currentRecordingState(): RecordingStateMachine.State? = instance?.stateMachine?.current()
+
         /** Whether Ramblr's own MainActivity is currently foregrounded (#35), kept as a static flag
          *  rather than only reacting when [instance] is non-null -- so a service that connects while
          *  MainActivity is already open (e.g. right after the user enables Accessibility from
