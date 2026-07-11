@@ -73,10 +73,10 @@ git submodule update --init --recursive
 The build automatically downloads the sherpa-onnx native libs (`libsherpa-onnx-jni.so`,
 `libonnxruntime.so`) it needs for local transcription — no manual step required.
 
-APK output:
+APK output (`FLAVOR` defaults to `github` — see "Distribution flavors" below):
 
 ```bash
-app/build/outputs/apk/debug/Ramblr-<version>-debug.apk
+app/build/outputs/apk/github/debug/Ramblr-<version>-github-debug.apk
 ```
 
 If you use ADB:
@@ -84,6 +84,52 @@ If you use ADB:
 ```bash
 make adb-install
 ```
+
+### Distribution flavors
+
+The app builds as one of two Gradle product flavors, selected via `-P` or (for `make`'s own
+targets) the `FLAVOR` variable:
+
+- **`github`** (default for local `make build`/`make test`/`make adb-install`) — the sideload
+  build published to [GitHub Releases](https://github.com/trevornk/ramblr/releases). This is the
+  only flavor that includes the self-update feature (see below).
+- **`storefront`** — the build intended for Google Play and F-Droid submission. It has **no
+  self-update code compiled into it at all** — not runtime-disabled, physically absent from the
+  APK's compiled classes. Build it with:
+
+  ```bash
+  make build FLAVOR=storefront
+  # or directly: ./gradlew assembleStorefrontDebug
+  ```
+
+This split exists because Google Play's Developer Program Policy explicitly prohibits an app
+updating itself by any method other than Play's own update mechanism ("An app distributed via
+Google Play may not modify, replace, or update itself using any method other than Google Play's
+update mechanism"), and F-Droid's whole update model assumes the client controls updates, not the
+app. Since Ramblr intends to pursue both storefronts, the self-update source lives in its own
+Gradle flavor source set (`app/src/github/kotlin/...`) rather than behind a runtime flag, so it's
+never present to violate that policy in a storefront build in the first place.
+
+### Self-update (github flavor only)
+
+The `github` flavor checks GitHub Releases periodically (every 6h) for a newer signed release and,
+if found:
+
+- **Notifies** by default (Settings → Updates → "Notify me of updates", on by default) — tapping
+  the notification opens the release page in a browser.
+- Can **optionally auto-install** (Settings → Updates → "Automatically install updates", off by
+  default/opt-in) — downloads the release APK to private app storage, verifies its SHA-256 against
+  the hash GitHub's Releases API already publishes per-asset (no separate checksum file needed),
+  and only then installs, gated on two independent safety checks: a quiet-hours window (default
+  1am–5am device-local time) and the accessibility service reporting genuinely idle (checked twice,
+  ~30s apart) so an install can't land mid-dictation. Uses Android's silent
+  `PackageInstaller`/`UPDATE_PACKAGES_WITHOUT_USER_ACTION` path on Android 12+, falling back to the
+  normal confirmation-dialog install on Android 11 (this app's actual `minSdk` floor).
+
+Every real (non-`-dev.`-tagged) GitHub Release's notes must include a `versionCode: <int>` line
+(free-form placement is fine, e.g. "...versionCode 14." reads correctly) — GitHub Releases don't
+carry an Android versionCode natively, so the self-update checker parses it from the release body
+to compare against the running app's own version.
 
 ## How it works
 
