@@ -305,6 +305,15 @@ class AdvancedActivity : BaseSettingsActivity() {
         )
         root.addView(historyGroup.outer)
 
+        // Benchmark log export (#100): lets Trevor hand off benchmark_log.jsonl (provider/model/
+        // latency per dictation, no transcript text) to Hermes for analysis without a USB/adb
+        // connection, via a plain share Intent -- same settingsRow pattern as every other row on
+        // this screen.
+        root.addView(settingsRow(
+            "Share benchmark log",
+            "Send the on-device transcription/cleanup benchmark log (timings and model ids only, no dictation text) to any app"
+        ) { shareBenchmarkLog() })
+
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
             addView(root)
@@ -436,6 +445,26 @@ class AdvancedActivity : BaseSettingsActivity() {
     }
 
     // --- Dictation History (#25) ---
+
+    /** Shares files/benchmark_log.jsonl (#100) via a standard chooser Intent, using a
+     *  [androidx.core.content.FileProvider] content:// URI (see the "benchmark_log" provider
+     *  section of AndroidManifest.xml + res/xml/benchmark_log_file_paths.xml) so no storage
+     *  permission is needed and the target app never gets a raw file:// path into app-private
+     *  storage. */
+    private fun shareBenchmarkLog() {
+        val file = BenchmarkLogger.logFile(this)
+        if (!file.exists() || file.length() == 0L) {
+            toast("No benchmark log yet — dictate a few times first")
+            return
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/jsonl"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(intent, "Share benchmark log"))
+    }
 
     private fun onHistoryToggle(enabled: Boolean) {
         if (enabled) {
