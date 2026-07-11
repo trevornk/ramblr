@@ -92,5 +92,19 @@
             android:excludeFromRecents="true"
             android:noHistory="true" />
 
+        <!-- Exposes app-private files/benchmark_log.jsonl as a content:// URI to whatever app
+             Trevor shares it via (Gmail, Discord, Drive, ...) from AdvancedActivity's "Share
+             benchmark log" action (#100), without granting broader access to app-private
+             storage. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/benchmark_log_file_paths" />
+        </provider>
+
     </application>
 </manifest>

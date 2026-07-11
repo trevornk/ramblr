@@ -433,6 +433,12 @@ object CleanupWaterfallExecutor {
         // "exceeded time budget" branch had no deterministic test (audit test-gap #6). Its siblings
         // (localLlmStepDeadline, BoundedBlockingCall) already take an injected now.
         nowMs: () -> Long = { System.currentTimeMillis() },
+        // Optional benchmark-log correlation (GH #100): when both are non-null, [logStepOutcome]
+        // additionally emits a [BenchmarkLogger] entry for each step outcome, tagged with the
+        // same correlationId as this dictation's transcription entry. Defaulted to null so every
+        // existing call site/unit test (none of which is Android-context-aware) is unaffected.
+        benchmarkContext: android.content.Context? = null,
+        benchmarkCorrelationId: String? = null,
         callback: (PostProcessor.Result) -> Unit,
     ) {
         val steps = waterfall.steps
@@ -478,7 +484,7 @@ object CleanupWaterfallExecutor {
             }
 
             performStep(steps[index], text, prompt, localPrompt, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
-                logStepOutcome(steps[index], startedAtMs, outcome)
+                logStepOutcome(steps[index], startedAtMs, outcome, benchmarkContext, benchmarkCorrelationId)
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
                         cursor.recordSuccess(index, nowMs())
@@ -496,11 +502,15 @@ object CleanupWaterfallExecutor {
 
     /**
      * Logs which cleanup step actually served the request and how long the waterfall had run by
-     * that point (#100 perceived-latency follow-up). [android.util.Log] isn't available in the
-     * plain JVM unit tests this executor is designed to run in without Android, so failures here
-     * are swallowed -- this is diagnostics only, never allowed to affect the real outcome.
+     * that point (#100 perceived-latency follow-up), plus the model id that served it and the
+     * outcome (GH #100 benchmark logger) via [BenchmarkLogger]. [android.util.Log] isn't
+     * available in the plain JVM unit tests this executor is designed to run in without Android,
+     * so failures here are swallowed -- this is diagnostics only, never allowed to affect the
+     * real outcome. [BenchmarkLogger.log] itself is a no-op-safe object call when [context] is
+     * null (i.e. from a plain JVM unit test with no Android [android.content.Context] available)
+     * so this path stays exercisable outside Android too.
      */
-    private fun logStepOutcome(step: CleanupStep, startedAtMs: Long, outcome: CleanupStepOutcome) {
+    private fun logStepOutcome(step: CleanupStep, startedAtMs: Long, outcome: CleanupStepOutcome, context: android.content.Context?, correlationId: String?) {
         runCatching {
             val elapsedMs = System.currentTimeMillis() - startedAtMs
             when (outcome) {
@@ -508,6 +518,21 @@ object CleanupWaterfallExecutor {
                 is CleanupStepOutcome.StepFailed -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} failed at +${elapsedMs}ms: ${outcome.message}")
                 is CleanupStepOutcome.ConnectionFailed -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} connection failed at +${elapsedMs}ms: ${outcome.message}")
                 is CleanupStepOutcome.Cancelled -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} cancelled at +${elapsedMs}ms")
+            }
+        }
+        if (context != null && correlationId != null) {
+            runCatching {
+                BenchmarkLogger.log(
+                    context = context,
+                    correlationId = correlationId,
+                    cleanup = BenchmarkStage(
+                        provider = step.group.name,
+                        model = step.model,
+                        latencyMs = System.currentTimeMillis() - startedAtMs,
+                        success = outcome is CleanupStepOutcome.Success,
+                    ),
+                    cleanedTextLength = (outcome as? CleanupStepOutcome.Success)?.text?.length,
+                )
             }
         }
     }
