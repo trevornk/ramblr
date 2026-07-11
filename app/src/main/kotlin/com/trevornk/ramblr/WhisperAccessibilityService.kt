@@ -93,10 +93,29 @@ class WhisperAccessibilityService : AccessibilityService() {
          *  Settings switches it was just enabled from. */
         @Volatile private var mainActivityForeground = false
 
+        /** Override that keeps the overlay visible despite [mainActivityForeground] being true
+         *  (#103): the onboarding wizard's "Try it out" step is a dialog shown ON TOP OF
+         *  MainActivity, so #35's Settings-suppression logic hid the exact icon the step asks the
+         *  user to tap -- the step was genuinely impossible to complete without first backing out
+         *  of onboarding entirely, since MainActivity (a [BaseSettingsActivity]) never left the
+         *  foreground while that dialog was up. Scoped to exactly this one step (set true only
+         *  while the "Try it out" dialog is showing, false again the moment it's dismissed) rather
+         *  than weakening #35's general "don't cover Settings switches" behavior, which remains
+         *  correct for every other Settings screen. */
+        @Volatile private var overlayForceVisibleOverride = false
+
         /** Called from MainActivity's onResume/onPause so the floating overlay never covers its own
          *  Settings switches (#35). Safe to call whether or not the service is currently connected. */
         fun setMainActivityForeground(foreground: Boolean) {
             mainActivityForeground = foreground
+            instance?.let { service -> service.handler.post { service.applyOverlayVisibility() } }
+        }
+
+        /** See [overlayForceVisibleOverride]'s kdoc. Called by [MainActivity]'s onboarding "Try it
+         *  out" step around showing/dismissing its dialog -- never left set to true past that one
+         *  dialog's lifetime. */
+        fun setOverlayForceVisibleOverride(forceVisible: Boolean) {
+            overlayForceVisibleOverride = forceVisible
             instance?.let { service -> service.handler.post { service.applyOverlayVisibility() } }
         }
 
@@ -888,7 +907,7 @@ class WhisperAccessibilityService : AccessibilityService() {
      * back off from outside this class.
      */
     internal fun applyOverlayVisibility() {
-        val visible = overlayShouldBeVisible(mainActivityForeground, IconHiddenState.isHidden(this), isKeyguardLocked())
+        val visible = overlayShouldBeVisible(mainActivityForeground, IconHiddenState.isHidden(this), isKeyguardLocked(), overlayForceVisibleOverride)
         setOverlayTouchable(visible)
         // alpha, not View.GONE (Pixel Fold display-transition stall, root-caused via Opus + real
         // on-device logcat capture: this runs on the same SCREEN_ON/SCREEN_OFF/USER_PRESENT/
