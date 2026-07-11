@@ -700,12 +700,22 @@ class MainActivity : BaseSettingsActivity() {
                 "floating button will start working as soon as the download completes, no need " +
                 "to wait here."
         }
+        // #103: without this, the overlay stays hidden the whole time this dialog is up -- #35's
+        // "don't cover Settings switches while MainActivity is foregrounded" logic can't tell the
+        // difference between "user is configuring a setting" and "user is being asked to tap the
+        // icon this very dialog is testing", so the step was genuinely impossible to complete
+        // without backing out of onboarding first. Reset to false on every dismissal path
+        // (Finish setup, and the dialog's own onDismiss as a catch-all for back-press/outside-tap,
+        // even though setCancelable(false) below blocks the common ones) so the override never
+        // outlives this one step.
+        WhisperAccessibilityService.setOverlayForceVisibleOverride(true)
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Try it out (optional)")
             .setMessage(message)
             .setView(testField)
             .setCancelable(false)
             .setPositiveButton("Finish setup") { _, _ -> finishOnboarding() }
+            .setOnDismissListener { WhisperAccessibilityService.setOverlayForceVisibleOverride(false) }
             .show()
     }
 
