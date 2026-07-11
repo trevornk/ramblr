@@ -474,11 +474,19 @@ class CloudProviderActivity : BaseSettingsActivity() {
         fun rebuildModelPicker(kind: ProviderKind) {
             modelPickerContainer.removeAllViews()
             modelRadioGroup.removeAllViews()
-            val entries = ModelCatalogResolver.entriesFor(catalog, kind)
+            // ModelUseCase.CLEANUP filter (#104): entriesFor(catalog, kind) alone returns EVERY
+            // catalog entry for kind regardless of use case, including transcription-only entries
+            // like gpt-4o-transcribe/whisper-1 -- the mirror-image of the #101/#102 bug this same
+            // provider-chain rework fixed on the transcription side. Without this filter, picking
+            // an ASR-only model here saves it as entry.model (the cleanup model), which then gets
+            // POSTed to /v1/chat/completions and fails at call time. Matches the same
+            // ModelUseCase.TRANSCRIPTION filtering already applied to the transcription picker
+            // below (rebuildTranscriptionPicker).
+            val entries = ModelCatalogResolver.entriesFor(catalog, kind, ModelUseCase.CLEANUP)
             val existingModel = existing?.model
-            val existingIsCatalogModel = existingModel != null && ModelCatalogResolver.isCatalogModel(catalog, kind, existingModel)
+            val existingIsCatalogModel = existingModel != null && entries.any { it.modelId == existingModel }
             pickedModelId = existingModel?.takeIf { existingIsCatalogModel }
-                ?: ModelCatalogResolver.recommendedEntryFor(catalog, kind)?.modelId
+                ?: entries.firstOrNull()?.modelId
 
             entries.forEach { entry ->
                 val row = MaterialRadioButton(this).apply {

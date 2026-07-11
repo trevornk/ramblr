@@ -1924,10 +1924,15 @@ class WhisperAccessibilityService : AccessibilityService() {
                     // separate field from entry.model, which is the CLEANUP model -- OpenAI's
                     // chat-completions models like "gpt-5.4-mini" can never serve
                     // /v1/audio/transcriptions, which needs "whisper-1"/"gpt-4o-transcribe").
+                    // .ifBlank { null } (#104 audit finding): the current UI never persists a
+                    // literal "" here, but without this guard a hand-edited SharedPreferences
+                    // value or a future regression could send an empty-string model id straight
+                    // to OpenAI instead of falling back to DEFAULT_MODEL -- matches the same
+                    // guard already applied on the Gemini call site just below.
                     TranscriberClient.transcribe(
                         file, apiKey, inFlightCall,
                         baseUrl = entry.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL,
-                        model = entry.transcriptionModel ?: TranscriberClient.DEFAULT_MODEL,
+                        model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
                     ) { result ->
                         Log.i(TAG, "OpenAI transcription HTTP round-trip took ${System.currentTimeMillis() - transcribeStartMs}ms")
                         if (result.text != null && result.text.isNotBlank()) {

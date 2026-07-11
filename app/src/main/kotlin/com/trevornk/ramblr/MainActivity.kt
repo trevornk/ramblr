@@ -607,7 +607,13 @@ class MainActivity : BaseSettingsActivity() {
         val chain = ProviderChainStore.load(this)
         if (chain.capableEntriesFor(needsTranscription = false).none { it.kind != ProviderKind.LOCAL }) {
             val catalog = ModelCatalogStore.currentCatalog(this)
-            val model = ModelCatalogResolver.recommendedEntryFor(catalog, kind)?.modelId
+            // ModelUseCase.CLEANUP filter (#104): recommendedEntryFor(catalog, kind) alone
+            // returns the top entry across ALL use cases for kind, so it could recommend a
+            // transcription-only model (e.g. gpt-4o-transcribe) as the CLEANUP model this saves
+            // to entry.model -- today it happens to pick the right one only because the cleanup
+            // entry sorts first in BUNDLED_DEFAULT_MODEL_CATALOG's tier order, not because
+            // anything enforces it. See CloudProviderActivity.kt's matching fix for the same bug.
+            val model = ModelCatalogResolver.entriesFor(catalog, kind, ModelUseCase.CLEANUP).firstOrNull()?.modelId
                 ?: when (kind) {
                     ProviderKind.GEMINI -> GeminiCleanupProvider.DEFAULT_MODEL
                     else -> PostProcessor.DEFAULT_MODEL
