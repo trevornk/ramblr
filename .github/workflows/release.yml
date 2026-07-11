@@ -44,10 +44,15 @@ jobs:
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
       - name: Unit tests
-        run: ./gradlew testDebugUnitTest
+        run: ./gradlew testGithubDebugUnitTest
 
       - name: Assemble debug APK
-        run: ./gradlew assembleDebug
+        # Builds the "github" flavor specifically: this is the sideload build published to
+        # GitHub Releases, which is exactly the flavor whose self-update notify/auto-update code
+        # (SelfUpdateChecker et al.) polls this very releases feed. The "storefront" flavor (no
+        # self-update code at all, see app/build.gradle.kts's flavor split) is never published
+        # here -- it's built and submitted to Play/F-Droid through their own separate processes.
+        run: ./gradlew assembleGithubDebug
 
       - name: Compute release tag
         id: tag
@@ -57,11 +62,11 @@ jobs:
           TAG="v${VERSION_NAME}-dev.$(date -u +%Y%m%d%H%M).${SHORT_SHA}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          # app/build.gradle.kts renames the assembled APK to Ramblr-<versionName>-debug.apk
-          # (see the outputFileName override there), not Gradle's default app-debug.apk -- reuse
-          # the versionName we just parsed so the release-upload step points at a file that
-          # actually exists instead of the stale default name.
-          echo "apk_path=app/build/outputs/apk/debug/Ramblr-${VERSION_NAME}-debug.apk" >> "$GITHUB_OUTPUT"
+          # app/build.gradle.kts renames the assembled APK to
+          # Ramblr-<versionName>-github-debug.apk (see the outputFileName override there, updated
+          # when the "distribution" flavor split landed) -- reuse the versionName we just parsed
+          # so the release-upload step points at a file that actually exists.
+          echo "apk_path=app/build/outputs/apk/github/debug/Ramblr-${VERSION_NAME}-github-debug.apk" >> "$GITHUB_OUTPUT"
 
       - name: Create release
         env:

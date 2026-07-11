@@ -77,7 +77,36 @@ android {
         buildConfigField("String", "OMNIROUTE_BASE_URL", "\"$omniRouteBaseUrl\"")
 
         ndk { abiFilters += "arm64-v8a" }
+    }
 
+    // Distribution split (self-update mechanism, Google Play policy compliance): Google Play's
+    // Developer Program Policy explicitly bans an app updating itself by any method other than
+    // Play's own mechanism, and Trevor wants to keep pursuing both Play and F-Droid listings, so
+    // the self-update notify/auto-update code must not just be *disabled* in those builds -- it
+    // must be physically absent from the compiled classes. buildConfigField alone can't do that
+    // (a boolean flag still ships the reachable code); the actual isolation is the flavor-specific
+    // source set (app/src/github/kotlin/...), which the "github" flavor's compile task includes
+    // and the "storefront" flavor's compile task never even sees. This buildConfigField is kept
+    // anyway as a cheap, greppable belt-and-suspenders signal for anyone reading BuildConfig, not
+    // as the actual isolation mechanism -- see AGENTS note in SelfUpdateChecker.kt.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            buildConfigField("boolean", "SELF_UPDATE_ENABLED", "true")
+        }
+        create("storefront") {
+            dimension = "distribution"
+            buildConfigField("boolean", "SELF_UPDATE_ENABLED", "false")
+        }
+    }
+
+    // externalNativeBuild's cmake block belongs directly under defaultConfig (arguments passed to
+    // every native build regardless of flavor/build type) -- kept here, right after defaultConfig
+    // and the flavor block above, rather than re-nested inside defaultConfig itself, since AGP
+    // resolves this the same either way and this reads more clearly next to the flavor split it's
+    // adjacent to.
+    defaultConfig {
         externalNativeBuild {
             cmake {
                 abiFilters += "arm64-v8a"
@@ -124,13 +153,18 @@ android {
 
     testOptions { unitTests { isIncludeAndroidResources = true } }
 
-    // Names the built APK "Ramblr-<versionName>-<buildType>.apk" (e.g. Ramblr-0.3.0-debug.apk)
-    // instead of Gradle's generic default "app-debug.apk"/"app-release.apk", so a file downloaded
-    // from GitHub Releases or shared directly is recognizable by filename alone.
+    // Names the built APK "Ramblr-<versionName>-<flavor>-<buildType>.apk" (e.g.
+    // Ramblr-1.0.10-github-debug.apk) instead of Gradle's generic default
+    // "app-github-debug.apk"/"app-storefront-release.apk", so a file downloaded from GitHub
+    // Releases or shared directly is recognizable by filename alone. The flavor name was added
+    // alongside the "distribution" flavor split (self-update mechanism) -- before that split
+    // there was only ever one flavor-less variant, so this used to just be
+    // "Ramblr-<versionName>-<buildType>.apk"; anything reading that old filename pattern (CI
+    // artifact globs, the release workflow) needs updating in lockstep with this rename.
     applicationVariants.all {
         outputs.all {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "Ramblr-${versionName}-${buildType.name}.apk"
+            output.outputFileName = "Ramblr-${versionName}-${flavorName}-${buildType.name}.apk"
         }
     }
 }
@@ -181,14 +215,20 @@ tasks.matching {
 // requires OPENAI_API_KEY, so it must only ever run when a developer invokes it directly.
 // Usage: OPENAI_API_KEY=sk-... ./gradlew runEvalHarness --args="SIMPLE_PROMPT,DEV_PROMPT"
 // See the "Prompt eval harness" section of README.md.
+//
+// Task names became flavor-qualified once the "distribution" flavor dimension (self-update
+// mechanism) was added -- plain "testDebugUnitTest"/"compileDebugUnitTestKotlin" no longer
+// resolve. PostProcessor (what this tool actually exercises) lives in the common source set,
+// unaffected by which flavor's test task runs it, so "Github" here is an arbitrary but stable
+// pick, not a meaningful dependency on the github flavor's self-update code.
 tasks.register<JavaExec>("runEvalHarness") {
     group = "verification"
     description = "Manual dev tool: runs eval_samples/ through PostProcessor prompts against " +
         "the real OpenAI API and writes a before/after report. Costs real API credits; " +
         "not part of build/test/check."
-    dependsOn("compileDebugUnitTestKotlin")
+    dependsOn("compileGithubDebugUnitTestKotlin")
     mainClass.set("com.trevornk.ramblr.tools.EvalHarnessKt")
-    classpath = tasks.named<Test>("testDebugUnitTest").get().classpath
+    classpath = tasks.named<Test>("testGithubDebugUnitTest").get().classpath
 }
 
 // Native libs (#36/#37, F-Droid prep): both the speech-to-text lib (libsherpa-onnx-jni.so,

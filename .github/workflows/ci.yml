@@ -41,17 +41,18 @@ jobs:
         uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
       - name: Unit tests
-        run: ./gradlew testDebugUnitTest
+        run: ./gradlew testGithubDebugUnitTest testStorefrontDebugUnitTest
 
-      - name: Assemble debug APK
-        run: ./gradlew assembleDebug
+      - name: Assemble debug APKs
+        run: ./gradlew assembleGithubDebug assembleStorefrontDebug
 
-      - name: Upload debug APK
+      - name: Upload debug APKs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: app-debug
-          # app/build.gradle.kts renames the output to Ramblr-<versionName>-debug.apk (see the
-          # outputFileName override there), not Gradle's default app-debug.apk, so this has to be
-          # a glob rather than the literal default filename.
-          path: app/build/outputs/apk/debug/Ramblr-*-debug.apk
+          # app/build.gradle.kts renames the output to Ramblr-<versionName>-<flavor>-debug.apk
+          # (see the outputFileName override there, updated when the "distribution" flavor split
+          # landed), not Gradle's default app-<flavor>-debug.apk, so this has to be a glob rather
+          # than the literal default filename. Covers both flavors' debug outputs.
+          path: app/build/outputs/apk/*/debug/Ramblr-*-debug.apk
           if-no-files-found: error
