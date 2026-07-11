@@ -141,6 +141,19 @@ private fun callProvider(provider: Provider, apiKey: String, model: String, prom
         Provider.GEMINI -> callGemini(apiKey, model, prompt, text)
     }
 
+/** Wall-clock latency (ms) alongside the real result, so a benchmark report captures speed and
+ *  cost tradeoffs (#106), not just output quality -- e.g. comparing a candidate replacement
+ *  model against the shipped default needs latency data, not just "did it clean up the text
+ *  reasonably." Wraps [callProvider] rather than modifying it so every existing call site
+ *  (and the report format for a plain quality-only run) stays unaffected. */
+private data class TimedResult(val result: PostProcessor.Result, val latencyMs: Long)
+
+private fun callProviderTimed(provider: Provider, apiKey: String, model: String, prompt: String, text: String): TimedResult {
+    val start = System.currentTimeMillis()
+    val result = callProvider(provider, apiKey, model, prompt, text)
+    return TimedResult(result, System.currentTimeMillis() - start)
+}
+
 fun main(args: Array<String>) {
     val available = Provider.entries.mapNotNull { provider ->
         val key = System.getenv(provider.apiKeyEnv)
@@ -208,6 +221,13 @@ fun main(args: Array<String>) {
     report.append("Samples: ${samples.size} (from `${samplesDir.path}`)\n\n")
     report.append("---\n\n")
 
+    // Latency per (provider, model), aggregated across every successful call (#106) -- appended
+    // as a summary table at the end of the report so a benchmark run captures speed alongside
+    // the per-sample quality transcripts already written below, without changing their format.
+    val latenciesMs: MutableMap<Pair<Provider, String>, MutableList<Long>> = mutableMapOf()
+    var errorCount = 0
+    var successCount = 0
+
     for (sample in samples) {
         val rawText = sample.readText().trim()
         report.append("## ${sample.name}\n\n")
@@ -218,19 +238,43 @@ fun main(args: Array<String>) {
             report.append("### Persona/prompt: `$promptName`\n\n")
             for ((provider, model) in runs) {
                 print("  ${sample.name} x $promptName x ${provider.label}/$model ... ")
-                val result = callProvider(provider, apiKeys.getValue(provider), model, PROMPT_REGISTRY.getValue(promptName), rawText)
-                println(if (result.error == null) "ok" else "error: ${result.error}")
+                val timed = callProviderTimed(provider, apiKeys.getValue(provider), model, PROMPT_REGISTRY.getValue(promptName), rawText)
+                val result = timed.result
+                println(if (result.error == null) "ok (${timed.latencyMs}ms)" else "error: ${result.error} (${timed.latencyMs}ms)")
 
                 report.append("**After — `${provider.label}/$model`:**\n\n")
                 if (result.text != null) {
                     report.append("```\n${result.text}\n```\n\n")
+                    report.append("_Latency: ${timed.latencyMs}ms_\n\n")
+                    latenciesMs.getOrPut(provider to model) { mutableListOf() }.add(timed.latencyMs)
+                    successCount++
                 } else {
-                    report.append("_Error: ${result.error}_\n\n")
+                    report.append("_Error: ${result.error} (${timed.latencyMs}ms)_\n\n")
+                    errorCount++
                 }
             }
         }
         report.append("---\n\n")
     }
+
+    // Summary table (#106): average/min/max latency per (provider, model) across every
+    // successful call in this run, plus the overall success/error tally -- lets a benchmark
+    // comparing a candidate model against the shipped default be judged on speed at a glance
+    // instead of scrolling every per-sample transcript to eyeball timing.
+    if (latenciesMs.isNotEmpty()) {
+        report.append("## Latency summary\n\n")
+        report.append("| Provider/model | Calls | Avg (ms) | Min (ms) | Max (ms) |\n")
+        report.append("|---|---|---|---|---|\n")
+        runs.forEach { (provider, model) ->
+            val samplesForRun = latenciesMs[provider to model]
+            if (samplesForRun != null && samplesForRun.isNotEmpty()) {
+                val avg = samplesForRun.average().toLong()
+                report.append("| `${provider.label}/$model` | ${samplesForRun.size} | $avg | ${samplesForRun.min()} | ${samplesForRun.max()} |\n")
+            }
+        }
+        report.append("\n")
+    }
+    report.append("**Totals:** $successCount succeeded, $errorCount failed.\n\n")
 
     outputFile.writeText(report.toString())
     println("Report written to ${outputFile.path}")
