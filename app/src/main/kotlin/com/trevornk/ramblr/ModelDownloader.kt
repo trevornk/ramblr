@@ -256,10 +256,10 @@ const val MUMBLE_CLEANUP_SYSTEM_PROMPT = "You are a transcript cleanup tool. You
  * [sourceUrl]/[fileName] work like every other entry instead of requiring manual `adb push`.
  */
 val MUMBLE_CLEANUP_Q4_0_MODEL = Model(
-    name = "Mumble Cleanup 2-Stage (Q4_0, local speed test)",
+    name = "Mumble Cleanup 2-Stage (Q4_0)",
     archive = "mumble-cleanup-2stage-q4_0",
     sizeMb = 336,
-    quality = "On-device cleanup · fine-tuned, Q4_0 speed test",
+    quality = "On-device cleanup · alternative fine-tune, A/B test",
     recommended = false,
     sha256 = "000efc700d74636bc3885afe1d8f32dbb3fe813b8198dea79d8fd73efcc2c711",
     isLocalCleanup = true,
