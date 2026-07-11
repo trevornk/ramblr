@@ -1832,6 +1832,10 @@ class WhisperAccessibilityService : AccessibilityService() {
      */
     private fun transcribeLocal(file: File, token: Int) {
         thread {
+            // Benchmark-log timing starts before the read/decode too, so a failure there (rare,
+            // but possible on a corrupt/truncated PCM file) still gets an honest latency instead
+            // of one measured from a t0 that never ran (GH #100 benchmark logger).
+            val benchmarkStartMs = System.currentTimeMillis()
             try {
                 val samples = try { PcmFileBuffer.readAsFloatArray(file) } finally { file.delete() }
 
@@ -1840,11 +1844,32 @@ class WhisperAccessibilityService : AccessibilityService() {
                     ?: throw IllegalStateException("Local model was unloaded during transcription")
                 val ms = System.currentTimeMillis() - t0
                 Log.i(TAG, "Local transcription: ${ms}ms, ${samples.size / SAMPLE_RATE}s audio")
+                BenchmarkLogger.log(
+                    context = this,
+                    correlationId = "tok-$token",
+                    transcription = BenchmarkStage(
+                        provider = ProviderKind.LOCAL.name,
+                        model = localTranscriptionModelId(),
+                        latencyMs = System.currentTimeMillis() - benchmarkStartMs,
+                        success = true,
+                    ),
+                    rawTextLength = text.length,
+                )
 
                 handleTranscriptionResult(text, token)
             } catch (e: Exception) {
                 Log.e(TAG, "Local transcription failed", e)
-                // #100: local transcription's audio file is already gone (read-then-delete
+                BenchmarkLogger.log(
+                    context = this,
+                    correlationId = "tok-$token",
+                    transcription = BenchmarkStage(
+                        provider = ProviderKind.LOCAL.name,
+                        model = localTranscriptionModelId(),
+                        latencyMs = System.currentTimeMillis() - benchmarkStartMs,
+                        success = false,
+                    ),
+                )
+                // Local transcription's audio file is already gone (read-then-delete
                 // above), so a cloud fallback here needs the raw PCM again -- but re-reading a
                 // deleted file isn't possible. Since local transcription failure this late
                 // (post-decode) is rare and re-recording is cheap, cloud fallback for
@@ -1859,6 +1884,13 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
         }
     }
+
+    /** The on-device transcription model currently selected via [TranscriptionActivity] (a
+     *  separate model-picker system from [ProviderChainEntry.transcriptionModel] -- see that
+     *  field's kdoc). Read straight from the same "model_name" preference key
+     *  [ModelDownloader]/[TranscriptionActivity] use, so benchmark-log entries reflect the real
+     *  active local model rather than guessing at a chain entry that doesn't apply to LOCAL. */
+    private fun localTranscriptionModelId(): String = prefs().getString("model_name", "") ?: ""
 
     private fun transcribeApi(file: File, token: Int) {
         val chain = ProviderChainStore.load(this)
@@ -1942,8 +1974,21 @@ class WhisperAccessibilityService : AccessibilityService() {
                         baseUrl = entry.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL,
                         model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
                     ) { result ->
-                        Log.i(TAG, "OpenAI transcription HTTP round-trip took ${System.currentTimeMillis() - transcribeStartMs}ms")
-                        if (result.text != null && result.text.isNotBlank()) {
+                        val roundTripMs = System.currentTimeMillis() - transcribeStartMs
+                        Log.i(TAG, "OpenAI transcription HTTP round-trip took ${roundTripMs}ms")
+                        val success = result.text != null && result.text.isNotBlank()
+                        BenchmarkLogger.log(
+                            context = this,
+                            correlationId = "tok-$token",
+                            transcription = BenchmarkStage(
+                                provider = entry.kind.name,
+                                model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
+                                latencyMs = roundTripMs,
+                                success = success,
+                            ),
+                            rawTextLength = result.text?.length,
+                        )
+                        if (success) {
                             file.delete()
                             handleTranscriptionResult(result.text, token)
                         } else {
@@ -1965,8 +2010,22 @@ class WhisperAccessibilityService : AccessibilityService() {
                         advanceOrGiveUp("Recording too large for Gemini transcription")
                     } else {
                         Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (Gemini generateContent audio)")
-                        GeminiTranscriberClient.transcribe(file, apiKey, entry.transcriptionModel?.ifBlank { null } ?: GeminiTranscriberClient.DEFAULT_MODEL, inFlightCall) { result ->
-                            if (result.text != null && result.text.isNotBlank()) {
+                        val geminiModel = entry.transcriptionModel?.ifBlank { null } ?: GeminiTranscriberClient.DEFAULT_MODEL
+                        val geminiStartMs = System.currentTimeMillis()
+                        GeminiTranscriberClient.transcribe(file, apiKey, geminiModel, inFlightCall) { result ->
+                            val success = result.text != null && result.text.isNotBlank()
+                            BenchmarkLogger.log(
+                                context = this,
+                                correlationId = "tok-$token",
+                                transcription = BenchmarkStage(
+                                    provider = entry.kind.name,
+                                    model = geminiModel,
+                                    latencyMs = System.currentTimeMillis() - geminiStartMs,
+                                    success = success,
+                                ),
+                                rawTextLength = result.text?.length,
+                            )
+                            if (success) {
                                 file.delete()
                                 handleTranscriptionResult(result.text, token)
                             } else {
@@ -2064,6 +2123,8 @@ class WhisperAccessibilityService : AccessibilityService() {
                 credentialLookup = { kind -> ProviderCredentialStore.get(this, kind) },
                 localModelPath = { ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this))?.absolutePath },
                 localPrompt = LocalCleanupProvider.selectedSystemPrompt(this),
+                benchmarkContext = this,
+                benchmarkCorrelationId = "tok-$token",
             ) { result ->
                 handler.post {
                     if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI

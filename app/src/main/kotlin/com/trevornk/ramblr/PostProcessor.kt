@@ -352,6 +352,10 @@ explanations, headers, or comments about your edits.
         // a fine-tuned local model (e.g. mumble-cleanup-2stage) can override SIMPLE_PROMPT with its
         // own required training prompt via [LocalCleanupProvider.selectedSystemPrompt].
         localPrompt: String = SIMPLE_PROMPT,
+        // Optional benchmark-log correlation (GH #100), passed straight through to
+        // [CleanupWaterfallExecutor.execute] -- see its own kdoc on these same param names.
+        benchmarkContext: android.content.Context? = null,
+        benchmarkCorrelationId: String? = null,
         callback: (Result) -> Unit,
     ) {
         val waterfall = ProviderChainRuntime.cleanupWaterfallFor(chain)
@@ -383,6 +387,8 @@ explanations, headers, or comments about your edits.
             credentialLookup = { slot -> credentialLookup(ProviderChainRuntime.providerKindForCleanupSlot(slot)) },
             localModelPath = localModelPath,
             localPrompt = localPrompt,
+            benchmarkContext = benchmarkContext,
+            benchmarkCorrelationId = benchmarkCorrelationId,
             callback = callback,
         )
     }
