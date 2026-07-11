@@ -77,10 +77,22 @@ object SelfUpdateChecker {
      * and falling back to any existing (even if stale) cached copy on failure so a transient
      * network blip doesn't flip a previously-known "update available" back to "check failed".
      * Callers on Android must invoke this off the main thread (it can make a blocking HTTP call).
+     *
+     * @param forceFresh Bypasses the TTL and always attempts a network fetch. Used by the
+     *  Settings screen's explicit "Check now" action (Part 3): a user who taps that expects a
+     *  real, live check right now, not "whatever's cached from up to 4 hours ago" -- without
+     *  this, tapping Check now shortly after the periodic job last ran (or after any other
+     *  check) silently re-evaluated stale cached JSON and never actually queried GitHub, which
+     *  is exactly what happened during live device verification: a cache fetched ~40 minutes
+     *  earlier (well under the 4h TTL) meant every subsequent "Check now" tap was a no-op against
+     *  network reality, even after a genuinely new release was published in the meantime. The
+     *  periodic job (Part 5) still wants the TTL respected -- it has no reason to hit the network
+     *  every 6h tick if a check already happened moments ago for an unrelated reason -- so this
+     *  defaults to false and only the explicit user action opts in to bypassing it.
      */
-    fun check(context: Context): UpdateCheckResult {
+    fun check(context: Context, forceFresh: Boolean = false): UpdateCheckResult {
         val now = System.currentTimeMillis()
-        val json = if (SelfUpdateResolver.isCacheStale(cachedFetchedAtMs(context), now, CACHE_TTL_MS)) {
+        val json = if (forceFresh || SelfUpdateResolver.isCacheStale(cachedFetchedAtMs(context), now, CACHE_TTL_MS)) {
             fetchFresh()?.also { saveCache(context, it) } ?: cachedJson(context)
         } else {
             cachedJson(context)

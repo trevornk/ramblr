@@ -138,7 +138,7 @@ class SelfUpdateSettingsActivity : BaseSettingsActivity() {
         statusRowSub.text = "Checking…"
         val appContext = applicationContext
         thread {
-            val result = SelfUpdateChecker.check(appContext)
+            val result = SelfUpdateChecker.check(appContext, forceFresh = true)
             runOnUiThread {
                 checking = false
                 checkNowRow.isEnabled = true
