@@ -85,12 +85,39 @@ object ModelCatalogResolver {
      * exact "bundled default -> cached -> fresh fetch" chain from #98, expressed with fresh
      * fetch checked first because it's the *most preferred* source when available, not because
      * it's chronologically first.
+     *
+     * Gap-fill (#105): a remote catalog is a curated *addition* over what ships in the APK, not
+     * guaranteed to be a superset of it -- if [cached]/[fresh] predates a later app update that
+     * added new bundled entries (e.g. #101/#102's OpenAI transcription entries), those entries
+     * would otherwise be invisible on every device until the remote source is separately updated
+     * to match, even though a correct answer already ships in the APK. For every (provider,
+     * cleanup-capable) and (provider, transcription-capable) combination [bundled] has at least
+     * one entry for, if the chosen source (fresh/cached/bundled itself) has ZERO entries for
+     * that combination, the bundled entries for it are appended so the picker is never emptier
+     * than what already ships in the app. This never removes or overrides anything the remote
+     * source DOES provide for a combination -- a remote entry always takes precedence over its
+     * bundled equivalent when both exist for the same (provider, use case), preserving the
+     * remote source's ability to genuinely update tiers/pricing/descriptions.
      */
     fun resolve(
         bundled: List<ModelCatalogEntry>,
         cached: List<ModelCatalogEntry>?,
         fresh: List<ModelCatalogEntry>?,
-    ): List<ModelCatalogEntry> = fresh ?: cached ?: bundled
+    ): List<ModelCatalogEntry> {
+        val chosen = fresh ?: cached ?: bundled
+        if (chosen === bundled) return chosen // nothing to gap-fill against itself
+
+        val missingBundledEntries = bundled.filter { bundledEntry ->
+            val chosenCoversProvider = chosen.any { it.provider == bundledEntry.provider }
+            if (!chosenCoversProvider) return@filter true // whole provider missing from chosen -- keep every bundled entry for it
+            val needsCleanupGap = bundledEntry.useCase.supportsCleanup() &&
+                chosen.none { it.provider == bundledEntry.provider && it.useCase.supportsCleanup() }
+            val needsTranscriptionGap = bundledEntry.useCase.supportsTranscription() &&
+                chosen.none { it.provider == bundledEntry.provider && it.useCase.supportsTranscription() }
+            needsCleanupGap || needsTranscriptionGap
+        }
+        return if (missingBundledEntries.isEmpty()) chosen else chosen + missingBundledEntries
+    }
 
     /** True when [lastFetchedAtMs] is older than [ttlMs] (or the catalog was never fetched --
      *  [lastFetchedAtMs] null/0), i.e. a fresh remote fetch is worth attempting. */

@@ -31,6 +31,70 @@ class ModelCatalogResolverResolveTest {
     }
 }
 
+/** #105 regression: a real remote fetch predates a bundled-catalog update and lacks entries the
+ *  APK now ships -- resolve() must not let it fully shadow those, but also must not let it
+ *  override entries the remote source genuinely does provide. Mirrors the real incident: the
+ *  live gist had zero OpenAI TRANSCRIPTION entries while BUNDLED_DEFAULT_MODEL_CATALOG had two,
+ *  making the transcription picker for OpenAI empty on every device with a cached/fresh fetch. */
+class ModelCatalogResolverGapFillTest {
+
+    private val bundledOpenAiCleanupAndTranscription = listOf(
+        ModelCatalogEntry(ProviderKind.OPENAI, "gpt-5.4-nano", "Nano", "d", ModelTier.RECOMMENDED, ModelUseCase.CLEANUP, 0.05, 0.4),
+        ModelCatalogEntry(ProviderKind.OPENAI, "gpt-4o-transcribe", "GPT-4o Transcribe", "d", ModelTier.RECOMMENDED, ModelUseCase.TRANSCRIPTION, 0.0, 0.0),
+        ModelCatalogEntry(ProviderKind.GEMINI, "gemini-3.1-flash-lite", "Flash-Lite", "d", ModelTier.RECOMMENDED, ModelUseCase.BOTH, 0.25, 1.5),
+    )
+
+    @Test fun `a stale remote missing an entire use case for a provider is gap-filled from bundled`() {
+        // Stale remote: has OpenAI CLEANUP, but zero OpenAI TRANSCRIPTION entries at all.
+        val staleRemote = listOf(
+            ModelCatalogEntry(ProviderKind.OPENAI, "gpt-5.4-nano", "Nano", "d", ModelTier.RECOMMENDED, ModelUseCase.CLEANUP, 0.05, 0.4),
+            ModelCatalogEntry(ProviderKind.GEMINI, "gemini-2.5-flash-lite", "Old Flash-Lite", "d", ModelTier.RECOMMENDED, ModelUseCase.BOTH, 0.1, 0.4),
+        )
+        val resolved = ModelCatalogResolver.resolve(bundledOpenAiCleanupAndTranscription, cached = staleRemote, fresh = null)
+
+        val openAiTranscription = resolved.filter { it.provider == ProviderKind.OPENAI && it.useCase.supportsTranscription() }
+        assertEquals(1, openAiTranscription.size) // gap-filled from bundled -- the real #105 bug
+        assertEquals("gpt-4o-transcribe", openAiTranscription[0].modelId)
+    }
+
+    @Test fun `a remote entry the source DOES provide is never overridden by the bundled gap-fill`() {
+        // Remote has its own (different, e.g. re-priced) OpenAI cleanup entry -- must win over bundled's.
+        val remoteWithOwnCleanupEntry = listOf(
+            ModelCatalogEntry(ProviderKind.OPENAI, "gpt-6-nano", "Newer Nano", "remote-curated", ModelTier.RECOMMENDED, ModelUseCase.CLEANUP, 0.03, 0.3),
+        )
+        val resolved = ModelCatalogResolver.resolve(bundledOpenAiCleanupAndTranscription, cached = remoteWithOwnCleanupEntry, fresh = null)
+
+        val openAiCleanup = resolved.filter { it.provider == ProviderKind.OPENAI && it.useCase.supportsCleanup() }
+        assertEquals(1, openAiCleanup.size)
+        assertEquals("gpt-6-nano", openAiCleanup[0].modelId) // remote's own entry, not bundled's gpt-5.4-nano
+        // OpenAI TRANSCRIPTION is still gap-filled since the remote has none at all for it.
+        assertTrue(resolved.any { it.provider == ProviderKind.OPENAI && it.modelId == "gpt-4o-transcribe" })
+    }
+
+    @Test fun `a provider entirely absent from the remote is fully gap-filled from bundled`() {
+        val remoteMissingGeminiEntirely = listOf(
+            ModelCatalogEntry(ProviderKind.OPENAI, "gpt-5.4-nano", "Nano", "d", ModelTier.RECOMMENDED, ModelUseCase.CLEANUP, 0.05, 0.4),
+            ModelCatalogEntry(ProviderKind.OPENAI, "gpt-4o-transcribe", "T", "d", ModelTier.RECOMMENDED, ModelUseCase.TRANSCRIPTION, 0.0, 0.0),
+        )
+        val resolved = ModelCatalogResolver.resolve(bundledOpenAiCleanupAndTranscription, cached = remoteMissingGeminiEntirely, fresh = null)
+        assertTrue(resolved.any { it.provider == ProviderKind.GEMINI && it.modelId == "gemini-3.1-flash-lite" })
+    }
+
+    @Test fun `a fresh fetch that is a genuine superset of bundled is returned unmodified, no duplicate gap-fill entries`() {
+        val freshSuperset = bundledOpenAiCleanupAndTranscription + ModelCatalogEntry(
+            ProviderKind.ANTHROPIC, "claude-haiku-4-5", "Haiku", "d", ModelTier.GOOD, ModelUseCase.CLEANUP, 1.0, 5.0,
+        )
+        val resolved = ModelCatalogResolver.resolve(bundledOpenAiCleanupAndTranscription, cached = null, fresh = freshSuperset)
+        assertEquals(freshSuperset.size, resolved.size) // no extra bundled duplicates appended
+        assertEquals(1, resolved.count { it.provider == ProviderKind.OPENAI && it.modelId == "gpt-4o-transcribe" })
+    }
+
+    @Test fun `bundled alone -- no cache, no fresh fetch -- is returned as-is with no self gap-fill`() {
+        val resolved = ModelCatalogResolver.resolve(bundledOpenAiCleanupAndTranscription, cached = null, fresh = null)
+        assertEquals(bundledOpenAiCleanupAndTranscription, resolved)
+    }
+}
+
 class ModelCatalogResolverCacheStaleTest {
 
     @Test fun `never-fetched -- null timestamp -- is always stale`() {
