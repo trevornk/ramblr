@@ -66,9 +66,20 @@ private enum class Provider(val label: String, val apiKeyEnv: String, val models
     GEMINI("gemini", "GEMINI_API_KEY", "GEMINI_EVAL_MODELS", listOf("gemini-2.5-flash-lite", "gemini-2.5-flash")),
 }
 
+/** Model-id prefixes known to reject a non-default `temperature` (#106) -- OpenAI's reasoning
+ *  model families (o1/o3/o4, and now GPT-5.6). Deliberately an explicit prefix list rather than
+ *  a broad regex: a false negative here just means a benchmark run fails loudly with a clear
+ *  "Unsupported value" error and needs a one-line addition, which is much safer than a false
+ *  positive silently omitting temperature from a model that actually wanted it. */
+private val TEMPERATURE_REJECTING_OPENAI_PREFIXES = listOf("o1", "o3", "o4", "gpt-5.6")
+
+private fun openAiRejectsTemperature(model: String): Boolean =
+    TEMPERATURE_REJECTING_OPENAI_PREFIXES.any { model.startsWith(it) }
+
 /** Calls OpenAI's real `/v1/chat/completions`, reusing [PostProcessor]'s request/response shape. */
 private fun callOpenAi(apiKey: String, model: String, prompt: String, text: String): PostProcessor.Result {
-    val body = PostProcessor.buildRequestBody(text, prompt, model).toString().toRequestBody("application/json".toMediaType())
+    val body = PostProcessor.buildRequestBody(text, prompt, model, omitTemperature = openAiRejectsTemperature(model))
+        .toString().toRequestBody("application/json".toMediaType())
     val request = Request.Builder()
         .url(PostProcessor.ENDPOINT_URL)
         .header("Authorization", "Bearer $apiKey")

@@ -250,7 +250,18 @@ explanations, headers, or comments about your edits.
      * the same flat-JSON response shape [parseResponse] expects instead of adding a second
      * SSE-parsing code path.
      */
-    fun buildRequestBody(text: String, prompt: String, model: String): JSONObject {
+    /**
+     * [omitTemperature] (#106): OpenAI's GPT-5.6 family (confirmed live for gpt-5.6-terra) and
+     * the older o1/o3/o4 reasoning-model families reject a non-default `temperature` value
+     * outright -- "Unsupported value: 'temperature' does not support 0 with this model. Only
+     * the default (1) value is supported." -- unlike gpt-5.4-nano/gpt-5.4-mini (the current
+     * shipped defaults), which accept temperature=0.0 fine. Defaults to false (temperature
+     * included) so every existing call site's behavior is unchanged; pass true explicitly for a
+     * model known to be in a temperature-rejecting family. See [CleanupWaterfallExecutor] if a
+     * temperature-rejecting model is ever adopted as a shipped default -- it will need to pass
+     * this too, not just the eval harness.
+     */
+    fun buildRequestBody(text: String, prompt: String, model: String, omitTemperature: Boolean = false): JSONObject {
         val messages = JSONArray().apply {
             put(JSONObject().apply {
                 put("role", "system")
@@ -265,7 +276,7 @@ explanations, headers, or comments about your edits.
         return JSONObject().apply {
             put("model", model.ifBlank { DEFAULT_MODEL })
             put("messages", messages)
-            put("temperature", 0.0)
+            if (!omitTemperature) put("temperature", 0.0)
             put("stream", false)
         }
     }
