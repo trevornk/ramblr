@@ -38,7 +38,7 @@ object ProviderChainMigration {
      * every version between the device's last-applied version and this one, so a device that
      * skipped several app updates still picks up every intermediate mapping in order.
      */
-    private const val MIGRATION_VERSION = 1
+    private const val MIGRATION_VERSION = 2
 
     /**
      * (provider, old shipped-default model id) -> new shipped-default model id. Only exact
@@ -53,15 +53,39 @@ object ProviderChainMigration {
         (ProviderKind.GEMINI to "gemini-2.5-flash-lite") to GeminiCleanupProvider.DEFAULT_MODEL,
     )
 
+    /** Kinds where [ProviderChainEntry.transcriptionModel] is a meaningful, seedable field --
+     *  mirrors [ProviderKind.supportsTranscription] restricted to the cloud kinds that actually
+     *  have a distinct transcription model namespace ([ProviderKind.LOCAL]'s transcription path
+     *  never reads this field at all, see [ProviderChainEntry]'s kdoc). */
+    private fun defaultTranscriptionModelFor(kind: ProviderKind): String? = when (kind) {
+        ProviderKind.OPENAI -> TranscriberClient.DEFAULT_MODEL
+        ProviderKind.GEMINI -> GeminiTranscriberClient.DEFAULT_MODEL
+        else -> null
+    }
+
     /**
      * Rewrites [chain]'s entries per [SUPERSEDED_MODELS], leaving every other field (kind,
-     * baseUrlOverride, entry order) and every non-superseded model id completely untouched.
+     * baseUrlOverride, entry order) and every non-superseded model id completely untouched. Also
+     * seeds [ProviderChainEntry.transcriptionModel] (v2, #101/#102) for any transcription-capable
+     * cloud entry that still has it null -- every entry saved before this field existed. This is
+     * NOT overwriting a user choice: null is defined as "never explicitly set," so seeding it
+     * with the current shipped transcription default is exactly the same "unset resolves to
+     * current default" behavior [model] already had via `.ifBlank`, just applied once, at
+     * migration time, instead of read-time -- necessary here (unlike [model]) because the actual
+     * OpenAI/Gemini transcription HTTP calls need a real, non-null value to send, not a runtime
+     * fallback computed fresh every call.
      * Pure function so the actual rewrite logic is unit-testable without a fake [Context].
      */
     internal fun migrate(chain: ProviderChain): ProviderChain {
         val migratedEntries = chain.entries.map { entry ->
             val replacement = SUPERSEDED_MODELS[entry.kind to entry.model]
-            if (replacement != null) entry.copy(model = replacement) else entry
+            val withModelFixed = if (replacement != null) entry.copy(model = replacement) else entry
+            if (withModelFixed.transcriptionModel == null) {
+                val seeded = defaultTranscriptionModelFor(withModelFixed.kind)
+                if (seeded != null) withModelFixed.copy(transcriptionModel = seeded) else withModelFixed
+            } else {
+                withModelFixed
+            }
         }
         return ProviderChain(migratedEntries)
     }

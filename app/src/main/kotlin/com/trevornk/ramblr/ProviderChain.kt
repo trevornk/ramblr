@@ -67,11 +67,30 @@ fun canFallBackToCloudCleanup(chain: ProviderChain, isConfigured: (ProviderKind)
  * (a [kind] instead of a [CleanupStepGroup], the same [model]/[baseUrlOverride] fields) so
  * mapping between the two models (see [ProviderChainRuntime.cleanupWaterfallFor]) stays a
  * near 1:1 conversion rather than a redesign.
+ *
+ * [model] is the CLEANUP model for [kind] -- kept named plainly `model` (not `cleanupModel`)
+ * for minimum diff against the many pre-existing call sites that already treat it that way
+ * (every real caller of this field feeds [CleanupWaterfallExecutor]/[CleanupStep]/
+ * [PostProcessor], never the transcription path).
+ *
+ * [transcriptionModel] is the separate TRANSCRIPTION model for [kind] (#101/#102: cleanup and
+ * transcription are genuinely different jobs with disjoint model namespaces on the same
+ * provider -- e.g. OpenAI's chat-completions models like "gpt-5.4-mini" can never serve
+ * `/v1/audio/transcriptions`, which needs "whisper-1"/"gpt-4o-transcribe" -- so one shared
+ * [model] field silently broke transcription the moment a user picked a cleanup-only model id).
+ * `null` (not blank) means "no explicit choice yet -- use this [kind]'s current transcription
+ * default", the same "unset means use the shipped default" convention [model] already has via
+ * `.ifBlank`. Only meaningful for kinds where [ProviderKind.supportsTranscription] is true;
+ * [ProviderKind.LOCAL]'s transcription path ([WhisperAccessibilityService.transcribeLocal])
+ * never reads this field at all -- on-device transcription model choice lives in a completely
+ * separate system ([TranscriptionActivity]'s local sherpa-onnx model picker), not the provider
+ * chain, so leaving it null for LOCAL is correct, not an oversight.
  */
 data class ProviderChainEntry(
     val kind: ProviderKind,
     val model: String,
     val baseUrlOverride: String? = null,
+    val transcriptionModel: String? = null,
 )
 
 /**

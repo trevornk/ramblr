@@ -301,7 +301,8 @@ class CloudProviderActivity : BaseSettingsActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         topLine.addView(TextView(this).apply {
-            text = "${displayPosition + 1}. ${providerLabel(entry.kind)} \u00b7 ${entry.model}"
+            text = "${displayPosition + 1}. ${providerLabel(entry.kind)} \u00b7 ${entry.model}" +
+                if (entry.kind.supportsTranscription()) " \u00b7 STT: ${entry.transcriptionModel ?: transcriptionDefaultFor(entry.kind)}" else ""
             textSize = 16f
             setTextColor(attrColor(android.R.attr.textColorPrimary))
             layoutParams = LinearLayout.LayoutParams(0, LP_WRAP, 1f)
@@ -386,6 +387,16 @@ class CloudProviderActivity : BaseSettingsActivity() {
         ProviderKind.GEMINI -> "Gemini"
         ProviderKind.OMNIROUTE -> "OmniRoute"
         ProviderKind.LOCAL -> "Local (on-device)"
+    }
+
+    /** Shipped transcription default for [kind], for display when an entry's
+     *  [ProviderChainEntry.transcriptionModel] is null (#101/#102: mirrors
+     *  [CleanupDestination]'s private `defaultTranscriptionModelFor` -- duplicated rather than
+     *  exposed there since this is a display-only concern local to this row/dialog, not a
+     *  cross-file API). Only meaningful for [ProviderKind.supportsTranscription] kinds. */
+    private fun transcriptionDefaultFor(kind: ProviderKind): String = when (kind) {
+        ProviderKind.GEMINI -> GeminiTranscriberClient.DEFAULT_MODEL
+        else -> TranscriberClient.DEFAULT_MODEL
     }
 
     // --- Add / edit provider dialog ---
@@ -493,12 +504,99 @@ class CloudProviderActivity : BaseSettingsActivity() {
         }
 
         rebuildModelPicker(existing?.kind ?: selectedKind())
+
+        // --- Transcription model picker (#101/#102): a SEPARATE model choice from the cleanup
+        // picker above, only shown for kinds where ProviderKind.supportsTranscription() is
+        // true. Cleanup and transcription are disjoint model namespaces on the same provider --
+        // sharing one picker/field for both was the actual root cause of #102 (a cleanup model
+        // id like "gpt-5.4-nano" silently sent to /v1/audio/transcriptions, which needs
+        // "whisper-1"/"gpt-4o-transcribe"). Container starts empty; rebuiltTranscriptionPicker
+        // fills it in only when the currently-selected kind actually supports transcription.
+        val transcriptionSectionHeader = TextView(this).apply {
+            text = "Transcription model"
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, dp(16), 0, dp(4))
+            visibility = View.GONE
+        }
+        container.addView(transcriptionSectionHeader)
+        val transcriptionPickerContainer = vertical(0)
+        container.addView(transcriptionPickerContainer)
+        var pickedTranscriptionModelId: String? = null
+        val transcriptionRadioGroup = RadioGroup(this).apply { orientation = LinearLayout.VERTICAL }
+
+        val advancedTranscriptionModelInput = EditText(this).apply {
+            hint = "Custom transcription model id (untested, unsupported)"
+            setText(existing?.transcriptionModel ?: "")
+        }
+        val advancedTranscriptionSection = vertical(0).apply {
+            visibility = View.GONE
+            addView(TextView(this@CloudProviderActivity).apply {
+                text = "Unsupported: typos or retired model ids will fail at call time with no extra validation."
+                textSize = 12f
+                setTextColor(attrColor(android.R.attr.textColorSecondary))
+                setPadding(0, 0, 0, dp(4))
+            })
+            addView(advancedTranscriptionModelInput)
+        }
+        val advancedTranscriptionToggle = TextView(this).apply {
+            text = "Advanced: enter a custom transcription model id"
+            setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
+            setPadding(0, dp(8), 0, dp(4))
+            visibility = View.GONE
+            setOnClickListener { advancedTranscriptionSection.visibility = View.VISIBLE }
+        }
+        container.addView(advancedTranscriptionToggle)
+        container.addView(advancedTranscriptionSection)
+
+        fun rebuildTranscriptionPicker(kind: ProviderKind) {
+            transcriptionPickerContainer.removeAllViews()
+            transcriptionRadioGroup.removeAllViews()
+            val supportsTranscription = kind.supportsTranscription() && kind != ProviderKind.LOCAL
+            transcriptionSectionHeader.visibility = if (supportsTranscription) View.VISIBLE else View.GONE
+            advancedTranscriptionToggle.visibility = if (supportsTranscription) View.VISIBLE else View.GONE
+            if (!supportsTranscription) {
+                advancedTranscriptionSection.visibility = View.GONE
+                pickedTranscriptionModelId = null
+                return
+            }
+
+            val entries = ModelCatalogResolver.entriesFor(catalog, kind, ModelUseCase.TRANSCRIPTION)
+            val existingModel = existing?.takeIf { it.kind == kind }?.transcriptionModel
+            val existingIsCatalogModel = existingModel != null && entries.any { it.modelId == existingModel }
+            pickedTranscriptionModelId = existingModel?.takeIf { existingIsCatalogModel }
+                ?: entries.firstOrNull()?.modelId
+
+            entries.forEach { entry ->
+                val row = MaterialRadioButton(this).apply {
+                    text = "${entry.displayName} \u00b7 ${ModelCatalogResolver.tierBadge(entry.tier)}\n${entry.description}"
+                    id = View.generateViewId()
+                    isChecked = entry.modelId == pickedTranscriptionModelId
+                    buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
+                    setOnClickListener {
+                        pickedTranscriptionModelId = entry.modelId
+                        advancedTranscriptionSection.visibility = View.GONE
+                    }
+                }
+                transcriptionRadioGroup.addView(row)
+            }
+            transcriptionPickerContainer.addView(transcriptionRadioGroup)
+
+            if (existingModel != null && !existingIsCatalogModel) {
+                advancedTranscriptionSection.visibility = View.VISIBLE
+                pickedTranscriptionModelId = null
+            }
+        }
+
+        rebuildTranscriptionPicker(existing?.kind ?: selectedKind())
         if (existing == null) {
             radioButtons.forEachIndexed { i, rb ->
                 rb.setOnClickListener {
                     advancedModelInput.setText("")
                     advancedSection.visibility = View.GONE
                     rebuildModelPicker(addableKinds[i])
+                    advancedTranscriptionModelInput.setText("")
+                    advancedTranscriptionSection.visibility = View.GONE
+                    rebuildTranscriptionPicker(addableKinds[i])
                 }
             }
         }
@@ -543,10 +641,23 @@ class CloudProviderActivity : BaseSettingsActivity() {
                     toast("Pick a model or enter a custom model id")
                     return@setPositiveButton
                 }
+                // Transcription model (#101/#102): only meaningful for transcription-capable
+                // kinds; null for everything else (Anthropic, OmniRoute, and any kind where the
+                // section was never shown). A blank custom field with the advanced section open
+                // is treated as "no explicit choice" (null), not an empty string -- consistent
+                // with the null-means-unset convention documented on the field itself.
+                val customTranscriptionModel = advancedTranscriptionModelInput.text.toString().trim()
+                val transcriptionModel = if (!kind.supportsTranscription() || kind == ProviderKind.LOCAL) {
+                    null
+                } else if (advancedTranscriptionSection.visibility == View.VISIBLE && customTranscriptionModel.isNotBlank()) {
+                    customTranscriptionModel
+                } else {
+                    pickedTranscriptionModelId
+                }
                 val baseUrlOverride = baseUrlInput.text.toString().trim().takeIf { it.isNotBlank() }
                 val enteredKey = keyInput.text.toString().trim()
                 if (enteredKey.isNotBlank()) ProviderCredentialStore.set(this, kind, enteredKey)
-                onSave(ProviderChainEntry(kind, model, baseUrlOverride))
+                onSave(ProviderChainEntry(kind, model, baseUrlOverride, transcriptionModel))
             }
             .setNegativeButton("Cancel", null)
         // Give the user a way to actually delete a stored key from the device (M10): a blank Save

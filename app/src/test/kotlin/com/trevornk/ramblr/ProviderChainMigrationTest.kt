@@ -88,4 +88,45 @@ class ProviderChainMigrationTest {
         val migrated = ProviderChainMigration.migrate(chain)
         assertEquals(chain, migrated)
     }
+
+    // --- v2 (#101/#102): transcriptionModel seeding ---
+
+    @Test fun `seeds a null transcriptionModel with the current OpenAI transcription default`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-nano")))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals(TranscriberClient.DEFAULT_MODEL, migrated.entries[0].transcriptionModel)
+    }
+
+    @Test fun `seeds a null transcriptionModel with the current Gemini transcription default`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.GEMINI, "gemini-3.1-flash-lite")))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals(GeminiTranscriberClient.DEFAULT_MODEL, migrated.entries[0].transcriptionModel)
+    }
+
+    @Test fun `does not overwrite an already-set transcriptionModel`() {
+        val chain = ProviderChain(listOf(
+            ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-nano", transcriptionModel = "whisper-1"),
+        ))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals("whisper-1", migrated.entries[0].transcriptionModel)
+    }
+
+    @Test fun `does not seed transcriptionModel for kinds that don't support transcription`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5-20251001")))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals(null, migrated.entries[0].transcriptionModel)
+    }
+
+    @Test fun `does not seed transcriptionModel for LOCAL even though it may share a kind check elsewhere`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.LOCAL, "some-local-model")))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals(null, migrated.entries[0].transcriptionModel)
+    }
+
+    @Test fun `both the superseded-model rewrite and transcriptionModel seeding apply together in one pass`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-mini")))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals(PostProcessor.DEFAULT_MODEL, migrated.entries[0].model)
+        assertEquals(TranscriberClient.DEFAULT_MODEL, migrated.entries[0].transcriptionModel)
+    }
 }

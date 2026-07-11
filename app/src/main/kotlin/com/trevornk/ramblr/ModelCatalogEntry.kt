@@ -76,8 +76,12 @@ data class ModelCatalogEntry(
  * own public per-1M-token list prices as of this pass, not secrets -- fine to ship in this JSON.
  */
 val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
-    // --- OpenAI: cleanup only (dedicated ASR uses gpt-4o-transcribe/whisper-1 as a fixed
-    // TranscriberClient wire model today, not this picker -- see WhisperAccessibilityService). ---
+    // --- OpenAI: cleanup (chat-completions) and transcription (dedicated ASR endpoint) are
+    // DISJOINT model namespaces on the same provider -- a cleanup model like gpt-5.4-nano can
+    // never serve /v1/audio/transcriptions, and whisper-1/gpt-4o-transcribe can't serve chat
+    // completions. Tagged CLEANUP vs. TRANSCRIPTION accordingly, never BOTH (#101/#102: the
+    // real bug this fixes was a single shared model field silently sending a cleanup model id
+    // to the transcription endpoint). ---
     ModelCatalogEntry(
         provider = ProviderKind.OPENAI,
         modelId = "gpt-5.4-nano",
@@ -97,6 +101,29 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         useCase = ModelUseCase.CLEANUP,
         costPer1MInputUsd = 0.25,
         costPer1MOutputUsd = 2.00,
+    ),
+    // Real 20-clip benchmark (2026-07-10): gpt-4o-transcribe beat whisper-1 on both WER
+    // (2.86% vs 4.29%) and latency (~42% faster avg), zero dropped words on either including a
+    // one-word clip -- see TranscriberClient.DEFAULT_MODEL's kdoc for the full benchmark note.
+    ModelCatalogEntry(
+        provider = ProviderKind.OPENAI,
+        modelId = "gpt-4o-transcribe",
+        displayName = "GPT-4o Transcribe",
+        description = "Benchmark-confirmed lower error rate and faster than Whisper-1 on short push-to-talk clips.",
+        tier = ModelTier.RECOMMENDED,
+        useCase = ModelUseCase.TRANSCRIPTION,
+        costPer1MInputUsd = 0.0, // priced per-minute of audio, not per-token -- catalog cost fields don't apply
+        costPer1MOutputUsd = 0.0,
+    ),
+    ModelCatalogEntry(
+        provider = ProviderKind.OPENAI,
+        modelId = "whisper-1",
+        displayName = "Whisper-1",
+        description = "OpenAI's original ASR model -- higher error rate and slower than GPT-4o Transcribe in Ramblr's own benchmark, kept as a fallback option.",
+        tier = ModelTier.GOOD,
+        useCase = ModelUseCase.TRANSCRIPTION,
+        costPer1MInputUsd = 0.0,
+        costPer1MOutputUsd = 0.0,
     ),
 
     // --- Gemini: only direct provider that's transcription-capable (multimodal audio-in) as

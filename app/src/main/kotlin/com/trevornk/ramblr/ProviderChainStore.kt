@@ -20,6 +20,7 @@ object ProviderChainStore {
                 put("kind", entry.kind.name)
                 put("model", entry.model)
                 put("baseUrlOverride", entry.baseUrlOverride ?: JSONObject.NULL)
+                put("transcriptionModel", entry.transcriptionModel ?: JSONObject.NULL)
             })
         }
         return array.toString()
@@ -40,6 +41,11 @@ object ProviderChainStore {
                     kind = ProviderKind.valueOf(obj.getString("kind")),
                     model = obj.getString("model"),
                     baseUrlOverride = if (obj.isNull("baseUrlOverride")) null else obj.getString("baseUrlOverride"),
+                    // Missing key (every chain saved before #101) and an explicit JSON null both
+                    // mean "no transcription model chosen yet" -- `optString` returning "" for a
+                    // genuinely absent key would collide with a real user-typed empty string, so
+                    // this checks key presence first via `has`, not just nullness.
+                    transcriptionModel = if (!obj.has("transcriptionModel") || obj.isNull("transcriptionModel")) null else obj.getString("transcriptionModel"),
                 )
             }
             ProviderChain(entries)

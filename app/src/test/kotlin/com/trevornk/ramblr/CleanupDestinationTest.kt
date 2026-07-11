@@ -59,6 +59,26 @@ class CleanupDestinationTest {
         val c = chain(ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5"))
         assertNull(CleanupDestination.firstCloudTranscription(c))
     }
+
+    @Test fun `cloud transcription subtitle detail names the provider and model (#101)`() {
+        val c = chain(ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-transcribe"))
+        assertEquals("OpenAI · gpt-4o-transcribe", CleanupDestination.cloudTranscriptionSubtitleDetail(c))
+    }
+
+    @Test fun `cloud transcription subtitle detail fills a blank model with the transcription default, not the cleanup default (#101)`() {
+        val c = chain(ProviderChainEntry(ProviderKind.OPENAI, ""))
+        assertEquals("OpenAI · ${TranscriberClient.DEFAULT_MODEL}", CleanupDestination.cloudTranscriptionSubtitleDetail(c))
+    }
+
+    @Test fun `cloud transcription subtitle detail uses Gemini's transcription default, not its cleanup default (#101)`() {
+        val c = chain(ProviderChainEntry(ProviderKind.GEMINI, ""))
+        assertEquals("Gemini · ${GeminiTranscriberClient.DEFAULT_MODEL}", CleanupDestination.cloudTranscriptionSubtitleDetail(c))
+    }
+
+    @Test fun `cloud transcription subtitle detail skips a cleanup-only entry and falls back to the default when no transcription-capable entry exists (#101)`() {
+        val c = chain(ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5"))
+        assertEquals("OpenAI · ${TranscriberClient.DEFAULT_MODEL}", CleanupDestination.cloudTranscriptionSubtitleDetail(c))
+    }
 }
 
 class CanFallBackToCloudCleanupTest {
