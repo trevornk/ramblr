@@ -145,6 +145,43 @@ class MainActivity : BaseSettingsActivity() {
 
         handleWalkthroughIntent(intent)
         refresh()
+
+        // Part 5, first-run scheduling (github flavor only): a fresh install's notify toggle
+        // defaults to true (see SelfUpdatePrefs.KEY_NOTIFY_ENABLED), but until now nothing ever
+        // called SelfUpdateCheckWorker.schedule() for a user who never opens the Updates screen
+        // and flips the toggle off/on -- so the periodic check silently never started. Hooked
+        // into onCreate (not onResume): this codebase has no existing "run once per
+        // install/process" idiom to mirror (onboarding's KEY_ONBOARDING_COMPLETE tracks wizard
+        // completion, not a general first-run marker), and onCreate already fires far less often
+        // than onResume, so calling schedule() here is a small enough redundancy to accept rather
+        // than invent a new one-shot-marker mechanism for this alone -- enqueueUniquePeriodicWork
+        // + KEEP (see SelfUpdateCheckWorker.schedule) makes every repeat call a harmless no-op
+        // regardless. Reflective lookup because SelfUpdateCheckWorker/SelfUpdatePrefs live in
+        // src/github/ and this Activity is compiled into every flavor including storefront,
+        // which never has those classes at all -- mirrors AdvancedActivity's identical
+        // selfUpdateSettingsActivityClass() Class.forName pattern.
+        scheduleSelfUpdateCheckIfEnabled()
+    }
+
+    /** No-op on the storefront flavor (ClassNotFoundException, caught silently) -- see call
+     *  site's kdoc in [onCreate] for why this must be reflective rather than a direct reference. */
+    private fun scheduleSelfUpdateCheckIfEnabled() {
+        try {
+            val prefsClass = Class.forName("com.trevornk.ramblr.SelfUpdatePrefs")
+            val prefsInstance = prefsClass.getField("INSTANCE").get(null)
+            val notifyEnabled = prefsClass.getMethod("isNotifyEnabled", android.content.Context::class.java)
+                .invoke(prefsInstance, this) as Boolean
+            if (!notifyEnabled) return
+
+            val workerClass = Class.forName("com.trevornk.ramblr.SelfUpdateCheckWorker")
+            val companion = workerClass.getField("Companion").get(null)
+            companion.javaClass.getMethod("schedule", android.content.Context::class.java)
+                .invoke(companion, this)
+        } catch (_: ClassNotFoundException) {
+            // storefront flavor: these classes don't exist in the compiled classes at all.
+        } catch (_: ReflectiveOperationException) {
+            // Defensive: a reflection signature mismatch must not crash app launch.
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

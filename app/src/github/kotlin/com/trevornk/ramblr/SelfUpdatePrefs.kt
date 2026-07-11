@@ -28,9 +28,10 @@ object SelfUpdatePrefs {
 
     fun setNotifyEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_NOTIFY_ENABLED, enabled).apply()
-        // TODO(Part 5): schedule/cancel the periodic SelfUpdateCheckWorker here (enable when
-        // `enabled` is true, cancel when false). Not built yet -- see SelfUpdateChecker.kt's
-        // kdoc on the periodic job this pref is meant to gate.
+        // Part 5: the periodic check is entirely gated by this toggle -- there's no separate
+        // "master" switch, so flipping this is exactly when the periodic job should start/stop
+        // existing at all. schedule()'s KEEP policy makes turning it on twice a harmless no-op.
+        if (enabled) SelfUpdateCheckWorker.schedule(context) else SelfUpdateCheckWorker.cancel(context)
     }
 
     fun isAutoInstallEnabled(context: Context): Boolean =
@@ -38,13 +39,25 @@ object SelfUpdatePrefs {
 
     fun setAutoInstallEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_INSTALL_ENABLED, enabled).apply()
-        // TODO(Part 5): call SelfUpdateInstallWorker.enqueue(context) from the periodic check when
-        // SelfUpdateChecker.check(context) returns UpdateCheckResult.UpdateAvailable AND
-        // isAutoInstallEnabled(context) is true (SelfUpdateInstallWorker.cancel(context) when
-        // false, or once installed). The install pipeline itself (download, checksum verify,
-        // quiet-hours + idle-debounce gate, PackageInstaller silent/fallback install) is built --
-        // see SelfUpdateInstallWorker.kt -- only the periodic WorkManager trigger that decides
-        // *when* to call enqueue() is still missing.
+        // Part 5: the per-tick "should I auto-install" decision lives in the periodic
+        // SelfUpdateCheckWorker (see SelfUpdateCheckDecision.shouldAutoInstall), not here -- this
+        // setter only fires on a settings-screen toggle, not on every check.
+        //
+        // Design decision: when auto-install is switched ON and an UpdateAvailable result is
+        // *already* cached from a previous check, enqueue the install immediately instead of
+        // making the user wait up to 6h for the next periodic tick. A user who just opted into
+        // auto-install with a known-available update sitting in cache almost certainly wants it
+        // applied now, not on the next scheduled tick -- waiting silently would look like the
+        // toggle didn't do anything. No equivalent immediate action is needed when turning it
+        // OFF: SelfUpdateInstallWorker.cancel(context) would race an install that's already
+        // mid-flight (download/verify/gate) for no benefit, since the worker itself re-reads
+        // isAutoInstallEnabled per tick and simply won't be re-enqueued going forward.
+        if (enabled) {
+            val cached = SelfUpdateChecker.cachedResult(context)
+            if (cached is UpdateCheckResult.UpdateAvailable) {
+                SelfUpdateInstallWorker.enqueue(context)
+            }
+        }
     }
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
