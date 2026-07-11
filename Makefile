@@ -3,7 +3,13 @@ SHELL := /bin/bash
 -include .env
 PHONE_HOST ?= pixel-5
 SSH_PORT   ?= 8022
-APK        := app/build/outputs/apk/debug/app-debug.apk
+# Distribution flavor for local dev builds/tests (github/storefront -- see the "Distribution
+# flavors" section of README.md). github is the default here because it's the sideload/self-update
+# build this repo's own tooling (make install, make adb-install, real-device testing) targets;
+# override with `make build FLAVOR=storefront` to build the Play/F-Droid variant instead, which
+# has no self-update code at all.
+FLAVOR     ?= github
+APK        := app/build/outputs/apk/$(FLAVOR)/debug/Ramblr-$(shell grep -m1 'versionName = ' app/build.gradle.kts | sed -E 's/.*"(.*)".*/\1/')-$(FLAVOR)-debug.apk
 
 export JAVA_HOME := /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 export ANDROID_HOME := $(HOME)/Library/Android/sdk
@@ -11,12 +17,18 @@ export PATH := $(JAVA_HOME)/bin:$(PATH)
 
 .PHONY: build test install adb-install push-model clean
 
+# Capitalized flavor name for Gradle's flavor-qualified task names (assembleGithubDebug, not
+# assemblegithubDebug). GNU sed's `\U` case-conversion isn't available in BSD sed (macOS's
+# default /usr/bin/sed), so this uses Make's own $(subst) instead: swap each known lowercase
+# flavor name for its capitalized form directly. Add a line here if a third flavor ever exists.
+FLAVOR_CAP = $(subst github,Github,$(subst storefront,Storefront,$(FLAVOR)))
+
 build:
-	./gradlew assembleDebug
+	./gradlew assemble$(FLAVOR_CAP)Debug
 	@echo "APK: $(APK)"
 
 test:
-	./gradlew testDebugUnitTest
+	./gradlew test$(FLAVOR_CAP)DebugUnitTest
 
 install: build
 	scp -P $(SSH_PORT) $(APK) $(PHONE_HOST):~/storage/downloads/phone-whisper.apk
