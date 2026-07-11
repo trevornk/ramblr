@@ -1,6 +1,7 @@
 package com.trevornk.ramblr
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -182,6 +183,22 @@ class PostProcessorTest {
     @Test
     fun buildRequestBodyUsesDeterministicTemperature() {
         val body = PostProcessor.buildRequestBody("raw text", "system prompt", "gpt-4o-mini")
+        assertEquals(0.0, body.getDouble("temperature"), 0.0001)
+    }
+
+    @Test
+    fun buildRequestBodyOmitsTemperatureWhenRequested() {
+        // #106: GPT-5.6-family reasoning models reject a non-default temperature outright.
+        val body = PostProcessor.buildRequestBody("raw text", "system prompt", "gpt-5.6-terra", omitTemperature = true)
+        assertFalse(body.has("temperature"))
+    }
+
+    @Test
+    fun buildRequestBodyIncludesTemperatureByDefaultForBackcompat() {
+        // Every existing call site (CleanupWaterfallExecutor) doesn't pass omitTemperature, so
+        // the default must keep including it -- this is the real production request shape today.
+        val body = PostProcessor.buildRequestBody("raw text", "system prompt", "gpt-5.4-mini")
+        assertTrue(body.has("temperature"))
         assertEquals(0.0, body.getDouble("temperature"), 0.0001)
     }
 
