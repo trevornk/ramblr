@@ -80,6 +80,7 @@ jobs:
         run: |
           gh release create "${{ steps.tag.outputs.tag }}" \
             "${{ steps.tag.outputs.apk_path }}" \
+            --prerelease \
             --title "Ramblr ${{ steps.tag.outputs.tag }} (debug build)" \
             --notes "Automated debug sideload build from \`${{ steps.tag.outputs.short_sha }}\` on main.
 
