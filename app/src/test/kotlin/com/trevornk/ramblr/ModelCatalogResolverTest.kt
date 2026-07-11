@@ -105,6 +105,44 @@ class ModelCatalogResolverEntriesForTest {
     }
 }
 
+/** #104 regression: entriesFor(catalog, kind) with no use-case filter mixes cleanup and
+ *  transcription-only entries for the SAME kind -- CloudProviderActivity's cleanup-model picker
+ *  used the unfiltered 2-arg overload and could offer a transcription-only model (e.g.
+ *  gpt-4o-transcribe) as a cleanup choice, which then fails at /v1/chat/completions call time.
+ *  [ModelCatalogResolverEntriesForTest] above never caught this because its OpenAI fixture only
+ *  had CLEANUP-only entries -- this fixture deliberately mixes both use cases per kind, matching
+ *  the real BUNDLED_DEFAULT_MODEL_CATALOG shape (gpt-5.4-nano/mini CLEANUP + gpt-4o-transcribe/
+ *  whisper-1 TRANSCRIPTION, both under OPENAI). */
+class ModelCatalogResolverMixedUseCaseTest {
+
+    private val mixedCatalog = listOf(
+        ModelCatalogEntry(ProviderKind.OPENAI, "gpt-5.4-nano", "Nano", "d", ModelTier.RECOMMENDED, ModelUseCase.CLEANUP, 0.05, 0.4),
+        ModelCatalogEntry(ProviderKind.OPENAI, "gpt-4o-transcribe", "GPT-4o Transcribe", "d", ModelTier.RECOMMENDED, ModelUseCase.TRANSCRIPTION, 0.006, 0.0),
+        ModelCatalogEntry(ProviderKind.OPENAI, "gpt-5.4-mini", "Mini", "d", ModelTier.GOOD, ModelUseCase.CLEANUP, 0.25, 2.0),
+        ModelCatalogEntry(ProviderKind.OPENAI, "whisper-1", "Whisper", "d", ModelTier.GOOD, ModelUseCase.TRANSCRIPTION, 0.006, 0.0),
+    )
+
+    @Test fun `the unfiltered 2-arg overload does mix cleanup and transcription entries -- this is why callers must always pass a use case`() {
+        val entries = ModelCatalogResolver.entriesFor(mixedCatalog, ProviderKind.OPENAI)
+        assertEquals(4, entries.size)
+        assertTrue(entries.any { it.modelId == "gpt-4o-transcribe" }) // the exact leak #104 found
+    }
+
+    @Test fun `the CLEANUP-filtered picker for a mixed catalog excludes every transcription-only entry`() {
+        val entries = ModelCatalogResolver.entriesFor(mixedCatalog, ProviderKind.OPENAI, ModelUseCase.CLEANUP)
+        assertEquals(2, entries.size)
+        assertTrue(entries.none { it.modelId == "gpt-4o-transcribe" || it.modelId == "whisper-1" })
+        assertEquals("gpt-5.4-nano", entries[0].modelId) // RECOMMENDED first, matches CloudProviderActivity's real default
+    }
+
+    @Test fun `the TRANSCRIPTION-filtered picker for a mixed catalog excludes every cleanup-only entry`() {
+        val entries = ModelCatalogResolver.entriesFor(mixedCatalog, ProviderKind.OPENAI, ModelUseCase.TRANSCRIPTION)
+        assertEquals(2, entries.size)
+        assertTrue(entries.none { it.modelId == "gpt-5.4-nano" || it.modelId == "gpt-5.4-mini" })
+        assertEquals("gpt-4o-transcribe", entries[0].modelId) // RECOMMENDED first
+    }
+}
+
 /** Sanity checks on the real bundled catalog seeded per #98's curated design decisions --
  *  guards against a future edit silently breaking the OmniRoute-latest-default or
  *  accidentally promoting Anthropic to a pushed default. */
