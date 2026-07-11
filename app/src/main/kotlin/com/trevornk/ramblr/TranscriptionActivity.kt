@@ -339,15 +339,18 @@ class TranscriptionActivity : BaseSettingsActivity() {
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
 
         /** Category subtitle for MainActivity's Transcription row (#93), e.g. "Local · Parakeet
-         *  0.6B" or "Cloud · OpenAI". Pure/static so MainActivity can compute it without touching
+         *  0.6B" or "Cloud · OpenAI · gpt-4o-transcribe" (#101: previously showed only "Cloud ·
+         *  OpenAI" with no model, unlike the matching Cleanup row -- now uses
+         *  [CleanupDestination.cloudTranscriptionSubtitleDetail] for the same "provider · model"
+         *  detail at a glance). Pure/static so MainActivity can compute it without touching
          *  any view state owned by this Activity. */
         fun subtitle(context: android.content.Context): String {
             val prefs = context.getSharedPreferences("ramblr", android.content.Context.MODE_PRIVATE)
             val useLocal = prefs.getBoolean("use_local", true)
             if (!useLocal) {
-                // Name the real transcription provider from the chain, not a hardcoded "OpenAI" (M9).
-                val entry = CleanupDestination.firstCloudTranscription(ProviderChainStore.load(context))
-                return if (entry != null) "Cloud · ${CleanupDestination.label(entry.kind)}" else "Cloud · set up a provider"
+                val chain = ProviderChainStore.load(context)
+                val entry = CleanupDestination.firstCloudTranscription(chain)
+                return if (entry != null) "Cloud · ${CleanupDestination.cloudTranscriptionSubtitleDetail(chain)}" else "Cloud · set up a provider"
             }
             val archive = prefs.getString("model_name", "") ?: ""
             val model = MODEL_CATALOG.firstOrNull { it.archive == archive && ModelDownloader.isInstalled(context, it) }

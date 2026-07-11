@@ -10,9 +10,9 @@ class ProviderChainStoreTest {
         val chain = ProviderChain(
             listOf(
                 ProviderChainEntry(ProviderKind.OMNIROUTE, "claude/claude-sonnet-4-6"),
-                ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-mini", baseUrlOverride = "https://example.com/v1"),
+                ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-mini", baseUrlOverride = "https://example.com/v1", transcriptionModel = "gpt-4o-transcribe"),
                 ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5"),
-                ProviderChainEntry(ProviderKind.GEMINI, "gemini-2.5-flash"),
+                ProviderChainEntry(ProviderKind.GEMINI, "gemini-2.5-flash", transcriptionModel = "gemini-3.1-flash-lite"),
                 ProviderChainEntry(ProviderKind.LOCAL, "qwen2.5-0.5b-instruct-q4_k_m"),
             )
         )
@@ -47,6 +47,22 @@ class ProviderChainStoreTest {
             """[{"kind":"ANTHROPIC","model":"claude-haiku-4-5","baseUrlOverride":null}]"""
         )
         assertEquals(null, parsed?.entries?.get(0)?.baseUrlOverride)
+    }
+
+    @Test fun `deserialize treats a missing transcriptionModel key as null (pre-#101 saved chains)`() {
+        // Regression: every chain saved before the transcriptionModel field existed has no such
+        // key in its stored JSON at all -- must not throw or coerce that into an empty string.
+        val parsed = ProviderChainStore.deserialize(
+            """[{"kind":"OPENAI","model":"gpt-5.4-nano","baseUrlOverride":null}]"""
+        )
+        assertEquals(null, parsed?.entries?.get(0)?.transcriptionModel)
+    }
+
+    @Test fun `deserialize preserves an explicit transcriptionModel value`() {
+        val parsed = ProviderChainStore.deserialize(
+            """[{"kind":"OPENAI","model":"gpt-5.4-nano","baseUrlOverride":null,"transcriptionModel":"gpt-4o-transcribe"}]"""
+        )
+        assertEquals("gpt-4o-transcribe", parsed?.entries?.get(0)?.transcriptionModel)
     }
 
     @Test fun `normalizeLocalPosition moves a leading LOCAL entry to the end`() {

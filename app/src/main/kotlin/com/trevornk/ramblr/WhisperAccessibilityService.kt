@@ -1901,12 +1901,14 @@ class WhisperAccessibilityService : AccessibilityService() {
                     val apiKey = ProviderCredentialStore.get(this, ProviderKind.OPENAI)
                     Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (OpenAI audio/transcriptions)")
                     val transcribeStartMs = System.currentTimeMillis()
-                    // Honor the entry's base-URL override and model so a proxy/self-hosted user's
-                    // audio goes where they configured, not always api.openai.com/whisper-1 (M5).
+                    // Honor the entry's base-URL override and TRANSCRIPTION model (#101/#102: a
+                    // separate field from entry.model, which is the CLEANUP model -- OpenAI's
+                    // chat-completions models like "gpt-5.4-mini" can never serve
+                    // /v1/audio/transcriptions, which needs "whisper-1"/"gpt-4o-transcribe").
                     TranscriberClient.transcribe(
                         file, apiKey, inFlightCall,
                         baseUrl = entry.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL,
-                        model = entry.model,
+                        model = entry.transcriptionModel ?: TranscriberClient.DEFAULT_MODEL,
                     ) { result ->
                         Log.i(TAG, "OpenAI transcription HTTP round-trip took ${System.currentTimeMillis() - transcribeStartMs}ms")
                         if (result.text != null && result.text.isNotBlank()) {
@@ -1931,7 +1933,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                         advanceOrGiveUp("Recording too large for Gemini transcription")
                     } else {
                         Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (Gemini generateContent audio)")
-                        GeminiTranscriberClient.transcribe(file, apiKey, entry.model.ifBlank { GeminiTranscriberClient.DEFAULT_MODEL }, inFlightCall) { result ->
+                        GeminiTranscriberClient.transcribe(file, apiKey, entry.transcriptionModel?.ifBlank { null } ?: GeminiTranscriberClient.DEFAULT_MODEL, inFlightCall) { result ->
                             if (result.text != null && result.text.isNotBlank()) {
                                 file.delete()
                                 handleTranscriptionResult(result.text, token)
