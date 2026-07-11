@@ -1398,7 +1398,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (HideIconToggle.isEnabled(this)) {
             container.addView(styleMenuDivider())
             container.addView(
-                styleMenuRow(icon = null, title = "Hide icon", subtitle = "Fully hides it -- restore from a notification") {
+                styleMenuRow(icon = null, title = "Hide icon", subtitle = "Fully hides it — restore from a notification") {
                     onStyleMenuHideIconTapped()
                 }
             )
@@ -1809,7 +1809,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             useLocal && allowCloudFallback -> transcribeApi(file, token)
             useLocal -> {
                 file.delete()
-                reset("Local model still downloading -- try again once it finishes")
+                reset("Local model still downloading — try again once it finishes")
             }
             else -> transcribeApi(file, token)
         }
@@ -1906,7 +1906,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                     ProviderKind.LOCAL ->
                         // A LOCAL entry whose model hasn't loaded advances to the next candidate;
                         // only if it's the last one do we surface "still downloading" (#H1).
-                        advanceOrGiveUp("Local model still downloading -- try again once it finishes")
+                        advanceOrGiveUp("Local model still downloading — try again once it finishes")
                     else -> {
                         Log.w(TAG, "Skipping transcription provider ${entry.kind}: not usable (no credential / not implemented)")
                         attempt(index + 1)

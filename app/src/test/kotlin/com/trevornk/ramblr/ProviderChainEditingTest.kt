@@ -90,7 +90,7 @@ class ProviderChainEditingTest {
         // "1 provider configured" with zero real cloud providers set up -- counting the LOCAL
         // floor entry as if it were a user-configured cloud provider.
         val chain = ProviderChain(listOf(entry(ProviderKind.LOCAL, "lfm2.5-350m-q4_0")))
-        assertEquals("Not configured -- using on-device", CloudProviderActivity.subtitleFor(chain))
+        assertEquals("Not configured — using on-device", CloudProviderActivity.subtitleFor(chain))
     }
 
     @Test fun `subtitleFor counts only cloud entries, ignoring LOCAL`() {

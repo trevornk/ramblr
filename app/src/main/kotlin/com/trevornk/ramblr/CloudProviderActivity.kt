@@ -180,7 +180,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         root.addView(sectionHeader("Live Preview"))
         root.addView(settingsRow(
             "Live Preview",
-            "Always on-device -- a cloud round trip would defeat the point of showing text live while you speak"
+            "Always on-device — a cloud round trip would defeat the point of showing text live while you speak"
         ).apply {
             isEnabled = false
             alpha = 0.6f
@@ -234,7 +234,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         modeRadioButtons.forEach { (candidate, button) -> button.isChecked = candidate == mode }
         if (mode == DictationMode.CUSTOM) {
             modeCustomNote.visibility = View.VISIBLE
-            modeCustomNote.text = "Custom -- transcription and cleanup are set independently below."
+            modeCustomNote.text = "Custom — transcription and cleanup are set independently below."
         } else {
             modeCustomNote.visibility = View.GONE
         }
@@ -263,9 +263,9 @@ class CloudProviderActivity : BaseSettingsActivity() {
     }
 
     private fun modeLabel(mode: DictationMode): String = when (mode) {
-        DictationMode.CLOUD -> "Cloud -- cloud transcription + cloud cleanup"
-        DictationMode.LOCAL -> "Local -- on-device transcription + on-device cleanup, fully offline"
-        DictationMode.FASTEST -> "Fastest -- on-device transcription (near-instant) + cloud cleanup"
+        DictationMode.CLOUD -> "Cloud — cloud transcription + cloud cleanup"
+        DictationMode.LOCAL -> "Local — on-device transcription + on-device cleanup, fully offline"
+        DictationMode.FASTEST -> "Fastest — on-device transcription (near-instant) + cloud cleanup"
         DictationMode.CUSTOM -> "Custom"
     }
 
@@ -688,26 +688,26 @@ class CloudProviderActivity : BaseSettingsActivity() {
 
     private fun cloudTranscriptionSubtitle(): String {
         val useLocal = prefs().getBoolean("use_local", true)
-        if (useLocal) return "Off -- transcription runs on-device"
+        if (useLocal) return "Off — transcription runs on-device"
         val chain = currentChain()
         val hasCandidate = ProviderChainRuntime.transcriptionCandidates(chain).any { it.kind != ProviderKind.LOCAL }
         // Capability alone isn't enough -- a provider with no key set won't actually work (L17).
         val hasConfigured = hasConfiguredCloudTranscription(chain) { ProviderCredentialStore.isConfigured(this, it) }
         return when {
-            hasConfigured -> "On -- uses the chain above"
-            hasCandidate -> "On, but no key is set for a transcription provider yet -- falls back to on-device"
-            else -> "On, but no configured provider supports transcription yet -- falls back to on-device"
+            hasConfigured -> "On — uses the chain above"
+            hasCandidate -> "On, but no key is set for a transcription provider yet — falls back to on-device"
+            else -> "On, but no configured provider supports transcription yet — falls back to on-device"
         }
     }
 
     private fun cloudCleanupSubtitle(): String {
-        if (!CloudFeatureToggle.cleanupEnabled(this)) return "Off -- cleanup runs on-device (or is skipped if no local model is set)"
+        if (!CloudFeatureToggle.cleanupEnabled(this)) return "Off — cleanup runs on-device (or is skipped if no local model is set)"
         val chain = currentChain()
         val cloudEntries = chain.capableEntriesFor(needsTranscription = false).filter { it.kind != ProviderKind.LOCAL }
         // Capability alone isn't enough -- a provider with no key set won't actually work (L17).
         val hasConfigured = cloudEntries.any { ProviderCredentialStore.isConfigured(this, it.kind) }
         return when {
-            hasConfigured -> "On -- uses the chain above"
+            hasConfigured -> "On — uses the chain above"
             cloudEntries.isNotEmpty() -> "On, but no key is set for a cloud cleanup provider yet"
             else -> "On, but no cloud provider is configured yet"
         }
@@ -727,15 +727,15 @@ class CloudProviderActivity : BaseSettingsActivity() {
 
     private fun localFallbackSubtitle(): String =
         if (DictationModeToggle.allowLocalFallback(this))
-            "On -- if every cloud provider fails, dictation falls back to on-device"
+            "On — if every cloud provider fails, dictation falls back to on-device"
         else
-            "Off -- if cloud fails, you'll see an error instead of a silent on-device retry"
+            "Off — if cloud fails, you'll see an error instead of a silent on-device retry"
 
     private fun cloudFallbackSubtitle(): String =
         if (DictationModeToggle.allowCloudFallback(this))
-            "On -- if on-device isn't ready or fails, dictation retries in the cloud"
+            "On — if on-device isn't ready or fails, dictation retries in the cloud"
         else
-            "Off -- if on-device isn't ready or fails, you'll see an error instead of a silent cloud retry"
+            "Off — if on-device isn't ready or fails, you'll see an error instead of a silent cloud retry"
 
     private fun onToggleLocalFallback(enabled: Boolean) {
         DictationModeToggle.setAllowLocalFallback(this, enabled)
@@ -769,7 +769,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         fun subtitleFor(chain: ProviderChain): String {
             val count = chain.entries.count { it.kind != ProviderKind.LOCAL }
             return when (count) {
-                0 -> "Not configured -- using on-device"
+                0 -> "Not configured — using on-device"
                 1 -> "1 provider configured"
                 else -> "$count providers configured"
             }

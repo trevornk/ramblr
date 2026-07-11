@@ -523,7 +523,7 @@ class MainActivity : BaseSettingsActivity() {
             .setTitle("Step 4 of 5: Clean up dictation with AI? (optional)")
             .setMessage(
                 "Cleanup rewrites your raw dictation to fix grammar, punctuation, and filler words — " +
-                    "off by default.\n\nCloud: uses your own API key (Gemini or OpenAI, your choice) -- " +
+                    "off by default.\n\nCloud: uses your own API key (Gemini or OpenAI, your choice) — " +
                     "no download, and doesn't compete with your phone's other apps for memory.\n\n" +
                     "On-device: downloads \"${recommendedLocal.name}\" and keeps the text on this phone, " +
                     "but on a phone that's also running lots of other apps, it can sometimes be too slow " +
@@ -552,7 +552,7 @@ class MainActivity : BaseSettingsActivity() {
             .setTitle("Step 4b of 5: Choose a cloud cleanup provider")
             .setMessage(
                 "Gemini and OpenAI are both good, inexpensive choices for cleanup. Pick whichever " +
-                    "you'd like to use -- e.g. one you already have an account or API key for."
+                    "you'd like to use — e.g. one you already have an account or API key for."
             )
             .setCancelable(false)
             .setPositiveButton("Gemini") { _, _ ->
@@ -646,7 +646,7 @@ class MainActivity : BaseSettingsActivity() {
                     "text after you stop recording still comes from your Transcription + Cleanup " +
                     "settings above; this only changes what's shown while recording.\n\n" +
                     "Recommended off: this model runs continuously while you talk, competing for your " +
-                    "phone's CPU with transcription right when recording stops -- it can make the final " +
+                    "phone's CPU with transcription right when recording stops — it can make the final " +
                     "text feel slower to appear, especially if you're also using on-device " +
                     "transcription.\n\nTurning this on downloads \"${recommended.name}\" now."
             )
@@ -701,7 +701,7 @@ class MainActivity : BaseSettingsActivity() {
             "Setup is done. If the floating button is visible, tap it, speak a test phrase, and " +
                 "tap it again to confirm the text lands in the field below."
         } else {
-            "Setup is done, but your on-device model is still downloading in the background -- " +
+            "Setup is done, but your on-device model is still downloading in the background — " +
                 "dictation won't work until that finishes. Feel free to close this now; the " +
                 "floating button will start working as soon as the download completes, no need " +
                 "to wait here."
