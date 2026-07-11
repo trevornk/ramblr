@@ -7,8 +7,23 @@
          SelfUpdateSettingsActivity is only ever declared (and therefore only ever launchable) in
          github-flavor builds, matching the flavor-source-set isolation SelfUpdateChecker.kt's
          AGENTS note establishes for the rest of this feature (Part 3, Settings UI). -->
+
+    <!-- Part 4 (SelfUpdateInstallWorker/SelfUpdateInstaller): lets a silent PackageInstaller
+         session (USER_ACTION_NOT_REQUIRED) skip Android's install confirmation dialog on API 31+
+         when this app is updating itself; see SelfUpdateInstaller.kt's kdoc for the full,
+         verified contract (normal protection level, no runtime prompt). Below API 31, or if any
+         other precondition isn't met, this permission simply has no effect and the standard
+         confirmation-dialog PackageInstaller flow is used instead (SelfUpdateInstaller.install's
+         fallback); github-flavor only, same policy reasoning as everything else in this file. -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+
     <application>
         <activity android:name=".SelfUpdateSettingsActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+
+        <!-- Manifest-declared (not context-registered) so PackageInstaller's commit-status
+             PendingIntent can still be delivered even if the process that started the install
+             session has since died; see SelfUpdateInstallReceiver's kdoc. -->
+        <receiver android:name=".SelfUpdateInstallReceiver" android:exported="false" />
     </application>
 </manifest>
