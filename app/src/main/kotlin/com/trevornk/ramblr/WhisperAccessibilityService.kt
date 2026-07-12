@@ -86,6 +86,10 @@ class WhisperAccessibilityService : AccessibilityService() {
     companion object {
         var instance: WhisperAccessibilityService? = null
 
+        /** SharedPreferences keys for the persisted overlay drag position (#101). */
+        private const val PREF_OVERLAY_X = "overlay_x"
+        private const val PREF_OVERLAY_Y = "overlay_y"
+
         /** Current [RecordingStateMachine.State] of the running service, or null if the service
          *  isn't connected at all (mirrors the existing `instance?.` null-safe read pattern used
          *  by e.g. [ModelDownloadWorker.notifyServiceModelReady] / LivePreviewActivity's
@@ -634,8 +638,23 @@ class WhisperAccessibilityService : AccessibilityService() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = screenW - ringSize - margin
-            y = screenH / 2 - ringSize / 2
+            // Restore the last dragged position across a service recreation (OS kill/restart,
+            // app update, etc. -- see #101) instead of always resetting to the hardcoded
+            // right-edge/vertical-center default. The saved value is sanity-clamped to the
+            // CURRENT screen bounds via clampRestoredPosition (shared with the drag-release
+            // clamp pattern) since the screen size may have changed since it was saved. Only a
+            // true first-run/fresh-install (no saved value yet) falls through to the hardcoded
+            // default.
+            val savedX = prefs().getInt(PREF_OVERLAY_X, Int.MIN_VALUE)
+            val savedY = prefs().getInt(PREF_OVERLAY_Y, Int.MIN_VALUE)
+            if (savedX != Int.MIN_VALUE && savedY != Int.MIN_VALUE) {
+                val (clampedX, clampedY) = clampRestoredPosition(savedX, savedY, screenW, screenH, ringSize, margin)
+                x = clampedX
+                y = clampedY
+            } else {
+                x = screenW - ringSize - margin
+                y = screenH / 2 - ringSize / 2
+            }
         }
         lastScreenW = screenW
         lastScreenH = screenH
@@ -735,6 +754,12 @@ class WhisperAccessibilityService : AccessibilityService() {
                             positionFeedback(it, params, feedbackView?.height ?: 0)
                             wm.updateViewLayout(feedbackView, it)
                         }
+                        // Persist the newly-settled drag position (#101) so it survives a later
+                        // service recreation instead of only living in this in-memory params
+                        // object. Deliberately NOT called from ACTION_MOVE (would fire on every
+                        // drag frame) -- only here, once the gesture has actually finalized a
+                        // resting position.
+                        persistOverlayPosition(params.x, params.y)
                     }
                     true
                 }
@@ -899,6 +924,10 @@ class WhisperAccessibilityService : AccessibilityService() {
                 wm.updateViewLayout(feedbackView, it)
             }
         }
+        // Persist the fold/unfold-settled position (#101) so a subsequent service recreation
+        // restores here rather than the hardcoded default -- mirrors the drag-release persist
+        // above.
+        persistOverlayPosition(params.x, params.y)
     }
 
     /**
@@ -2876,5 +2905,17 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     private fun prefs() = getSharedPreferences("ramblr", MODE_PRIVATE)
+
+    /**
+     * Writes the overlay's current x/y to [prefs] (#101) so it survives a service recreation
+     * (OS kill/restart, app update, etc.) instead of resetting to the hardcoded default. Called
+     * only from the drag-release and fold/unfold-settle points where a gesture/transition has
+     * actually finalized a resting position -- never from ACTION_MOVE, which would otherwise
+     * write on every drag frame.
+     */
+    private fun persistOverlayPosition(x: Int, y: Int) {
+        prefs().edit().putInt(PREF_OVERLAY_X, x).putInt(PREF_OVERLAY_Y, y).apply()
+    }
+
     private fun toast(msg: String) { handler.post { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() } }
 }

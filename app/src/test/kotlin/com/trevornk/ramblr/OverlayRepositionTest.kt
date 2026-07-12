@@ -112,4 +112,60 @@ class OverlayRepositionTest {
         assertEquals(margin, newDockedX)
         assertEquals(peekVisiblePx - ringSize, newPeekedX)
     }
+
+    // --- clampRestoredPosition ---
+
+    @Test fun `a restored position within current screen bounds is left unchanged`() {
+        val ringSize = 168
+        val margin = 24
+        val screenW = 1080
+        val screenH = 2364
+        val x = screenW - ringSize - margin
+        val y = screenH / 2 - ringSize / 2
+
+        val (clampedX, clampedY) = clampRestoredPosition(x, y, screenW, screenH, ringSize, margin)
+
+        assertEquals(x, clampedX)
+        assertEquals(y, clampedY)
+    }
+
+    @Test fun `a restored position saved for a wider old screen is clamped onto a narrower new screen`() {
+        val ringSize = 168
+        val margin = 24
+        val oldScreenW = 2076
+        val x = oldScreenW - ringSize - margin // pinned to the right edge of the OLD, wider screen
+        val newScreenW = 1080
+        val newScreenH = 2364
+
+        val (clampedX, _) = clampRestoredPosition(x, margin, newScreenW, newScreenH, ringSize, margin)
+
+        assertTrue(clampedX <= newScreenW - ringSize - margin)
+        assertTrue(clampedX >= margin)
+    }
+
+    @Test fun `a restored position saved for a taller old screen is clamped onto a shorter new screen`() {
+        val ringSize = 168
+        val margin = 24
+        val oldScreenH = 2364
+        val y = oldScreenH - ringSize - margin // near the bottom of the OLD, taller screen
+        val newScreenW = 1080
+        val newScreenH = 400
+
+        val (_, clampedY) = clampRestoredPosition(margin, y, newScreenW, newScreenH, ringSize, margin)
+
+        assertTrue(clampedY <= newScreenH - ringSize - margin)
+        assertTrue(clampedY >= margin)
+    }
+
+    @Test fun `a stale negative restored position is clamped to the on-screen minimum`() {
+        val ringSize = 168
+        val margin = 24
+        val screenW = 1080
+        val screenH = 2364
+
+        val (clampedX, clampedY) = clampRestoredPosition(-500, -500, screenW, screenH, ringSize, margin)
+
+        assertEquals(margin, clampedX)
+        assertEquals(margin, clampedY)
+    }
 }
