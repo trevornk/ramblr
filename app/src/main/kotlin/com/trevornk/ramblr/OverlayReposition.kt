@@ -64,3 +64,19 @@ fun proportionalYForScreenChange(oldY: Int, oldScreenH: Int, newScreenH: Int, ri
     val maxY = (newScreenH - ringSize - margin).coerceAtLeast(margin)
     return (newCenterY - ringSize / 2).coerceIn(margin, maxY)
 }
+
+/**
+ * Clamps a persisted (SharedPreferences-restored) overlay x/y to the CURRENT screen's bounds
+ * before it's used at overlay-creation time (service-recreation persistence fix). The saved
+ * position was valid for whatever screen size was current when it was written, but the service
+ * can be recreated after the screen size changed (app reinstalled onto a different device, a
+ * fold-state change that raced the save, or a stale/corrupt saved value) -- using it unclamped
+ * could park the ring partially or fully off-screen with no on-screen affordance to recover it.
+ * Mirrors the same [Int.coerceIn] pattern already used by the drag-release y clamp (see the
+ * ACTION_UP handler in WhisperAccessibilityService) rather than introducing new clamping rules.
+ */
+fun clampRestoredPosition(x: Int, y: Int, screenW: Int, screenH: Int, ringSize: Int, margin: Int): Pair<Int, Int> {
+    val maxX = (screenW - ringSize - margin).coerceAtLeast(margin)
+    val maxY = (screenH - ringSize - margin).coerceAtLeast(margin)
+    return x.coerceIn(margin, maxX) to y.coerceIn(margin, maxY)
+}
