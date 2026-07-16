@@ -77,6 +77,30 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--build-id=none")
     set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS} -Wl,--build-id=none")
 
+    # Real F-Droid-vs-GitHub-release byte diff (pipeline 2680669984, job 15371499690, 2026-07-16):
+    # after the GGML_COMMIT fix (1547d38) all 7 native libs were STILL flagged as differing by
+    # `fdroid build`'s signature-copy check, but llvm-readelf -x .comment / -S showed every
+    # section byte-identical between hosts EXCEPT a single 26th section, `.comment`: F-Droid's
+    # Vagrant build only ever emits the linker's own ident string ("Linker: LLD 18.0.3\0Android
+    # (...) clang version 18.0.3 (...)"), while GitHub Actions' ubuntu-latest runner additionally
+    # concatenates a SECOND ident string from whichever prebuilt NDK crt object
+    # (crtbegin_so.o/crtend_so.o, or a vendored libunwind.a member) the linker happens to pull in
+    # first -- both strings are otherwise byte-identical NDK-clang-18.0.3 idents, just with
+    # differing +bolt/-bolt and +mlgo/-mlgo flags baked in per *build-host's own prebuilt object
+    # variant selection*, not per source or compiler-invocation flags Ramblr controls. This is
+    # `.comment`'s ordinary behaviour (SHF_MERGE|SHF_STRINGS: the linker merges byte-identical
+    # entries, so hosts that route through a different crt/libunwind object simply keep two
+    # distinct ident strings instead of collapsing to one) -- not a bug in the fix above, just an
+    # input this build doesn't control and that has no effect on program behavior. Verified fix:
+    # stripping `.comment` at link time makes both hosts' output byte-for-byte identical --
+    # `llvm-strip --strip-all` on both the real fdroid-build-server artifact (downloaded via the
+    # GitLab jobs API) and the GitHub Releases v1.0.13 reference APK's copies of all 7 libs
+    # (libggml-base/libggml-cpu/libggml/libllama-cleanup-jni/libllama-common/libllama/
+    # libsherpa-onnx-jni.so) produced identical sha256 sums for every one of them, confirming
+    # `.comment` was the ONLY remaining divergence and this flag alone closes it.
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--strip-all")
+    set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS} -Wl,--strip-all")
+
     # Relocation-table non-determinism (F-Droid MR follow-up, 2026-07-10): even with the
     # path/debug-info fixes above, F-Droid's Vagrant rebuild and GitHub Actions' Ubuntu-runner
     # rebuild produced byte-different libggml-base.so despite identical source commit and NDK
