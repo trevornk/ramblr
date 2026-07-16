@@ -64,8 +64,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: app-release-unsigned
-          # app/build.gradle.kts's outputFileName override names this Ramblr-<versionName>-release.apk
-          # regardless of signing state (it's unsigned-for-distribution here, still debug-signed
-          # by the keystore.properties fallback so the build itself succeeds).
-          path: app/build/outputs/apk/release/Ramblr-*-release.apk
+          # app/build.gradle.kts's outputFileName override names this
+          # Ramblr-<versionName>-<flavor>-release.apk regardless of signing state (it's
+          # unsigned-for-distribution here, still debug-signed by the keystore.properties
+          # fallback so the build itself succeeds) -- updated for the "github"/"storefront"
+          # distribution flavor split (app/build.gradle.kts), which inserted the flavor name
+          # into the output filename and made the old bare "-release.apk" pattern stale.
+          path: app/build/outputs/apk/github/release/Ramblr-*-github-release.apk
           if-no-files-found: error
