@@ -137,4 +137,60 @@ class BackupManagerTest {
         )
         assertTrue(excluded.none { it in includedKeys })
     }
+
+    // --- parsePrefsXml (regression: restore silently returning seeded defaults, #103 follow-up) ---
+    //
+    // Real SharedPreferences XML backup content pulled from Trevor's own device (trimmed to a
+    // representative subset of the real file's boolean/string/int entries) -- this is the exact
+    // format restoreBackup()'s prefs path has to parse correctly, not a synthetic shape.
+    private val realPrefsXmlFixture = """
+        <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+        <map>
+            <boolean name="use_post_processing" value="true" />
+            <string name="custom_vocabulary_terms">Solveit&#10;fast.ai&#10;Merittas&#10;Pi&#10;Codex</string>
+            <int name="peek_visible_size_dp" value="48" />
+            <boolean name="debug_visibility_enabled" value="false" />
+            <string name="cleanup_style">concise</string>
+        </map>
+    """.trimIndent()
+
+    @Test fun `parsePrefsXml reads boolean, string, and int entries from a real Android prefs XML backup`() {
+        val xml = java.io.ByteArrayOutputStream().apply { write(realPrefsXmlFixture.toByteArray()) }
+
+        val result = BackupManager.parsePrefsXml(xml)
+
+        assertEquals(true, result["use_post_processing"])
+        assertEquals(false, result["debug_visibility_enabled"])
+        assertEquals(48, result["peek_visible_size_dp"])
+        assertEquals("concise", result["cleanup_style"])
+        assertEquals(
+            "Solveit\nfast.ai\nMerittas\nPi\nCodex",
+            result["custom_vocabulary_terms"],
+        )
+    }
+
+    @Test fun `parsePrefsXml round-trips a multi-line vocabulary string exactly, matching the real bug report`() {
+        // Regression for the reported bug: restoring a backed-up custom_vocabulary_terms list
+        // came back as the seeded defaults instead of the real 24-term list, because the old
+        // restore path only overwrote ramblr.xml on disk -- a no-op against the app's already-
+        // loaded SharedPreferences instance. This asserts the *parsed* value round-trips exactly
+        // (the actual SharedPreferences.Editor.commit() apply step is exercised on-device, since
+        // getSharedPreferences() needs a real Context this plain-JVM unit test doesn't have).
+        val terms = listOf("Solveit", "fast.ai", "Answer.AI", "Wyatt", "Dyson", "Adalyn")
+        val serialized = terms.joinToString("&#10;")
+        val xml = java.io.ByteArrayOutputStream().apply {
+            write(
+                """
+                <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+                <map>
+                    <string name="custom_vocabulary_terms">$serialized</string>
+                </map>
+                """.trimIndent().toByteArray()
+            )
+        }
+
+        val result = BackupManager.parsePrefsXml(xml)
+
+        assertEquals(terms.joinToString("\n"), result["custom_vocabulary_terms"])
+    }
 }

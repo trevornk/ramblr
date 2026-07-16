@@ -1,11 +1,14 @@
 package com.trevornk.ramblr
 
 import android.content.Context
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
 
 /**
  * Manual, on-demand backup/restore of the on-device data that's NOT already covered by Android's
@@ -88,7 +91,13 @@ object BackupManager {
     data class RestoreResult(val restoredEntries: Set<String>, val skippedEntries: Set<String>)
 
     /** Restores every entry in [source] whose name matches a key in [targets], overwriting that
-     *  file in place. See this class's kdoc for the zip-slip-safety contract this relies on. */
+     *  file in place. See this class's kdoc for the zip-slip-safety contract this relies on.
+     *
+     *  Plain [File] overwrite is correct for the JSONL log files: every read site
+     *  ([DictationHistoryStore], [BenchmarkLogger], [QualityLogger]) opens the file fresh each
+     *  call, no long-lived in-memory cache to go stale. It is NOT correct for [ENTRY_PREFS] --
+     *  see [restoreBackup]'s kdoc for why that entry is deliberately excluded here and handled
+     *  separately. */
     fun unzipToTargets(source: InputStream, targets: Map<String, File>): RestoreResult {
         val restored = mutableSetOf<String>()
         val skipped = mutableSetOf<String>()
@@ -110,6 +119,99 @@ object BackupManager {
         return RestoreResult(restored, skipped)
     }
 
-    fun restoreBackup(context: Context, source: InputStream): RestoreResult =
-        unzipToTargets(source, targetFiles(context))
+    /** Parses a `SharedPreferences` XML backup entry (Android's own on-disk format: `<map>`
+     *  containing `<boolean>`/`<string>`/`<int>`/`<long>`/`<float>` children with `name`/`value`
+     *  attributes) and returns it as a plain key-to-typed-value map ready to apply through a
+     *  real [android.content.SharedPreferences.Editor].
+     *
+     *  This exists because restoring [ENTRY_PREFS] by overwriting `ramblr.xml` on disk (the
+     *  same way the JSONL files are restored) silently does nothing while the app is running:
+     *  Android's [Context.getSharedPreferences] returns a single process-wide cached instance
+     *  per file name that's loaded once and never re-read from disk afterward. [BaseSettingsActivity.prefs]
+     *  is called from the very screen that triggers the restore, so that cached instance is
+     *  already loaded -- overwriting the XML file underneath it changes what's on disk but not
+     *  what every prefs read in the running process actually sees. (Confirmed against a real
+     *  restore: a vocabulary list backed up from a device, restored on that same running app
+     *  instance, came back as the seeded defaults -- prefs() still had its original in-memory
+     *  values, only a relaunch would have picked up the raw file swap.) Applying through the
+     *  real `Editor` updates that same cached instance in place, so [BaseSettingsActivity.prefs]
+     *  reads the restored values immediately, no relaunch required.
+     *
+     *  Uses `javax.xml.parsers` (real JDK, not `org.xmlpull.v1`) deliberately: XmlPullParser's
+     *  actual implementation is provided by the Android runtime, so calling it from a plain-JVM
+     *  `testGithubDebugUnitTest` run (no Robolectric/instrumentation in this module) would throw
+     *  at runtime against the SDK's unimplemented-stub jar. `javax.xml.parsers` is real JDK, so
+     *  it works identically on-device and in a host-JVM unit test -- see [BackupManagerTest] for
+     *  a fixture parsed with the real Android XML backup format Trevor's own device produced. */
+    internal fun parsePrefsXml(xml: ByteArrayOutputStream): Map<String, Any> {
+        val result = mutableMapOf<String, Any>()
+        val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(xml.toByteArray().inputStream())
+        val children = doc.documentElement.childNodes
+        for (i in 0 until children.length) {
+            val node = children.item(i) as? Element ?: continue
+            val name = node.getAttribute("name")
+            if (name.isEmpty()) continue
+            when (node.tagName) {
+                "boolean" -> result[name] = node.getAttribute("value").toBoolean()
+                "int" -> node.getAttribute("value").toIntOrNull()?.let { result[name] = it }
+                "long" -> node.getAttribute("value").toLongOrNull()?.let { result[name] = it }
+                "float" -> node.getAttribute("value").toFloatOrNull()?.let { result[name] = it }
+                // <string name="...">value</string> -- the text is nested element content, not a
+                // "value" attribute.
+                "string" -> result[name] = node.textContent ?: ""
+            }
+        }
+        return result
+    }
+
+    /** Restores every file-backed entry ([ENTRY_DICTATION_HISTORY]/[ENTRY_BENCHMARK_LOG]/
+     *  [ENTRY_QUALITY_LOG]) via plain [File] overwrite, and -- if present -- [ENTRY_PREFS]
+     *  separately through a real `SharedPreferences.Editor.commit()` against the app's actual
+     *  "ramblr" prefs instance. See [parsePrefsXml]'s kdoc for why the prefs entry can't take
+     *  the same file-overwrite path as the others. `commit()` (not `apply()`) so a caller that
+     *  immediately re-reads prefs right after this call (e.g. the restore screen's own refresh())
+     *  is guaranteed to see the new values, not a possibly-still-in-flight async write. */
+    fun restoreBackup(context: Context, source: InputStream): RestoreResult {
+        val zipBytes = source.readBytes()
+        val fileTargets = targetFiles(context) - ENTRY_PREFS
+        val fileResult = unzipToTargets(zipBytes.inputStream(), fileTargets)
+
+        val restored = fileResult.restoredEntries.toMutableSet()
+        val skipped = fileResult.skippedEntries.toMutableSet()
+
+        var prefsXml: ByteArrayOutputStream? = null
+        ZipInputStream(zipBytes.inputStream()).use { zipIn ->
+            var entry: ZipEntry? = zipIn.nextEntry
+            while (entry != null) {
+                if (entry.name == ENTRY_PREFS) {
+                    prefsXml = ByteArrayOutputStream().apply { zipIn.copyTo(this) }
+                }
+                zipIn.closeEntry()
+                entry = zipIn.nextEntry
+            }
+        }
+        prefsXml?.let { xml ->
+            val values = parsePrefsXml(xml)
+            val editor = context.getSharedPreferences("ramblr", Context.MODE_PRIVATE).edit().clear()
+            values.forEach { (key, value) ->
+                when (value) {
+                    is Boolean -> editor.putBoolean(key, value)
+                    is Int -> editor.putInt(key, value)
+                    is Long -> editor.putLong(key, value)
+                    is Float -> editor.putFloat(key, value)
+                    is String -> editor.putString(key, value)
+                }
+            }
+            editor.commit()
+            restored += ENTRY_PREFS
+            // unzipToTargets's first pass above never had ENTRY_PREFS in its targets map (it's
+            // deliberately excluded so that pass doesn't raw-overwrite ramblr.xml), so it always
+            // reports this entry as "skipped" -- correct that now that it's actually been
+            // restored through the real Editor above.
+            skipped -= ENTRY_PREFS
+        }
+
+        return RestoreResult(restored, skipped)
+    }
 }
