@@ -60,11 +60,25 @@ set(LLAMA_BUILD_COMMIT "unknown")
 # "GGML_NO_BACKTRACE\0\0q8_1\0..." (empty/no hash) on the other -- i.e. GGML_COMMIT itself, not a
 # path or timestamp. This explains why ggml-base was the ONLY native lib that failed to reproduce:
 # every other library already got the LLAMA_BUILD_COMMIT pin above; only ggml-base has this
-# second, independent git-lookup path. Force GIT_EXE to a pre-resolved NOTFOUND cache entry
-# before add_subdirectory() below: find_program() leaves an already-set (even NOTFOUND) cache
-# variable alone rather than re-searching, so ggml/CMakeLists.txt's `if(GIT_EXE)` block is always
-# skipped and GGML_BUILD_COMMIT always falls through to its own "unknown" fallback, identically
-# on every host regardless of whether git happens to be installed/available there.
+# second, independent git-lookup path.
+#
+# CORRECTION (F-Droid MR re-re-verification, 2026-07-16): the GIT_EXE-NOTFOUND cache pin below
+# does NOT actually work -- confirmed against CMake's own find_program() docs: "If the variable
+# is defined and its value is NOTFOUND, or ends in -NOTFOUND, the search will be performed."
+# CMake explicitly treats any *-NOTFOUND cache value as "not yet found" and re-runs the search
+# on every configure, so on any host where `git` actually is on PATH (GitHub Actions' runner),
+# ggml/CMakeLists.txt's find_program(GIT_EXE ...) simply rediscovers real git regardless of this
+# pin and re-embeds the true submodule commit hash. Verified via a real disassembly-level diff of
+# the two hosts' actual libggml-base.so (F-Droid job 15384654280 vs. the v1.0.15 GitHub Release
+# APK): GitHub's copy embeds "152d337" (the llama.cpp submodule's real pinned short hash --
+# `git submodule status` confirms 152d337fadb93c2a099653c4072d5512c92c5bfd), while F-Droid's copy
+# embeds a zero-length string in the same slot (its Vagrant buildserver sandbox apparently can't
+# resolve a real git commit for the submodule tree it's handed, so `git rev-parse` fails there
+# and GGML_BUILD_COMMIT stays empty) -- i.e. this line never blocked anything on either host; the
+# hosts differ because git behaves differently in each environment, exactly as the -NOTFOUND
+# semantics above predict. Kept below as a harmless best-effort (does still block find_program on
+# hosts with a genuinely git-less PATH), but it is NOT what makes this deterministic -- see the
+# real fix after add_subdirectory() below.
 set(GIT_EXE "GIT_EXE-NOTFOUND" CACHE FILEPATH "" FORCE)
 
 # 16KB ELF alignment (#44): NDK r27 (pinned via android.ndkVersion) doesn't default to 16KB
@@ -95,6 +109,24 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,max-page-size=16384
 set(GGML_CPU_ARM_ARCH "armv8.6-a+dotprod+i8mm+fp16" CACHE STRING "" FORCE)
 
 add_subdirectory(../../../../../llama.cpp llama.cpp)
+
+# Real fix for the GGML_COMMIT non-determinism (F-Droid MR re-re-verification, 2026-07-16):
+# the GIT_EXE-NOTFOUND pin above cannot block find_program() from re-discovering a real `git`
+# binary on hosts that have one on PATH (see the CORRECTION comment above it), so
+# ggml/CMakeLists.txt's own `target_compile_definitions(ggml-base PRIVATE GGML_COMMIT="...")`
+# call -- which already ran during the add_subdirectory() above -- baked in whatever
+# GGML_BUILD_COMMIT that host's git lookup produced. Rather than fight ggml's own git-detection
+# (which cannot be reached from here without modifying the vendored submodule's CMakeLists.txt,
+# something we don't want to fork/patch), override the compile definition it already set on the
+# ggml-base target directly: a target can carry multiple -D flags for the same macro name, and
+# both clang and gcc apply "last definition on the command line wins" for a repeated -D, so
+# appending a fixed GGML_COMMIT here -- after ggml's own add_subdirectory() has already added its
+# host-dependent one -- reliably wins on every host's compiler invocation regardless of what
+# ggml's own git lookup found or didn't find. Value picked to match llama.cpp's own no-git
+# fallback convention (see LLAMA_BUILD_COMMIT "unknown" above) for consistency; this is purely a
+# diagnostic string ggml prints/exposes via ggml_commit(), not anything Ramblr's own code reads.
+target_compile_definitions(ggml-base PRIVATE GGML_COMMIT="unknown")
+
 set(LLAMA_DIR_RELATIVE "../../../../../llama.cpp")
 get_filename_component(LLAMA_DIR ${LLAMA_DIR_RELATIVE} ABSOLUTE)
 
