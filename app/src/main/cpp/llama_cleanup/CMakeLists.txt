@@ -48,6 +48,25 @@ set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_NUMBER 0)
 set(LLAMA_BUILD_COMMIT "unknown")
 
+# Follow-up (F-Droid MR re-verification, 2026-07-15): the pin above only covers
+# LLAMA_BUILD_COMMIT/LLAMA_BUILD_NUMBER, which llama.cpp's own build-info.cmake consumes into
+# common/build-info.cpp (-> the llama-common/llama libraries). It does NOT cover a second,
+# separate git-derived string: ggml/CMakeLists.txt independently runs its own
+# `find_program(GIT_EXE ...)` + `git rev-parse --short HEAD` and bakes the result directly into
+# ggml-base via `target_compile_definitions(ggml-base PRIVATE GGML_COMMIT="${GGML_BUILD_COMMIT}")`.
+# Confirmed via real F-Droid job-artifact vs. GitHub-release binary diff (job 15293325827): the
+# rebuilt libggml-base.so differs from the reference APK's copy starting at byte 110521, inside
+# .rodata, where the embedded string reads "GGML_NO_BACKTRACE\0<hash>\0q8_1\0..." on one host and
+# "GGML_NO_BACKTRACE\0\0q8_1\0..." (empty/no hash) on the other -- i.e. GGML_COMMIT itself, not a
+# path or timestamp. This explains why ggml-base was the ONLY native lib that failed to reproduce:
+# every other library already got the LLAMA_BUILD_COMMIT pin above; only ggml-base has this
+# second, independent git-lookup path. Force GIT_EXE to a pre-resolved NOTFOUND cache entry
+# before add_subdirectory() below: find_program() leaves an already-set (even NOTFOUND) cache
+# variable alone rather than re-searching, so ggml/CMakeLists.txt's `if(GIT_EXE)` block is always
+# skipped and GGML_BUILD_COMMIT always falls through to its own "unknown" fallback, identically
+# on every host regardless of whether git happens to be installed/available there.
+set(GIT_EXE "GIT_EXE-NOTFOUND" CACHE FILEPATH "" FORCE)
+
 # 16KB ELF alignment (#44): NDK r27 (pinned via android.ndkVersion) doesn't default to 16KB
 # page-size-aligned LOAD segments -- only r28+ does. Setting these here, before
 # add_subdirectory(), makes them ordinary (non-cache) CMake variables in this directory scope,

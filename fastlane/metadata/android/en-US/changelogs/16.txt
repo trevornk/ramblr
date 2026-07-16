@@ -1,0 +1,1 @@
+Fixed a build-reproducibility issue that was blocking F-Droid distribution: the local-cleanup native library embedded a build-host-dependent value, so F-Droid's independent rebuild couldn't verify it matched the official release. No app-facing behavior change.
