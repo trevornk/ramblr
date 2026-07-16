@@ -314,6 +314,14 @@ class AdvancedActivity : BaseSettingsActivity() {
             "Send the on-device transcription/cleanup benchmark log (timings and model ids only, no dictation text) to any app"
         ) { shareBenchmarkLog() })
 
+        // Quality log export (#102): complements the benchmark log above with the actual raw/
+        // cleaned dictation text (not just timings), correlated with provider+model, so combos
+        // being A/B tested on-device can be judged on real output quality, not just speed.
+        root.addView(settingsRow(
+            "Share quality log",
+            "Send the on-device raw/cleaned transcript pairs (real text) and provider/model ids to any app"
+        ) { shareQualityLog() })
+
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
             addView(root)
@@ -448,9 +456,10 @@ class AdvancedActivity : BaseSettingsActivity() {
 
     /** Shares files/benchmark_log.jsonl (#100) via a standard chooser Intent, using a
      *  [androidx.core.content.FileProvider] content:// URI (see the "benchmark_log" provider
-     *  section of AndroidManifest.xml + res/xml/benchmark_log_file_paths.xml) so no storage
-     *  permission is needed and the target app never gets a raw file:// path into app-private
-     *  storage. */
+     *  section of AndroidManifest.xml + res/xml/benchmark_log_file_paths.xml -- this same
+     *  files-path entry also covers quality_log.jsonl below, since it exposes the whole
+     *  filesDir root) so no storage permission is needed and the target app never gets a raw
+     *  file:// path into app-private storage. */
     private fun shareBenchmarkLog() {
         val file = BenchmarkLogger.logFile(this)
         if (!file.exists() || file.length() == 0L) {
@@ -464,6 +473,26 @@ class AdvancedActivity : BaseSettingsActivity() {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivity(Intent.createChooser(intent, "Share benchmark log"))
+    }
+
+    /** Shares files/quality_log.jsonl (#102) via the same FileProvider pattern as
+     *  [shareBenchmarkLog] -- both benchmark_log.jsonl and quality_log.jsonl live directly under
+     *  [android.content.Context.getFilesDir], which the existing `files-path name="benchmark_log"
+     *  path="."` entry in res/xml/benchmark_log_file_paths.xml already exposes in full, so no new
+     *  FileProvider paths entry is needed for this second file. */
+    private fun shareQualityLog() {
+        val file = QualityLogger.logFile(this)
+        if (!file.exists() || file.length() == 0L) {
+            toast("No quality log yet — dictate a few times first")
+            return
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/jsonl"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(intent, "Share quality log"))
     }
 
     private fun onHistoryToggle(enabled: Boolean) {

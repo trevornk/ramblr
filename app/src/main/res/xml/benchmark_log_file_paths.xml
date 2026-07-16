@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- FileProvider path spec for sharing benchmark_log.jsonl (GH #100). Only exposes the app's
-     internal filesDir root (files-path), not external/cache storage: the benchmark log is the
-     only file this app currently shares out via FileProvider. -->
+<!-- FileProvider path spec for sharing benchmark_log.jsonl (GH #100) and quality_log.jsonl
+     (GH #102). Only exposes the app's internal filesDir root (files-path), not external/cache
+     storage: these two JSONL debug logs are the only files this app currently shares out via
+     FileProvider. Both files live directly under filesDir, so this single "." files-path entry
+     covers both without needing a second <paths> entry. -->
 <paths>
     <files-path name="benchmark_log" path="." />
 </paths>

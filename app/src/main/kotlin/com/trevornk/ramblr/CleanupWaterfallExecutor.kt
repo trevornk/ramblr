@@ -433,10 +433,11 @@ object CleanupWaterfallExecutor {
         // "exceeded time budget" branch had no deterministic test (audit test-gap #6). Its siblings
         // (localLlmStepDeadline, BoundedBlockingCall) already take an injected now.
         nowMs: () -> Long = { System.currentTimeMillis() },
-        // Optional benchmark-log correlation (GH #100): when both are non-null, [logStepOutcome]
-        // additionally emits a [BenchmarkLogger] entry for each step outcome, tagged with the
-        // same correlationId as this dictation's transcription entry. Defaulted to null so every
-        // existing call site/unit test (none of which is Android-context-aware) is unaffected.
+        // Optional benchmark/quality-log correlation (GH #100, #102): when both are non-null,
+        // [logStepOutcome] additionally emits a [BenchmarkLogger] entry AND a [QualityLogger]
+        // entry for each step outcome, tagged with the same correlationId as this dictation's
+        // transcription entries in both logs. Defaulted to null so every existing call
+        // site/unit test (none of which is Android-context-aware) is unaffected.
         benchmarkContext: android.content.Context? = null,
         benchmarkCorrelationId: String? = null,
         callback: (PostProcessor.Result) -> Unit,
@@ -532,6 +533,17 @@ object CleanupWaterfallExecutor {
                         success = outcome is CleanupStepOutcome.Success,
                     ),
                     cleanedTextLength = (outcome as? CleanupStepOutcome.Success)?.text?.length,
+                )
+            }
+            runCatching {
+                QualityLogger.log(
+                    context = context,
+                    correlationId = correlationId,
+                    cleanup = QualityStage(
+                        provider = step.group.name,
+                        model = step.model,
+                    ),
+                    cleanedText = (outcome as? CleanupStepOutcome.Success)?.text,
                 )
             }
         }

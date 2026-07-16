@@ -1884,6 +1884,15 @@ class WhisperAccessibilityService : AccessibilityService() {
                     ),
                     rawTextLength = text.length,
                 )
+                QualityLogger.log(
+                    context = this,
+                    correlationId = "tok-$token",
+                    transcription = QualityStage(
+                        provider = ProviderKind.LOCAL.name,
+                        model = localTranscriptionModelId(),
+                    ),
+                    rawText = text,
+                )
 
                 handleTranscriptionResult(text, token)
             } catch (e: Exception) {
@@ -1896,6 +1905,14 @@ class WhisperAccessibilityService : AccessibilityService() {
                         model = localTranscriptionModelId(),
                         latencyMs = System.currentTimeMillis() - benchmarkStartMs,
                         success = false,
+                    ),
+                )
+                QualityLogger.log(
+                    context = this,
+                    correlationId = "tok-$token",
+                    transcription = QualityStage(
+                        provider = ProviderKind.LOCAL.name,
+                        model = localTranscriptionModelId(),
                     ),
                 )
                 // Local transcription's audio file is already gone (read-then-delete
@@ -2017,6 +2034,15 @@ class WhisperAccessibilityService : AccessibilityService() {
                             ),
                             rawTextLength = result.text?.length,
                         )
+                        QualityLogger.log(
+                            context = this,
+                            correlationId = "tok-$token",
+                            transcription = QualityStage(
+                                provider = entry.kind.name,
+                                model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
+                            ),
+                            rawText = result.text,
+                        )
                         if (success) {
                             file.delete()
                             handleTranscriptionResult(result.text, token)
@@ -2053,6 +2079,15 @@ class WhisperAccessibilityService : AccessibilityService() {
                                     success = success,
                                 ),
                                 rawTextLength = result.text?.length,
+                            )
+                            QualityLogger.log(
+                                context = this,
+                                correlationId = "tok-$token",
+                                transcription = QualityStage(
+                                    provider = entry.kind.name,
+                                    model = geminiModel,
+                                ),
+                                rawText = result.text,
                             )
                             if (success) {
                                 file.delete()
