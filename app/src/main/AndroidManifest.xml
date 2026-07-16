@@ -59,6 +59,14 @@
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <activity android:name=".AdvancedActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <!-- Advanced's four sub-Activities (#104 restructure): mirror AdvancedActivity's own
+             configChanges declaration above for the same Pixel Fold fold/unfold reasoning. -->
+        <activity android:name=".OverlayAppearanceActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <activity android:name=".BehaviorActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <activity android:name=".DataLogsActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
 
         <service
             android:name=".WhisperAccessibilityService"
