@@ -210,6 +210,63 @@ tasks.matching {
     dependsOn(extractOnnxRuntimeNative)
 }
 
+// --- Post-link .comment stripping (F-Droid MR fdroid/fdroiddata!42401 follow-up, 2026-07-16) --
+//
+// Root cause: F-Droid's Vagrant buildserver and GitHub Actions' ubuntu-latest runner produce
+// byte-different native .so files even from an identical source commit + pinned NDK version.
+// Diffed with llvm-readelf -S against a real failed F-Droid buildserver artifact vs. a GitHub
+// Actions build of the same commit: every section matched except a single ELF `.comment`
+// (SHF_MERGE|SHF_STRINGS) section, which differs in size/content because each host's linker
+// pulls a different prebuilt NDK crt/libunwind object first, appending a distinct linker-ident
+// string (+bolt/-bolt, +mlgo/-mlgo flags baked in per build host, not per source or compiler
+// invocation this build controls). Verified fix: `llvm-strip --strip-all` on both hosts'
+// output produces byte-identical libraries (sha256-matched for all 7 native libs Ramblr ships).
+//
+// TWO THINGS THAT DID NOT WORK, kept here so a future pass doesn't repeat them:
+// 1. `-Wl,--strip-all` as a CMAKE_SHARED_LINKER_FLAGS entry (src/main/cpp/CMakeLists.txt) --
+//    this is a LINKER flag and only strips .symtab/.strtab, never touches .comment (confirmed:
+//    a real MR pipeline run with only this flag still failed with all 7 libs differing).
+// 2. A CMake-level add_custom_target(... ALL) with a llvm-strip POST_BUILD step -- CMake's own
+//    "ALL" target is never invoked by AGP: android_gradle_build.json's buildTargetsCommandComponents
+//    shows AGP calls `ninja <explicit target list>`, never `ninja all`, so any CMake target not
+//    in that explicit list (which only ever contains the actual shared-library targets AGP
+//    needs to package) silently never runs, however it's declared.
+//
+// Actual fix: a real strip pass over AGP's OWN merged-native-libs intermediate directory,
+// hooked as a Gradle task between mergeNativeLibs (creates the merged tree) and
+// stripDebugSymbols (AGP's own debug-symbol strip, further downstream) so this runs on every
+// release variant's native libs before packaging, regardless of which CMake targets AGP chose
+// to invoke that run.
+//
+// NDK host-tag detection: this must resolve on both a macOS dev machine (darwin-x86_64) and
+// Linux CI/F-Droid buildservers (linux-x86_64) -- os.name is the standard Gradle-visible JVM
+// property for this, no NDK-side "current host" indirection exists to query instead.
+val ndkHostTag = when {
+    org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "darwin-x86_64"
+    org.gradle.internal.os.OperatingSystem.current().isLinux -> "linux-x86_64"
+    else -> "windows-x86_64"
+}
+val ramblrLlvmStrip = android.sdkDirectory.resolve(
+    "ndk/${android.ndkVersion}/toolchains/llvm/prebuilt/$ndkHostTag/bin/llvm-strip"
+)
+tasks.matching { it.name.matches(Regex("merge.*ReleaseNativeLibs")) }.configureEach {
+    doLast {
+        if (!ramblrLlvmStrip.exists()) {
+            logger.warn("Ramblr reproducible-build strip skipped: llvm-strip not found at $ramblrLlvmStrip")
+            return@doLast
+        }
+        outputs.files.files.forEach { outDir ->
+            outDir.walkTopDown()
+                .filter { it.isFile && it.name.endsWith(".so") }
+                .forEach { soFile ->
+                    exec {
+                        commandLine(ramblrLlvmStrip.absolutePath, "--strip-all", soFile.absolutePath)
+                    }
+                }
+        }
+    }
+}
+
 // Manual dev tool (issue #2): compares PostProcessor prompts against the real OpenAI API.
 // Deliberately NOT a dependency of `test`/`check`/`build` — it costs real API credits and
 // requires OPENAI_API_KEY, so it must only ever run when a developer invokes it directly.

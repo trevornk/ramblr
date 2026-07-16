@@ -91,13 +91,14 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     # `.comment`'s ordinary behaviour (SHF_MERGE|SHF_STRINGS: the linker merges byte-identical
     # entries, so hosts that route through a different crt/libunwind object simply keep two
     # distinct ident strings instead of collapsing to one) -- not a bug in the fix above, just an
-    # input this build doesn't control and that has no effect on program behavior. Verified fix:
-    # stripping `.comment` at link time makes both hosts' output byte-for-byte identical --
-    # `llvm-strip --strip-all` on both the real fdroid-build-server artifact (downloaded via the
-    # GitLab jobs API) and the GitHub Releases v1.0.13 reference APK's copies of all 7 libs
-    # (libggml-base/libggml-cpu/libggml/libllama-cleanup-jni/libllama-common/libllama/
-    # libsherpa-onnx-jni.so) produced identical sha256 sums for every one of them, confirming
-    # `.comment` was the ONLY remaining divergence and this flag alone closes it.
+    # input this build doesn't control and that has no effect on program behavior.
+    #
+    # The actual stripping mechanism lives at the bottom of this file (POST_BUILD llvm-strip
+    # step) -- `-Wl,--strip-all` below was tried FIRST and looked plausible, but is a LINKER flag
+    # that only strips .symtab/.strtab, not .comment (verified: a real F-Droid-vs-GitHub rebuild
+    # with only this flag still showed differently-sized .comment sections on both hosts). Kept
+    # here anyway since it's harmless and does shrink .symtab/.strtab, but it is NOT what closes
+    # the reproducibility gap -- see the POST_BUILD strip step for the real fix.
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--strip-all")
     set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS} -Wl,--strip-all")
 
