@@ -289,6 +289,11 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  or the VAD model isn't installed: this field simply stays null, no [SilenceAutoStopSession]
      *  (and therefore no native [com.k2fsa.sherpa.onnx.Vad]) is ever created. */
     @Volatile private var silenceAutoStopSession: SilenceAutoStopSession? = null
+    /** Non-null only while a recording with compressed-upload encoding (#109) active is in
+     *  progress -- see [startRecording]/[onRecordingFinished]. Zero-cost when [CompressedUploadToggle]
+     *  is off: this field simply stays null, no [AacEncoderSession] (and therefore no MediaCodec/
+     *  MediaMuxer) is ever created. */
+    @Volatile private var aacEncoderSession: AacEncoderSession? = null
     private val guard = TranscriptionGuard()
     private val inFlightCall = InFlightCall()
     private val cleanupCursor = CleanupWaterfallCursor()
@@ -527,6 +532,12 @@ class WhisperAccessibilityService : AccessibilityService() {
         // is normally already null, but a stray VAD session must never survive service teardown.
         silenceAutoStopSession?.release()
         silenceAutoStopSession = null
+        // Belt-and-suspenders alongside the release already wired into startRecording's onFinished
+        // (#109): awaitTeardown above blocks until the reader thread's onFinished has run, so this
+        // is normally already null, but a stray encoder session must never survive service teardown
+        // and leave a partial .m4a temp file behind.
+        aacEncoderSession?.release()
+        aacEncoderSession = null
         cancelWatchdog()
         guard.cancel()
         inFlightCall.cancel()
@@ -1832,13 +1843,42 @@ class WhisperAccessibilityService : AccessibilityService() {
         } else null
         silenceAutoStopSession = autoStopSession
 
+        // Compressed-upload AAC encoding (#109): additive and opt-in -- a session (and the
+        // MediaCodec/MediaMuxer it owns) is only ever created when CompressedUploadToggle is on.
+        // Unlike #108's VAD, no model download or extra precondition is needed: AAC-LC is a
+        // built-in platform codec. Toggle off means zero AacEncoderSession instantiation and
+        // byte-for-byte identical recording behavior to before this feature existed.
+        val aacSession = if (CompressedUploadToggle.isEnabled(this)) {
+            try {
+                AacEncoderSession(cacheDir)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start AAC encoder session", e)
+                null
+            }
+        } else null
+        aacEncoderSession = aacSession
+
         val onChunk: (ByteArray, Int) -> Unit = when {
+            streamingActive && autoStopSession != null && aacSession != null -> { buf, len ->
+                handleStreamingChunk(buf, len)
+                autoStopSession.onChunk(buf, len)
+                aacSession.onChunk(buf, len)
+            }
             streamingActive && autoStopSession != null -> { buf, len ->
                 handleStreamingChunk(buf, len)
                 autoStopSession.onChunk(buf, len)
             }
+            streamingActive && aacSession != null -> { buf, len ->
+                handleStreamingChunk(buf, len)
+                aacSession.onChunk(buf, len)
+            }
+            autoStopSession != null && aacSession != null -> { buf, len ->
+                autoStopSession.onChunk(buf, len)
+                aacSession.onChunk(buf, len)
+            }
             streamingActive -> ::handleStreamingChunk
             autoStopSession != null -> autoStopSession::onChunk
+            aacSession != null -> aacSession::onChunk
             else -> { _, _ -> }
         }
 
@@ -1847,7 +1887,11 @@ class WhisperAccessibilityService : AccessibilityService() {
             onFinished = { result ->
                 silenceAutoStopSession?.release()
                 silenceAutoStopSession = null
-                onRecordingFinished(engine, result)
+                val compressedFile = aacEncoderSession?.finish()
+                aacEncoderSession?.release()
+                aacEncoderSession = null
+                val finalResult = if (compressedFile != null) result.copy(compressedFile = compressedFile) else result
+                onRecordingFinished(engine, finalResult)
             },
             onChunk = onChunk
         )
@@ -1857,6 +1901,8 @@ class WhisperAccessibilityService : AccessibilityService() {
             if (streamingActive) endStreamingSession()
             autoStopSession?.release()
             silenceAutoStopSession = null
+            aacSession?.release()
+            aacEncoderSession = null
             toast("Couldn't start recording — mic busy?")
             return
         }
