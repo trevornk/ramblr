@@ -80,6 +80,24 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- Quick Settings tile (#127): alternative dictation trigger for users who hide the
+             floating ring entirely. BIND_QUICK_SETTINGS_TILE + the QS_TILE intent-filter action
+             are required by the platform for any TileService to be discoverable from the Quick
+             Settings editor; icon/label are set programmatically in RamblrQsTileService so they
+             stay in sync with recording state, but android:icon/android:label are also declared
+             here since the system reads them once, before the service's first onStartListening,
+             to populate the "add tile" editor row. -->
+        <service
+            android:name=".RamblrQsTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_mic"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <!-- ModelDownloadWorker promotes itself to a foreground service while a model download is
              in progress, so it needs a declared type (required on API 34+, #56). Overrides
              WorkManager's own manifest entry for this service. -->
