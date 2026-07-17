@@ -167,6 +167,25 @@ android {
             output.outputFileName = "Ramblr-${versionName}-${flavorName}-${buildType.name}.apk"
         }
     }
+
+    // F-Droid reproducible-build requirement (MR !42401): AGP's dependency metadata block
+    // embeds the exact git revision the APK was built from (and the Play Store SDK/library
+    // dependency list) into a signed block inside the APK. F-Droid's own from-source rebuild
+    // is a *different* checkout of the *same* tagged commit, so if the git working tree wasn't
+    // bit-for-bit identical at build time (e.g. a version-bump commit landed on the branch tip
+    // after this APK was actually built, as happened releasing v1.0.20 -- see the "revision"
+    // mismatch in the failed fdroid build job), AGP embeds a different revision string than
+    // what F-Droid's rebuild embeds, and the reproducibility byte-comparison fails even though
+    // the actual app code is identical. Disabling this block removes that non-deterministic
+    // input entirely -- mirrors how GGML_COMMIT was pinned to "unknown" for the native library
+    // for the exact same class of problem (a build-environment-dependent string leaking into
+    // the compiled artifact). This block also 100% doesn't matter for GitHub/F-Droid
+    // distribution -- it exists for Play Store's dependency transparency feature, which this
+    // app doesn't use (see #99, Play Store distribution is still just a pre-effort evaluation).
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
 }
 
 dependencies {
