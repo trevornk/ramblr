@@ -163,15 +163,23 @@ class AacEncoderSession(cacheDir: File) {
             } else {
                 drainEncoder(endOfStream = true)
             }
+            // finishSucceeded must be computed BEFORE muxerStarted is cleared below -- it
+            // reflects whether the muxer was actually started and received samples, not whether
+            // stop() happened to succeed synchronously here.
+            val startedWithSamples = muxerStarted && wroteAnySamples
             if (muxerStarted) {
                 try {
                     muxer.stop()
                 } catch (e: Exception) {
                     Log.e(TAG, "muxer.stop() failed", e)
-                    muxerStarted = false // don't let release() double-stop below
                 }
+                // Stopped exactly once here regardless of success/failure above -- release()'s
+                // own `if (muxerStarted) muxer.stop()` must never run a second stop() on a muxer
+                // this method already stopped (Android throws IllegalStateException on a
+                // double-stop). release() still unconditionally calls muxer.release() afterwards.
+                muxerStarted = false
             }
-            finishSucceeded = eosQueued && muxerStarted && wroteAnySamples && outputFile.length() > 0L
+            finishSucceeded = eosQueued && startedWithSamples && outputFile.length() > 0L
         } catch (e: Exception) {
             Log.e(TAG, "finish() failed", e)
             finishSucceeded = false
