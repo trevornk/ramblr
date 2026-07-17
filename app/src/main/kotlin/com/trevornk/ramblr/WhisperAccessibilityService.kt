@@ -793,6 +793,14 @@ class WhisperAccessibilityService : AccessibilityService() {
             alpha = 0f
             isClickable = true
             setOnClickListener { onFeedbackTapped() }
+            // #121: TalkBack never announced bubble text changes -- including actionable states
+            // like "Preview: ... tap to insert" and "Cleanup failed (...)" -- because this view had
+            // no live region set. POLITE (rather than a per-case ASSERTIVE-for-errors split) is
+            // used uniformly here: it's a simple, correct fix for every state this bubble shows,
+            // and none of those states are urgent/interrupting enough to justify stealing focus
+            // from whatever the user is already doing (ASSERTIVE's whole point) at the cost of the
+            // added complexity of threading a "is this an error" flag through to every call site.
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         // No post-attach GONE assignment (real root cause fix -- see hideFeedback's comment
         // above): this window's root view stays VISIBLE permanently; hidden state is expressed
