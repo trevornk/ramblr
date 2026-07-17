@@ -1211,6 +1211,13 @@ class WhisperAccessibilityService : AccessibilityService() {
             applyButtonAppearance(stateColor)
 
             feedbackLayoutParams?.let { positionFeedback(it, params, feedbackView?.height ?: 0); wm.updateViewLayout(feedbackView, it) }
+
+            // #111: the exclusion rect reserved in showOverlay() is sized to the ring at the
+            // time it was first shown. A live overlay-size settings change resizes params.width/
+            // height above but, without this, never refreshes the exclusion rect -- leaving it
+            // pinned to the OLD (now stale) size, so touches near the resized ring's new outer
+            // edge fall back into the system edge-swipe gesture's catchment again.
+            applyGestureExclusion(overlay, ringSize)
         }
     }
 
