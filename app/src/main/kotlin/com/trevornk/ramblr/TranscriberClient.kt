@@ -2,6 +2,7 @@ package com.trevornk.ramblr
 
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.asRequestBody
 import okio.BufferedSink
 import okio.source
 import org.json.JSONObject
@@ -35,10 +36,39 @@ object TranscriberClient {
         Result(null, e.message ?: "Parse error")
     }
 
+    /** MIME type used for the compressed-upload (#109) `.m4a` file part -- AAC-in-MP4-container
+     *  audio, the same content-type OkHttp/browsers use for `.m4a`. Mirrors [PcmWavRequestBody]'s
+     *  hardcoded `audio/wav` for the uncompressed path. */
+    const val COMPRESSED_MEDIA_TYPE = "audio/mp4"
+
+    /** Filename for the compressed-upload (#109) multipart file part. OpenAI's
+     *  `/v1/audio/transcriptions` infers the audio format from this extension -- no separate
+     *  mime-type form field exists for it -- so this must stay in sync with [COMPRESSED_MEDIA_TYPE]. */
+    const val COMPRESSED_FILENAME = "audio.m4a"
+
+    /** Filename for the uncompressed (raw WAV) multipart file part -- unchanged default path. */
+    const val WAV_FILENAME = "audio.wav"
+
+    /**
+     * Picks the multipart filename + [RequestBody] for the audio upload (#109): [compressedFile]
+     * wins whenever it's non-null (toggle was on and [AacEncoderSession] produced usable audio),
+     * falling back to streaming [pcmFile] as WAV exactly as before otherwise. Pulled out as its
+     * own pure-ish decision point so the null-check that drives compressed-vs-raw upload format
+     * is easy to read (and to unit test) independent of the network/multipart plumbing around it.
+     */
+    fun uploadPart(pcmFile: File, compressedFile: File?): Pair<String, RequestBody> =
+        if (compressedFile != null) {
+            COMPRESSED_FILENAME to compressedFile.asRequestBody(COMPRESSED_MEDIA_TYPE.toMediaType())
+        } else {
+            WAV_FILENAME to PcmWavRequestBody(pcmFile)
+        }
+
     /**
      * Streams [pcmFile]'s bytes into the multipart upload as a WAV file without ever holding the
      * full audio as one contiguous byte array: [PcmWavRequestBody] writes the 44-byte header
-     * directly to the sink, then streams the PCM file's bytes straight through.
+     * directly to the sink, then streams the PCM file's bytes straight through. When
+     * [compressedFile] is non-null (#109: compressed-upload toggle on and the AAC encode
+     * succeeded) it is uploaded instead, as `.m4a`/`audio/mp4` -- see [uploadPart].
      *
      * [baseUrl]/[model] are honored so a proxy/self-hosted user's recordings actually go to their
      * configured OpenAI-compatible endpoint and model, not always api.openai.com/whisper-1 (M5) --
@@ -52,6 +82,7 @@ object TranscriberClient {
         baseUrl: String = PostProcessor.DEFAULT_BASE_URL,
         model: String = DEFAULT_MODEL,
         vocabularyTerms: List<String> = emptyList(),
+        compressedFile: File? = null,
         callback: (Result) -> Unit,
     ) {
         val bodyBuilder = MultipartBody.Builder()
@@ -65,8 +96,9 @@ object TranscriberClient {
         if (vocabularyTerms.isNotEmpty()) {
             bodyBuilder.addFormDataPart("prompt", VocabularyTerms.asTranscriptionPrompt(vocabularyTerms))
         }
+        val (filename, filePart) = uploadPart(pcmFile, compressedFile)
         val body = bodyBuilder
-            .addFormDataPart("file", "audio.wav", PcmWavRequestBody(pcmFile))
+            .addFormDataPart("file", filename, filePart)
             .build()
 
         val endpoint = transcriptionEndpoint(baseUrl)
