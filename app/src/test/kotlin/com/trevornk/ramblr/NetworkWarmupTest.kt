@@ -1,5 +1,6 @@
 package com.trevornk.ramblr
 
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -55,5 +56,25 @@ class NetworkWarmupTest {
             cleanupChain = ProviderChain(emptyList()),
         )
         assertEquals(emptySet<String>(), hosts)
+    }
+
+    @Test fun `OMNIROUTE warms OmniRoute BASE_URL's host when configured, otherwise contributes nothing`() {
+        // Regression test for #110: OMNIROUTE used to unconditionally return null here ("no fixed
+        // default host to guess at"), even though OmniRoute.BASE_URL (from local.properties via
+        // BuildConfig, see OmniRoute.kt) is a real, build-time-known host once a dev configures
+        // one. This repo is public and CI never sets OMNIROUTE_BASE_URL, so OmniRoute.isConfigured
+        // is false in this test run -- mirroring OmniRouteTest, this pins the contract against
+        // OmniRoute.isConfigured itself rather than a hardcoded assumption about its value, so the
+        // same test is correct here and for any dev with a real local.properties override.
+        val hosts = NetworkWarmup.hostsToWarm(
+            transcriptionCandidates = emptyList(),
+            cleanupChain = ProviderChain(listOf(entry(ProviderKind.OMNIROUTE))),
+        )
+        val expected = if (OmniRoute.isConfigured) {
+            setOfNotNull(OmniRoute.BASE_URL.toHttpUrlOrNull()?.host)
+        } else {
+            emptySet()
+        }
+        assertEquals(expected, hosts)
     }
 }
