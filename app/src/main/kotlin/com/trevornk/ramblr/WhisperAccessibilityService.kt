@@ -71,6 +71,18 @@ fun clipboardClearActionFor(method: InjectMethod, delayMs: Long): ClipboardClear
 const val DEFAULT_INJECT_FEEDBACK = "Copied to clipboard"
 
 /**
+ * #115: wall-clock markers for one dictation's user-perceived latency, from the stop tap through
+ * to the actual injection result -- see [WhisperAccessibilityService.pipelineTiming]'s kdoc for
+ * the field's lifecycle. [stopTapAtMs] is the anchor every other field's elapsed-ms is measured
+ * against when the [PipelineStage] benchmark line is finally built.
+ */
+data class PipelineTiming(
+    val stopTapAtMs: Long,
+    val correlationId: String,
+    val drainAtMs: Long? = null,
+)
+
+/**
  * #118: the default "Copied to clipboard" feedback is only true when the text really did land on
  * the clipboard for the user to paste -- a DIRECT (ACTION_SET_TEXT) injection never reads the
  * clipboard at all, so showing that message there is misleading noise. Any caller-supplied,
@@ -263,6 +275,15 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  [overlayShouldBeVisible]'s keyguard doc). */
     private var screenStateReceiver: android.content.BroadcastReceiver? = null
     @Volatile private var activeToken: Int = 0
+    /** #115: wall-clock markers for the current dictation's user-perceived, stop-tap-to-injection
+     *  timeline. Set the instant [activeToken] is minted (stop tap, or the max-duration auto-stop
+     *  path's synthetic "stop") and consumed once in [finishInjection] to write the end-to-end
+     *  [PipelineStage] benchmark line, then cleared so a later, unrelated retry-tap injectText()
+     *  call (e.g. [onFeedbackTapped]'s raw-text retry) doesn't attribute stale timing to itself.
+     *  A plain field (not a per-token map) is safe here because exactly one dictation is ever
+     *  in flight at a time -- [guard]/[activeToken] already enforce that invariant everywhere
+     *  else in this class. */
+    @Volatile private var pipelineTiming: PipelineTiming? = null
     private val handler = Handler(Looper.getMainLooper())
     private val hideFeedback = Runnable {
         setFeedbackTouchable(false)
@@ -1758,6 +1779,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun stopAndTranscribe() {
         if (!stateMachine.tryStartTranscribing()) return
         activeToken = guard.start()
+        pipelineTiming = PipelineTiming(stopTapAtMs = System.currentTimeMillis(), correlationId = "tok-$activeToken")
         armWatchdog(activeToken)
         enterTranscribingUi()
     }
@@ -1856,6 +1878,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         cancelWatchdog()
         guard.cancel()
         activeToken = 0
+        // #115: deliberately NOT cleared here. resetToIdle() runs immediately after beginPreview()
+        // too (preview-before-inject, #40) -- well before the real injectText() call that resolves
+        // the preview, possibly seconds later on a timeout. Clearing here would silently drop
+        // pipeline timing for every previewed dictation. Left to be consumed once by
+        // finishInjection() (which nulls it after reading) or naturally overwritten by the next
+        // dictation's stopAndTranscribe()/startMaxDurationTranscription() -- see pipelineTiming's
+        // kdoc for why a stale value can never be misattributed to an unrelated injectText() call.
         stateMachine.reset()
         setBusy(false)
         setAppearance(COLOR_IDLE)
@@ -1869,6 +1898,12 @@ class WhisperAccessibilityService : AccessibilityService() {
         // teardown and leave the new reader keeping the mic hot after the service appears off.
         if (recordingEngine === engine) recordingEngine = null
         if (result.discarded) return // service destroyed / recording forced off — nothing to transcribe
+
+        // #115: mark stop-tap -> reader-drain/PCM-handoff the instant it actually happens, on
+        // this reader thread, rather than waiting for the main-thread token resolution below --
+        // resolveLateRecordingOnMain's hop can add a real, variable delay that would otherwise be
+        // silently folded into this measurement.
+        pipelineTiming = pipelineTiming?.copy(drainAtMs = System.currentTimeMillis())
 
         val token = when {
             activeToken != 0 && guard.isCurrent(activeToken) -> activeToken
@@ -1919,6 +1954,13 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
             val token = guard.start()
             activeToken = token
+            // #115: max-duration auto-stop has no real user "stop tap" -- the cap itself is the
+            // trigger -- so anchor the timeline here instead, at the moment this app-side decided
+            // the dictation is over. drainAtMs is set to the same instant since the drain already
+            // happened (this whole branch runs after onRecordingFinished already returned) before
+            // any pipelineTiming existed to record it against.
+            val nowMs = System.currentTimeMillis()
+            pipelineTiming = PipelineTiming(stopTapAtMs = nowMs, correlationId = "tok-$token", drainAtMs = nowMs)
             armWatchdog(token)
             enterTranscribingUi()
             toast("Recording limit reached (10 min) — transcribing…")
@@ -2634,6 +2676,12 @@ class WhisperAccessibilityService : AccessibilityService() {
     ) {
         Log.i(TAG, "Injecting text into ${candidates.size} candidate node(s)")
 
+        // #115: the final injection attempt starts here -- scanning is done, this is the actual
+        // node-by-node write attempt below. Snapshotting once up front (rather than re-reading
+        // System.currentTimeMillis() at the bottom) keeps "attempt start" honest even though the
+        // loop below can itself take real time on a slow/unresponsive target node.
+        val injectionAttemptAtMs = System.currentTimeMillis()
+
         var method = InjectMethod.NONE
         var priorNodeText: String? = null
         var injectedNode: AccessibilityNodeInfo? = null
@@ -2673,6 +2721,27 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
 
         Log.i(TAG, if (method != InjectMethod.NONE) "Text injection action reported success" else "No injection action succeeded; clipboard fallback only")
+
+        // #115: write the end-to-end pipeline benchmark line the moment injection has actually
+        // resolved (success or clipboard fallback) -- this IS the "text appears in the focused
+        // field" moment the whole timeline exists to measure. Consumed exactly once (the field is
+        // nulled right after reading) so a later, unrelated retry-tap injectText() call (e.g.
+        // onFeedbackTapped's raw-text retry, or a preview commit that runs well after the
+        // original stop tap) never attributes this dictation's stale timing to itself.
+        pipelineTiming?.let { timing ->
+            pipelineTiming = null
+            val nowMs = System.currentTimeMillis()
+            BenchmarkLogger.log(
+                context = this,
+                correlationId = timing.correlationId,
+                pipeline = PipelineStage(
+                    stopToDrainMs = timing.drainAtMs?.let { it - timing.stopTapAtMs },
+                    injectionAttemptMs = injectionAttemptAtMs - timing.stopTapAtMs,
+                    injectMethod = method.name,
+                    totalMs = nowMs - timing.stopTapAtMs,
+                ),
+            )
+        }
 
         updatePendingInjection(method, injectedText = text, rawText = rawText ?: text, priorClipboard, priorNodeText, injectedNode, historyTimestamp)
 
