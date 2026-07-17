@@ -31,6 +31,8 @@ class SelfUpdateSettingsActivity : BaseSettingsActivity() {
     private lateinit var autoInstallSwitch: MaterialSwitch
     private lateinit var autoInstallGroup: NestedGroup
     private lateinit var statusRowSub: TextView
+    private lateinit var installNowRow: LinearLayout
+    private lateinit var installNowRowSub: TextView
     private lateinit var checkNowRow: LinearLayout
 
     private var checking = false
@@ -79,6 +81,19 @@ class SelfUpdateSettingsActivity : BaseSettingsActivity() {
         statusRowSub = statusRow.findViewWithTag("subtitle")
         root.addView(statusRow)
 
+        // --- Manual install action (real bug fix, 2026-07-17): tapping "Check now" or the
+        // update-available notification previously only ever opened the GitHub release page in
+        // a browser -- there was no in-app path to actually install a found update short of
+        // opting into the separate, quiet-hours-gated "Automatically install updates" toggle
+        // above. This row is the missing middle ground: a one-tap install using the exact same
+        // download/checksum/PackageInstaller pipeline as the automatic path, just without the
+        // overnight-window wait (see SelfUpdateInstallGate.shouldAttemptManualInstallNow) --
+        // appropriate since a user tapping this is, by definition, already looking at the phone.
+        // Only shown when a real UpdateAvailable result is cached -- refresh() controls visibility.
+        installNowRow = settingsRow("Install now", "") { onInstallNow() }
+        installNowRowSub = installNowRow.findViewWithTag("subtitle")
+        root.addView(installNowRow)
+
         // --- Manual one-off check, exercising the whole pipeline before Part 5's periodic job exists ---
         checkNowRow = settingsRow("Check now", "Check GitHub for a newer release right away") { onCheckNow() }
         root.addView(checkNowRow)
@@ -111,6 +126,21 @@ class SelfUpdateSettingsActivity : BaseSettingsActivity() {
         // mechanism AdvancedActivity's dictation-history sub-row uses.
         autoInstallGroup.outer.visibility = if (notifyEnabled) android.view.View.VISIBLE else android.view.View.GONE
         refreshStatusRow()
+        refreshInstallNowRow()
+    }
+
+    /** "Install now" is only ever shown when there's a real update to install -- a fresh
+     *  UpdateAvailable in the cache, per the same source of truth [refreshStatusRow] already
+     *  reads. Hidden (not merely disabled) otherwise so the row doesn't sit there implying
+     *  there's something to tap when there isn't. */
+    private fun refreshInstallNowRow() {
+        val cached = SelfUpdateChecker.cachedResult(this)
+        if (cached is UpdateCheckResult.UpdateAvailable) {
+            installNowRow.visibility = android.view.View.VISIBLE
+            installNowRowSub.text = "Download and install v${cached.versionName} now"
+        } else {
+            installNowRow.visibility = android.view.View.GONE
+        }
     }
 
     private fun refreshStatusRow() {
@@ -144,11 +174,25 @@ class SelfUpdateSettingsActivity : BaseSettingsActivity() {
                 checkNowRow.isEnabled = true
                 if (isDestroyed || isFinishing) return@runOnUiThread
                 refreshStatusRow()
+                refreshInstallNowRow()
                 if (result is UpdateCheckResult.UpdateAvailable && SelfUpdatePrefs.isNotifyEnabled(this)) {
                     SelfUpdateNotifications.postUpdateAvailable(this, result)
                 }
                 toast(SelfUpdateStatusFormatter.statusLine(result))
             }
         }
+    }
+
+    /** Manual "Install now" tap: enqueues the real download/checksum/PackageInstaller pipeline
+     *  ([SelfUpdateInstallWorker.enqueueManual]) against whatever [UpdateCheckResult.UpdateAvailable]
+     *  is currently cached -- the same result [refreshInstallNowRow] used to decide this row
+     *  should even be visible. This does NOT block on the install finishing (that's a real
+     *  network download plus, on API<31 or when the framework declines the silent path, Android's
+     *  own confirmation dialog) -- it hands off to WorkManager and the existing
+     *  [SelfUpdateNotifications.progress]/[SelfUpdateNotifications.postInstallFailure]
+     *  notifications report the rest, exactly as the automatic path already does. */
+    private fun onInstallNow() {
+        SelfUpdateInstallWorker.enqueueManual(applicationContext)
+        toast("Installing update…")
     }
 }

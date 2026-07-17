@@ -34,5 +34,11 @@
              PendingIntent can still be delivered even if the process that started the install
              session has since died; see SelfUpdateInstallReceiver's kdoc. -->
         <receiver android:name=".SelfUpdateInstallReceiver" android:exported="false" />
+
+        <!-- Backs the "Install" action button on the update-available notification
+             (SelfUpdateNotifications.buildNotification). Manifest-declared for the same
+             process-may-have-died reason as SelfUpdateInstallReceiver above, since a notification
+             action can be tapped long after the app process that posted it has been killed. -->
+        <receiver android:name=".SelfUpdateInstallActionReceiver" android:exported="false" />
     </application>
 </manifest>
