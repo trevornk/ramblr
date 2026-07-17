@@ -2939,8 +2939,16 @@ class WhisperAccessibilityService : AccessibilityService() {
             val current = resolveRealText(node.text?.toString(), node.isShowingHintText)
             val start = if (node.textSelectionStart >= 0) node.textSelectionStart else current.length
             val end = if (node.textSelectionEnd >= 0) node.textSelectionEnd else start
-            val replacementStart = minOf(start, end)
-            val replacementEnd = maxOf(start, end)
+            // Clamp to current's actual bounds (audit finding, two-model cross-examined): a node
+            // can self-report a stale/inconsistent selection index -- most plausibly right after
+            // resolveRealText substitutes "" for hint text above while the node's own
+            // textSelectionStart/End still reflects a positive index against the hint string it
+            // was just showing. Without this, replaceRange below throws IndexOutOfBoundsException
+            // uncaught (this method has no try/catch of its own; finishInjection's try/finally only
+            // recycles nodes), which would crash the whole accessibility service. Mirrors the same
+            // clamp StreamingPreview.replacePartialInField already applies for the same reason.
+            val replacementStart = minOf(start, end).coerceIn(0, current.length)
+            val replacementEnd = maxOf(start, end).coerceIn(replacementStart, current.length)
             val updated = current.replaceRange(replacementStart, replacementEnd, text)
             val setTextOk = setNodeText(node, updated)
             Log.i(TAG, "ACTION_SET_TEXT => $setTextOk")
