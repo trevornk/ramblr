@@ -160,6 +160,11 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
         // primitive across the accessibility-service boundary.
         return try {
             SelfUpdateInstaller.install(applicationContext, apkFile)
+            // The staged APK has been successfully handed off to (and committed by)
+            // PackageInstaller -- it's no longer needed on disk. Mirrors the downloadApk()
+            // path's tmp.delete() cleanup for the .part file: a successful terminal outcome
+            // must never leave staged bytes behind under filesDir/self_update/ forever.
+            apkFile.delete()
             Result.success()
         } catch (e: Exception) {
             SelfUpdateNotifications.postInstallFailure(applicationContext, update.versionName, e.message ?: "Install failed")
