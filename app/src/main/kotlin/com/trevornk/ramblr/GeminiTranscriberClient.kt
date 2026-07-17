@@ -33,6 +33,16 @@ object GeminiTranscriberClient {
     const val DEFAULT_MODEL = "gemini-3.1-flash-lite"
     const val TRANSCRIBE_PROMPT = "Transcribe this audio exactly as spoken. Return only the transcript text, with no commentary, labels, or extra formatting."
 
+    /**
+     * Interpolates the user's personal vocabulary into [TRANSCRIBE_PROMPT] (#114 part 2): the
+     * same terms already biasing cleanup-stage prompts (see [PostProcessor.vocabularyClause])
+     * appended as a short clause so Gemini's transcription decoding is nudged toward them too.
+     * Always on when [terms] is non-empty; [TRANSCRIBE_PROMPT] is returned unchanged otherwise.
+     */
+    fun transcribePrompt(terms: List<String>): String =
+        if (terms.isEmpty()) TRANSCRIBE_PROMPT
+        else "$TRANSCRIBE_PROMPT Watch for these project names and personal vocabulary terms, which speech-to-text often mishears: ${terms.joinToString(", ")}."
+
     /** Max PCM file size this inline-audio path will accept (M6): base64 + JSON string + request
      *  body copy buffers the recording ~4x in memory (a max-length 19.2MB PCM ≈ ~100MB transient),
      *  stacked on the resident STT/cleanup models -- a plausible OOM exactly when memory is tight.
@@ -103,7 +113,14 @@ object GeminiTranscriberClient {
      * short dictation recordings, same tradeoff [NetworkClients]' generous timeouts already
      * budget for.
      */
-    fun transcribe(pcmFile: File, apiKey: String, model: String = DEFAULT_MODEL, cancelHolder: InFlightCall, callback: (Result) -> Unit) {
+    fun transcribe(
+        pcmFile: File,
+        apiKey: String,
+        model: String = DEFAULT_MODEL,
+        cancelHolder: InFlightCall,
+        vocabularyTerms: List<String> = emptyList(),
+        callback: (Result) -> Unit,
+    ) {
         val wavBytes = try {
             WavWriter.header(pcmFile.length(), 16000, 1, 16) + pcmFile.readBytes()
         } catch (e: IOException) {
@@ -111,7 +128,10 @@ object GeminiTranscriberClient {
             return
         }
 
-        val body = buildRequestBody(wavBytes).toString().toRequestBody("application/json".toMediaType())
+        // #114 part 2: interpolate the user's vocabulary into the transcription prompt itself
+        // (previously only cleanup-stage prompts got it), always on when terms exist.
+        val body = buildRequestBody(wavBytes, prompt = transcribePrompt(vocabularyTerms))
+            .toString().toRequestBody("application/json".toMediaType())
 
         // A malformed key/model (or one OkHttp otherwise rejects) throws IllegalArgumentException
         // from Request.Builder().url() rather than failing the call -- caught so it reports
