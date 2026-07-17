@@ -733,10 +733,22 @@ class WhisperAccessibilityService : AccessibilityService() {
                     // A touch-down on a currently-peeked ring is a restore tap, not the start of a
                     // normal drag/tap/long-press gesture (Feature A): consume it here so it can
                     // never also fall through to onTap()'s mic-toggle on ACTION_UP.
+                    //
+                    // #119 exception: with SingleTapRestoreToggle on, the user has opted into a
+                    // single tap both restoring AND recording, so this must NOT short-circuit the
+                    // gesture the way the two-tap default does. Instead it only triggers the
+                    // restore side effect here and then falls through into the exact same
+                    // tap/long-press/drag setup used below for a normal (non-peeked) touch-down --
+                    // reusing that existing disambiguation rather than inventing a new one means a
+                    // long-press or a drag started from a peeked ring still resolves correctly;
+                    // only a genuine tap (ACTION_UP with movement under TAP_THRESHOLD_DP, exactly
+                    // as below) ends up calling onTap().
                     if (isPeeked) {
                         restoreFromPeek()
-                        consumedByPeekRestore = true
-                        return@setOnTouchListener true
+                        if (!SingleTapRestoreToggle.isEnabled(this)) {
+                            consumedByPeekRestore = true
+                            return@setOnTouchListener true
+                        }
                     }
                     startX = params.x; startY = params.y
                     touchX = ev.rawX; touchY = ev.rawY
@@ -1282,6 +1294,14 @@ class WhisperAccessibilityService : AccessibilityService() {
      * before); when the icon is in the top half, the bubble now opens downward instead, using
      * [feedbackHeight] -- the view's real last-measured height, not a guess -- so it never
      * overlaps the icon on either side. Both directions are still clamped fully on-screen.
+     *
+     * #117: the ring-relative gap above uses [RING_AVOID_MARGIN_DP] rather than the plain
+     * [MARGIN_DP] used for on-screen clamping -- the bubble's touchable footprint is small and
+     * scoped to itself (see [setFeedbackTouchable]), but during the 10s raw-text-retry window the
+     * very next thing the user is likely to do is tap the ring again to start another dictation,
+     * so this is exactly the one spot where a too-thin gap risks stealing that tap. The extra
+     * margin is applied only to the ring-adjacent edge; the far edge and on-screen clamping still
+     * use [MARGIN_DP] as before.
      */
     private fun positionFeedback(
         feedbackParams: WindowManager.LayoutParams,
@@ -1290,16 +1310,17 @@ class WhisperAccessibilityService : AccessibilityService() {
         targetBounds: Rect? = null
     ) {
         val margin = (MARGIN_DP * dp).toInt()
+        val ringMargin = (RING_AVOID_MARGIN_DP * dp).toInt()
         val offset = (FEEDBACK_OFFSET_DP * dp).toInt()
         val ringSize = bubbleParams.width
         feedbackParams.x = maxOf(margin, bubbleParams.x - offset)
         var openUpward = bubbleParams.y + ringSize / 2 > screenH / 2
         feedbackParams.y = if (openUpward) {
             // Icon in bottom half: open upward, same placement as before this fix.
-            (bubbleParams.y - feedbackHeight - margin).coerceAtLeast(margin)
+            (bubbleParams.y - feedbackHeight - ringMargin).coerceAtLeast(margin)
         } else {
             // Icon in top half: open downward instead, so the bubble can't cover the icon.
-            (bubbleParams.y + ringSize + margin).coerceAtMost(screenH - feedbackHeight - margin)
+            (bubbleParams.y + ringSize + ringMargin).coerceAtMost(screenH - feedbackHeight - margin)
         }
 
         // #120: the natural above/below placement above only ever considers the ring's own
@@ -1316,9 +1337,9 @@ class WhisperAccessibilityService : AccessibilityService() {
             if (overlapsTarget) {
                 openUpward = !openUpward
                 feedbackParams.y = if (openUpward) {
-                    (bubbleParams.y - feedbackHeight - margin).coerceAtLeast(margin)
+                    (bubbleParams.y - feedbackHeight - ringMargin).coerceAtLeast(margin)
                 } else {
-                    (bubbleParams.y + ringSize + margin).coerceAtMost(screenH - feedbackHeight - margin)
+                    (bubbleParams.y + ringSize + ringMargin).coerceAtMost(screenH - feedbackHeight - margin)
                 }
             }
         }
