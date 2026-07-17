@@ -125,6 +125,26 @@ class WhisperAccessibilityService : AccessibilityService() {
          *  idle right now" without exposing the private [stateMachine] field itself. */
         fun currentRecordingState(): RecordingStateMachine.State? = instance?.stateMachine?.current()
 
+        /**
+         * Cross-component entry point for the Quick Settings tile (#127): [RamblrQsTileService]
+         * lives in its own component, not this AccessibilityService, so it can't call
+         * [onTap]/[startRecording]/[stopAndTranscribe] directly -- it goes through this static,
+         * null-safe function instead, mirroring the existing `instance?.` pattern used by
+         * [currentRecordingState]/[ModelDownloadWorker.notifyServiceModelReady] rather than
+         * inventing a new Binder/Broadcast IPC channel for what is, in-process, just a same-JVM
+         * singleton reference. Returns false (and does nothing) when the service isn't connected
+         * at all, i.e. the user hasn't enabled Ramblr's accessibility service -- the tile uses
+         * that to show its "service disabled" state instead of silently no-op'ing forever.
+         * Posted to the service's own [handler] so the actual state-machine transition always
+         * runs on the same thread [onTap] itself runs on, even though the tile calls in from a
+         * different process-local component's callback thread.
+         */
+        fun requestToggleRecording(): Boolean {
+            val service = instance ?: return false
+            service.handler.post { service.onTap() }
+            return true
+        }
+
         /** Whether Ramblr's own MainActivity is currently foregrounded (#35), kept as a static flag
          *  rather than only reacting when [instance] is non-null -- so a service that connects while
          *  MainActivity is already open (e.g. right after the user enables Accessibility from
