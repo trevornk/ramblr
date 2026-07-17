@@ -65,6 +65,21 @@ fun clipboardClearActionFor(method: InjectMethod, delayMs: Long): ClipboardClear
     InjectMethod.NONE -> ClipboardClearAction.None
 }
 
+/** [injectText]'s default `feedback` value -- shown whenever a caller doesn't ask for a more
+ *  specific message. Only meaningful when something actually ended up on the clipboard, so
+ *  [injectionFeedbackFor] swaps it out for DIRECT injections (#118). */
+const val DEFAULT_INJECT_FEEDBACK = "Copied to clipboard"
+
+/**
+ * #118: the default "Copied to clipboard" feedback is only true when the text really did land on
+ * the clipboard for the user to paste -- a DIRECT (ACTION_SET_TEXT) injection never reads the
+ * clipboard at all, so showing that message there is misleading noise. Any caller-supplied,
+ * non-default [feedback] (raw-text-retry, cleanup-failed/-skipped, etc.) is meaningful and passes
+ * through untouched; only the untouched default gets swapped, and only for DIRECT.
+ */
+fun injectionFeedbackFor(method: InjectMethod, feedback: String?): String? =
+    if (feedback == DEFAULT_INJECT_FEEDBACK && method == InjectMethod.DIRECT) "Inserted" else feedback
+
 /**
  * Snapshot of the most recent successful injection, kept briefly (~10s) to back "undo last
  * insertion" / "retry with raw text" (#27). [node] is only set for a DIRECT (ACTION_SET_TEXT)
@@ -2533,7 +2548,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun injectText(
         text: String,
         rawText: String? = null,
-        feedback: String? = "Copied to clipboard",
+        feedback: String? = DEFAULT_INJECT_FEEDBACK,
         feedbackDurationMs: Long = 2000,
         paidFallbackGroup: CleanupStepGroup? = null,
         existingHistoryTimestamp: Long? = null,
@@ -2652,10 +2667,14 @@ class WhisperAccessibilityService : AccessibilityService() {
         // to it (e.g. "Copied to clipboard") -- the cleaned text is already injected at this point,
         // so "Copied to clipboard" is stale/misleading noise; the only actionable thing left to
         // tell the user is that tapping swaps in the raw transcript instead (Trevor's request).
+        // #118: only the untouched default clipboard message gets swapped for DIRECT injections;
+        // any explicit feedback the caller passed (raw-text-retry, cleanup-failed, etc.) is
+        // meaningful and must survive as-is.
+        val resolvedFeedback = injectionFeedbackFor(method, feedback)
         val displayFeedback = when {
             retryRawOffered -> "Tap to use raw text"
-            isFallback -> feedback?.let { "$it · tap to copy again" }
-            else -> feedback
+            isFallback -> resolvedFeedback?.let { "$it · tap to copy again" }
+            else -> resolvedFeedback
         }
         displayFeedback?.let { showFeedback(it, duration, touchable = retryRawOffered || isFallback, isFallback = isFallback) }
 
