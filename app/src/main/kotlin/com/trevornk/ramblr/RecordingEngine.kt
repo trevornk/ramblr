@@ -34,7 +34,19 @@ class RecordingEngine(
         val bytesRecorded: Long,
         val discarded: Boolean,
         val stopReason: StopReason,
-        val errorMessage: String? = null
+        val errorMessage: String? = null,
+        /**
+         * The finalized `.m4a` produced by an [AacEncoderSession] tee'd through this recording's
+         * `onChunk` (#109), when the caller opted into compressed cloud uploads and the encode
+         * actually produced usable audio. Always null when that opt-in is off (see
+         * [CompressedUploadToggle]) -- [RecordingEngine] itself has no knowledge of compression,
+         * this field only exists so the caller (which does own the encoder session, same as it
+         * owns [SilenceAutoStopSession]) can attach the finished file onto the [Result] it
+         * receives via `onFinished`, keeping the compressed file's lifetime attached 1:1 to
+         * [pcmFile]'s from that point on -- both travel together and are deleted together by
+         * every downstream call site, mirroring [pcmFile]'s own discard/delete discipline.
+         */
+        val compressedFile: File? = null
     )
 
     companion object {
