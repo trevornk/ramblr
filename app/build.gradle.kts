@@ -64,6 +64,23 @@ android {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
+            // F-Droid reproducible-build requirement (MR !42401): AGP embeds a
+            // META-INF/version-control-info.textproto file recording the exact git commit hash
+            // (and whether the tree is clean) into the APK whenever it can detect a git repo --
+            // a separate feature from the dependenciesInfo{} block above (that one is Play
+            // Store's dependency-transparency block; this is AGP's distinct VCS-info feature).
+            // This broke v1.0.20's reproducibility: an isolated `git worktree` checkout (used to
+            // build a byte-exact release APK for an already-tagged commit without disturbing the
+            // main working tree) has a `.git` *file* pointing back to the main repo rather than a
+            // `.git` *directory`, so AGP's git detection there failed outright (embedding
+            // "generate_error_reason: NO_VALID_GIT_FOUND"), while F-Droid's own from-source clone
+            // correctly detected git and embedded a real revision block -- two different bytes
+            // for genuinely identical app code and source commit. Disabling this entirely (the
+            // documented fix per F-Droid's own guidance, since this app's release process doesn't
+            // guarantee every local/CI build environment has an identical git metadata layout at
+            // build time) removes that non-deterministic input, the same fix class as pinning
+            // GGML_COMMIT for the native library.
+            vcsInfo.include = false
         }
     }
 
