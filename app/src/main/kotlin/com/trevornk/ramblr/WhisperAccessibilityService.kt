@@ -173,6 +173,11 @@ class WhisperAccessibilityService : AccessibilityService() {
          *  existed and a customized size keeps the glyph/padding proportions consistent. */
         private const val RING_DP = OverlayAppearancePrefs.DEFAULT_RING_DP
         private const val FEEDBACK_OFFSET_DP = 64
+        /** #117: gap kept between the feedback bubble and the ring on the ring-adjacent edge,
+         *  wider than the plain [MARGIN_DP] used everywhere else -- the ring is the single most
+         *  likely next tap target while the bubble is touchable (raw-text-retry), so it gets
+         *  extra breathing room instead of the ordinary screen-edge margin. */
+        private const val RING_AVOID_MARGIN_DP = 20
 
         /** Hold the button this long while TRANSCRIBING to cancel (see overlay.setOnTouchListener). */
         private const val LONG_PRESS_CANCEL_MS = 500L
