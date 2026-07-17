@@ -34,11 +34,34 @@ object SelfUpdateNotifications {
      *  [DownloadNotifications.notificationId] does. */
     fun notificationId(versionCode: Int): Int = versionCode and 0x7FFFFFFF
 
+    /** XOR mask applied to [notificationId] to derive [installActionPendingIntent]'s distinct
+     *  request code -- keeps it deterministic per-version (so re-posting the same release's
+     *  notification reuses/updates the same PendingIntent instead of leaking a new one every
+     *  time) while guaranteeing it never collides with [releasePendingIntent]'s own request
+     *  code for that same version. */
+    private const val INSTALL_ACTION_REQUEST_CODE_MASK = 0x1000_0000
+
     private fun releasePendingIntent(ctx: Context, update: UpdateCheckResult.UpdateAvailable): PendingIntent {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(update.releaseUrl))
         return PendingIntent.getActivity(
             ctx,
             notificationId(update.versionCode),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    /** Fires [SelfUpdateInstallActionReceiver], which enqueues the same manual,
+     *  quiet-hours-free install pipeline as [SelfUpdateSettingsActivity]'s "Install now" row --
+     *  see that receiver's kdoc. A distinct request code (offset from [notificationId]'s own
+     *  per-version id space, mirroring [SelfUpdateInstallWorker]'s INSTALL_NOTIFICATION_ID vs.
+     *  notificationId() separation) so this PendingIntent can never collide with
+     *  [releasePendingIntent]'s for the same release. */
+    private fun installActionPendingIntent(ctx: Context, update: UpdateCheckResult.UpdateAvailable): PendingIntent {
+        val intent = Intent(ctx, SelfUpdateInstallActionReceiver::class.java)
+        return PendingIntent.getBroadcast(
+            ctx,
+            notificationId(update.versionCode) xor INSTALL_ACTION_REQUEST_CODE_MASK,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -50,6 +73,7 @@ object SelfUpdateNotifications {
             .setContentTitle("Update available: v${update.versionName}")
             .setContentText("Tap to view the release on GitHub")
             .setContentIntent(releasePendingIntent(ctx, update))
+            .addAction(0, "Install", installActionPendingIntent(ctx, update))
             .setAutoCancel(true)
             .build()
 

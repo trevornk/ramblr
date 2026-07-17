@@ -126,11 +126,20 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
 
     /** The install gate (quiet hours + idle debounce, see [SelfUpdateInstallGate]) plus, if it
      *  passes, the actual [PackageInstaller]-based install attempt. [apkFile] is already
-     *  downloaded and checksum-verified by the time this runs. */
+     *  downloaded and checksum-verified by the time this runs. [manual] (from [inputData]'s
+     *  [KEY_MANUAL], set by [enqueueManual]) skips the quiet-hours requirement -- a user who just
+     *  tapped "Install now" is by definition looking at the phone right now, so waiting for the
+     *  overnight window would just be confusing (see [SelfUpdateInstallGate.shouldAttemptManualInstallNow]).
+     *  The idle/not-mid-dictation check still applies either way. */
     private fun attemptGatedInstall(update: UpdateCheckResult.UpdateAvailable, apkFile: File): Result {
-        val withinQuietHoursFirst = SelfUpdateInstallGate.isWithinQuietHours(currentHour())
+        val manual = inputData.getBoolean(KEY_MANUAL, false)
         val recordingStateFirst = WhisperAccessibilityService.currentRecordingState()
-        if (!SelfUpdateInstallGate.shouldAttemptInstallNow(withinQuietHoursFirst, recordingStateFirst)) {
+        val allowedFirst = if (manual) {
+            SelfUpdateInstallGate.shouldAttemptManualInstallNow(recordingStateFirst)
+        } else {
+            SelfUpdateInstallGate.shouldAttemptInstallNow(SelfUpdateInstallGate.isWithinQuietHours(currentHour()), recordingStateFirst)
+        }
+        if (!allowedFirst) {
             // Not a failure -- just not a good moment. Keep the verified file on disk so the next
             // periodic retry (Part 5) doesn't need to re-download. No failure notification either:
             // this is expected, routine "try again later" behavior, not something to alarm about.
@@ -144,9 +153,13 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
         Thread.sleep(IDLE_DEBOUNCE_MS)
         if (isStopped) return Result.failure()
 
-        val withinQuietHoursSecond = SelfUpdateInstallGate.isWithinQuietHours(currentHour())
         val recordingStateSecond = WhisperAccessibilityService.currentRecordingState()
-        if (!SelfUpdateInstallGate.shouldAttemptInstallNow(withinQuietHoursSecond, recordingStateSecond)) {
+        val allowedSecond = if (manual) {
+            SelfUpdateInstallGate.shouldAttemptManualInstallNow(recordingStateSecond)
+        } else {
+            SelfUpdateInstallGate.shouldAttemptInstallNow(SelfUpdateInstallGate.isWithinQuietHours(currentHour()), recordingStateSecond)
+        }
+        if (!allowedSecond) {
             return Result.retry()
         }
 
@@ -239,6 +252,11 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
 
         fun workName(): String = "self-update-install"
 
+        /** [Data] key for whether this run was triggered by an explicit user tap (see
+         *  [enqueueManual]) vs. the periodic/auto-install path (see [enqueue]) -- read by
+         *  [attemptGatedInstall] to decide which [SelfUpdateInstallGate] rule applies. */
+        private const val KEY_MANUAL = "manual"
+
         fun enqueue(ctx: Context) {
             val request = OneTimeWorkRequestBuilder<SelfUpdateInstallWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -246,6 +264,23 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
                 .build()
             WorkManager.getInstance(ctx)
                 .enqueueUniqueWork(workName(), ExistingWorkPolicy.KEEP, request)
+        }
+
+        /** Manual "Install now" entry point (Settings row / notification action): same worker,
+         *  same download/checksum/PackageInstaller pipeline as [enqueue], but tagged so
+         *  [attemptGatedInstall] skips the overnight quiet-hours requirement -- see
+         *  [SelfUpdateInstallGate.shouldAttemptManualInstallNow]'s kdoc for why that's safe.
+         *  [ExistingWorkPolicy.REPLACE] (not [ExistingWorkPolicy.KEEP] like [enqueue]) so a
+         *  user who taps "Install now" while a quiet-hours-gated automatic attempt is still
+         *  sitting in backoff doesn't have to wait for that one's next retry tick -- the manual
+         *  tap always wins and runs immediately. */
+        fun enqueueManual(ctx: Context) {
+            val request = OneTimeWorkRequestBuilder<SelfUpdateInstallWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setInputData(androidx.work.Data.Builder().putBoolean(KEY_MANUAL, true).build())
+                .build()
+            WorkManager.getInstance(ctx)
+                .enqueueUniqueWork(workName(), ExistingWorkPolicy.REPLACE, request)
         }
 
         fun cancel(ctx: Context) {

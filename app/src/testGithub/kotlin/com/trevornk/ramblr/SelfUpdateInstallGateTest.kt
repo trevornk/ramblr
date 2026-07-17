@@ -119,6 +119,24 @@ class SelfUpdateInstallGateTest {
         assertFalse(SelfUpdateInstallGate.shouldAttemptInstallNow(false, RecordingStateMachine.State.RECORDING))
     }
 
+    // -- shouldAttemptManualInstallNow: manual "Install now" gate skips quiet hours --
+
+    @Test fun `manual install proceeds when idle, regardless of time of day`() {
+        assertTrue(SelfUpdateInstallGate.shouldAttemptManualInstallNow(RecordingStateMachine.State.IDLE))
+    }
+
+    @Test fun `manual install proceeds when the service isn't running at all (null)`() {
+        assertTrue(SelfUpdateInstallGate.shouldAttemptManualInstallNow(null))
+    }
+
+    @Test fun `manual install is still deferred while recording`() {
+        assertFalse(SelfUpdateInstallGate.shouldAttemptManualInstallNow(RecordingStateMachine.State.RECORDING))
+    }
+
+    @Test fun `manual install is still deferred while transcribing`() {
+        assertFalse(SelfUpdateInstallGate.shouldAttemptManualInstallNow(RecordingStateMachine.State.TRANSCRIBING))
+    }
+
     // -- SelfUpdateInstallWorker pure helpers --
 
     @Test fun `apkFile path is keyed by versionCode so different versions never collide`() {

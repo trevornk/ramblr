@@ -83,4 +83,17 @@ object SelfUpdateInstallGate {
         withinQuietHours: Boolean,
         recordingState: RecordingStateMachine.State?,
     ): Boolean = withinQuietHours && (recordingState == null || recordingState == RecordingStateMachine.State.IDLE)
+
+    /**
+     * The manual "Install now" counterpart to [shouldAttemptInstallNow]: a user who explicitly
+     * tapped an install action (Settings row or notification button) is, by definition, actively
+     * looking at the phone right now -- the whole point of [QUIET_HOURS_START_HOUR]/
+     * [QUIET_HOURS_END_HOUR] is to avoid a silent APK swap while Trevor is using the device, which
+     * doesn't apply here since he just explicitly asked for it. Still requires the recording
+     * state to read as idle (or the service to be disconnected) for the same reason
+     * [shouldAttemptInstallNow] does -- an install mid-dictation is still unsafe regardless of who
+     * triggered it or what time it is.
+     */
+    fun shouldAttemptManualInstallNow(recordingState: RecordingStateMachine.State?): Boolean =
+        recordingState == null || recordingState == RecordingStateMachine.State.IDLE
 }
