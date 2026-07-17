@@ -19,7 +19,7 @@
 
     <!-- Required base permission for a non-privileged app to create/commit a PackageInstaller
          session at all (#106 audit finding): UPDATE_PACKAGES_WITHOUT_USER_ACTION above only
-         upgrades an already-permitted install to skip the confirmation dialog -- it does not by
+         upgrades an already-permitted install to skip the confirmation dialog; it does not by
          itself grant install authority. Without this, PackageInstaller.Session.commit() throws
          SecurityException on both the silent (API 31+, USER_ACTION_NOT_REQUIRED) and the
          standard confirmation-dialog fallback paths in SelfUpdateInstaller.kt, i.e. self-update
