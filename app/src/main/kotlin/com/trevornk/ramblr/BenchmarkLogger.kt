@@ -15,6 +15,13 @@ data class BenchmarkStage(
     val model: String,
     val latencyMs: Long,
     val success: Boolean,
+    /** #109 benchmarking follow-up: whether this cloud transcription upload used the opt-in
+     *  compressed AAC/M4A path (true) or the original raw-WAV path (false). Null for local
+     *  transcription, which never uploads anything and has no compression concept. Lets a JSONL
+     *  consumer actually A/B whether the compressed-upload toggle affects latency/quality on real
+     *  usage data, instead of only being able to infer it indirectly from wall-clock timing next
+     *  to a separately-remembered "I had it on" recollection. */
+    val compressedUpload: Boolean? = null,
 )
 
 /**
@@ -160,6 +167,7 @@ object BenchmarkLogger {
         .put("model", model)
         .put("latencyMs", latencyMs)
         .put("success", success)
+        .put("compressedUpload", compressedUpload ?: JSONObject.NULL)
 
     private fun PipelineStage.toJson(): JSONObject = JSONObject()
         .put("stopToDrainMs", stopToDrainMs ?: JSONObject.NULL)

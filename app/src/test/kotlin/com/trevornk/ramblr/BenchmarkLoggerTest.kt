@@ -128,6 +128,48 @@ class BenchmarkLoggerTest {
         assertFalse(transcription.getBoolean("success"))
     }
 
+    @Test fun `buildLine records compressedUpload true when the compressed-upload toggle was used`() {
+        val line = BenchmarkLogger.buildLine(
+            timestamp = 1L,
+            correlationId = "tok-9",
+            transcription = BenchmarkStage("OPENAI", "gpt-4o-transcribe", 900L, success = true, compressedUpload = true),
+            cleanup = null,
+            rawTextLength = null,
+            cleanedTextLength = null,
+        )
+
+        val transcription = JSONObject(line).getJSONObject("transcription")
+        assertTrue(transcription.getBoolean("compressedUpload"))
+    }
+
+    @Test fun `buildLine records compressedUpload false for the raw-WAV cloud upload path`() {
+        val line = BenchmarkLogger.buildLine(
+            timestamp = 1L,
+            correlationId = "tok-9",
+            transcription = BenchmarkStage("GEMINI", "gemini-3.1-flash-lite", 900L, success = true, compressedUpload = false),
+            cleanup = null,
+            rawTextLength = null,
+            cleanedTextLength = null,
+        )
+
+        val transcription = JSONObject(line).getJSONObject("transcription")
+        assertFalse(transcription.getBoolean("compressedUpload"))
+    }
+
+    @Test fun `buildLine represents an omitted compressedUpload as JSON null, e_g_ for local transcription`() {
+        val line = BenchmarkLogger.buildLine(
+            timestamp = 1L,
+            correlationId = "tok-9",
+            transcription = BenchmarkStage("LOCAL", "sherpa-onnx-parakeet-110m", 900L, success = true),
+            cleanup = null,
+            rawTextLength = null,
+            cleanedTextLength = null,
+        )
+
+        val transcription = JSONObject(line).getJSONObject("transcription")
+        assertTrue(transcription.isNull("compressedUpload"))
+    }
+
     @Test fun `each buildLine call produces a single self-contained JSON object, not an array`() {
         val line = BenchmarkLogger.buildLine(
             timestamp = 1L, correlationId = "tok-3",
