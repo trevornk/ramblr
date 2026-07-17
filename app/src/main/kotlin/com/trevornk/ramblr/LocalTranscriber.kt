@@ -51,7 +51,8 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
                 return null
             }
 
-            val config = detectModelConfig(modelDir) ?: run {
+            val numThreads = LocalTranscriptionThreads.threadsOrDefault(ctx)
+            val config = detectModelConfig(modelDir, numThreads) ?: run {
                 Log.e(TAG, "Could not detect model type in $modelDir")
                 return null
             }
@@ -66,8 +67,12 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
             }
         }
 
-        /** Auto-detect model type from files present in the directory. */
-        fun detectModelConfig(dir: File): OfflineRecognizerConfig? {
+        /** Auto-detect model type from files present in the directory. [numThreads] defaults to
+         *  [LocalTranscriptionThreads.DEFAULT_THREADS] (2, unchanged shipped behavior) so every
+         *  existing direct caller -- notably the detectModelConfig-only unit tests, which have no
+         *  [Context] to read a setting from -- keeps working without change; [create] passes the
+         *  user-configured value explicitly (#107). */
+        fun detectModelConfig(dir: File, numThreads: Int = LocalTranscriptionThreads.DEFAULT_THREADS): OfflineRecognizerConfig? {
             val p = dir.absolutePath
             val tokens = findTokens(p) ?: return null
 
@@ -83,7 +88,7 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
                             cachedDecoder = findFile(p, "cached_decode") ?: return null,
                         ),
                         tokens = tokens,
-                        numThreads = 2,
+                        numThreads = numThreads,
                     )
                 )
             }
@@ -110,7 +115,7 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
                                 usePnc = true,
                             ),
                             tokens = tokens,
-                            numThreads = 2,
+                            numThreads = numThreads,
                         )
                     )
                 }
@@ -126,7 +131,7 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
                             decoder = whisperDecoder,
                         ),
                         tokens = tokens,
-                        numThreads = 2,
+                        numThreads = numThreads,
                         modelType = "whisper",
                     )
                 )
@@ -145,7 +150,7 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
                             joiner = joiner,
                         ),
                         tokens = tokens,
-                        numThreads = 2,
+                        numThreads = numThreads,
                         modelType = "nemo_transducer",
                     )
                 )
@@ -158,7 +163,7 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
                     modelConfig = OfflineModelConfig(
                         nemo = OfflineNemoEncDecCtcModelConfig(model = ctcModel),
                         tokens = tokens,
-                        numThreads = 2,
+                        numThreads = numThreads,
                     )
                 )
             }

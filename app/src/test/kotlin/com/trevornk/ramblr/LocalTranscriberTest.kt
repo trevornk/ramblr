@@ -91,6 +91,9 @@ class LocalTranscriberTest {
                 File(tmp, "base.en-decoder.int8.onnx").absolutePath,
                 config.modelConfig.whisper.decoder
             )
+            // #107: no explicit numThreads passed -> must be LocalTranscriptionThreads.DEFAULT_THREADS
+            // (2), the pre-existing hardcoded value, so this stays a zero-behavior-change default.
+            assertEquals(LocalTranscriptionThreads.DEFAULT_THREADS, config.modelConfig.numThreads)
         }
     }
 
@@ -176,6 +179,17 @@ class LocalTranscriberTest {
         withTempDir { tmp ->
             layout(tmp, "tokens.txt", "README.txt")
             assertNull(LocalTranscriber.detectModelConfig(tmp))
+        }
+    }
+
+    // -- detectModelConfig: numThreads wiring (#107) --
+
+    @Test fun `detectModelConfig honors an explicit numThreads override`() {
+        withTempDir { tmp ->
+            layout(tmp, "tokens.txt", "model.int8.onnx")
+            val config = LocalTranscriber.detectModelConfig(tmp, numThreads = 6)
+            assertNotNull(config)
+            assertEquals(6, config!!.modelConfig.numThreads)
         }
     }
 
