@@ -213,9 +213,18 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
     private fun openCustomColorPicker(title: String, current: Int?, onPick: (Int?) -> Unit) {
         val hsv = FloatArray(3)
         Color.colorToHSV((current ?: Color.WHITE) or 0xFF000000.toInt(), hsv)
+        // Opacity (#126 audit finding): the shipped default idle fill is 0xDD (~87% opaque, see
+        // WhisperAccessibilityService.COLOR_IDLE et al.), but a custom color picked here was
+        // previously forced to full 0xFF opacity with no way to preserve any translucency --
+        // directly working against the "must not obstruct the screen" goal for anyone who wants
+        // their custom color to read the same way the default does. Extracted alpha (0-255) from
+        // the current color when one exists, defaulting to the same ~87% (0xDD) the built-in
+        // colors use so a first-time custom pick starts at parity with the default look rather
+        // than opening already fully opaque.
+        var alpha = current?.let { (it ushr 24) and 0xFF } ?: 0xDD
 
         var isSyncing = false
-        fun currentColor(): Int = Color.HSVToColor(hsv) or 0xFF000000.toInt()
+        fun currentColor(): Int = (Color.HSVToColor(hsv) and 0x00FFFFFF) or (alpha shl 24)
 
         val preview = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(56))
@@ -270,6 +279,10 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
         val hueRow = sliderRow("Hue", 360, hsv[0].toInt()) { hsv[0] = it.toFloat() }
         val satRow = sliderRow("Saturation", 100, (hsv[1] * 100).toInt()) { hsv[1] = it / 100f }
         val valRow = sliderRow("Brightness", 100, (hsv[2] * 100).toInt()) { hsv[2] = it / 100f }
+        // Opacity slider (#126): 0-100%, stored internally as a 0-255 alpha byte. Sits alongside
+        // Hue/Saturation/Brightness rather than folded into the hex field, since ARGB hex strings
+        // aren't a format users are expected to type by hand for this control.
+        val alphaRow = sliderRow("Opacity", 100, (alpha * 100 / 255)) { alpha = (it * 255 / 100).coerceIn(0, 255) }
 
         @Suppress("UNCHECKED_CAST")
         fun sliderRowViews(row: LinearLayout) = row.tag as Pair<TextView, SeekBar>
@@ -301,6 +314,7 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
             addView(hueRow)
             addView(satRow)
             addView(valRow)
+            addView(alphaRow)
             addView(TextView(this@OverlayAppearanceActivity).apply {
                 text = "Hex"
                 setPadding(0, dp(8), 0, dp(4))
