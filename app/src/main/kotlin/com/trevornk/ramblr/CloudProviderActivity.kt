@@ -637,36 +637,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         val builder = android.app.AlertDialog.Builder(this)
             .setTitle(if (existing == null) "Add provider" else "Edit ${providerLabel(existing.kind)}")
             .setView(ScrollView(this).apply { addView(container) })
-            .setPositiveButton("Save") { _, _ ->
-                val kind = existing?.kind ?: selectedKind()
-                val customModel = advancedModelInput.text.toString().trim()
-                val model = if (advancedSection.visibility == View.VISIBLE && customModel.isNotBlank()) {
-                    customModel
-                } else {
-                    pickedModelId ?: ""
-                }
-                if (model.isBlank()) {
-                    toast("Pick a model or enter a custom model id")
-                    return@setPositiveButton
-                }
-                // Transcription model (#101/#102): only meaningful for transcription-capable
-                // kinds; null for everything else (Anthropic, OmniRoute, and any kind where the
-                // section was never shown). A blank custom field with the advanced section open
-                // is treated as "no explicit choice" (null), not an empty string -- consistent
-                // with the null-means-unset convention documented on the field itself.
-                val customTranscriptionModel = advancedTranscriptionModelInput.text.toString().trim()
-                val transcriptionModel = if (!kind.supportsTranscription() || kind == ProviderKind.LOCAL) {
-                    null
-                } else if (advancedTranscriptionSection.visibility == View.VISIBLE && customTranscriptionModel.isNotBlank()) {
-                    customTranscriptionModel
-                } else {
-                    pickedTranscriptionModelId
-                }
-                val baseUrlOverride = baseUrlInput.text.toString().trim().takeIf { it.isNotBlank() }
-                val enteredKey = keyInput.text.toString().trim()
-                if (enteredKey.isNotBlank()) ProviderCredentialStore.set(this, kind, enteredKey)
-                onSave(ProviderChainEntry(kind, model, baseUrlOverride, transcriptionModel))
-            }
+            .setPositiveButton("Save", null) // real handler wired below so a validation failure doesn't dismiss (#125)
             .setNegativeButton("Cancel", null)
         // Give the user a way to actually delete a stored key from the device (M10): a blank Save
         // deliberately keeps the old key, and removing a chain entry keeps the credential too, so
@@ -681,7 +652,44 @@ class CloudProviderActivity : BaseSettingsActivity() {
                 }
             }
         }
-        builder.show()
+        val dialog = builder.create()
+        // Override Save so a validation failure (no model picked/entered) shows an inline error
+        // and keeps the dialog open with all edits intact -- including a pasted API key, which is
+        // only persisted after validation succeeds (#125).
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val kind = existing?.kind ?: selectedKind()
+                val customModel = advancedModelInput.text.toString().trim()
+                val model = if (advancedSection.visibility == View.VISIBLE && customModel.isNotBlank()) {
+                    customModel
+                } else {
+                    pickedModelId ?: ""
+                }
+                if (model.isBlank()) {
+                    toast("Pick a model or enter a custom model id")
+                } else {
+                    // Transcription model (#101/#102): only meaningful for transcription-capable
+                    // kinds; null for everything else (Anthropic, OmniRoute, and any kind where the
+                    // section was never shown). A blank custom field with the advanced section open
+                    // is treated as "no explicit choice" (null), not an empty string -- consistent
+                    // with the null-means-unset convention documented on the field itself.
+                    val customTranscriptionModel = advancedTranscriptionModelInput.text.toString().trim()
+                    val transcriptionModel = if (!kind.supportsTranscription() || kind == ProviderKind.LOCAL) {
+                        null
+                    } else if (advancedTranscriptionSection.visibility == View.VISIBLE && customTranscriptionModel.isNotBlank()) {
+                        customTranscriptionModel
+                    } else {
+                        pickedTranscriptionModelId
+                    }
+                    val baseUrlOverride = baseUrlInput.text.toString().trim().takeIf { it.isNotBlank() }
+                    val enteredKey = keyInput.text.toString().trim()
+                    if (enteredKey.isNotBlank()) ProviderCredentialStore.set(this, kind, enteredKey)
+                    onSave(ProviderChainEntry(kind, model, baseUrlOverride, transcriptionModel))
+                    dialog.dismiss()
+                }
+            }
+        }
+        dialog.show()
     }
 
     // --- Use cloud for Transcription / Cleanup ---
