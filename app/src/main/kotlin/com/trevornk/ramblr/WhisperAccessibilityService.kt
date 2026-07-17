@@ -2879,6 +2879,16 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     private fun findInjectionCandidates(): List<AccessibilityNodeInfo> {
+        // #116: the common case is that focus is already sitting on a valid injection target, so
+        // check that single node with the same validity check ([isPotentialInjectionTarget]) the
+        // full tree walk below uses before paying for a full traversal of (possibly deep) view
+        // hierarchies across every active window. Only falls through to the full walk when there's
+        // no active root, no input-focused node, or that node doesn't qualify -- the result in the
+        // fast-path case is identical to what the full walk would have found, since findFocus(
+        // FOCUS_INPUT) on the active root is exactly what collectInjectionCandidates also collects
+        // first.
+        findFastPathInjectionCandidate()?.let { return listOf(it) }
+
         val candidates = mutableListOf<AccessibilityNodeInfo>()
 
         rootInActiveWindow?.let { root ->
@@ -2900,6 +2910,24 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
 
         return candidates.sortedByDescending(::candidateScore)
+    }
+
+    /** Fast path for [findInjectionCandidates]: returns the active window's input-focused node
+     *  immediately when it already passes [isPotentialInjectionTarget] -- the exact same validity
+     *  check [collectPotentialTargets] applies to every node in the full walk -- so this never
+     *  diverges from what the full walk would have picked as the top candidate. Returns null (and
+     *  recycles whatever it obtained) when there's no active root, no focused node, or the focused
+     *  node fails the check, leaving the full walk as the source of truth for those cases. */
+    private fun findFastPathInjectionCandidate(): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        try {
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return null
+            if (isPotentialInjectionTarget(focused)) return focused
+            focused.recycle()
+            return null
+        } finally {
+            root.recycle()
+        }
     }
 
     private fun collectInjectionCandidates(
