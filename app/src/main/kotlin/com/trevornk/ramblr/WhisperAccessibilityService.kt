@@ -295,6 +295,21 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  MediaMuxer) is ever created. */
     @Volatile private var aacEncoderSession: AacEncoderSession? = null
     private val guard = TranscriptionGuard()
+    /** Per-process-launch unique prefix for [correlationIdFor] (real bug fix, 2026-07-17):
+     *  [guard]'s underlying token is an in-process [java.util.concurrent.atomic.AtomicInteger]
+     *  that always restarts at 1 on a fresh accessibility-service process (app update, OS memory
+     *  pressure eviction, device reboot, or the user toggling the service off/on) -- all of which
+     *  happen routinely on Android, not edge cases. Benchmark log analysis confirmed this
+     *  collides real, unrelated dictations recorded hours or days apart under the identical
+     *  "tok-1"/"tok-3"/etc correlationId, silently corrupting any per-dictation grouping done
+     *  against [BenchmarkLogger]'s data. This value is captured once when the service process is
+     *  actually created (not merely `onServiceConnected`, which can re-fire without a new
+     *  process) and folded into every correlationId this service mints, so IDs are unique across
+     *  restarts while [guard]/[TranscriptionGuard] itself is untouched -- its only real job is
+     *  same-process staleness detection via [TranscriptionGuard.isCurrent], which needs no
+     *  cross-process uniqueness at all. */
+    private val processLaunchId = System.currentTimeMillis()
+    private fun correlationIdFor(token: Int) = "tok-$processLaunchId-$token"
     private val inFlightCall = InFlightCall()
     private val cleanupCursor = CleanupWaterfallCursor()
     /** Signature of the cleanup waterfall the [cleanupCursor]'s index was last recorded against, so
@@ -1917,7 +1932,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun stopAndTranscribe() {
         if (!stateMachine.tryStartTranscribing()) return
         activeToken = guard.start()
-        pipelineTiming = PipelineTiming(stopTapAtMs = System.currentTimeMillis(), correlationId = "tok-$activeToken")
+        pipelineTiming = PipelineTiming(stopTapAtMs = System.currentTimeMillis(), correlationId = correlationIdFor(activeToken))
         armWatchdog(activeToken)
         enterTranscribingUi()
     }
@@ -2103,7 +2118,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             // happened (this whole branch runs after onRecordingFinished already returned) before
             // any pipelineTiming existed to record it against.
             val nowMs = System.currentTimeMillis()
-            pipelineTiming = PipelineTiming(stopTapAtMs = nowMs, correlationId = "tok-$token", drainAtMs = nowMs)
+            pipelineTiming = PipelineTiming(stopTapAtMs = nowMs, correlationId = correlationIdFor(token), drainAtMs = nowMs)
             armWatchdog(token)
             enterTranscribingUi()
             toast("Recording limit reached (10 min) — transcribing…")
@@ -2172,7 +2187,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 Log.i(TAG, "Local transcription: ${ms}ms, ${samples.size / SAMPLE_RATE}s audio")
                 BenchmarkLogger.log(
                     context = this,
-                    correlationId = "tok-$token",
+                    correlationId = correlationIdFor(token),
                     transcription = BenchmarkStage(
                         provider = ProviderKind.LOCAL.name,
                         model = localTranscriptionModelId(),
@@ -2183,7 +2198,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 )
                 QualityLogger.log(
                     context = this,
-                    correlationId = "tok-$token",
+                    correlationId = correlationIdFor(token),
                     transcription = QualityStage(
                         provider = ProviderKind.LOCAL.name,
                         model = localTranscriptionModelId(),
@@ -2196,7 +2211,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 Log.e(TAG, "Local transcription failed", e)
                 BenchmarkLogger.log(
                     context = this,
-                    correlationId = "tok-$token",
+                    correlationId = correlationIdFor(token),
                     transcription = BenchmarkStage(
                         provider = ProviderKind.LOCAL.name,
                         model = localTranscriptionModelId(),
@@ -2206,7 +2221,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 )
                 QualityLogger.log(
                     context = this,
-                    correlationId = "tok-$token",
+                    correlationId = correlationIdFor(token),
                     transcription = QualityStage(
                         provider = ProviderKind.LOCAL.name,
                         model = localTranscriptionModelId(),
@@ -2337,18 +2352,19 @@ class WhisperAccessibilityService : AccessibilityService() {
                         val success = result.text != null && result.text.isNotBlank()
                         BenchmarkLogger.log(
                             context = this,
-                            correlationId = "tok-$token",
+                            correlationId = correlationIdFor(token),
                             transcription = BenchmarkStage(
                                 provider = entry.kind.name,
                                 model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
                                 latencyMs = roundTripMs,
                                 success = success,
+                                compressedUpload = compressedFile != null,
                             ),
                             rawTextLength = result.text?.length,
                         )
                         QualityLogger.log(
                             context = this,
-                            correlationId = "tok-$token",
+                            correlationId = correlationIdFor(token),
                             transcription = QualityStage(
                                 provider = entry.kind.name,
                                 model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
@@ -2394,18 +2410,19 @@ class WhisperAccessibilityService : AccessibilityService() {
                             val success = result.text != null && result.text.isNotBlank()
                             BenchmarkLogger.log(
                                 context = this,
-                                correlationId = "tok-$token",
+                                correlationId = correlationIdFor(token),
                                 transcription = BenchmarkStage(
                                     provider = entry.kind.name,
                                     model = geminiModel,
                                     latencyMs = System.currentTimeMillis() - geminiStartMs,
                                     success = success,
+                                    compressedUpload = compressedFile != null,
                                 ),
                                 rawTextLength = result.text?.length,
                             )
                             QualityLogger.log(
                                 context = this,
-                                correlationId = "tok-$token",
+                                correlationId = correlationIdFor(token),
                                 transcription = QualityStage(
                                     provider = entry.kind.name,
                                     model = geminiModel,
@@ -2512,7 +2529,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 localModelPath = { ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this))?.absolutePath },
                 localPrompt = LocalCleanupProvider.selectedSystemPrompt(this),
                 benchmarkContext = this,
-                benchmarkCorrelationId = "tok-$token",
+                benchmarkCorrelationId = correlationIdFor(token),
             ) { result ->
                 handler.post {
                     if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
