@@ -43,6 +43,7 @@ class BehaviorActivity : BaseSettingsActivity() {
     private var silenceAutoStopPendingEnable = false
     private lateinit var vocabularyRowSub: TextView
     private lateinit var localThreadsRowSub: TextView
+    private lateinit var compressedUploadSwitch: MaterialSwitch
     // Built unconditionally and shown/hidden in refresh() (#L16): building it only when hidden at
     // onCreate meant hiding the icon via the overlay while this screen was paused left no way back
     // on resume, and it relied on recreate() as a refresh hammer.
@@ -182,6 +183,25 @@ class BehaviorActivity : BaseSettingsActivity() {
         ) { promptSilenceAutoStopThreshold() }
         root.addView(silenceAutoStopThresholdRow)
 
+        // Compressed (AAC/M4A) cloud upload (#109). Off by default (see CompressedUploadToggle's
+        // kdoc for why) and a genuine behavior change to the audio actually sent to a cloud
+        // transcription provider, so it gets an honest description instead of pretending it's
+        // already proven -- mirrors silenceAutoStopRow's "needs real-world validation" framing
+        // above.
+        compressedUploadSwitch = MaterialSwitch(this).apply {
+            isChecked = CompressedUploadToggle.isEnabled(this@BehaviorActivity)
+            isClickable = false
+        }
+        root.addView(settingsRow(
+            "Compress audio before cloud upload",
+            "Encodes to AAC/M4A before sending to OpenAI or Gemini for transcription -- primarily useful on cellular or slow connections. Transcription quality with compressed audio hasn't been verified in real-world use yet, so leave off for dictations where accuracy really matters until you've tried it",
+            compressedUploadSwitch
+        ) {
+            val newVal = !compressedUploadSwitch.isChecked
+            CompressedUploadToggle.setEnabled(this, newVal)
+            compressedUploadSwitch.isChecked = newVal
+        })
+
         // Fallback restore path (#Feature B): if the icon is currently hidden -- including for
         // someone who turns the toggle above off while already hidden -- give them a way back
         // that doesn't depend on the notification still being around.
@@ -233,6 +253,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         silenceAutoStopSwitch.isChecked = SilenceAutoStopToggle.isEnabled(this)
         silenceAutoStopThresholdRow.findViewWithTag<TextView>("subtitle").text = silenceAutoStopThresholdSummary()
         refreshSilenceAutoStopSummary()
+        compressedUploadSwitch.isChecked = CompressedUploadToggle.isEnabled(this)
         vocabularyRowSub.text = vocabularySummary()
         localThreadsRowSub.text = localThreadsSummary()
         autoPeekDelayRow.findViewWithTag<TextView>("subtitle").text = autoPeekDelaySummary()

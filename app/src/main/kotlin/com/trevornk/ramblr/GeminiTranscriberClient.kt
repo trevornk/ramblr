@@ -54,16 +54,19 @@ object GeminiTranscriberClient {
     fun canInlineAudio(pcmBytes: Long): Boolean = pcmBytes <= MAX_INLINE_PCM_BYTES
 
     /**
-     * Builds the generateContent request body with the WAV audio bytes inlined as base64
-     * `inline_data` (see https://ai.google.dev/gemini-api/docs/audio#inline-audio). [wavBytes]
-     * must already include the WAV header -- callers building from a raw PCM file should use
-     * [WavWriter] first, same as [PcmWavRequestBody] does for [TranscriberClient].
+     * Builds the generateContent request body with the audio bytes inlined as base64
+     * `inline_data` (see https://ai.google.dev/gemini-api/docs/audio#inline-audio). [audioBytes]
+     * must already be in the container/encoding described by [mimeType] -- callers building from
+     * a raw PCM file should use [WavWriter] first for the WAV path, same as [PcmWavRequestBody]
+     * does for [TranscriberClient]. [mimeType] defaults to `audio/wav`; #109's compressed-upload
+     * path passes `audio/aac` for a finished `.m4a` file instead (AAC is one of Gemini's
+     * documented supported inline audio MIME types).
      */
-    fun buildRequestBody(wavBytes: ByteArray, prompt: String = TRANSCRIBE_PROMPT): JSONObject {
+    fun buildRequestBody(audioBytes: ByteArray, prompt: String = TRANSCRIBE_PROMPT, mimeType: String = "audio/wav"): JSONObject {
         val audioPart = JSONObject().apply {
             put("inline_data", JSONObject().apply {
-                put("mime_type", "audio/wav")
-                put("data", wavBytes.toByteString().base64())
+                put("mime_type", mimeType)
+                put("data", audioBytes.toByteString().base64())
             })
         }
         val textPart = JSONObject().apply { put("text", prompt) }
@@ -112,6 +115,11 @@ object GeminiTranscriberClient {
      * body requires the full base64 payload assembled in memory -- acceptable for this app's
      * short dictation recordings, same tradeoff [NetworkClients]' generous timeouts already
      * budget for.
+     *
+     * When [compressedFile] is non-null (#109: compressed-upload toggle on and the AAC encode
+     * succeeded), that finished `.m4a` is embedded instead as `audio/aac` -- read directly rather
+     * than WAV-wrapped, since it's already a complete, playable audio container. Falls back to
+     * the WAV path built from [pcmFile] exactly as before whenever it's null.
      */
     fun transcribe(
         pcmFile: File,
@@ -119,10 +127,15 @@ object GeminiTranscriberClient {
         model: String = DEFAULT_MODEL,
         cancelHolder: InFlightCall,
         vocabularyTerms: List<String> = emptyList(),
+        compressedFile: File? = null,
         callback: (Result) -> Unit,
     ) {
-        val wavBytes = try {
-            WavWriter.header(pcmFile.length(), 16000, 1, 16) + pcmFile.readBytes()
+        val (audioBytes, mimeType) = try {
+            if (compressedFile != null) {
+                compressedFile.readBytes() to "audio/aac"
+            } else {
+                (WavWriter.header(pcmFile.length(), 16000, 1, 16) + pcmFile.readBytes()) to "audio/wav"
+            }
         } catch (e: IOException) {
             callback(Result(null, e.message ?: "Failed to read audio file"))
             return
@@ -130,7 +143,7 @@ object GeminiTranscriberClient {
 
         // #114 part 2: interpolate the user's vocabulary into the transcription prompt itself
         // (previously only cleanup-stage prompts got it), always on when terms exist.
-        val body = buildRequestBody(wavBytes, prompt = transcribePrompt(vocabularyTerms))
+        val body = buildRequestBody(audioBytes, prompt = transcribePrompt(vocabularyTerms), mimeType = mimeType)
             .toString().toRequestBody("application/json".toMediaType())
 
         // A malformed key/model (or one OkHttp otherwise rejects) throws IllegalArgumentException

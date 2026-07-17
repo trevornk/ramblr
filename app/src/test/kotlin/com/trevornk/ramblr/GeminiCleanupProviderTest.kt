@@ -106,4 +106,16 @@ class GeminiTranscriberClientTest {
     @Test fun `an oversized recording falls off the inline-audio path (M6)`() {
         assertFalse(GeminiTranscriberClient.canInlineAudio(GeminiTranscriberClient.MAX_INLINE_PCM_BYTES + 1))
     }
+
+    @Test fun `buildRequestBody defaults to audio wav mime type`() {
+        val body = GeminiTranscriberClient.buildRequestBody(ByteArray(4))
+        val audioPart = body.getJSONArray("contents").getJSONObject(0).getJSONArray("parts").getJSONObject(1)
+        assertEquals("audio/wav", audioPart.getJSONObject("inline_data").getString("mime_type"))
+    }
+
+    @Test fun `buildRequestBody honors an explicit audio aac mime type (#109)`() {
+        val body = GeminiTranscriberClient.buildRequestBody(ByteArray(4), mimeType = "audio/aac")
+        val audioPart = body.getJSONArray("contents").getJSONObject(0).getJSONArray("parts").getJSONObject(1)
+        assertEquals("audio/aac", audioPart.getJSONObject("inline_data").getString("mime_type"))
+    }
 }

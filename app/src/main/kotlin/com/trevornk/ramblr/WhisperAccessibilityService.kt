@@ -2068,12 +2068,16 @@ class WhisperAccessibilityService : AccessibilityService() {
         val token = activeToken
         when (resolveLateRecording(token, guard.isCurrent(token), stateMachine.current())) {
             LateRecordingResolution.CONTINUE_TRANSCRIPTION -> thread { continueTranscription(result, token) }
-            LateRecordingResolution.DISCARD -> result.pcmFile?.delete()
+            LateRecordingResolution.DISCARD -> {
+                result.pcmFile?.delete()
+                result.compressedFile?.delete()
+            }
             LateRecordingResolution.DISCARD_AND_RESET -> {
                 // Mic error mid-recording (#90): the reader thread self-claimed TRANSCRIBING but
                 // no transcription will run and no watchdog was armed — without this reset the
                 // overlay stays stuck in TRANSCRIBING with taps as no-ops forever.
                 result.pcmFile?.delete()
+                result.compressedFile?.delete()
                 reset(result.errorMessage?.let { "Recording error: $it" } ?: "Recording stopped unexpectedly")
             }
         }
@@ -2088,6 +2092,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         handler.post {
             if (stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING || activeToken != 0) {
                 result.pcmFile?.delete()
+                result.compressedFile?.delete()
                 return@post
             }
             val token = guard.start()
@@ -2113,9 +2118,16 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         val useLocal = prefs().getBoolean("use_local", true)
         val allowCloudFallback = DictationModeToggle.allowCloudFallback(this)
+        // #109: the compressed .m4a (when the toggle was on and AacEncoderSession's encode
+        // succeeded) only ever matters to a cloud upload -- the local transcriber reads raw PCM
+        // samples directly, never a file upload, so it's discarded (never uploaded) on that path.
+        val compressedFile = result.compressedFile
 
         when {
-            useLocal && transcriberSlot.get() != null -> transcribeLocal(file, token)
+            useLocal && transcriberSlot.get() != null -> {
+                compressedFile?.delete()
+                transcribeLocal(file, token)
+            }
             // #98 UX follow-up: previously this fell straight through to transcribeApi() whenever
             // the local model wasn't loaded yet, regardless of *why* -- including the real-world
             // case of a fresh install where onboarding's model download is still in progress.
@@ -2127,12 +2139,13 @@ class WhisperAccessibilityService : AccessibilityService() {
             // configured -- unless #100's "fall back to cloud if on-device fails" toggle is on,
             // in which case a not-yet-downloaded local model is exactly the case that toggle
             // exists for.
-            useLocal && allowCloudFallback -> transcribeApi(file, token)
+            useLocal && allowCloudFallback -> transcribeApi(file, token, compressedFile)
             useLocal -> {
+                compressedFile?.delete()
                 file.delete()
                 reset("Local model still downloading — try again once it finishes")
             }
-            else -> transcribeApi(file, token)
+            else -> transcribeApi(file, token, compressedFile)
         }
     }
 
@@ -2228,12 +2241,13 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun vocabularyTerms(): List<String> =
         VocabularyTerms.parse(prefs().getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED))
 
-    private fun transcribeApi(file: File, token: Int) {
+    private fun transcribeApi(file: File, token: Int, compressedFile: File? = null) {
         val chain = ProviderChainStore.load(this)
         val allowLocalFallback = DictationModeToggle.allowLocalFallback(this)
         val candidates = ProviderChainRuntime.transcriptionCandidates(chain, allowLocalFallback)
         if (candidates.isEmpty()) {
             file.delete()
+            compressedFile?.delete()
             reset("No transcription provider configured")
             return
         }
@@ -2241,6 +2255,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         fun attempt(index: Int) {
             if (index >= candidates.size) {
                 file.delete()
+                compressedFile?.delete()
                 reset("Set API key in Ramblr app")
                 return
             }
@@ -2259,6 +2274,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                         // Cancelled or watchdog already reset the UI: nothing more to try, but the
                         // PCM is still ours to clean up.
                         file.delete()
+                        compressedFile?.delete()
                         return@post
                     }
                     if (TranscriptionChain.hasNextCandidate(index, candidates.size)) {
@@ -2266,6 +2282,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                         attempt(index + 1)
                     } else {
                         file.delete()
+                        compressedFile?.delete()
                         reset("Error: ${error ?: "transcription failed"}")
                     }
                 }
@@ -2313,6 +2330,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                         baseUrl = entry.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL,
                         model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
                         vocabularyTerms = vocabularyTerms(),
+                        compressedFile = compressedFile,
                     ) { result ->
                         val roundTripMs = System.currentTimeMillis() - transcribeStartMs
                         Log.i(TAG, "OpenAI transcription HTTP round-trip took ${roundTripMs}ms")
@@ -2339,6 +2357,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                         )
                         if (success) {
                             file.delete()
+                            compressedFile?.delete()
                             handleTranscriptionResult(result.text, token)
                         } else {
                             advanceOrGiveUp(result.error ?: "empty transcript")
@@ -2347,13 +2366,19 @@ class WhisperAccessibilityService : AccessibilityService() {
                 }
                 ProviderKind.LOCAL -> {
                     Log.i(TAG, "Transcription via ProviderChain provider=${entry.kind}")
+                    compressedFile?.delete()
                     transcribeLocal(file, token)
                 }
                 ProviderKind.GEMINI -> {
                     val apiKey = ProviderCredentialStore.get(this, ProviderKind.GEMINI)
                     // Gemini's inline-audio path buffers the recording ~4x in memory, so gate it by
                     // size: above the threshold, fall through to the next candidate rather than risk
-                    // an OOM stacked on the resident STT/cleanup models (M6).
+                    // an OOM stacked on the resident STT/cleanup models (M6). The compressed .m4a
+                    // (#109) is always much smaller than the PCM/WAV it was encoded from, but the
+                    // size check still gates on the original PCM: it's the cheap, reliable proxy for
+                    // recording length already used everywhere else on this path, and a length-gated
+                    // recording that's small enough to compress successfully is smaller still once
+                    // encoded, so this can only ever be more permissive, never wrongly reject.
                     if (!GeminiTranscriberClient.canInlineAudio(file.length())) {
                         Log.w(TAG, "Recording too large for Gemini inline audio (${file.length()} bytes); trying next candidate")
                         advanceOrGiveUp("Recording too large for Gemini transcription")
@@ -2364,6 +2389,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                         GeminiTranscriberClient.transcribe(
                             file, apiKey, geminiModel, inFlightCall,
                             vocabularyTerms = vocabularyTerms(),
+                            compressedFile = compressedFile,
                         ) { result ->
                             val success = result.text != null && result.text.isNotBlank()
                             BenchmarkLogger.log(
@@ -2388,6 +2414,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                             )
                             if (success) {
                                 file.delete()
+                                compressedFile?.delete()
                                 handleTranscriptionResult(result.text, token)
                             } else {
                                 advanceOrGiveUp(result.error ?: "empty transcript")

@@ -63,3 +63,47 @@ class PcmWavRequestBodyTest {
         assertEquals(44, sink.readByteArray().size)
     }
 }
+
+/**
+ * [TranscriberClient.uploadPart] is the pure decision point behind #109's compressed-upload
+ * wiring: pick the compressed `.m4a` file/filename/MediaType when it's available, otherwise the
+ * existing raw-WAV path exactly as before. No network/file I/O beyond opening the streaming
+ * bodies -- both branches are cheap to construct and inspect directly.
+ */
+class TranscriberClientUploadPartTest {
+
+    private fun tempFile(suffix: String): File =
+        File.createTempFile("uploadparttest_", suffix).apply {
+            deleteOnExit()
+            writeBytes(ByteArray(10))
+        }
+
+    @Test fun `falls back to wav filename and content type when compressedFile is null`() {
+        val pcmFile = tempFile(".pcm")
+        val (filename, body) = TranscriberClient.uploadPart(pcmFile, compressedFile = null)
+
+        assertEquals("audio.wav", filename)
+        assertEquals("audio", body.contentType()?.type)
+        assertEquals("wav", body.contentType()?.subtype)
+    }
+
+    @Test fun `uses m4a filename and content type when compressedFile is present`() {
+        val pcmFile = tempFile(".pcm")
+        val compressedFile = tempFile(".m4a")
+        val (filename, body) = TranscriberClient.uploadPart(pcmFile, compressedFile)
+
+        assertEquals("audio.m4a", filename)
+        assertEquals("audio", body.contentType()?.type)
+        assertEquals("mp4", body.contentType()?.subtype)
+    }
+
+    @Test fun `compressed upload part streams the compressed file's own bytes, not the pcm file's`() {
+        val pcmFile = tempFile(".pcm").apply { writeBytes(ByteArray(5) { 1 }) }
+        val compressedFile = tempFile(".m4a").apply { writeBytes(ByteArray(3) { 2 }) }
+        val (_, body) = TranscriberClient.uploadPart(pcmFile, compressedFile)
+
+        val sink = Buffer()
+        body.writeTo(sink)
+        assertArrayEquals(ByteArray(3) { 2 }, sink.readByteArray())
+    }
+}
