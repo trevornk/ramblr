@@ -193,4 +193,65 @@ class BackupManagerTest {
 
         assertEquals(terms.joinToString("\n"), result["custom_vocabulary_terms"])
     }
+
+    // --- pruneOldBackups retention (GH #123) ---
+
+    @Test fun `pruneOldBackups keeps only the N most recently modified files`() {
+        val dir = createTempDir(prefix = "backups").apply { deleteOnExit() }
+        val files = (1..8).map { i ->
+            File(dir, "ramblr_backup_$i.zip").apply {
+                writeText("zip$i")
+                // Force distinct, ascending mtimes so "most recent" ordering is unambiguous
+                // regardless of filesystem timestamp resolution.
+                setLastModified(1_000_000L + i * 1000L)
+            }
+        }
+
+        val deleted = BackupManager.pruneOldBackups(files, keep = 5)
+
+        assertEquals(3, deleted.size)
+        // The 3 oldest (1,2,3) should be gone; the 5 newest (4..8) should remain.
+        assertEquals(setOf("ramblr_backup_1.zip", "ramblr_backup_2.zip", "ramblr_backup_3.zip"), deleted.map { it.name }.toSet())
+        (4..8).forEach { i -> assertTrue("backup $i should still exist", File(dir, "ramblr_backup_$i.zip").exists()) }
+        (1..3).forEach { i -> assertFalse("backup $i should have been deleted", File(dir, "ramblr_backup_$i.zip").exists()) }
+
+        dir.deleteRecursively()
+    }
+
+    @Test fun `pruneOldBackups deletes nothing when the count is at or under the limit`() {
+        val dir = createTempDir(prefix = "backups").apply { deleteOnExit() }
+        val files = (1..3).map { i -> File(dir, "b$i.zip").apply { writeText("x") } }
+
+        val deleted = BackupManager.pruneOldBackups(files, keep = 5)
+
+        assertTrue(deleted.isEmpty())
+        files.forEach { assertTrue(it.exists()) }
+
+        dir.deleteRecursively()
+    }
+
+    @Test fun `pruneOldBackups directory overload only considers zip files and defaults to keeping 5`() {
+        val dir = createTempDir(prefix = "backups").apply { deleteOnExit() }
+        (1..7).forEach { i ->
+            File(dir, "ramblr_backup_$i.zip").apply { writeText("z"); setLastModified(2_000_000L + i * 1000L) }
+        }
+        // A non-zip file in the same directory must never be touched by this logic.
+        val unrelated = File(dir, "notes.txt").apply { writeText("keep me") }
+
+        val deleted = BackupManager.pruneOldBackups(dir)
+
+        assertEquals(2, deleted.size)
+        assertEquals(BackupManager.MAX_RETAINED_BACKUPS, dir.listFiles { f -> f.name.endsWith(".zip") }?.size)
+        assertTrue(unrelated.exists())
+
+        dir.deleteRecursively()
+    }
+
+    @Test fun `pruneOldBackups directory overload is a no-op when the directory does not exist`() {
+        val missingDir = File(createTempDir(prefix = "parent").apply { deleteOnExit() }, "does_not_exist")
+
+        val deleted = BackupManager.pruneOldBackups(missingDir)
+
+        assertTrue(deleted.isEmpty())
+    }
 }
