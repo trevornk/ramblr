@@ -18,6 +18,40 @@ data class BenchmarkStage(
 )
 
 /**
+ * End-to-end, user-perceived pipeline timing for one dictation (#115). Unlike [BenchmarkStage]
+ * (which times a single provider round-trip), this is the "speech ended -> text appears in the
+ * focused field" timeline Trevor actually cares about optimizing before any #107/#109 tuning
+ * decision -- every field here is elapsed milliseconds *from the stop tap*, not a duration of one
+ * sub-stage, so they're directly comparable to each other and to [BenchmarkStage.latencyMs]
+ * without a reader needing to reconstruct absolute timestamps first.
+ *
+ * All fields are individually optional: a given dictation may fail or short-circuit before later
+ * stages run (e.g. no speech detected never reaches injection), and this must degrade gracefully
+ * to partial data rather than requiring a caller fabricate a value for a stage that never
+ * happened.
+ *
+ * Transcription/cleanup stage start/end are already covered by [BenchmarkStage.latencyMs] on the
+ * existing `transcription`/`cleanup` entries sharing this line's correlationId -- deliberately
+ * not duplicated here.
+ */
+data class PipelineStage(
+    /** Stop tap -> the recording reader thread finished draining/releasing the AudioRecord and
+     *  handed off the captured PCM (i.e. [WhisperAccessibilityService.onRecordingFinished]). */
+    val stopToDrainMs: Long? = null,
+    /** Stop tap -> the final [WhisperAccessibilityService.injectText] attempt started (i.e. the
+     *  cleaned/raw text is decided and injection into the focused field begins). */
+    val injectionAttemptMs: Long? = null,
+    /** Which [InjectMethod] this dictation actually resolved to -- DIRECT (typed straight into the
+     *  node), FROM_CLIPBOARD (pasted), or NONE (clipboard-only fallback, user must paste manually).
+     *  Stored as the enum's plain name string so this schema never takes a hard dependency on
+     *  [InjectMethod] living in this module. */
+    val injectMethod: String? = null,
+    /** Stop tap -> injection fully resolved (success or clipboard fallback) -- the real
+     *  end-to-end number this whole stage exists to measure. */
+    val totalMs: Long? = null,
+)
+
+/**
  * Durable, append-only JSONL benchmark log for A/B testing transcription/cleanup provider+model
  * combinations across real-world dictation usage (#100). One line per completed dictation, each
  * line a self-contained JSON object -- deliberately NOT a JSON array, so a crash or a concurrent
@@ -75,6 +109,7 @@ object BenchmarkLogger {
         cleanup: BenchmarkStage? = null,
         rawTextLength: Int? = null,
         cleanedTextLength: Int? = null,
+        pipeline: PipelineStage? = null,
     ) {
         runCatching {
             val line = buildLine(
@@ -84,6 +119,7 @@ object BenchmarkLogger {
                 cleanup = cleanup,
                 rawTextLength = rawTextLength,
                 cleanedTextLength = cleanedTextLength,
+                pipeline = pipeline,
             )
             val file = logFile(context)
             rotateIfNeeded(file)
@@ -103,6 +139,7 @@ object BenchmarkLogger {
         cleanup: BenchmarkStage?,
         rawTextLength: Int?,
         cleanedTextLength: Int?,
+        pipeline: PipelineStage? = null,
     ): String {
         val root = JSONObject()
         root.put("timestamp", timestamp)
@@ -111,6 +148,10 @@ object BenchmarkLogger {
         root.put("cleanup", cleanup?.toJson() ?: JSONObject.NULL)
         root.put("rawTextLength", rawTextLength ?: JSONObject.NULL)
         root.put("cleanedTextLength", cleanedTextLength ?: JSONObject.NULL)
+        // Additive (#115): older consumers that don't know this key simply never look at it;
+        // JSONObject.NULL (not an omitted key) mirrors transcription/cleanup's existing
+        // null-vs-missing convention above so every line has a stable, predictable key set.
+        root.put("pipeline", pipeline?.toJson() ?: JSONObject.NULL)
         return root.toString()
     }
 
@@ -119,6 +160,12 @@ object BenchmarkLogger {
         .put("model", model)
         .put("latencyMs", latencyMs)
         .put("success", success)
+
+    private fun PipelineStage.toJson(): JSONObject = JSONObject()
+        .put("stopToDrainMs", stopToDrainMs ?: JSONObject.NULL)
+        .put("injectionAttemptMs", injectionAttemptMs ?: JSONObject.NULL)
+        .put("injectMethod", injectMethod ?: JSONObject.NULL)
+        .put("totalMs", totalMs ?: JSONObject.NULL)
 
     /** If [file] is at/over [ROTATE_AT_BYTES], truncates it down to its newest
      *  [KEEP_BYTES_AFTER_ROTATION] bytes, dropping any partial first line left over from the

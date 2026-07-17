@@ -57,6 +57,63 @@ class BenchmarkLoggerTest {
         assertFalse(json.getJSONObject("cleanup").getBoolean("success"))
     }
 
+    @Test fun `buildLine omits pipeline as JSON null when the caller doesn't pass one`() {
+        val line = BenchmarkLogger.buildLine(
+            timestamp = 1L,
+            correlationId = "tok-1",
+            transcription = null,
+            cleanup = null,
+            rawTextLength = null,
+            cleanedTextLength = null,
+        )
+
+        val json = JSONObject(line)
+        assertTrue(json.has("pipeline"))
+        assertTrue(json.isNull("pipeline"))
+    }
+
+    @Test fun `buildLine records the end-to-end pipeline stage with all fields present`() {
+        val line = BenchmarkLogger.buildLine(
+            timestamp = 1_700_000_000_000L,
+            correlationId = "tok-42",
+            transcription = null,
+            cleanup = null,
+            rawTextLength = null,
+            cleanedTextLength = null,
+            pipeline = PipelineStage(
+                stopToDrainMs = 40L,
+                injectionAttemptMs = 950L,
+                injectMethod = "DIRECT",
+                totalMs = 1010L,
+            ),
+        )
+
+        val pipeline = JSONObject(line).getJSONObject("pipeline")
+        assertEquals(40L, pipeline.getLong("stopToDrainMs"))
+        assertEquals(950L, pipeline.getLong("injectionAttemptMs"))
+        assertEquals("DIRECT", pipeline.getString("injectMethod"))
+        assertEquals(1010L, pipeline.getLong("totalMs"))
+    }
+
+    @Test fun `buildLine records a partial pipeline stage's missing fields as JSON null, not omitted`() {
+        val line = BenchmarkLogger.buildLine(
+            timestamp = 1L,
+            correlationId = "tok-3",
+            transcription = null,
+            cleanup = null,
+            rawTextLength = null,
+            cleanedTextLength = null,
+            // e.g. "no speech detected" bails out before the reader-drain marker was ever set.
+            pipeline = PipelineStage(totalMs = 200L),
+        )
+
+        val pipeline = JSONObject(line).getJSONObject("pipeline")
+        assertTrue(pipeline.isNull("stopToDrainMs"))
+        assertTrue(pipeline.isNull("injectionAttemptMs"))
+        assertTrue(pipeline.isNull("injectMethod"))
+        assertEquals(200L, pipeline.getLong("totalMs"))
+    }
+
     @Test fun `buildLine records a failed stage's success flag as false, not omitted`() {
         val line = BenchmarkLogger.buildLine(
             timestamp = 1L,
