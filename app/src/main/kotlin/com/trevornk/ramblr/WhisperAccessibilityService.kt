@@ -1050,11 +1050,29 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     /** Animates the ring window's x from its current value to [targetX], keeping the feedback
-     *  bubble anchored to it in step exactly like drag-to-reposition already does. */
+     *  bubble anchored to it in step exactly like drag-to-reposition already does.
+     *
+     *  Under reduced motion (see [isReducedMotionEnabled]) this still moves the ring to
+     *  [targetX] -- peek/un-peek is a functional position change (it uncovers content behind
+     *  the ring), not a decorative flourish, so it can't just be skipped the way [startPulse]'s
+     *  purely-cosmetic pulse is. It jumps straight to the end position in one frame instead of
+     *  tweening through [RingPeek.ANIM_DURATION_MS], which is what "reduce motion" means for a
+     *  functional transition: keep the state change, remove the animated interpolation. */
     private fun animateRingX(params: WindowManager.LayoutParams, wm: WindowManager, targetX: Int) {
         peekAnimator?.cancel()
         val startXValue = params.x
         val overlay = overlayView ?: return
+
+        if (isReducedMotionEnabled()) {
+            params.x = targetX
+            wm.updateViewLayout(overlay, params)
+            feedbackLayoutParams?.let {
+                positionFeedback(it, params, feedbackView?.height ?: 0)
+                wm.updateViewLayout(feedbackView, it)
+            }
+            return
+        }
+
         val animator = android.animation.ValueAnimator.ofInt(startXValue, targetX).apply {
             duration = RingPeek.ANIM_DURATION_MS
             addUpdateListener { anim ->
@@ -1110,10 +1128,21 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  transcribing, back to idle) and a live appearance-settings change (#43/#53, see
      *  [applyOverlayAppearance]) -- so the two can never race each other into an inconsistent
      *  half-applied state. See [OverlayAppearance]'s own doc for the custom-icon-vs-color-controls
-     *  and idle-only-fill-override product decisions this implements. */
+     *  and idle-only-fill-override product decisions this implements.
+     *
+     *  Also sets [ImageView.contentDescription] from [stateMachine]'s current state (read
+     *  directly rather than derived from [stateColor], since every call site already maps 1:1
+     *  from the same state) -- this is the app's single most-used interactive control (the
+     *  floating overlay button that starts/stops/cancels dictation) and previously had no
+     *  accessibility label at all, so TalkBack announced it as an unlabeled image. */
     private fun applyButtonAppearance(stateColor: Int) {
         val btn = button ?: return
         val appearance = OverlayAppearancePrefs.load(this)
+        btn.contentDescription = when (stateMachine.current()) {
+            RecordingStateMachine.State.IDLE -> getString(R.string.overlay_button_idle_description)
+            RecordingStateMachine.State.RECORDING -> getString(R.string.overlay_button_recording_description)
+            RecordingStateMachine.State.TRANSCRIBING -> getString(R.string.overlay_button_transcribing_description)
+        }
 
         if (appearance.hasCustomIcon) {
             val bitmap = OverlayIconStore.load(this)
@@ -1586,6 +1615,14 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     private fun startPulse() {
+        // Respect the OS "Remove animations" / Developer Options "Animator duration scale = Off"
+        // preference (#accessibility pass): unlike the framework's own transition system, a
+        // manually-built ViewPropertyAnimator like this one does NOT automatically honor that
+        // setting -- it has to be checked explicitly. The pulse is purely decorative (RECORDING
+        // state is already conveyed by the button's fill color via applyButtonAppearance), so
+        // under reduced motion this just leaves the button at full, static alpha instead of
+        // looping an animation the user asked the OS to suppress.
+        if (isReducedMotionEnabled()) return
         button?.let {
             it.animate().alpha(0.4f).setDuration(500).withEndAction {
                 it.animate().alpha(1f).setDuration(500).withEndAction {
@@ -1593,6 +1630,20 @@ class WhisperAccessibilityService : AccessibilityService() {
                 }.start()
             }.start()
         }
+    }
+
+    /** Reads the OS-level reduced-motion preference (Settings > Accessibility > Remove
+     *  animations, which also drives Developer Options > Animator duration scale). Android
+     *  sets this to exactly `0f` for both the accessibility toggle and the developer setting,
+     *  so reading it directly here works uniformly across both entry points and back to this
+     *  app's actual minSdk (rather than only the newer AccessibilityManager reduced-motion API). */
+    private fun isReducedMotionEnabled(): Boolean = try {
+        android.provider.Settings.Global.getFloat(
+            contentResolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE
+        ) == 0f
+    } catch (_: android.provider.Settings.SettingNotFoundException) {
+        false
     }
 
     private fun stopPulse() {
