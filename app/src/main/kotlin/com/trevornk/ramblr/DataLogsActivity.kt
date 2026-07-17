@@ -10,6 +10,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import kotlin.concurrent.thread
 
 /**
  * "Data & Logs" settings screen (#104 restructure): dictation history toggle + viewer,
@@ -124,29 +125,44 @@ class DataLogsActivity : BaseSettingsActivity() {
      *  res/xml/benchmark_log_file_paths.xml's existing `files-path name="benchmark_log" path="."`
      *  entry exposes the whole filesDir root (confirmed by reading that file), so writing here
      *  needs no new FileProvider paths entry -- cacheDir has no matching `cache-path` entry and
-     *  would 404 on share. */
+     *  would 404 on share.
+     *
+     *  Runs off the UI thread (GH #124): zipping benchmark/quality logs and dictation history can
+     *  be several MB, and doing that synchronously from a click listener risks a visible freeze
+     *  or an ANR. Matches the thread { ... } + runOnUiThread { ... } pattern already used
+     *  elsewhere in this app (e.g. OverlayAppearanceActivity's pickOverlayIcon callback).
+     *
+     *  Also prunes old backups down to [BackupManager.MAX_RETAINED_BACKUPS] (GH #123): previously
+     *  a new timestamped zip was written on every tap and only ever deleted if the result was
+     *  empty, so non-empty backups accumulated on disk forever. */
     private fun createAndShareBackup() {
-        val backupsDir = java.io.File(filesDir, "backups").apply { mkdirs() }
-        val destination = java.io.File(backupsDir, "ramblr_backup_${System.currentTimeMillis()}.zip")
-        val written = try {
-            BackupManager.createBackup(this, destination)
-        } catch (e: Exception) {
-            toast("Couldn't create backup: ${e.message}")
-            return
+        thread {
+            val backupsDir = java.io.File(filesDir, "backups").apply { mkdirs() }
+            val destination = java.io.File(backupsDir, "ramblr_backup_${System.currentTimeMillis()}.zip")
+            val written = try {
+                BackupManager.createBackup(this, destination)
+            } catch (e: Exception) {
+                runOnUiThread { toast("Couldn't create backup: ${e.message}") }
+                return@thread
+            }
+            if (written.isEmpty()) {
+                destination.delete()
+                runOnUiThread { toast("Nothing to back up yet — dictate a few times first") }
+                return@thread
+            }
+            BackupManager.pruneOldBackups(backupsDir)
+            runOnUiThread {
+                if (isDestroyed || isFinishing) return@runOnUiThread
+                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", destination)
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(intent, "Share backup"))
+                backupRowSub.text = "Backed up: ${written.joinToString(", ")}"
+            }
         }
-        if (written.isEmpty()) {
-            destination.delete()
-            toast("Nothing to back up yet — dictate a few times first")
-            return
-        }
-        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", destination)
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "application/zip"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        startActivity(Intent.createChooser(intent, "Share backup"))
-        backupRowSub.text = "Backed up: ${written.joinToString(", ")}"
     }
 
     private fun confirmRestore(uri: Uri) {
@@ -162,23 +178,32 @@ class DataLogsActivity : BaseSettingsActivity() {
             .show()
     }
 
+    /** Runs off the UI thread (GH #124): restoring can involve reading/unzipping a multi-MB
+     *  file and committing SharedPreferences synchronously, which risks a visible freeze or an
+     *  ANR if run directly from the click listener. Matches the thread { ... } +
+     *  runOnUiThread { ... } pattern used elsewhere in this app. */
     private fun performRestore(uri: Uri) {
-        val result = try {
-            contentResolver.openInputStream(uri)?.use { input -> BackupManager.restoreBackup(this, input) }
-        } catch (e: Exception) {
-            toast("Couldn't restore: ${e.message}")
-            return
+        thread {
+            val result = try {
+                contentResolver.openInputStream(uri)?.use { input -> BackupManager.restoreBackup(this, input) }
+            } catch (e: Exception) {
+                runOnUiThread { toast("Couldn't restore: ${e.message}") }
+                return@thread
+            }
+            if (result == null) {
+                runOnUiThread { toast("Couldn't open that file") }
+                return@thread
+            }
+            if (result.restoredEntries.isEmpty()) {
+                runOnUiThread { toast("That file didn't contain any recognized backup data") }
+                return@thread
+            }
+            runOnUiThread {
+                if (isDestroyed || isFinishing) return@runOnUiThread
+                toast("Restored: ${result.restoredEntries.joinToString(", ")}")
+                refresh()
+            }
         }
-        if (result == null) {
-            toast("Couldn't open that file")
-            return
-        }
-        if (result.restoredEntries.isEmpty()) {
-            toast("That file didn't contain any recognized backup data")
-            return
-        }
-        toast("Restored: ${result.restoredEntries.joinToString(", ")}")
-        refresh()
     }
 
     // --- Dictation History (#25) ---

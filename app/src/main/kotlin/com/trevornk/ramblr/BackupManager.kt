@@ -84,6 +84,32 @@ object BackupManager {
     fun createBackup(context: Context, destination: File): Set<String> =
         zipFiles(destination, targetFiles(context))
 
+    /** How many of the most recent backup files to keep in a backups directory; see
+     *  [pruneOldBackups]. GH #123: "Backup all data" wrote a fresh timestamped zip on every tap
+     *  and only ever deleted it if the result was empty, so non-empty backups accumulated
+     *  forever. 5 is a reasonable default -- enough recent history to recover from a bad restore
+     *  or a few days of mistaken taps, without unbounded growth eating device storage. */
+    const val MAX_RETAINED_BACKUPS = 5
+
+    /** Pure, [File]-based retention logic split out for direct unit-testing (same reasoning as
+     *  [zipFiles]/[unzipToTargets] above): deletes every file in [files] beyond the
+     *  [keep] most recently modified, keeping the newest [keep] intact. Returns the files that
+     *  were actually deleted. Sorts by [File.lastModified] (not filename) so it stays correct
+     *  even if a future caller's naming scheme changes; the current
+     *  `ramblr_backup_<timestamp>.zip` naming also happens to sort identically either way. */
+    fun pruneOldBackups(files: List<File>, keep: Int = MAX_RETAINED_BACKUPS): List<File> {
+        val toDelete = files.sortedByDescending { it.lastModified() }.drop(keep)
+        toDelete.forEach { it.delete() }
+        return toDelete
+    }
+
+    /** [pruneOldBackups] wrapper for a real backup directory on disk: lists its immediate zip
+     *  files and prunes down to [keep]. Safe to call whether or not [backupsDir] exists yet. */
+    fun pruneOldBackups(backupsDir: File, keep: Int = MAX_RETAINED_BACKUPS): List<File> {
+        val existing = backupsDir.listFiles { f -> f.isFile && f.name.endsWith(".zip") }?.toList() ?: return emptyList()
+        return pruneOldBackups(existing, keep)
+    }
+
     /** [restoredEntries]: entry names successfully written to their matching target file.
      *  [skippedEntries]: entry names present in the zip that had no matching [targets] key, and
      *  were therefore never written anywhere -- see this class's kdoc for why that's the safety
