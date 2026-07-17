@@ -2176,6 +2176,12 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  active local model rather than guessing at a chain entry that doesn't apply to LOCAL. */
     private fun localTranscriptionModelId(): String = prefs().getString("model_name", "") ?: ""
 
+    /** The user's personal vocabulary terms (#26/#114), read from the same "custom_vocabulary_terms"
+     *  prefs key [BehaviorActivity] writes -- shared by both the cleanup-stage prompt interpolation
+     *  below and the transcription-stage prompt biasing (OpenAI/Gemini) in [transcribeApi]. */
+    private fun vocabularyTerms(): List<String> =
+        VocabularyTerms.parse(prefs().getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED))
+
     private fun transcribeApi(file: File, token: Int) {
         val chain = ProviderChainStore.load(this)
         val allowLocalFallback = DictationModeToggle.allowLocalFallback(this)
@@ -2253,10 +2259,14 @@ class WhisperAccessibilityService : AccessibilityService() {
                     // value or a future regression could send an empty-string model id straight
                     // to OpenAI instead of falling back to DEFAULT_MODEL -- matches the same
                     // guard already applied on the Gemini call site just below.
+                    // #114 parts 1/2: bias transcription itself toward the user's vocabulary, not
+                    // just the cleanup stage -- same terms already read below at the cleanup call
+                    // site (see vocabularyTerms()).
                     TranscriberClient.transcribe(
                         file, apiKey, inFlightCall,
                         baseUrl = entry.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL,
                         model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
+                        vocabularyTerms = vocabularyTerms(),
                     ) { result ->
                         val roundTripMs = System.currentTimeMillis() - transcribeStartMs
                         Log.i(TAG, "OpenAI transcription HTTP round-trip took ${roundTripMs}ms")
@@ -2305,7 +2315,10 @@ class WhisperAccessibilityService : AccessibilityService() {
                         Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (Gemini generateContent audio)")
                         val geminiModel = entry.transcriptionModel?.ifBlank { null } ?: GeminiTranscriberClient.DEFAULT_MODEL
                         val geminiStartMs = System.currentTimeMillis()
-                        GeminiTranscriberClient.transcribe(file, apiKey, geminiModel, inFlightCall) { result ->
+                        GeminiTranscriberClient.transcribe(
+                            file, apiKey, geminiModel, inFlightCall,
+                            vocabularyTerms = vocabularyTerms(),
+                        ) { result ->
                             val success = result.text != null && result.text.isNotBlank()
                             BenchmarkLogger.log(
                                 context = this,
@@ -2411,7 +2424,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             val rawPrompt = perAppPersonaKey
                 ?.let { CleanupPersonas.promptForExplicitSelection(PersonaRegistry.resolve(this, it)) }
                 ?: savedPrompt
-            val vocabulary = VocabularyTerms.parse(prefs().getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED))
+            val vocabulary = vocabularyTerms()
             val prompt = PostProcessor.interpolateVocabulary(rawPrompt, vocabulary)
 
             if (!guard.isCurrent(token)) return

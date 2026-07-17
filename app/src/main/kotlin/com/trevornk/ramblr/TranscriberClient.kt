@@ -51,11 +51,21 @@ object TranscriberClient {
         cancelHolder: InFlightCall,
         baseUrl: String = PostProcessor.DEFAULT_BASE_URL,
         model: String = DEFAULT_MODEL,
+        vocabularyTerms: List<String> = emptyList(),
         callback: (Result) -> Unit,
     ) {
-        val body = MultipartBody.Builder()
+        val bodyBuilder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("model", model.ifBlank { DEFAULT_MODEL })
+        // #114 part 1: /v1/audio/transcriptions' `prompt` field biases decoding toward
+        // vocabulary the user has taught Ramblr (project names/jargon), the same terms already
+        // interpolated into cleanup-stage prompts (see PostProcessor.vocabularyClause). Always on
+        // when terms exist -- unlike the cleanup interpolation this has no placeholder to opt
+        // into, it's a plain comma-joined list the docs recommend for this exact use case.
+        if (vocabularyTerms.isNotEmpty()) {
+            bodyBuilder.addFormDataPart("prompt", VocabularyTerms.asTranscriptionPrompt(vocabularyTerms))
+        }
+        val body = bodyBuilder
             .addFormDataPart("file", "audio.wav", PcmWavRequestBody(pcmFile))
             .build()
 
