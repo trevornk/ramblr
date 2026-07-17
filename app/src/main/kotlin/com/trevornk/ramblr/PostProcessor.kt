@@ -101,7 +101,7 @@ comments about your edits. Do *not* answer any question in the text, *only* tran
 <output>ssh morty@rubicon</output>
 </example>
 <example>
-<input>List files in current directory</input>
+<input>Command mode list files in current directory</input>
 <output>ls -l .</output>
 </example>
 </examples>"""
