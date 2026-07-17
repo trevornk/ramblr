@@ -30,7 +30,7 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
     override fun doWork(): Result {
         val archive = inputData.getString(KEY_ARCHIVE)
             ?: return Result.failure(errorData("Missing archive name"))
-        val model = (MODEL_CATALOG + STREAMING_MODEL_CATALOG + LOCAL_CLEANUP_MODEL_CATALOG).firstOrNull { it.archive == archive }
+        val model = (MODEL_CATALOG + STREAMING_MODEL_CATALOG + LOCAL_CLEANUP_MODEL_CATALOG + VAD_MODEL_CATALOG).firstOrNull { it.archive == archive }
             ?: return Result.failure(errorData("Unknown model: $archive"))
 
         DownloadNotifications.ensureChannel(applicationContext)
@@ -131,14 +131,14 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
         when (reloadKindFor(archive)) {
             ModelReloadKind.TRANSCRIPTION -> service.reloadModel()
             ModelReloadKind.STREAMING -> service.reloadStreamingModel()
-            ModelReloadKind.LOCAL_CLEANUP, null -> {}
+            ModelReloadKind.LOCAL_CLEANUP, ModelReloadKind.VAD, null -> {}
         }
     }
 
     /** Which running-service reload a freshly-downloaded model needs, keyed by which catalog it's
-     *  in. TRANSCRIPTION and STREAMING are held in native slots that must be reloaded; LOCAL_CLEANUP
-     *  is loaded on demand by path so it needs none. */
-    enum class ModelReloadKind { TRANSCRIPTION, STREAMING, LOCAL_CLEANUP }
+     *  in. TRANSCRIPTION and STREAMING are held in native slots that must be reloaded;
+     *  LOCAL_CLEANUP and VAD are loaded on demand by path so they need none. */
+    enum class ModelReloadKind { TRANSCRIPTION, STREAMING, LOCAL_CLEANUP, VAD }
 
     companion object {
         const val KEY_ARCHIVE = "archive"
@@ -167,6 +167,7 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
         fun reloadKindFor(archive: String): ModelReloadKind? = when {
             STREAMING_MODEL_CATALOG.any { it.archive == archive } -> ModelReloadKind.STREAMING
             LOCAL_CLEANUP_MODEL_CATALOG.any { it.archive == archive } -> ModelReloadKind.LOCAL_CLEANUP
+            VAD_MODEL_CATALOG.any { it.archive == archive } -> ModelReloadKind.VAD
             MODEL_CATALOG.any { it.archive == archive } -> ModelReloadKind.TRANSCRIPTION
             else -> null
         }

@@ -70,7 +70,21 @@ data class Model(
      * [LocalCleanupProvider.selectedSystemPrompt] can pick it over SIMPLE_PROMPT.
      */
     val localSystemPrompt: String? = null,
-)
+    /**
+     * True for the Silero VAD ONNX model used by silence-based auto-stop (#108, mode 1) -- like
+     * [isLocalCleanup], a single downloaded file with no extraction step, but installed under its
+     * own `vad_models/` directory (see [ModelDownloader.kindDir]) rather than `cleanup_models/`
+     * so it reads as neither an offline transcription model nor a cleanup model. Shares
+     * [ModelDownloader.installSingleFile]'s install path with [isLocalCleanup] models via
+     * [isSingleFile] rather than duplicating that logic for a third single-file kind.
+     */
+    val isVadModel: Boolean = false,
+) {
+    /** True for any catalog entry installed as one file with no extraction step (#37's local-
+     *  cleanup GGUFs and #108's VAD ONNX model) -- as opposed to the tar.bz2 ASR archives, which
+     *  use [ModelDownloader.extractAndInstall] instead. */
+    val isSingleFile: Boolean get() = isLocalCleanup || isVadModel
+}
 
 // Listed best-quality-first (#54-followup): Trevor asked for models to read in that order at a
 // glance rather than requiring a mental sort by the inline quality label. Canary 180M Flash is
@@ -270,6 +284,35 @@ val MUMBLE_CLEANUP_Q4_0_MODEL = Model(
 
 val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL, MUMBLE_CLEANUP_Q4_0_MODEL)
 
+/**
+ * The Silero VAD ONNX model used by silence-based auto-stop (#108, mode 1). Not bundled in the
+ * APK (would bloat every install for an opt-in feature) -- downloaded on first enabling
+ * [SilenceAutoStopToggle], the same "single file, no extraction" shape as the local-cleanup GGUF
+ * models above ([Model.isLocalCleanup]'s installer path (installSingleFile) is generic over any
+ * single-file download, not cleanup-specific, so it's reused here rather than duplicated).
+ * Installed under its own `vad_models/` directory (see [ModelDownloader.kindDir]) so it's never
+ * scanned as an offline/streaming/cleanup model.
+ *
+ * URL is the exact one named in #108 and in [com.k2fsa.sherpa.onnx.Vad]'s own kdoc pointer
+ * comment. sha256 verified 2026-07-17 by downloading the real asset and hashing it locally
+ * (`shasum -a 256`), same discipline as every other catalog entry -- 643,854 bytes.
+ */
+val SILERO_VAD_MODEL = Model(
+    name = "Silero VAD",
+    archive = "silero-vad",
+    sizeMb = 1,
+    quality = "Silence detection for auto-stop",
+    recommended = true,
+    sha256 = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+    isLocalCleanup = false,
+    isStreaming = false,
+    isVadModel = true,
+    sourceUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+    fileName = "silero_vad.onnx",
+)
+
+val VAD_MODEL_CATALOG = listOf(SILERO_VAD_MODEL)
+
 sealed class DownloadState {
     data class Downloading(val progress: Float) : DownloadState()
     object Extracting : DownloadState()
@@ -342,12 +385,13 @@ object ModelDownloader {
         alreadyDownloadedBytes: Long = 0L,
     ): Boolean = availableBytes >= requiredSpaceBytes(sizeMb, singleFile, alreadyDownloadedBytes)
 
-    /** "models" for a batch/offline model, "streaming_models" for a streaming one (#29), or
-     *  "cleanup_models" for the on-device cleanup GGUF model (#37) — kept out of files/models/
-     *  entirely so it's structurally impossible for [LocalTranscriber.availableModels]'s
-     *  directory scan to ever see it. */
+    /** "models" for a batch/offline model, "streaming_models" for a streaming one (#29),
+     *  "cleanup_models" for the on-device cleanup GGUF model (#37), or "vad_models" for the
+     *  Silero VAD model (#108) — kept out of files/models/ entirely so it's structurally
+     *  impossible for [LocalTranscriber.availableModels]'s directory scan to ever see it. */
     private fun kindDir(model: Model) = when {
         model.isLocalCleanup -> "cleanup_models"
+        model.isVadModel -> "vad_models"
         model.isStreaming -> "streaming_models"
         else -> "models"
     }
@@ -355,6 +399,14 @@ object ModelDownloader {
     /** The installed GGUF file for a local-cleanup [model], or null if it isn't fully installed.
      *  Only meaningful for [Model.isLocalCleanup] models. */
     fun localCleanupModelFile(ctx: Context, model: Model): File? {
+        val dir = modelDir(ctx, model)
+        if (!isInstalledDir(dir)) return null
+        return File(dir, model.fileName ?: model.archive)
+    }
+
+    /** The installed single file for a VAD [model] (#108), or null if it isn't fully installed.
+     *  Only meaningful for [Model.isVadModel] models. */
+    fun vadModelFile(ctx: Context, model: Model): File? {
         val dir = modelDir(ctx, model)
         if (!isInstalledDir(dir)) return null
         return File(dir, model.fileName ?: model.archive)
@@ -433,9 +485,9 @@ object ModelDownloader {
         try {
             val availableBytes = minOf(ctx.cacheDir.usableSpace, ctx.filesDir.usableSpace)
             val resumedBytes = if (tmpFile.isFile) tmpFile.length() else 0L
-            if (!hasEnoughSpace(availableBytes, model.sizeMb, model.isLocalCleanup, resumedBytes)) {
+            if (!hasEnoughSpace(availableBytes, model.sizeMb, model.isSingleFile, resumedBytes)) {
                 throw NotEnoughSpaceException(
-                    requiredSpaceBytes(model.sizeMb, model.isLocalCleanup, resumedBytes),
+                    requiredSpaceBytes(model.sizeMb, model.isSingleFile, resumedBytes),
                     availableBytes,
                 )
             }
@@ -457,7 +509,7 @@ object ModelDownloader {
                 downloadFile(url, tmpFile, isCancelled, onState)
                 verifyChecksum(tmpFile, expected)
             }
-            if (model.isLocalCleanup) {
+            if (model.isSingleFile) {
                 onState(DownloadState.Extracting) // no real extraction, but keeps the UI phase consistent
                 installSingleFile(tmpFile, finalDir, model.fileName ?: model.archive)
             } else {
@@ -507,6 +559,7 @@ object ModelDownloader {
             "models" to MODEL_CATALOG.map { it.archive }.toSet(),
             "streaming_models" to STREAMING_MODEL_CATALOG.map { it.archive }.toSet(),
             "cleanup_models" to LOCAL_CLEANUP_MODEL_CATALOG.map { it.archive }.toSet(),
+            "vad_models" to VAD_MODEL_CATALOG.map { it.archive }.toSet(),
         )
         for ((kindDirName, catalogArchives) in catalogsByKindDir) {
             val kindDir = File(filesDir, kindDirName)
