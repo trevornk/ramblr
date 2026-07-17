@@ -264,6 +264,11 @@ class WhisperAccessibilityService : AccessibilityService() {
     private var lastScreenW = 0
     private var lastScreenH = 0
     @Volatile private var recordingEngine: RecordingEngine? = null
+    /** Non-null only while a recording with silence-based auto-stop (#108, mode 1) active is in
+     *  progress -- see [startRecording]/[onRecordingFinished]. Zero-cost when the feature is off
+     *  or the VAD model isn't installed: this field simply stays null, no [SilenceAutoStopSession]
+     *  (and therefore no native [com.k2fsa.sherpa.onnx.Vad]) is ever created. */
+    @Volatile private var silenceAutoStopSession: SilenceAutoStopSession? = null
     private val guard = TranscriptionGuard()
     private val inFlightCall = InFlightCall()
     private val cleanupCursor = CleanupWaterfallCursor()
@@ -497,6 +502,11 @@ class WhisperAccessibilityService : AccessibilityService() {
         stateMachine.reset()
         recordingEngine?.awaitTeardown()
         recordingEngine = null
+        // Belt-and-suspenders alongside the release already wired into startRecording's onFinished
+        // (#108): awaitTeardown above blocks until the reader thread's onFinished has run, so this
+        // is normally already null, but a stray VAD session must never survive service teardown.
+        silenceAutoStopSession?.release()
+        silenceAutoStopSession = null
         cancelWatchdog()
         guard.cancel()
         inFlightCall.cancel()
@@ -1782,15 +1792,51 @@ class WhisperAccessibilityService : AccessibilityService() {
         val streamingActive = streamingTranscriberSlot.get() != null
         if (streamingActive) streamingTranscriberSlot.use { it.beginSession() }
 
+        // Silence-based auto-stop (#108, mode 1): additive and opt-in -- a session (and the
+        // native Vad it owns) is only ever created when the toggle is on AND the model is
+        // actually installed. Either condition being false means zero VAD instantiation and
+        // byte-for-byte identical recording behavior to before this feature existed.
+        val autoStopSession = if (SilenceAutoStopToggle.isEnabled(this)) {
+            ModelDownloader.vadModelFile(this, SILERO_VAD_MODEL)?.let { modelFile ->
+                try {
+                    SilenceAutoStopSession(
+                        modelFile = modelFile,
+                        thresholdMs = SilenceAutoStopThreshold.millisOrDefault(this),
+                        onSilenceThresholdExceeded = { handler.post { stopAndTranscribe() } },
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start silence auto-stop VAD session", e)
+                    null
+                }
+            }
+        } else null
+        silenceAutoStopSession = autoStopSession
+
+        val onChunk: (ByteArray, Int) -> Unit = when {
+            streamingActive && autoStopSession != null -> { buf, len ->
+                handleStreamingChunk(buf, len)
+                autoStopSession.onChunk(buf, len)
+            }
+            streamingActive -> ::handleStreamingChunk
+            autoStopSession != null -> autoStopSession::onChunk
+            else -> { _, _ -> }
+        }
+
         val engine = RecordingEngine(cacheDir, stateMachine)
         val started = engine.start(
-            onFinished = { result -> onRecordingFinished(engine, result) },
-            onChunk = if (streamingActive) ::handleStreamingChunk else { _, _ -> }
+            onFinished = { result ->
+                silenceAutoStopSession?.release()
+                silenceAutoStopSession = null
+                onRecordingFinished(engine, result)
+            },
+            onChunk = onChunk
         )
         if (!started) {
             // End the streaming session so a failed recorder start doesn't leak the OnlineStream
             // opened by beginSession() above until the next recording (L11).
             if (streamingActive) endStreamingSession()
+            autoStopSession?.release()
+            silenceAutoStopSession = null
             toast("Couldn't start recording — mic busy?")
             return
         }
