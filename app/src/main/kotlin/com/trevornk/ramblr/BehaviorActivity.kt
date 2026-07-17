@@ -500,18 +500,35 @@ class BehaviorActivity : BaseSettingsActivity() {
      *  the way [promptSilenceAutoStopThreshold] does for a user-experience threshold -- there's
      *  no forgiving range to fall back to here, just three concrete values to compare. */
     private fun promptLocalTranscriptionThreads() {
+        // AlertDialog.Builder's message and single-choice-item list share the same content area
+        // and are mutually exclusive -- calling both silently drops the list with no error, which
+        // is exactly what happened here: the dialog rendered title+message+Cancel but never the
+        // three thread presets, making the setting effectively unreachable (GH bug report,
+        // 2026-07-17). Fixed using the documented workaround: a custom title view carrying both
+        // the heading and the explanatory copy (in place of setTitle()+setMessage()), leaving the
+        // content area free for setSingleChoiceItems() to actually render.
         val presets = LocalTranscriptionThreads.PRESET_THREADS
         val labels = presets.map { "$it threads" }.toTypedArray()
         val current = LocalTranscriptionThreads.threadsOrDefault(this)
         val checkedIndex = presets.indexOf(current).let { if (it < 0) 0 else it }
+        val titleView = vertical(dp(20), dp(20)).apply {
+            addView(TextView(this@BehaviorActivity).apply {
+                text = "Local transcription threads"
+                textSize = 20f
+                setTextColor(attrColor(android.R.attr.textColorPrimary))
+            })
+            addView(TextView(this@BehaviorActivity).apply {
+                text = "How many CPU threads on-device transcription uses to decode. The " +
+                    "default (2) is unchanged from before this setting existed -- try 4 or 6 " +
+                    "and compare against the benchmark log (Data & Logs > Share benchmark log) " +
+                    "to see what's actually faster on your device."
+                textSize = 14f
+                setTextColor(attrColor(android.R.attr.textColorSecondary))
+                setPadding(0, dp(8), 0, 0)
+            })
+        }
         android.app.AlertDialog.Builder(this)
-            .setTitle("Local transcription threads")
-            .setMessage(
-                "How many CPU threads on-device transcription uses to decode. The default (2) " +
-                    "is unchanged from before this setting existed -- try 4 or 6 and compare " +
-                    "against the benchmark log (Data & Logs > Share benchmark log) to see " +
-                    "what's actually faster on your device."
-            )
+            .setCustomTitle(titleView)
             .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
                 LocalTranscriptionThreads.setThreads(this, presets[which])
                 refresh()
