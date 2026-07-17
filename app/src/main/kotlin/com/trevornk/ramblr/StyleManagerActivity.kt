@@ -184,20 +184,27 @@ class StyleManagerActivity : BaseSettingsActivity() {
         container.addView(nameInput)
         container.addView(promptInput)
 
-        android.app.AlertDialog.Builder(this)
+        val dialog = android.app.AlertDialog.Builder(this)
             .setTitle(title)
             .setView(container)
-            .setPositiveButton("Save") { _, _ ->
+            .setPositiveButton("Save", null) // real handler wired below so a blank name/prompt doesn't dismiss (#125)
+            .setNegativeButton("Cancel", null)
+            .create()
+        // Override Save so a blank name/prompt shows an inline error and keeps the dialog open
+        // with the user's input intact instead of silently discarding it (#125).
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val name = nameInput.text.toString().trim()
                 val prompt = promptInput.text.toString().trim()
                 if (name.isBlank() || prompt.isBlank()) {
                     toast("Name and prompt can't be empty")
-                    return@setPositiveButton
+                } else {
+                    onSave(name, prompt)
+                    dialog.dismiss()
                 }
-                onSave(name, prompt)
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }
+        dialog.show()
     }
 
     private fun confirmDeletePersona(persona: CleanupPersona) {
