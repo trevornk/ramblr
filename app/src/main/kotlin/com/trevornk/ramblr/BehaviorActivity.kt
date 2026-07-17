@@ -26,6 +26,7 @@ class BehaviorActivity : BaseSettingsActivity() {
     private lateinit var autoPeekSwitch: MaterialSwitch
     private lateinit var autoPeekDelayRow: LinearLayout
     private lateinit var peekSizeRow: LinearLayout
+    private lateinit var singleTapRestoreSwitch: MaterialSwitch
     private lateinit var rawTextRetrySwitch: MaterialSwitch
     private lateinit var vocabularyRowSub: TextView
     // Built unconditionally and shown/hidden in refresh() (#L16): building it only when hidden at
@@ -115,6 +116,21 @@ class BehaviorActivity : BaseSettingsActivity() {
         ) { promptPeekSize() }
         root.addView(peekSizeRow)
 
+        singleTapRestoreSwitch = MaterialSwitch(this).apply {
+            isChecked = SingleTapRestoreToggle.isEnabled(this@BehaviorActivity)
+            isClickable = false
+        }
+        root.addView(settingsRow(
+            "Single-tap restore and record",
+            "While peeked, one tap both brings the icon back and starts recording. Off by default, which keeps the first tap just restoring the icon and a second tap starting recording",
+            singleTapRestoreSwitch,
+            indent = 1
+        ) {
+            val newVal = !singleTapRestoreSwitch.isChecked
+            SingleTapRestoreToggle.setEnabled(this, newVal)
+            singleTapRestoreSwitch.isChecked = newVal
+        })
+
         rawTextRetrySwitch = MaterialSwitch(this).apply {
             isChecked = RawTextRetryToggle.isEnabled(this@BehaviorActivity)
             isClickable = false
@@ -164,6 +180,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         perAppPersonaSwitch.isChecked = PerAppPersonaToggle.isEnabled(this)
         hideIconSwitch.isChecked = HideIconToggle.isEnabled(this)
         autoPeekSwitch.isChecked = AutoPeekToggle.isEnabled(this)
+        singleTapRestoreSwitch.isChecked = SingleTapRestoreToggle.isEnabled(this)
         rawTextRetrySwitch.isChecked = RawTextRetryToggle.isEnabled(this)
         vocabularyRowSub.text = vocabularySummary()
         autoPeekDelayRow.findViewWithTag<TextView>("subtitle").text = autoPeekDelaySummary()
