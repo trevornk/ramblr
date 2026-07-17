@@ -1265,22 +1265,45 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun positionFeedback(
         feedbackParams: WindowManager.LayoutParams,
         bubbleParams: WindowManager.LayoutParams,
-        feedbackHeight: Int
+        feedbackHeight: Int,
+        targetBounds: Rect? = null
     ) {
         val margin = (MARGIN_DP * dp).toInt()
         val offset = (FEEDBACK_OFFSET_DP * dp).toInt()
         val ringSize = bubbleParams.width
         feedbackParams.x = maxOf(margin, bubbleParams.x - offset)
-        feedbackParams.y = if (bubbleParams.y + ringSize / 2 > screenH / 2) {
+        var openUpward = bubbleParams.y + ringSize / 2 > screenH / 2
+        feedbackParams.y = if (openUpward) {
             // Icon in bottom half: open upward, same placement as before this fix.
             (bubbleParams.y - feedbackHeight - margin).coerceAtLeast(margin)
         } else {
             // Icon in top half: open downward instead, so the bubble can't cover the icon.
             (bubbleParams.y + ringSize + margin).coerceAtMost(screenH - feedbackHeight - margin)
         }
+
+        // #120: the natural above/below placement above only ever considers the ring's own
+        // position, so it can still land the bubble squarely on top of the field the text was
+        // just injected into (e.g. a short field near screen-center, or a tall multi-line one).
+        // When the target node's on-screen bounds are known, flip to the opposite side of the
+        // ring instead of the naturally-preferred one if that natural spot would overlap it.
+        // Simple heuristic, not a general layout solver: try the natural side, and only if that
+        // overlaps the target do we take the other side (still clamped on-screen as before).
+        if (targetBounds != null) {
+            val bubbleTop = feedbackParams.y
+            val bubbleBottom = feedbackParams.y + feedbackHeight
+            val overlapsTarget = bubbleBottom > targetBounds.top && bubbleTop < targetBounds.bottom
+            if (overlapsTarget) {
+                openUpward = !openUpward
+                feedbackParams.y = if (openUpward) {
+                    (bubbleParams.y - feedbackHeight - margin).coerceAtLeast(margin)
+                } else {
+                    (bubbleParams.y + ringSize + margin).coerceAtMost(screenH - feedbackHeight - margin)
+                }
+            }
+        }
     }
 
-    private fun showFeedback(text: String, durationMs: Long = 2000, touchable: Boolean = false, isFallback: Boolean = false) {
+    private fun showFeedback(text: String, durationMs: Long = 2000, touchable: Boolean = false, isFallback: Boolean = false, targetBounds: Rect? = null) {
         handler.post {
             val view = feedbackView ?: return@post
             val bubbleParams = layoutParams ?: return@post
@@ -1295,11 +1318,11 @@ class WhisperAccessibilityService : AccessibilityService() {
             // once this text's real layout is available, same two-pass approach as
             // showStyleMenu's menu.post{} (WRAP_CONTENT's true size still isn't known until after
             // the next layout pass actually runs).
-            positionFeedback(feedbackParams, bubbleParams, view.height)
+            positionFeedback(feedbackParams, bubbleParams, view.height, targetBounds)
             wm.updateViewLayout(view, feedbackParams)
             view.post {
                 if (feedbackView !== view) return@post // hidden/replaced already
-                positionFeedback(feedbackParams, bubbleParams, view.height)
+                positionFeedback(feedbackParams, bubbleParams, view.height, targetBounds)
                 wm.updateViewLayout(view, feedbackParams)
             }
 
@@ -2676,7 +2699,15 @@ class WhisperAccessibilityService : AccessibilityService() {
             isFallback -> resolvedFeedback?.let { "$it · tap to copy again" }
             else -> resolvedFeedback
         }
-        displayFeedback?.let { showFeedback(it, duration, touchable = retryRawOffered || isFallback, isFallback = isFallback) }
+        // #120: bias the bubble away from overlapping the field it just injected into, when that
+        // node's on-screen bounds are known (DIRECT injections only -- that's the only path with
+        // a live target node at this point).
+        val targetBounds = injectedNode?.let { node ->
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            rect
+        }
+        displayFeedback?.let { showFeedback(it, duration, touchable = retryRawOffered || isFallback, isFallback = isFallback, targetBounds = targetBounds) }
 
         when (val action = clipboardClearActionFor(method, CLIPBOARD_CLEAR_DELAY_MS)) {
             ClipboardClearAction.Immediate -> restoreClipboardAfterInjection(text, priorClipboard)
