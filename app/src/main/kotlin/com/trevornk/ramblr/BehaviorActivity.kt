@@ -42,6 +42,7 @@ class BehaviorActivity : BaseSettingsActivity() {
      *  from an unrelated download (or one already in flight before this screen opened). */
     private var silenceAutoStopPendingEnable = false
     private lateinit var vocabularyRowSub: TextView
+    private lateinit var localThreadsRowSub: TextView
     // Built unconditionally and shown/hidden in refresh() (#L16): building it only when hidden at
     // onCreate meant hiding the icon via the overlay while this screen was paused left no way back
     // on resume, and it relied on recreate() as a refresh hammer.
@@ -197,6 +198,16 @@ class BehaviorActivity : BaseSettingsActivity() {
         vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
         root.addView(vocabularyRow)
 
+        // Local transcription thread count (#107): a developer-ish tuning knob, not a mainstream
+        // everyday setting, so it lives down here rather than cluttering Transcription's main
+        // local-model picker. See LocalTranscriptionThreads' kdoc for why the default stays 2.
+        root.addView(sectionHeader("Advanced tuning"))
+        val localThreadsRow = settingsRow("Local transcription threads", localThreadsSummary()) {
+            promptLocalTranscriptionThreads()
+        }
+        localThreadsRowSub = localThreadsRow.findViewWithTag("subtitle")
+        root.addView(localThreadsRow)
+
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
             addView(root)
@@ -223,6 +234,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         silenceAutoStopThresholdRow.findViewWithTag<TextView>("subtitle").text = silenceAutoStopThresholdSummary()
         refreshSilenceAutoStopSummary()
         vocabularyRowSub.text = vocabularySummary()
+        localThreadsRowSub.text = localThreadsSummary()
         autoPeekDelayRow.findViewWithTag<TextView>("subtitle").text = autoPeekDelaySummary()
         peekSizeRow.findViewWithTag<TextView>("subtitle").text = peekSizeSummary()
     }
@@ -449,6 +461,40 @@ class BehaviorActivity : BaseSettingsActivity() {
                 val terms = VocabularyTerms.parse(input.text.toString())
                 prefs().edit().putString("custom_vocabulary_terms", VocabularyTerms.serialize(terms)).apply()
                 refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // --- Local transcription thread count (#107) ---
+
+    private fun localThreadsSummary(): String {
+        val threads = LocalTranscriptionThreads.threadsOrDefault(this)
+        return "$threads threads for on-device transcription. Higher may transcribe faster " +
+            "but uses more CPU/battery -- compare with the benchmark log in Data & Logs"
+    }
+
+    /** Presets-only picker (#107): the issue's whole point is letting Trevor A/B 2/4/6 himself
+     *  using his own real-usage [BenchmarkLogger] data, not offering a free-form "Custom…" input
+     *  the way [promptSilenceAutoStopThreshold] does for a user-experience threshold -- there's
+     *  no forgiving range to fall back to here, just three concrete values to compare. */
+    private fun promptLocalTranscriptionThreads() {
+        val presets = LocalTranscriptionThreads.PRESET_THREADS
+        val labels = presets.map { "$it threads" }.toTypedArray()
+        val current = LocalTranscriptionThreads.threadsOrDefault(this)
+        val checkedIndex = presets.indexOf(current).let { if (it < 0) 0 else it }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Local transcription threads")
+            .setMessage(
+                "How many CPU threads on-device transcription uses to decode. The default (2) " +
+                    "is unchanged from before this setting existed -- try 4 or 6 and compare " +
+                    "against the benchmark log (Data & Logs > Share benchmark log) to see " +
+                    "what's actually faster on your device."
+            )
+            .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
+                LocalTranscriptionThreads.setThreads(this, presets[which])
+                refresh()
+                dialog.dismiss()
             }
             .setNegativeButton("Cancel", null)
             .show()
