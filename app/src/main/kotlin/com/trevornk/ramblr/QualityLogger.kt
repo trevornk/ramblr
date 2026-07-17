@@ -27,7 +27,7 @@ data class QualityStage(
  * from its original build) and only records lengths/timings. [QualityLogger] is the one place
  * that captures the real raw-transcript-to-cleaned-text pairs Trevor needs to judge output
  * *quality*, correlated with the exact provider+model that produced each one via the same
- * `"tok-$token"` correlation id [BenchmarkLogger] already uses -- so a quality-log line and its
+ * per-dictation correlation id [BenchmarkLogger] already uses -- so a quality-log line and its
  * corresponding benchmark-log line for the same dictation can be joined by id. The two logs stay
  * fully independent files/formats/classes; this is purely additive.
  *
