@@ -274,6 +274,11 @@ class WhisperAccessibilityService : AccessibilityService() {
     private var isPeeked = false
     private var prePeekX: Int? = null
     private var peekAnimator: android.animation.ValueAnimator? = null
+    /** Set only when a peek-restore ValueAnimator is currently running AND a caller asked to
+     *  defer a same-view appearance change until it finishes (see [runAfterPeekRestore]) --
+     *  the actual fix for the SingleTapRestoreToggle race documented on [animateRingX]. Cleared
+     *  (and invoked) from the animator's own end/cancel listener, never left to accumulate. */
+    private var pendingPostPeekAction: Runnable? = null
     /** The currently-armed transcription watchdog (#L14), held so it can be removed on normal
      *  completion/teardown instead of one accumulating in the handler queue per dictation. */
     private var watchdogRunnable: Runnable? = null
@@ -1176,6 +1181,18 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  tweening through [RingPeek.ANIM_DURATION_MS], which is what "reduce motion" means for a
      *  functional transition: keep the state change, remove the animated interpolation. */
     private fun animateRingX(params: WindowManager.LayoutParams, wm: WindowManager, targetX: Int) {
+        // Bug fix (Trevor-reported): with SingleTapRestoreToggle on, a tap against a peeked ring
+        // both restores it (this animator) AND immediately starts recording in the SAME gesture
+        // (see overlay.setOnTouchListener's ACTION_DOWN -> restoreFromPeek(), then ACTION_UP ->
+        // onTap() -> startRecording()). startRecording() calls setAppearance()/startPulse(),
+        // which is a second, independent ViewPropertyAnimator on the same `button` view -- with
+        // no ordering guarantee against this restore ValueAnimator's per-frame
+        // wm.updateViewLayout() calls, the two could interleave and visibly stall/skip the
+        // restore, leaving the ring looking like it never slid out even though recording (and
+        // its own animation) started correctly. Any queued post-restore action (see
+        // [runAfterPeekRestore]) is captured BEFORE cancelling the old animator (if one was
+        // already mid-flight) so a rapid second peek/restore in the same gesture never drops a
+        // pending callback silently.
         peekAnimator?.cancel()
         val startXValue = params.x
         val overlay = overlayView ?: return
@@ -1200,15 +1217,54 @@ class WhisperAccessibilityService : AccessibilityService() {
                     wm.updateViewLayout(feedbackView, it)
                 }
             }
+            // Fires the deferred appearance/pulse change (see [deferUntilPeekAnimationDone]) once
+            // this animator is actually done moving the window -- on both a normal finish and a
+            // cancel (e.g. superseded by a second peek/restore before this one completed), so a
+            // queued action can never be silently dropped. Cleared here, not just invoked, so a
+            // stale Runnable never re-fires from a later, unrelated animator run.
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    pendingPostPeekAction?.let { it.run() }
+                    pendingPostPeekAction = null
+                }
+
+                override fun onAnimationCancel(animation: android.animation.Animator) {
+                    pendingPostPeekAction?.let { it.run() }
+                    pendingPostPeekAction = null
+                }
+            })
         }
         peekAnimator = animator
         animator.start()
+    }
+
+    /**
+     * Runs [action] immediately if no peek/restore animation is currently in flight, or defers
+     * it to fire right after [animateRingX]'s animator finishes (end or cancel) otherwise -- the
+     * actual fix for the SingleTapRestoreToggle race documented on [animateRingX]'s kdoc: without
+     * this, [startRecording]'s [setAppearance]/[startPulse] calls could run on the very same
+     * `button` view mid-flight of the peek-restore ValueAnimator, and the two competing
+     * animations could visibly stall/skip the restore. Reduced-motion restores (see
+     * [isReducedMotionEnabled]) never leave an animator running, so [action] always runs
+     * immediately in that case -- nothing to defer.
+     */
+    private fun deferUntilPeekAnimationDone(action: () -> Unit) {
+        if (peekAnimator?.isRunning == true) {
+            pendingPostPeekAction = Runnable(action)
+        } else {
+            action()
+        }
     }
 
     private fun removeOverlay() {
         // Cancel any in-flight peek/restore animation first (M2): its per-frame update listener
         // calls wm.updateViewLayout(overlay, …), which throws IllegalArgumentException ("View not
         // attached") on the main thread if it fires after the views below are removed.
+        // pendingPostPeekAction is cleared BEFORE cancel() (not after) so the animator's own
+        // onAnimationCancel listener has nothing left to run -- teardown has no business kicking
+        // off a deferred setAppearance()/startPulse() against a button view that's about to be
+        // removed below.
+        pendingPostPeekAction = null
         peekAnimator?.cancel()
         peekAnimator = null
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -1924,8 +1980,16 @@ class WhisperAccessibilityService : AccessibilityService() {
 
         recordingEngine = engine
         setBusy(false)
-        setAppearance(COLOR_RECORDING)
-        startPulse()
+        // Deferred (Trevor-reported bug fix, see animateRingX's kdoc): with SingleTapRestoreToggle
+        // on, this exact call site can run while restoreFromPeek()'s animator is still mid-flight
+        // repositioning the same ring window from the SAME tap gesture. setAppearance()/
+        // startPulse() are a second, independent animation on the same button view; without this
+        // guard the two could interleave and the peek-restore slide would visibly stall or never
+        // finish, even though recording (and its own animation) started correctly.
+        deferUntilPeekAnimationDone {
+            setAppearance(COLOR_RECORDING)
+            startPulse()
+        }
     }
 
     /** Flips shared state; the reader thread notices, drains, tears down and hands off via [onRecordingFinished]. */

@@ -60,6 +60,16 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Dev/benchmarking build (Trevor's request): same applicationId as the release
+            // build, matching the established sideload workflow (uninstall/reinstall in place,
+            // no side-by-side app). Debuggable is AGP's default for this build type already,
+            // which is the actual point of this variant: it makes
+            // `adb shell run-as com.trevornk.ramblr` work, so benchmark_log.jsonl and
+            // quality_log.jsonl (both under filesDir, private-app storage) can be pulled
+            // directly over wireless adb instead of round-tripping through Data & Logs's
+            // share-to-Gmail flow.
+        }
         release {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
