@@ -1,19 +1,41 @@
 name: CI
 
+# Single consolidated workflow replacing the former separate CI + Release workflows.
+# Previously every push to main ran two fully independent Android builds (CI: full
+# checkout+JDK+SDK+Gradle setup, tests, assemble; Release: the exact same setup, tests,
+# and assemble again, just to attach the APK to a GitHub Release) -- roughly double the
+# Actions minutes for zero extra verification, since Release rebuilt the identical
+# testGithubDebugUnitTest + assembleGithubDebug that CI had just run. Now build-and-test
+# runs once per push/PR, uploads its APK as an artifact, and release (push-to-main only)
+# just downloads that artifact and publishes it -- no second JDK/SDK/Gradle spin-up, no
+# second test run, no second native (llama.cpp submodule) build.
+#
+# reproducible-build.yml is untouched: it's tag-triggered only (real version bumps), not
+# push-triggered, so it was never part of the per-push cost problem, and it backs the open
+# F-Droid inclusion MR (fdroid/fdroiddata!42401) which depends on its exact build recipe.
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
-# Least-privilege GITHUB_TOKEN: nothing in this workflow writes to the repo (contrast release.yml,
-# which scopes `contents: write` into its own push-only workflow). Mirrors that discipline (L-1).
-permissions:
-  contents: read
+concurrency:
+  # Superseding an in-flight run for an older commit on the same ref is fine and avoids
+  # wasted minutes when pushing multiple commits in quick succession (applies to both PR
+  # and main-push runs, not just the old Release-only behavior).
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # Least-privilege GITHUB_TOKEN: this job never writes to the repo (contrast release,
+    # which scopes `contents: write` into its own job only) (L-1).
+    permissions:
+      contents: read
+    outputs:
+      version_name: ${{ steps.tag.outputs.version_name }}
     steps:
       - name: Checkout
         # Actions pinned to full commit SHAs, not mutable tags, so a compromised tag can't
@@ -46,6 +68,13 @@ jobs:
       - name: Assemble debug APKs
         run: ./gradlew assembleGithubDebug assembleStorefrontDebug
 
+      - name: Record version name
+        id: tag
+        # Read once here so the release job doesn't need JDK/Gradle just to grep this file.
+        run: |
+          VERSION_NAME=$(grep -m1 'versionName' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: Upload debug APKs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -56,3 +85,61 @@ jobs:
           # than the literal default filename. Covers both flavors' debug outputs.
           path: app/build/outputs/apk/*/debug/Ramblr-*-debug.apk
           if-no-files-found: error
+
+  release:
+    needs: build-and-test
+    # Only publish from real pushes to main, never from PR builds -- matches the former
+    # release.yml's `on: push: branches: [main]` trigger exactly.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # `contents: write` scoped to only this job, same isolation rationale as the former
+    # separate release.yml workflow: PR-triggered build-and-test never gets write access.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        # Lightweight checkout only -- no submodules, no JDK/SDK/Gradle. This job doesn't
+        # rebuild anything; it just needs `git rev-parse` for the short SHA and the release
+        # notes/tag text. This is the actual minutes savings versus the old release.yml,
+        # which re-ran the full submodule checkout + toolchain + test + build for this.
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download build artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk
+
+      - name: Compute release tag
+        id: tag
+        run: |
+          SHORT_SHA=$(git rev-parse --short=7 HEAD)
+          VERSION_NAME="${{ needs.build-and-test.outputs.version_name }}"
+          TAG="v${VERSION_NAME}-dev.$(date -u +%Y%m%d%H%M).${SHORT_SHA}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          # Matches the path the downloaded artifact was restored to above -- same
+          # Ramblr-<versionName>-github-debug.apk filename produced by the build job's
+          # outputFileName override in app/build.gradle.kts.
+          echo "apk_path=app/build/outputs/apk/github/debug/Ramblr-${VERSION_NAME}-github-debug.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Safe from the workflow-injection risk this trigger type usually carries: every
+        # interpolated value here is either computed from trusted internal state (steps.tag's
+        # outputs, derived from `git rev-parse`/gradle's versionName) or github.sha itself (an
+        # immutable commit hash, not attacker-controlled free text like a PR title/body). This
+        # workflow only runs on push to main, never on pull_request/issue_comment/etc., so there's
+        # no untrusted external text anywhere in scope to interpolate in the first place.
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            "${{ steps.tag.outputs.apk_path }}" \
+            --prerelease \
+            --title "Ramblr ${{ steps.tag.outputs.tag }} (debug build)" \
+            --notes "Automated debug sideload build from \`${{ steps.tag.outputs.short_sha }}\` on main.
+
+          **Unsigned debug build** — enable \"install unknown apps\" for whatever app you use to open the downloaded APK. Not from the Play Store.
+
+          Commit: ${{ github.sha }}
+          [Compare with previous release](../../commits/main)"
