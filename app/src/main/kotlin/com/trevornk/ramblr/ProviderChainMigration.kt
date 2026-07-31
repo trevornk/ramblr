@@ -38,7 +38,7 @@ object ProviderChainMigration {
      * every version between the device's last-applied version and this one, so a device that
      * skipped several app updates still picks up every intermediate mapping in order.
      */
-    private const val MIGRATION_VERSION = 2
+    private const val MIGRATION_VERSION = 3
 
     /**
      * (provider, old shipped-default model id) -> new shipped-default model id. Only exact
@@ -51,6 +51,25 @@ object ProviderChainMigration {
         (ProviderKind.OPENAI to "whisper-1") to TranscriberClient.DEFAULT_MODEL,
         (ProviderKind.GEMINI to "gemini-2.5-flash") to GeminiCleanupProvider.DEFAULT_MODEL,
         (ProviderKind.GEMINI to "gemini-2.5-flash-lite") to GeminiCleanupProvider.DEFAULT_MODEL,
+        // v3 (2026-07-31): gpt-4o-transcribe -> gpt-transcribe (OpenAI's successor ASR model,
+        // more accurate and 25% cheaper). Also covers the pre-#101/#102 shared-model-field era:
+        // a device whose single `model` field held gpt-4o-transcribe (e.g. via the v1
+        // whisper-1 rewrite applied when gpt-4o-transcribe was the current default).
+        (ProviderKind.OPENAI to "gpt-4o-transcribe") to TranscriberClient.DEFAULT_MODEL,
+    )
+
+    /**
+     * v3: like [SUPERSEDED_MODELS] but applied to [ProviderChainEntry.transcriptionModel].
+     * Needed because the v2 migration SEEDED transcriptionModel with the then-current default
+     * (gpt-4o-transcribe) on every transcription-capable entry -- those seeded values are just
+     * as pinned as the v1-era `model` strings were, and [migrate]'s null-seeding path can never
+     * fix a non-null value. Kept as a SEPARATE map deliberately: the main map's
+     * whisper-1 -> current-default entry must NOT apply here, because a non-null whisper-1
+     * transcriptionModel can only be a deliberate picker choice (the field did not exist yet
+     * when whisper-1 was the shipped default; v2 seeded gpt-4o-transcribe, never whisper-1).
+     */
+    private val SUPERSEDED_TRANSCRIPTION_MODELS: Map<Pair<ProviderKind, String>, String> = mapOf(
+        (ProviderKind.OPENAI to "gpt-4o-transcribe") to TranscriberClient.DEFAULT_MODEL,
     )
 
     /** Kinds where [ProviderChainEntry.transcriptionModel] is a meaningful, seedable field --
@@ -80,11 +99,19 @@ object ProviderChainMigration {
         val migratedEntries = chain.entries.map { entry ->
             val replacement = SUPERSEDED_MODELS[entry.kind to entry.model]
             val withModelFixed = if (replacement != null) entry.copy(model = replacement) else entry
-            if (withModelFixed.transcriptionModel == null) {
-                val seeded = defaultTranscriptionModelFor(withModelFixed.kind)
-                if (seeded != null) withModelFixed.copy(transcriptionModel = seeded) else withModelFixed
+            // v3: a non-null transcriptionModel that exactly matches a superseded shipped/seeded
+            // default is rewritten too (see SUPERSEDED_TRANSCRIPTION_MODELS' kdoc for why this
+            // is a separate map from the `model`-field one).
+            val transcriptionReplacement = withModelFixed.transcriptionModel
+                ?.let { SUPERSEDED_TRANSCRIPTION_MODELS[withModelFixed.kind to it] }
+            val withTranscriptionFixed =
+                if (transcriptionReplacement != null) withModelFixed.copy(transcriptionModel = transcriptionReplacement)
+                else withModelFixed
+            if (withTranscriptionFixed.transcriptionModel == null) {
+                val seeded = defaultTranscriptionModelFor(withTranscriptionFixed.kind)
+                if (seeded != null) withTranscriptionFixed.copy(transcriptionModel = seeded) else withTranscriptionFixed
             } else {
-                withModelFixed
+                withTranscriptionFixed
             }
         }
         return ProviderChain(migratedEntries)

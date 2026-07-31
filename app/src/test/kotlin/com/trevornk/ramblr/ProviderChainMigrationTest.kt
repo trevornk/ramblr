@@ -129,4 +129,51 @@ class ProviderChainMigrationTest {
         assertEquals(PostProcessor.DEFAULT_MODEL, migrated.entries[0].model)
         assertEquals(TranscriberClient.DEFAULT_MODEL, migrated.entries[0].transcriptionModel)
     }
+
+    // --- v3 (2026-07-31): gpt-4o-transcribe -> gpt-transcribe ---
+
+    @Test fun `rewrites a superseded gpt-4o-transcribe model field to gpt-transcribe`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-transcribe")))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals("gpt-transcribe", migrated.entries[0].model)
+        assertEquals(TranscriberClient.DEFAULT_MODEL, migrated.entries[0].model)
+    }
+
+    @Test fun `rewrites a v2-seeded gpt-4o-transcribe transcriptionModel to gpt-transcribe`() {
+        val chain = ProviderChain(listOf(
+            ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-nano", transcriptionModel = "gpt-4o-transcribe"),
+        ))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals("gpt-5.4-nano", migrated.entries[0].model) // cleanup model untouched
+        assertEquals("gpt-transcribe", migrated.entries[0].transcriptionModel)
+    }
+
+    @Test fun `does NOT rewrite a deliberate whisper-1 transcriptionModel -- only the seeded default is superseded`() {
+        val chain = ProviderChain(listOf(
+            ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-nano", transcriptionModel = "whisper-1"),
+        ))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals("whisper-1", migrated.entries[0].transcriptionModel)
+    }
+
+    @Test fun `an already-current gpt-transcribe transcriptionModel is untouched`() {
+        val chain = ProviderChain(listOf(
+            ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-nano", transcriptionModel = "gpt-transcribe"),
+        ))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals(chain, migrated)
+    }
+
+    @Test fun `preserves baseUrlOverride when rewriting the transcriptionModel`() {
+        val chain = ProviderChain(listOf(
+            ProviderChainEntry(
+                ProviderKind.OPENAI, "gpt-5.4-nano",
+                baseUrlOverride = "https://example.com/v1",
+                transcriptionModel = "gpt-4o-transcribe",
+            ),
+        ))
+        val migrated = ProviderChainMigration.migrate(chain)
+        assertEquals("gpt-transcribe", migrated.entries[0].transcriptionModel)
+        assertEquals("https://example.com/v1", migrated.entries[0].baseUrlOverride)
+    }
 }

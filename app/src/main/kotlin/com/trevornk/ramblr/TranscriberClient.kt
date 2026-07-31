@@ -18,7 +18,13 @@ object TranscriberClient {
     // (2.86% vs 4.29%) and ~42% faster avg latency (0.81s vs 1.40s) on identical short
     // push-to-talk-style audio, with zero dropped/wrong words on either model including a
     // one-word clip -- the earlier "drops short words" concern did not reproduce.
-    const val DEFAULT_MODEL = "gpt-4o-transcribe"
+    // gpt-4o-transcribe -> gpt-transcribe (2026-07-31): OpenAI's successor model on the same
+    // /v1/audio/transcriptions endpoint. Not benchmarked with Ramblr's own clip protocol yet;
+    // adopted on OpenAI's Real World Audio numbers (8.98% vs 15.21% WER over Whisper) plus
+    // Artificial Analysis AA-WER (3.31% vs ~4.0% for gpt-4o-transcribe), at a 25% LOWER price
+    // ($0.0045/min vs $0.006/min). `prompt` (used for #114 vocabulary biasing) remains
+    // supported; the new model returns plain JSON `text`, which parseResponse already reads.
+    const val DEFAULT_MODEL = "gpt-transcribe"
 
     /** The `/audio/transcriptions` endpoint for [baseUrl], normalized the same way the cleanup path
      *  normalizes its base URL (M5). A blank/malformed base falls back to OpenAI's default. */

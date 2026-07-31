@@ -247,6 +247,17 @@ class BundledDefaultModelCatalogTest {
         assertEquals("gpt-5.4-nano", recommended?.modelId)
     }
 
+    @Test fun `OpenAI's recommended transcription entry is gpt-transcribe and matches the shipped code default`() {
+        val entries = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, ModelUseCase.TRANSCRIPTION)
+        val recommended = entries.filter { it.tier == ModelTier.RECOMMENDED }
+        assertEquals(1, recommended.size)
+        assertEquals("gpt-transcribe", recommended[0].modelId)
+        // The catalog's RECOMMENDED transcription pick and TranscriberClient.DEFAULT_MODEL must
+        // never drift apart -- a fresh install resolves through the constant, the picker
+        // steers through the catalog; disagreeing would ship two different "defaults."
+        assertEquals(TranscriberClient.DEFAULT_MODEL, recommended[0].modelId)
+    }
+
     @Test fun `Gemini's cheapest tier -- flash-lite -- is recommended and transcription-capable`() {
         val recommended = ModelCatalogResolver.recommendedEntryFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.GEMINI)
         assertEquals("gemini-3.1-flash-lite", recommended?.modelId)

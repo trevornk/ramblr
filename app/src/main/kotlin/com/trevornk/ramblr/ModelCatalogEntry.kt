@@ -104,13 +104,25 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
     ),
     // Real 20-clip benchmark (2026-07-10): gpt-4o-transcribe beat whisper-1 on both WER
     // (2.86% vs 4.29%) and latency (~42% faster avg), zero dropped words on either including a
-    // one-word clip -- see TranscriberClient.DEFAULT_MODEL's kdoc for the full benchmark note.
+    // one-word clip. gpt-transcribe (2026-07-31): OpenAI's successor on the same endpoint --
+    // better external benchmarks AND 25% cheaper ($0.0045/min vs $0.006/min); not yet run
+    // through Ramblr's own clip protocol -- see TranscriberClient.DEFAULT_MODEL's kdoc.
+    ModelCatalogEntry(
+        provider = ProviderKind.OPENAI,
+        modelId = "gpt-transcribe",
+        displayName = "GPT-Transcribe",
+        description = "OpenAI's newest ASR model (2026-07) — more accurate than GPT-4o Transcribe on OpenAI's and independent benchmarks, and 25% cheaper per minute.",
+        tier = ModelTier.RECOMMENDED,
+        useCase = ModelUseCase.TRANSCRIPTION,
+        costPer1MInputUsd = 0.0, // priced per-minute of audio ($0.0045/min), not per-token
+        costPer1MOutputUsd = 0.0,
+    ),
     ModelCatalogEntry(
         provider = ProviderKind.OPENAI,
         modelId = "gpt-4o-transcribe",
         displayName = "GPT-4o Transcribe",
-        description = "Benchmark-confirmed lower error rate and faster than Whisper-1 on short push-to-talk clips.",
-        tier = ModelTier.RECOMMENDED,
+        description = "Previous default — solid and Ramblr-benchmark-proven, but GPT-Transcribe measures more accurate and costs less.",
+        tier = ModelTier.GOOD,
         useCase = ModelUseCase.TRANSCRIPTION,
         costPer1MInputUsd = 0.0, // priced per-minute of audio, not per-token -- catalog cost fields don't apply
         costPer1MOutputUsd = 0.0,
@@ -119,8 +131,8 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         provider = ProviderKind.OPENAI,
         modelId = "whisper-1",
         displayName = "Whisper-1",
-        description = "OpenAI's original ASR model — higher error rate and slower than GPT-4o Transcribe in Ramblr's own benchmark, kept as a fallback option.",
-        tier = ModelTier.GOOD,
+        description = "OpenAI's original ASR model — highest error rate of the three; only pick it if you specifically need its legacy output formats.",
+        tier = ModelTier.ADVANCED,
         useCase = ModelUseCase.TRANSCRIPTION,
         costPer1MInputUsd = 0.0,
         costPer1MOutputUsd = 0.0,

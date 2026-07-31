@@ -61,7 +61,10 @@ class CleanupDestinationTest {
     }
 
     @Test fun `cloud transcription subtitle detail names the provider and model (#101)`() {
-        val c = chain(ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-transcribe"))
+        // transcriptionModel set explicitly -- with it null this only tested the default
+        // fallback (and silently depended on DEFAULT_MODEL happening to be gpt-4o-transcribe,
+        // which broke when the default moved to gpt-transcribe on 2026-07-31).
+        val c = chain(ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-nano", transcriptionModel = "gpt-4o-transcribe"))
         assertEquals("OpenAI · gpt-4o-transcribe", CleanupDestination.cloudTranscriptionSubtitleDetail(c))
     }
 
