@@ -69,6 +69,28 @@ object TranscriberClient {
             WAV_FILENAME to PcmWavRequestBody(pcmFile)
         }
 
+    /** Whether [model] supports the structured `keywords` array on `/v1/audio/transcriptions`
+     *  (#114 follow-up, 2026-07-31): OpenAI documents `keywords[]` for the gpt-transcribe family
+     *  as literal terms that may appear in the audio -- exactly what Ramblr's user-taught
+     *  vocabulary is. Older models (whisper-1, gpt-4o-transcribe) don't document it, and an
+     *  unrecognized form field risks a 400 from OpenAI or an OpenAI-compatible proxy, so those
+     *  keep the comma-joined `prompt` fallback. Prefix match so dated snapshots
+     *  (gpt-transcribe-2026-07-xx) qualify too. */
+    fun supportsKeywords(model: String): Boolean = model.startsWith("gpt-transcribe")
+
+    /**
+     * The multipart form parts that carry [terms] into the transcription request (#114): one
+     * `keywords[]` part per term on models that [supportsKeywords] (structured hints beat one
+     * comma-joined string -- multi-word terms like "Claude Code" stay intact instead of being
+     * ambiguous list fragments), or a single legacy `prompt` part otherwise. Empty terms yield
+     * no parts. Pure so the model-gating decision is unit-testable without the network plumbing.
+     */
+    fun vocabularyFormParts(model: String, terms: List<String>): List<Pair<String, String>> = when {
+        terms.isEmpty() -> emptyList()
+        supportsKeywords(model) -> terms.map { "keywords[]" to it }
+        else -> listOf("prompt" to VocabularyTerms.asTranscriptionPrompt(terms))
+    }
+
     /**
      * Streams [pcmFile]'s bytes into the multipart upload as a WAV file without ever holding the
      * full audio as one contiguous byte array: [PcmWavRequestBody] writes the 44-byte header
@@ -94,13 +116,12 @@ object TranscriberClient {
         val bodyBuilder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("model", model.ifBlank { DEFAULT_MODEL })
-        // #114 part 1: /v1/audio/transcriptions' `prompt` field biases decoding toward
-        // vocabulary the user has taught Ramblr (project names/jargon), the same terms already
-        // interpolated into cleanup-stage prompts (see PostProcessor.vocabularyClause). Always on
-        // when terms exist -- unlike the cleanup interpolation this has no placeholder to opt
-        // into, it's a plain comma-joined list the docs recommend for this exact use case.
-        if (vocabularyTerms.isNotEmpty()) {
-            bodyBuilder.addFormDataPart("prompt", VocabularyTerms.asTranscriptionPrompt(vocabularyTerms))
+        // #114 part 1: bias decoding toward vocabulary the user has taught Ramblr (project
+        // names/jargon), the same terms already interpolated into cleanup-stage prompts (see
+        // PostProcessor.vocabularyClause). Sent as structured `keywords[]` parts on models that
+        // support them, else as the legacy comma-joined `prompt` -- see [vocabularyFormParts].
+        for ((name, value) in vocabularyFormParts(model.ifBlank { DEFAULT_MODEL }, vocabularyTerms)) {
+            bodyBuilder.addFormDataPart(name, value)
         }
         val (filename, filePart) = uploadPart(pcmFile, compressedFile)
         val body = bodyBuilder

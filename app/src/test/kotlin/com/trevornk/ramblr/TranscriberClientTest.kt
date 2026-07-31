@@ -51,4 +51,40 @@ class TranscriberClientTest {
             TranscriberClient.transcriptionEndpoint(""),
         )
     }
+
+    // -- #114: vocabulary terms as structured keywords[] vs legacy prompt --
+
+    @Test fun `gpt-transcribe gets one keywords part per term, preserving multi-word terms`() {
+        val parts = TranscriberClient.vocabularyFormParts(
+            "gpt-transcribe", listOf("Solveit", "Claude Code", "Hetzner"),
+        )
+        assertEquals(
+            listOf("keywords[]" to "Solveit", "keywords[]" to "Claude Code", "keywords[]" to "Hetzner"),
+            parts,
+        )
+    }
+
+    @Test fun `dated gpt-transcribe snapshots still qualify for keywords`() {
+        assertTrue(TranscriberClient.supportsKeywords("gpt-transcribe-2026-07-31"))
+    }
+
+    @Test fun `gpt-4o-transcribe and whisper-1 keep the legacy comma-joined prompt`() {
+        for (model in listOf("gpt-4o-transcribe", "whisper-1")) {
+            assertEquals(
+                listOf("prompt" to "Solveit, Claude Code"),
+                TranscriberClient.vocabularyFormParts(model, listOf("Solveit", "Claude Code")),
+            )
+        }
+    }
+
+    @Test fun `the shipped default model uses structured keywords`() {
+        // Guard: if DEFAULT_MODEL ever moves to a family without keywords support,
+        // supportsKeywords must be updated in the same change.
+        assertTrue(TranscriberClient.supportsKeywords(TranscriberClient.DEFAULT_MODEL))
+    }
+
+    @Test fun `no terms yields no vocabulary form parts on any model`() {
+        assertEquals(emptyList<Pair<String, String>>(), TranscriberClient.vocabularyFormParts("gpt-transcribe", emptyList()))
+        assertEquals(emptyList<Pair<String, String>>(), TranscriberClient.vocabularyFormParts("whisper-1", emptyList()))
+    }
 }
