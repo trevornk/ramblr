@@ -11,4 +11,15 @@ No keyboard swap, no separate app to paste out of. Ramblr floats a single button
 
 Ramblr uses Android's Accessibility Service for one narrow reason: to insert dictated text into the currently focused text field across apps. It does not replace your keyboard. It does not run background automation. It only acts after you explicitly tap the overlay button.
 
-<b>Privacy:</b> combine local transcription with local cleanup and nothing ever leaves the device. There is no backend for this app — in every cloud mode, requests go straight from your phone to the provider using your own API key, with no relay server in the middle. Cloud providers (OpenAI, Anthropic, Gemini, or a self-hosted OpenAI-compatible endpoint you point it at yourself) are entirely optional, off by default, and require you to supply your own API key.
+<b>Network connections:</b> Ramblr makes no network connection on its own. Every connection it can make is listed here:
+
+<ul>
+<li><b>Speech and cleanup model downloads (on request).</b> On-device transcription needs a speech model, which is downloaded only when you pick one — from github.com (the sherpa-onnx project's release files) or huggingface.co. Optional on-device cleanup and optional silence auto-stop download their models the same way, only when you turn those features on. Nothing is downloaded until you ask for it, and models are verified against a known SHA-256 before being installed.</li>
+<li><b>Optional cloud transcription and cleanup (off by default).</b> Only if you enable it and supply your own API key. Requests go straight from your phone to the provider you chose (OpenAI, Anthropic, Google Gemini, or a self-hosted OpenAI-compatible endpoint you point it at) — there is no Ramblr server in between.</li>
+</ul>
+
+There is no analytics, no telemetry, no crash reporting, and no advertising of any kind. This F-Droid build also contains no update checker: it never contacts GitHub to look for new versions, and updates come from F-Droid like any other app.
+
+<b>Privacy:</b> combine local transcription with local cleanup and nothing ever leaves the device. There is no backend for this app — in every cloud mode, requests go straight from your phone to the provider using your own API key, with no relay server in the middle. Cloud providers are entirely optional, off by default, and require you to supply your own API key.
+
+<b>On-device cleanup model licensing:</b> the optional on-device cleanup feature offers a choice of models. The default (LFM2.5-350M) is published by Liquid AI under the LFM Open License v1.0, which is not a free/open-source license — it restricts commercial use by companies above a revenue threshold. It is downloaded from Hugging Face only if you choose to enable on-device cleanup, and it is never bundled in the app. Transcription models, which the core dictation feature uses, are all freely licensed (CC-BY-4.0 / CC-BY-SA-4.0), as is the app itself (GPLv3).

@@ -57,18 +57,29 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
-      - name: Assemble unsigned release APK
+      - name: Assemble unsigned release APKs
+        # Builds BOTH flavors' release variants (github + storefront). Storefront is the one
+        # F-Droid consumes; github is kept for the self-updating sideload channel.
         run: ./gradlew assembleRelease
 
-      - name: Upload unsigned release APK
+      - name: Upload unsigned release APKs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: app-release-unsigned
-          # app/build.gradle.kts's outputFileName override names this
-          # Ramblr-<versionName>-<flavor>-release.apk regardless of signing state (it's
-          # unsigned-for-distribution here, still debug-signed by the keystore.properties
-          # fallback so the build itself succeeds) -- updated for the "github"/"storefront"
-          # distribution flavor split (app/build.gradle.kts), which inserted the flavor name
-          # into the output filename and made the old bare "-release.apk" pattern stale.
-          path: app/build/outputs/apk/github/release/Ramblr-*-github-release.apk
+          # BOTH flavors are uploaded (fdroid/fdroiddata!42401 reviewer finding 1). This step
+          # previously globbed only .../apk/github/release/, which is why no storefront
+          # reference binary had ever been published even though `assembleRelease` above was
+          # already building one: F-Droid's recipe was therefore pinned to the `github` flavor,
+          # the only flavor that compiles the self-updater in (SelfUpdateCheckWorker polling
+          # api.github.com every ~6h, notify defaulting on, PackageInstaller-based install).
+          # That violates F-Droid's inclusion policy on apps updating themselves outside
+          # F-Droid, and contradicts this repo's own README, which designates `storefront` as
+          # the F-Droid/Play build with that code physically absent from the source set.
+          #
+          # Publishing the storefront APK is the *prerequisite* for flipping the fdroiddata
+          # recipe to `gradle: [storefront]` and repointing `Binaries:` at
+          # Ramblr-<version>-storefront-release.apk -- the metadata must not be switched before
+          # a matching signed reference binary exists at that URL, or F-Droid's binary
+          # comparison has nothing to compare against.
+          path: app/build/outputs/apk/*/release/Ramblr-*-release.apk
           if-no-files-found: error
