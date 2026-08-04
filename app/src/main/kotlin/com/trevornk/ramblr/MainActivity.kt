@@ -620,8 +620,11 @@ class MainActivity : BaseSettingsActivity() {
         ProviderChainStore.save(this, ProviderChainStore.load(this).withLocalFloor(model.archive))
         CloudFeatureToggle.setCleanupEnabled(this, false)
         if (!ModelDownloader.isInstalled(this, model)) {
-            ModelDownloadWorker.enqueue(this, model)
-            toast("Downloading ${model.name}...")
+            // The recommended cleanup model is non-free (LFM2.5-350M), and this onboarding tap
+            // was previously the single action that downloaded it with no license disclosure at
+            // all -- the exact F-Droid consent problem. Prompt here too, and only claim the
+            // download started if it actually did.
+            downloadModelWithLicenseConsent(model) { toast("Downloading ${model.name}...") }
         }
         refresh()
     }

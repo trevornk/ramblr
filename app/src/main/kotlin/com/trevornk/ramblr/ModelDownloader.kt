@@ -10,6 +10,48 @@ import java.io.*
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
+/**
+ * Licensing metadata for a downloadable model (F-Droid inclusion review, fdroiddata!42401).
+ *
+ * Exists because a model's license is a real, user-affecting property that the app previously
+ * only recorded in source comments: the catalog carried no machine-readable license at all, so
+ * nothing could surface it in the UI and nothing could gate a download on it. That gap is what
+ * let the non-free [LOCAL_CLEANUP_MODEL] become the *recommended default* cleanup model,
+ * downloaded by a single onboarding tap, with the user never told the license differs from the
+ * app's own GPLv3.
+ *
+ * [isFree] means free/libre by the standards F-Droid defers to (DFSG/FSF/OSI), NOT merely
+ * "free of charge" -- the distinction this type exists to make. A license that restricts
+ * commercial use (LFM Open License's revenue cap), forbids derivatives, or adds a
+ * non-commercial clause is `isFree = false` even when it costs nothing to use.
+ */
+data class ModelLicense(
+    /** SPDX identifier where one exists, otherwise the license's published name. */
+    val name: String,
+    /** Canonical URL for the license text, shown to the user before a non-free download. */
+    val url: String,
+    /** True only if free/libre per DFSG/FSF/OSI -- see this type's kdoc. */
+    val isFree: Boolean,
+)
+
+/** CC-BY-4.0: free, attribution only. NVIDIA's NeMo ASR checkpoints. */
+val CC_BY_4_0 = ModelLicense("CC-BY-4.0", "https://creativecommons.org/licenses/by/4.0/", isFree = true)
+
+/** CC-BY-SA-4.0: free, attribution + share-alike. Banafo/Kroko streaming model. */
+val CC_BY_SA_4_0 = ModelLicense("CC-BY-SA-4.0", "https://creativecommons.org/licenses/by-sa/4.0/", isFree = true)
+
+/** Apache-2.0: free. Silero VAD, and the mumble-cleanup fine-tune + its Qwen2.5 base. */
+val APACHE_2_0 = ModelLicense("Apache-2.0", "https://www.apache.org/licenses/LICENSE-2.0", isFree = true)
+
+/**
+ * LFM Open License v1.0 -- **not** a free/open-source license, despite being free of charge for
+ * most users. Section 5 terminates the right to commercial use for any legal entity at or above
+ * $10M annual revenue, which discriminates against a field of endeavor and therefore fails
+ * DFSG §6 / OSD §6 (verified against Liquid AI's published license text, not inferred from the
+ * model card's "open" branding).
+ */
+val LFM_OPEN_LICENSE_1_0 = ModelLicense("LFM Open License v1.0", "https://www.liquid.ai/lfm-license", isFree = false)
+
 data class Model(
     val name: String,
     val archive: String,
@@ -79,11 +121,32 @@ data class Model(
      * [isSingleFile] rather than duplicating that logic for a third single-file kind.
      */
     val isVadModel: Boolean = false,
+    /**
+     * License this model's weights are published under (F-Droid inclusion review). Defaults to
+     * [CC_BY_4_0], which is correct for the NeMo ASR entries that make up most of the catalog;
+     * every entry states it explicitly anyway rather than leaning on the default, since a silent
+     * wrong default here is exactly the failure this field exists to prevent.
+     *
+     * A `!license.isFree` model must never be downloaded without explicit, informed user consent
+     * -- see [requiresLicenseConsent].
+     */
+    val license: ModelLicense = CC_BY_4_0,
 ) {
     /** True for any catalog entry installed as one file with no extraction step (#37's local-
      *  cleanup GGUFs and #108's VAD ONNX model) -- as opposed to the tar.bz2 ASR archives, which
      *  use [ModelDownloader.extractAndInstall] instead. */
     val isSingleFile: Boolean get() = isLocalCleanup || isVadModel
+
+    /**
+     * True when downloading this model requires showing the user its license terms first and
+     * getting an explicit opt-in.
+     *
+     * F-Droid's inclusion policy requires that an app not download additional binaries without
+     * consent that is opt-in and clearly explains what the user is agreeing to. A model whose
+     * license is more restrictive than the app's own GPLv3 is precisely that case: the user
+     * cannot be assumed to have accepted terms they were never shown.
+     */
+    val requiresLicenseConsent: Boolean get() = !license.isFree
 }
 
 // Listed best-quality-first (#54-followup): Trevor asked for models to read in that order at a
@@ -93,12 +156,14 @@ data class Model(
 val MODEL_CATALOG = listOf(
     Model("Parakeet 0.6B", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
         465, "★★★★ Best quality",
-        sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf"),
+        sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
+        license = CC_BY_4_0),
     // Smallest AND best-value entry in the catalog (100MB, ~7.5% avg WER on the Open ASR
     // Leaderboard) -- recommended default.
     Model("Parakeet 110M", "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
         100, "★★★ Best value · Smallest", recommended = true,
-        sha256 = "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479cefcabd06cf5703630b"),
+        sha256 = "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479cefcabd06cf5703630b",
+        license = CC_BY_4_0),
     // Replaces Whisper Base.en for #98 (Claude Fable 5 STT model consult): Canary-180m-flash is
     // strictly better in the same size class -- 7.12% avg WER vs. Whisper Base.en's 10.32%
     // (Open ASR Leaderboard), plus real punctuation/capitalization and en/es/de/fr support,
@@ -110,7 +175,8 @@ val MODEL_CATALOG = listOf(
     // (`shasum -a 256`), same discipline as every other entry in this file.
     Model("Canary 180M Flash", "sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8",
         147, "★★★★ Multilingual, punctuated",
-        sha256 = "7a38ed8b13f014ad632b09ff8d22e0c6f1359dd046af9235d281dfae841b9ab9"),
+        sha256 = "7a38ed8b13f014ad632b09ff8d22e0c6f1359dd046af9235d281dfae841b9ab9",
+        license = CC_BY_4_0),
     // Moonshine Tiny REMOVED (#98, follow-up to Trevor's request to clean up mislabeled/confusing
     // catalog entries): verified against Useful Sensors' own published benchmarks and the Open ASR
     // Leaderboard, "English Tiny" (the non-streaming variant shipped here) has ~12.66% WER --
@@ -151,7 +217,7 @@ val MODEL_CATALOG = listOf(
 val STREAMING_MODEL = Model("Streaming Zipformer2 (EN)", "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06",
     57, "★★★ Live preview", recommended = true,
     sha256 = "c8676e5ff9ac2a85296e53ee0fd4d5fb1db6770e7a7647166eeafe349ade6834",
-    isStreaming = true, streamingModelType = "zipformer2")
+    isStreaming = true, streamingModelType = "zipformer2", license = CC_BY_SA_4_0)
 
 val STREAMING_MODEL_CATALOG = listOf(STREAMING_MODEL)
 
@@ -209,6 +275,9 @@ val LOCAL_CLEANUP_MODEL = Model(
     isLocalCleanup = true,
     sourceUrl = "https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/main/LFM2.5-350M-Q4_0.gguf",
     fileName = "lfm2.5-350m-q4_0.gguf",
+    // NOT free/libre -- see LFM_OPEN_LICENSE_1_0. This makes the entry require explicit
+    // license consent before it can be downloaded (Model.requiresLicenseConsent).
+    license = LFM_OPEN_LICENSE_1_0,
 )
 
 /**
@@ -280,6 +349,8 @@ val MUMBLE_CLEANUP_Q4_0_MODEL = Model(
     sourceUrl = null,
     fileName = "mumble-cleanup-2stage-q4_0.gguf",
     localSystemPrompt = MUMBLE_CLEANUP_SYSTEM_PROMPT,
+    // Apache-2.0 covers both the LoRA fine-tune and its Qwen2.5-0.5B-Instruct base.
+    license = APACHE_2_0,
 )
 
 val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL, MUMBLE_CLEANUP_Q4_0_MODEL)
@@ -309,6 +380,9 @@ val SILERO_VAD_MODEL = Model(
     isVadModel = true,
     sourceUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
     fileName = "silero_vad.onnx",
+    // Silero VAD is MIT-licensed upstream (snakers4/silero-vad); Apache-2.0 is not the same
+    // license but both are free/libre, and only isFree drives behavior here. Named accurately:
+    license = ModelLicense("MIT", "https://github.com/snakers4/silero-vad/blob/master/LICENSE", isFree = true),
 )
 
 val VAD_MODEL_CATALOG = listOf(SILERO_VAD_MODEL)

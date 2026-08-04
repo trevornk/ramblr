@@ -194,7 +194,22 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
             }
         }
 
-        fun enqueue(ctx: Context, model: Model) {
+        /**
+         * Enqueues a download, refusing any model whose license the user hasn't accepted.
+         *
+         * The guard lives here rather than in each caller because this is the single chokepoint
+         * every download path funnels through (onboarding, the transcription/cleanup pickers, and
+         * the auto-download-on-feature-enable paths). Enforcing at the call sites instead would
+         * mean the policy holds only as long as every future caller remembers it -- exactly the
+         * kind of "one missed branch reintroduces the violation" gap that made the non-free
+         * default model downloadable in a single onboarding tap in the first place.
+         *
+         * Returns false (and enqueues nothing) when consent is required but absent, so a caller
+         * can show the license prompt and re-enqueue. Callers that legitimately can't prompt
+         * simply don't download, which is the safe direction to fail.
+         */
+        fun enqueue(ctx: Context, model: Model): Boolean {
+            if (!ModelLicenseConsent.canDownload(ctx, model)) return false
             val request = OneTimeWorkRequestBuilder<ModelDownloadWorker>()
                 .setInputData(Data.Builder().putString(KEY_ARCHIVE, model.archive).build())
                 // Don't start (or restart) a 30s-20min download with no network: enqueued
@@ -205,6 +220,7 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
                 .build()
             WorkManager.getInstance(ctx)
                 .enqueueUniqueWork(workName(model.archive), ExistingWorkPolicy.KEEP, request)
+            return true
         }
 
         /** Cancels an in-flight (or queued) download for [model]. WorkManager sets the worker's

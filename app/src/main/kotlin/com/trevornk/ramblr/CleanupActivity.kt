@@ -307,7 +307,11 @@ class CleanupActivity : BaseSettingsActivity() {
             layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(4)).apply { topMargin = dp(8) }
         }
 
-        val row = settingsRow(model.name, "${model.quality} · ${model.sizeMb} MB", rightContainer) {
+        // License is shown in the row subtitle, not only inside the consent dialog: a user
+        // choosing between cleanup models should be able to see that one of them isn't
+        // free/open-source before tapping anything (F-Droid review).
+        val licenseNote = if (model.license.isFree) "" else " · ${model.license.name} (not FOSS)"
+        val row = settingsRow(model.name, "${model.quality} · ${model.sizeMb} MB$licenseNote", rightContainer) {
             onCleanupModelAction(model)
         }
         val textContainer = row.getChildAt(0) as LinearLayout
@@ -333,7 +337,8 @@ class CleanupActivity : BaseSettingsActivity() {
             return
         }
         if (ModelDownloadWorker.isInFlight(cleanupModelDownloadState[model.archive])) return
-        ModelDownloadWorker.enqueue(this, model)
+        // Non-free cleanup models (LFM2.5-350M) must show their license terms before downloading.
+        downloadModelWithLicenseConsent(model)
     }
 
     private fun selectCleanupModel(archive: String) {
@@ -363,6 +368,10 @@ class CleanupActivity : BaseSettingsActivity() {
         val wasActive = !CloudFeatureToggle.cleanupEnabled(this) &&
             selectedCleanupModel().archive == model.archive
         ModelDownloader.delete(this, model)
+        // Deleting a non-free model revokes its license acceptance: re-downloading it later is a
+        // fresh decision and should show the terms again, not silently reuse consent given for a
+        // copy the user deliberately removed.
+        ModelLicenseConsent.clearAccepted(this, model)
         if (wasActive) {
             if (canFallBackToCloud()) {
                 onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
