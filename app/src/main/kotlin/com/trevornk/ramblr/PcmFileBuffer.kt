@@ -80,6 +80,50 @@ class PcmFileBuffer(private val file: File, private val maxBytes: Long) : AutoCl
         }
 
         /**
+         * Streams a 16-bit little-endian PCM file through [onChunk] as [FloatArray] batches of at
+         * most [chunkSamples] samples, without ever holding the whole recording in memory.
+         *
+         * This is the segmented-decode counterpart to [readAsFloatArray] (#132): the single-shot
+         * local path allocated one FloatArray for the entire take (~22MB for a 6-minute
+         * dictation) purely because `OfflineStream.acceptWaveform` wanted it in one call. Feeding
+         * a VAD incrementally has no such requirement, so the read side stays flat too.
+         *
+         * The same [FloatArray] instance is NOT reused between calls -- each chunk is a fresh
+         * array, since [SpeechSegmenter] may retain a slice of it as segment carry-over.
+         */
+        fun forEachChunk(file: File, chunkSamples: Int, onChunk: (FloatArray) -> Unit) {
+            require(chunkSamples > 0) { "chunkSamples must be positive" }
+            val totalSamples = (file.length() / 2).toInt()
+            if (totalSamples == 0) return
+
+            val bytes = ByteArray(minOf(chunkSamples, totalSamples) * 2)
+            var remaining = totalSamples
+
+            BufferedInputStream(FileInputStream(file)).use { input ->
+                while (remaining > 0) {
+                    val wanted = minOf(bytes.size, remaining * 2)
+                    var read = 0
+                    while (read < wanted) {
+                        val n = input.read(bytes, read, wanted - read)
+                        if (n < 0) break
+                        read += n
+                    }
+                    if (read <= 0) break
+
+                    val sampleCount = read / 2
+                    val samples = FloatArray(sampleCount)
+                    for (i in 0 until sampleCount) {
+                        val lo = bytes[i * 2].toInt() and 0xFF
+                        val hi = bytes[i * 2 + 1].toInt()
+                        samples[i] = ((hi shl 8) or lo).toShort().toFloat() / 32768f
+                    }
+                    onChunk(samples)
+                    remaining -= sampleCount
+                }
+            }
+        }
+
+        /**
          * Converts [len] bytes of 16-bit little-endian PCM at the start of [buf] into a
          * [FloatArray] of samples in [-1, 1] -- the same conversion as [readAsFloatArray], but for
          * one small chunk at a time instead of a whole file. Used by the streaming live-preview

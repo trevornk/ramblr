@@ -2229,11 +2229,18 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * [file] is read straight off disk into a bounded-size FloatArray (#16's duration cap bounds
-     * a recording to ~19MB PCM / ~38MB of floats) rather than staging through an intermediate
-     * ByteArray copy of the whole file first. sherpa-onnx's `OfflineStream.acceptWaveform` only
-     * accepts one full FloatArray per stream — there's no incremental/chunked accept in the
-     * vendored bindings — so this remains the single largest allocation on this path.
+     * Decodes the recording one VAD-detected speech segment at a time when the Silero VAD model
+     * is available (#132), falling back to the original whole-file decode when it isn't.
+     *
+     * The segmented path is what keeps peak memory bounded by utterance length: the old path read
+     * the take into one FloatArray and handed all of it to a single `OfflineStream`, which drove
+     * ~2GB RSS on a 5:52 dictation and got the process OOM-killed before any text or error could
+     * reach the user. Contrary to this method's previous doc comment, that FloatArray was never
+     * the dominant allocation (~22MB for a 6-minute take) -- the single-shot native decode was.
+     *
+     * The fallback is deliberate rather than a hard failure: the VAD model is an optional ~1-2MB
+     * download today (see [SILERO_VAD_MODEL]), so a user who has never enabled silence auto-stop
+     * would otherwise lose local transcription entirely. Short takes are unaffected either way.
      */
     private fun transcribeLocal(file: File, token: Int) {
         thread {
@@ -2242,13 +2249,26 @@ class WhisperAccessibilityService : AccessibilityService() {
             // of one measured from a t0 that never ran (GH #100 benchmark logger).
             val benchmarkStartMs = System.currentTimeMillis()
             try {
-                val samples = try { PcmFileBuffer.readAsFloatArray(file) } finally { file.delete() }
+                val vad = ModelDownloader.vadModelFile(this, SILERO_VAD_MODEL)
+                    ?.let { SherpaVadHandle.create(it) }
 
                 val t0 = System.currentTimeMillis()
-                val text = transcriberSlot.use { it.transcribe(samples, SAMPLE_RATE) }
-                    ?: throw IllegalStateException("Local model was unloaded during transcription")
+                val durationSeconds = (file.length() / 2 / SAMPLE_RATE).toInt()
+                val text = try {
+                    transcriberSlot.use { transcriber ->
+                        if (vad != null) {
+                            transcriber.transcribeSegmented(file, vad, SAMPLE_RATE)
+                        } else {
+                            Log.i(TAG, "VAD model unavailable — decoding unsegmented (#132)")
+                            transcriber.transcribe(PcmFileBuffer.readAsFloatArray(file), SAMPLE_RATE)
+                        }
+                    } ?: throw IllegalStateException("Local model was unloaded during transcription")
+                } finally {
+                    vad?.close()
+                    file.delete()
+                }
                 val ms = System.currentTimeMillis() - t0
-                Log.i(TAG, "Local transcription: ${ms}ms, ${samples.size / SAMPLE_RATE}s audio")
+                Log.i(TAG, "Local transcription: ${ms}ms, ${durationSeconds}s audio")
                 BenchmarkLogger.log(
                     context = this,
                     correlationId = correlationIdFor(token),

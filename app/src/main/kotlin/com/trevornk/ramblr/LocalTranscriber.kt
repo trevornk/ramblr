@@ -23,11 +23,43 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
         }
     }
 
+    /**
+     * Transcribes a whole PCM file by decoding one VAD-detected speech segment at a time (#132).
+     *
+     * Peak memory is bounded by the longest *segment* rather than the longest *recording*: each
+     * segment gets its own `OfflineStream`, released before the next segment is decoded, and
+     * [SherpaVadHandle.MAX_SPEECH_DURATION_SECONDS] caps how long a single segment can grow. The
+     * previous single-shot path fed the entire take to one stream, which drove ~2GB RSS on a
+     * 5:52 dictation and got the process OOM-killed with no text and no error reaching the user.
+     *
+     * The file is streamed through [PcmFileBuffer.forEachChunk], so the read side never holds the
+     * whole recording either. Blocking — call from a background thread.
+     */
+    fun transcribeSegmented(
+        file: File,
+        vad: VadHandle,
+        sampleRate: Int = 16000,
+        chunkSamples: Int = SEGMENT_READ_CHUNK_SAMPLES,
+    ): String {
+        val results = mutableListOf<String>()
+        val segmenter = SpeechSegmenter(vad)
+        val onSegment: (FloatArray) -> Unit = { segment -> results += transcribe(segment, sampleRate) }
+
+        PcmFileBuffer.forEachChunk(file, chunkSamples) { chunk -> segmenter.accept(chunk, onSegment) }
+        segmenter.finish(onSegment)
+
+        return SegmentedTranscript.join(results)
+    }
+
     /** Release the native recognizer. Call once no in-flight [transcribe] can still be using it. */
     fun release() = recognizer.release()
 
     companion object {
         private const val TAG = "LocalTranscriber"
+
+        /** ~1s of 16kHz audio per read in [transcribeSegmented] — small enough to keep the read
+         *  side flat, large enough not to churn one allocation per 512-sample VAD window. */
+        const val SEGMENT_READ_CHUNK_SAMPLES = 16000
 
         /** Find fully-installed model dirs under the app's files/models/ dir. Filters on the
          *  same `.complete` marker [ModelDownloader.isInstalledDir] requires (#88): a marker-less

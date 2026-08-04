@@ -137,6 +137,79 @@ class PcmFileBufferTest {
         assertEquals(42f / 32768f, result[0], 1e-6f)
     }
 
+    // -- forEachChunk (streaming file read for segmented decode, #132) --
+
+    @Test fun `forEachChunk streams a file in bounded batches that reassemble to the whole file`() {
+        val file = tempFile()
+        val count = 100_000
+        val samples = ShortArray(count) { (it % 30000).toShort() }
+        writePcm16(file, samples)
+
+        val batches = mutableListOf<Int>()
+        val collected = mutableListOf<Float>()
+        PcmFileBuffer.forEachChunk(file, chunkSamples = 16000) { chunk ->
+            batches += chunk.size
+            collected += chunk.toList()
+        }
+
+        // Every batch is bounded by chunkSamples -- that bound is the whole point of this API.
+        assertTrue(batches.all { it <= 16000 })
+        assertEquals(count, collected.size)
+        assertEquals(PcmFileBuffer.readAsFloatArray(file).toList(), collected)
+    }
+
+    @Test fun `forEachChunk emits nothing for an empty file`() {
+        val file = tempFile()
+        var calls = 0
+        PcmFileBuffer.forEachChunk(file, chunkSamples = 16000) { calls++ }
+        assertEquals(0, calls)
+    }
+
+    @Test fun `forEachChunk handles a file smaller than one chunk in a single batch`() {
+        val file = tempFile()
+        writePcm16(file, shortArrayOf(0, Short.MAX_VALUE, Short.MIN_VALUE, -1))
+
+        val batches = mutableListOf<FloatArray>()
+        PcmFileBuffer.forEachChunk(file, chunkSamples = 16000) { batches += it }
+
+        assertEquals(1, batches.size)
+        assertEquals(4, batches[0].size)
+        assertEquals(Short.MAX_VALUE.toFloat() / 32768f, batches[0][1], 1e-6f)
+    }
+
+    @Test fun `forEachChunk truncates a trailing odd byte`() {
+        val file = tempFile()
+        writePcm16(file, shortArrayOf(42))
+        file.appendBytes(byteArrayOf(7))
+
+        val collected = mutableListOf<Float>()
+        PcmFileBuffer.forEachChunk(file, chunkSamples = 16000) { collected += it.toList() }
+
+        assertEquals(1, collected.size)
+        assertEquals(42f / 32768f, collected[0], 1e-6f)
+    }
+
+    @Test fun `forEachChunk hands out a fresh array per batch, not a reused buffer`() {
+        // SpeechSegmenter may retain a slice of a chunk as carry-over, so reusing one array
+        // across calls would silently corrupt the pending remainder.
+        val file = tempFile()
+        writePcm16(file, ShortArray(10) { it.toShort() })
+
+        val batches = mutableListOf<FloatArray>()
+        PcmFileBuffer.forEachChunk(file, chunkSamples = 2) { batches += it }
+
+        assertTrue(batches.size > 1)
+        assertNotSame(batches[0], batches[1])
+    }
+
+    @Test fun `forEachChunk rejects a non-positive chunk size`() {
+        val file = tempFile()
+        writePcm16(file, shortArrayOf(1))
+        assertThrows(IllegalArgumentException::class.java) {
+            PcmFileBuffer.forEachChunk(file, chunkSamples = 0) {}
+        }
+    }
+
     // -- bytesToFloatArray (streaming chunk conversion, #29) --
 
     private fun pcm16Bytes(samples: ShortArray): ByteArray {
