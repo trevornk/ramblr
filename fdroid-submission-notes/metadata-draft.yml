@@ -1,110 +1,109 @@
+# Corrected fdroiddata recipe for com.trevornk.ramblr
+#
+# Reference copy of what metadata/com.trevornk.ramblr.yml in fdroiddata should
+# say. This file is documentation, not something F-Droid reads -- the live MR is
+# fdroid/fdroiddata!42401.
+#
+# Rewritten after reviewer Miggi's physical-device review of 1.0.20/23. The
+# previous draft here was badly stale (versionName 1.0.3, versionCode 6,
+# `gradle: [yes]` from before the flavor split existed, and no AntiFeatures
+# beyond NonFreeNet), which is part of why the live MR ended up building the
+# wrong flavor.
+#
+# DO NOT push the Builds/Binaries section below until a signed
+# Ramblr-<version>-storefront-release.apk is actually published on the GitHub
+# release. See "Blocked on" at the bottom.
+
 Categories:
-  - Writing
   - Keyboard & IME
+  - Writing
 License: GPL-3.0-only
 AuthorName: Trevor NK
 SourceCode: https://github.com/trevornk/ramblr
 IssueTracker: https://github.com/trevornk/ramblr/issues
 Changelog: https://github.com/trevornk/ramblr/releases
-
 AutoName: Ramblr
 
 # --- AntiFeatures ---------------------------------------------------------
-# UPDATED (see NOTES.md "AntiFeatures / NonFreeNet decision"): a follow-up
-# research pass into actual F-Droid policy/precedent for comparable BYO-key
-# optional-cloud apps changed this from "no AntiFeatures" to "apply
-# NonFreeNet." F-Droid's own precedent trends toward tagging NonFreeNet even
-# when a non-free network service is OPTIONAL and off-by-default, not only
-# when an app "depends entirely" on one, per config/antiFeatures.yml wording
-# read literally, F-Droid maintainer practice reads it more broadly in
-# review. NOT independently confirmed by an actual F-Droid maintainer ruling
-# on Ramblr specifically -- flag for maintainer review at MR time, but the
-# safer default before submission is to declare it upfront rather than have
-# a reviewer add it (or reject the MR) later.
+# NonFreeNet: optional cloud transcription/cleanup via a user-supplied API key,
+# off by default. Already on the live MR.
+#
+# NonFreeAssets: ADDED. The optional on-device cleanup feature's recommended
+# model, LFM2.5-350M, is published under the LFM Open License v1.0, whose §5
+# terminates commercial-use rights for legal entities at/above $10M annual
+# revenue. That is a field-of-endeavor restriction, so it fails DFSG §6 / OSD §6
+# and is non-free -- notwithstanding Liquid AI's "open" branding. It is
+# downloaded from Hugging Face on request, never bundled in the APK.
+#
+# This is declared rather than hidden, and the app now also (a) records every
+# model's license in machine-readable form, (b) shows "not FOSS" in the model
+# picker, and (c) requires explicit opt-in license consent before the download
+# is even enqueued.
+#
+# Removing this anti-feature entirely is tracked in trevornk/ramblr#134: the
+# Apache-2.0 mumble-cleanup fine-tune is the intended free replacement and just
+# needs hosting before it can become the default.
+#
+# NOT declared: UpstreamNonFree. All transcription, streaming-preview, and VAD
+# models -- everything the core dictation feature actually depends on -- are
+# CC-BY-4.0 / CC-BY-SA-4.0 / MIT. The app is fully usable with no non-free
+# component at all.
 AntiFeatures:
-  - NonFreeNet
+  NonFreeNet:
+    en-US: Optional cloud transcription/cleanup uses a user-supplied API key.
+  NonFreeAssets:
+    en-US: >-
+      The optional on-device cleanup feature's default model (LFM2.5-350M) is
+      published under a license restricting commercial use. It is downloaded on
+      request, never bundled, and requires explicit consent. Transcription
+      models and the app itself are free-licensed.
 
-
-# --- Builds ----------------------------------------------------------------
 RepoType: git
 Repo: https://github.com/trevornk/ramblr.git
 
+# --- Binaries -------------------------------------------------------------
+# CHANGED from Ramblr-%v-github-release.apk. The github flavor is the sideload
+# channel and is the ONLY flavor that compiles the self-updater in
+# (SelfUpdateCheckWorker polls api.github.com/repos/trevornk/ramblr/releases/
+# latest roughly every 6h with notify defaulting on; SelfUpdateInstaller
+# installs via PackageInstaller). An app that updates itself outside F-Droid
+# does not belong in F-Droid, and the repo's own README designates storefront
+# as the F-Droid/Play build.
+Binaries: https://github.com/trevornk/ramblr/releases/download/v%v/Ramblr-%v-storefront-release.apk
+
 Builds:
-  - versionName: '1.0.3'
-    versionCode: 6
-    # UPDATED: v1.0.2 lacked the kissfft + kaldifst transitive-dependency
-    # vendoring fix (discovered via a REAL network-isolation build test, see
-    # NOTES.md "REAL NETWORK-ISOLATION BUILD PROOF"). v1.0.3 is the first tag
-    # that contains a build genuinely verified to succeed with zero network
-    # access. versionCode/versionName re-verified directly against
-    # app/build.gradle.kts at this bump.
-    commit: v1.0.3
+  - versionName: 1.0.22
+    versionCode: 25
+    commit: v1.0.22
     subdir: app
     submodules: true
-
-    # --- FetchContent-at-configure-time fix -----------------------------
-    # sherpa-onnx's own CMake, plus TWO further layers of TRANSITIVE
-    # dependencies only discovered via an actual network-isolation build
-    # (blocking github.com et al. at the OS /etc/hosts level and running a
-    # real `./gradlew clean assembleDebug`), calls FetchContent_Declare()
-    # for 7 total small SOURCE tarballs/repos at CMake configure time:
-    #   kaldi-native-fbank, kaldi-decoder, openfst, simple-sentencepiece,
-    #   json          (direct sherpa-onnx deps)
-    #   kissfft       (transitive: pulled unconditionally by
-    #                  kaldi-native-fbank's own CMakeLists.txt)
-    #   kaldifst      (transitive: pulled unconditionally by
-    #                  kaldi-decoder's own CMakeLists.txt)
-    # F-Droid's build server has NO network access during the sandboxed
-    # build step, so this breaks an F-Droid build as-is.
-    #
-    # STATUS: IMPLEMENTED AND VERIFIED via a genuine offline build (not just
-    # planned/assumed). All 7 deps are vendored as additional pinned git
-    # submodules under app/src/main/cpp/sherpa_onnx/deps/{kaldi-native-fbank,
-    # kaldi-decoder,openfst,simple-sentencepiece,json,kissfft,kaldifst}, each
-    # checked out at the exact tag/hash each .cmake file's
-    # FetchContent_Declare() targets (verified via `git describe --tags` /
-    # `git rev-parse HEAD` per submodule). The CMake wiring lives in
-    # app/src/main/cpp/sherpa_onnx/CMakeLists.txt, which sets
-    # FETCHCONTENT_SOURCE_DIR_<NAME> for each dep before add_subdirectory()
-    # pulls in the sherpa-onnx submodule -- CMake's own FetchContent
-    # override mechanism, requiring zero changes to sherpa-onnx's,
-    # kaldi-native-fbank's, or kaldi-decoder's own CMakeLists.txt.
-    #
-    # A REAL network-isolation build (GitHub hosts blocked at /etc/hosts,
-    # verified restored after) succeeded: `BUILD SUCCESSFUL in 5m 55s`, and
-    # the resulting APK was confirmed to contain both
-    # lib/arm64-v8a/libonnxruntime.so and
-    # lib/arm64-v8a/libsherpa-onnx-jni.so at correct sizes. Full details in
-    # NOTES.md "REAL NETWORK-ISOLATION BUILD PROOF".
-    #
-    # IMPORTANT CORRECTNESS NOTE (verified empirically against the
-    # installed CMake 4.3.4 module, not assumed): FETCHCONTENT_SOURCE_DIR_
-    # <NAME> uses a LITERAL string(TOUPPER ...) of the FetchContent_Declare()
-    # name -- NOT a hyphen-to-underscore substitution. For
-    # simple-sentencepiece the correct variable is
-    # FETCHCONTENT_SOURCE_DIR_SIMPLE-SENTENCEPIECE (hyphen preserved). An
-    # underscore version silently falls through to a real network fetch
-    # attempt instead of erroring, which would have been a subtle,
-    # hard-to-notice F-Droid build failure. A local CMake reproduction
-    # confirmed both the working (hyphen) and broken (underscore) forms.
-    #
-    # NOTED VERSION SKEW (documented, not hidden -- see NOTES.md): kaldifst
-    # v1.8.0's own openfst.cmake requests openfst tag v1.8.5-2026-04-10, one
-    # day earlier than sherpa-onnx's own openfst pin of v1.8.5-2026-04-11
-    # (already vendored). FetchContent_Declare()'s per-name idempotency means
-    # both consumers end up using the -04-11 checkout -- a deliberate,
-    # low-risk choice given the tags are a one-day-apart republish of the
-    # same upstream fork.
-    #
-    # No prebuild: hook is needed for this fix -- the submodules are
-    # already checked out at their pinned commits by `submodules: true`
-    # above, and CMakeLists.txt itself references app/src/main/cpp/
-    # sherpa_onnx/deps/<name> directly.
+    # CHANGED from [github]. Verified on a real assembleRelease that the
+    # storefront APK contains zero SelfUpdateCheckWorker type descriptors and
+    # neither REQUEST_INSTALL_PACKAGES nor UPDATE_PACKAGES_WITHOUT_USER_ACTION
+    # (aapt2 dump permissions), while the github APK carries both.
     gradle:
-      - yes
-    output: build/outputs/apk/release/app-release-unsigned.apk
+      - storefront
+    # sherpa-onnx and llama.cpp's gguf-hash deps are removed from the build
+    # tree by F-Droid's scanner; both are source submodules, not prebuilts.
+    scandelete:
+      - sherpa-onnx
+      - llama.cpp/examples/gguf-hash/deps
+
+AllowedAPKSigningKeys: 375c6f118f18f900971e80ee1b9f711b7abd0845e6de317fbdff0abbfb1eda5a
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: '1.0.3'
-CurrentVersionCode: 6
+CurrentVersion: 1.0.22
+CurrentVersionCode: 25
+
+# --- Blocked on -----------------------------------------------------------
+# 1. A signed Ramblr-<version>-storefront-release.apk published at the Binaries
+#    URL above. reproducible-build.yml now uploads both flavors' release APKs
+#    (commit d67869f) -- before that fix the storefront APK was built by
+#    `assembleRelease` and then discarded, which is precisely why no storefront
+#    reference binary has ever existed and why the recipe was pinned to github.
+#    Flipping the flavor before the artifact exists would leave F-Droid's binary
+#    comparison with nothing to compare against.
+# 2. A version bump + tag, so versionName/versionCode/commit above point at a
+#    build that actually contains the review fixes (segmented local decode for
+#    the OOM, license consent gate, updated description).
