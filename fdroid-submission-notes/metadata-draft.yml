@@ -72,9 +72,9 @@ Repo: https://github.com/trevornk/ramblr.git
 Binaries: https://github.com/trevornk/ramblr/releases/download/v%v/Ramblr-%v-storefront-release.apk
 
 Builds:
-  - versionName: 1.0.22
-    versionCode: 25
-    commit: v1.0.22
+  - versionName: 1.0.23
+    versionCode: 26
+    commit: v1.0.23
     subdir: app
     submodules: true
     # CHANGED from [github]. Verified on a real assembleRelease that the
@@ -93,8 +93,8 @@ AllowedAPKSigningKeys: 375c6f118f18f900971e80ee1b9f711b7abd0845e6de317fbdff0abbf
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 1.0.22
-CurrentVersionCode: 25
+CurrentVersion: 1.0.23
+CurrentVersionCode: 26
 
 # --- Blocked on -----------------------------------------------------------
 # 1. A signed Ramblr-<version>-storefront-release.apk published at the Binaries

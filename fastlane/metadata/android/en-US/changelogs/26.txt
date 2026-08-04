@@ -1,0 +1,11 @@
+Fixes for the F-Droid review.
+
+- Long dictations no longer fail silently. Speech is now transcribed in
+  segments instead of all at once, which keeps memory flat regardless of how
+  long you talk. Previously a several-minute recording could exhaust memory and
+  be lost with no transcription and no error.
+- Every downloadable model now states its license before you download it, and
+  the optional cleanup model whose license restricts commercial use asks for
+  explicit consent first. Transcription models are all freely licensed.
+- The app description now lists every network connection the app can make and
+  what triggers each one.
