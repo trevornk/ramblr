@@ -141,7 +141,27 @@ class WhisperAccessibilityService : AccessibilityService() {
          */
         fun requestToggleRecording(): Boolean {
             val service = instance ?: return false
-            service.handler.post { service.onTap() }
+            service.handler.post {
+                // Never start a recording the user can't see (#136). The tile is reachable while
+                // the ring is hidden -- that's the entire point of #127 -- but startRecording()/
+                // onTap() never touch IconHiddenState, and applyOverlayVisibility() holds BOTH
+                // overlay windows at alpha=0f while it's set. Without this, a tile tap starts a
+                // live mic with zero on-screen indication: the ring stays invisible and
+                // showFeedback() writes into a bubble that's already been forced to alpha=0f and
+                // re-hidden. Silent recording is a privacy problem, not just a UX one, so
+                // un-hiding is treated as a precondition of starting rather than an option.
+                // See [shouldRestoreIconBeforeToggle] for the rule and why it's start-only.
+                if (shouldRestoreIconBeforeToggle(
+                        service.stateMachine.current(),
+                        IconHiddenState.isHidden(service),
+                    )
+                ) {
+                    IconHiddenState.setHidden(service, false)
+                    IconVisibilityNotifications.cancel(service)
+                    service.applyOverlayVisibility()
+                }
+                service.onTap()
+            }
             return true
         }
 

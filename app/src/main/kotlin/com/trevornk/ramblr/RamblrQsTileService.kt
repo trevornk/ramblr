@@ -1,5 +1,6 @@
 package com.trevornk.ramblr
 
+import android.app.PendingIntent
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
@@ -53,12 +54,21 @@ class RamblrQsTileService : TileService() {
         if (!serviceRunning) {
             // #127 requirement 3: accessibility service isn't enabled -- don't crash or silently
             // no-op forever, deep-link the user to the settings screen where they can turn it on.
+            //
+            // Must be the PendingIntent overload (#136): startActivityAndCollapse(Intent) is
+            // deprecated and throws UnsupportedOperationException unconditionally on
+            // UPSIDE_DOWN_CAKE (API 34) and up, which this app targets. The old Intent call
+            // therefore threw on every device that could install this build, and the broad
+            // catch it replaced swallowed the exception -- making the "tap to enable" affordance
+            // the exact permanent silent no-op it was written to prevent. FLAG_IMMUTABLE mirrors
+            // IconVisibilityNotifications' PendingIntent; the intent is already explicit
+            // (a platform settings action), so nothing here is mutable-by-design.
             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            try {
-                startActivityAndCollapse(intent)
-            } catch (_: Exception) {
-                // Best-effort; nothing else to safely do from a tile click if this fails.
-            }
+            val pending = PendingIntent.getActivity(
+                this, 0, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            startActivityAndCollapse(pending)
             return
         }
         WhisperAccessibilityService.requestToggleRecording()
