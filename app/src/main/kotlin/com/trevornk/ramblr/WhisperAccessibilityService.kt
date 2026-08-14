@@ -459,6 +459,10 @@ class WhisperAccessibilityService : AccessibilityService() {
         CustomPersonaStore.ensureLegacySeeded(this)
         ProviderChainMigration.runIfNeeded(this)
         showOverlay()
+        // Self-heal the recovery notification (#135): if the icon is hidden but the notification
+        // was swiped away, this is the first moment we can put the way back on screen again.
+        // Runs after showOverlay() so the overlay really is connected by the time we claim it is.
+        IconVisibilityNotifications.repostIfMissing(this, overlayConnected = overlayView != null)
         registerNetworkCallback()
         registerScreenStateReceiver()
         thread { cleanupOrphanedRecordings() }
@@ -515,6 +519,17 @@ class WhisperAccessibilityService : AccessibilityService() {
         val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
                 applyOverlayVisibility()
+                // USER_PRESENT only (#135): the unlock is the natural checkpoint to restore a
+                // swiped-away recovery notification -- the user is present, looking at the screen,
+                // and about to reach for a ring that isn't there. Deliberately not SCREEN_ON/OFF:
+                // those fire at the keyguard where the shade is a worse place to surface this, and
+                // firing on all three would re-post up to three times per wake for no added value.
+                if (intent?.action == Intent.ACTION_USER_PRESENT) {
+                    IconVisibilityNotifications.repostIfMissing(
+                        this@WhisperAccessibilityService,
+                        overlayConnected = overlayView != null,
+                    )
+                }
             }
         }
         val filter = android.content.IntentFilter().apply {
@@ -1548,7 +1563,13 @@ class WhisperAccessibilityService : AccessibilityService() {
      * AccessibilityService's floating overlay doesn't have, so they can't reliably anchor to (or
      * even show above) this service's own TYPE_ACCESSIBILITY_OVERLAY windows.
      */
-    private fun showStyleMenu() {
+    /**
+     * [content] is a builder rather than a fixed call to [buildStyleMenuContent] so the "Hide
+     * icon" confirmation (#135) can reuse this window, scrim, anchoring and dismiss handling
+     * verbatim instead of duplicating it -- the confirmation is the same menu showing a different
+     * page, which is also how it should read to the user.
+     */
+    private fun showStyleMenu(content: () -> LinearLayout = ::buildStyleMenuContent) {
         dismissStyleMenu()
         val ringParams = layoutParams ?: return
         val ringSize = ringParams.width
@@ -1563,7 +1584,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
 
-        val menu = buildStyleMenuContent().apply {
+        val menu = content().apply {
             // Invisible until positioned (see menu.post below) -- WRAP_CONTENT's real size isn't
             // known until after this first layout pass, so the window is added at a provisional
             // ring-anchored x/y (usually the right screen edge) purely to let it measure itself.
@@ -1627,21 +1648,26 @@ class WhisperAccessibilityService : AccessibilityService() {
         menuParams.y = (ringParams.y - menuHeight - margin).coerceIn(margin, screenH - menuHeight - margin)
     }
 
-    private fun buildStyleMenuContent(): LinearLayout {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            minimumWidth = (220 * dp).toInt()
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 12 * dp
-                setColor(COLOR_FEEDBACK_BG)
-                // A near-black translucent fill with no edge blends into a dark app background or
-                // dark wallpaper -- a subtle light-alpha border keeps the menu visually distinct
-                // regardless of what's behind it, without needing a hard opaque outline.
-                setStroke((1 * dp).toInt(), COLOR_MENU_BORDER)
-            }
-            setPadding((6 * dp).toInt(), (6 * dp).toInt(), (6 * dp).toInt(), (6 * dp).toInt())
+    /** The style menu's shared chrome (rounded translucent panel), extracted so the "Hide icon"
+     *  confirmation page (#135) renders as the same object the user was already looking at rather
+     *  than a differently-styled second surface. */
+    private fun styleMenuContainer(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        minimumWidth = (220 * dp).toInt()
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = 12 * dp
+            setColor(COLOR_FEEDBACK_BG)
+            // A near-black translucent fill with no edge blends into a dark app background or
+            // dark wallpaper -- a subtle light-alpha border keeps the menu visually distinct
+            // regardless of what's behind it, without needing a hard opaque outline.
+            setStroke((1 * dp).toInt(), COLOR_MENU_BORDER)
         }
+        setPadding((6 * dp).toInt(), (6 * dp).toInt(), (6 * dp).toInt(), (6 * dp).toInt())
+    }
+
+    private fun buildStyleMenuContent(): LinearLayout {
+        val container = styleMenuContainer()
 
         val cleanupEnabled = PostProcessingToggle.isEnabled(this)
         val cleanupIcon = getDrawable(R.drawable.ic_cleanup)?.mutate()?.apply {
@@ -1696,11 +1722,59 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (HideIconToggle.isEnabled(this)) {
             container.addView(styleMenuDivider())
             container.addView(
-                styleMenuRow(icon = null, title = "Hide icon", subtitle = "Fully hides it — restore from a notification") {
+                styleMenuRow(icon = null, title = "Hide icon", subtitle = "Fully hides it — you'll be asked to confirm") {
                     onStyleMenuHideIconTapped()
                 }
             )
         }
+
+        return container
+    }
+
+    /**
+     * Second page of the style menu shown after "Hide icon" is tapped (#135): confirm, and name
+     * the way back *before* the ring disappears rather than after.
+     *
+     * This is a confirmation step, not a nag. Hiding the icon is the single most destructive thing
+     * the long-press menu can do -- it removes the only always-on affordance the app has -- and it
+     * was previously one tap with no undo shown anywhere the user was already looking. The recovery
+     * text has to be readable at the moment of the decision, because every channel for delivering
+     * it afterwards is losable: the notification can be swiped, the toast disappears in seconds,
+     * and Settings > Behavior's restore row is invisible until you're already hidden.
+     *
+     * Built from the same [styleMenuRow]/[styleMenuDivider] primitives as the main menu so it
+     * inherits the overlay's theming, touch handling and dismiss-on-outside-tap for free. An
+     * AlertDialog is not an option here: an AccessibilityService has no activity context, and a
+     * TYPE_APPLICATION_OVERLAY dialog would be a second window to manage for no benefit.
+     */
+    private fun buildHideIconConfirmMenu(): LinearLayout {
+        val container = styleMenuContainer()
+
+        container.addView(
+            styleMenuRow(
+                icon = null,
+                title = "Hide the floating icon?",
+                subtitle = "The ring disappears until you bring it back.",
+            ) { /* header row: inert by design, tapping the question does nothing */ }
+        )
+
+        container.addView(styleMenuDivider())
+
+        container.addView(
+            styleMenuRow(
+                icon = null,
+                title = "Hide it",
+                subtitle = "Get it back from the notification, the Quick Settings tile, or Settings > Behavior",
+            ) { onHideIconConfirmed() }
+        )
+
+        container.addView(styleMenuDivider())
+
+        container.addView(
+            styleMenuRow(icon = null, title = "Cancel", subtitle = "Leave the icon where it is") {
+                dismissStyleMenu()
+            }
+        )
 
         return container
     }
@@ -1835,11 +1909,18 @@ class WhisperAccessibilityService : AccessibilityService() {
         startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    /** "Hide icon" long-press menu row (Feature B): fully hides the ring/feedback bubble (same
+    /** "Hide icon" long-press menu row (Feature B): opens the confirmation page (#135) rather
+     *  than hiding immediately. The hide itself is one tap away, but never the *first* tap --
+     *  see [buildHideIconConfirmMenu] for why the confirmation is worth the extra step. */
+    private fun onStyleMenuHideIconTapped() {
+        showStyleMenu(::buildHideIconConfirmMenu)
+    }
+
+    /** The actual hide, once confirmed (#135): fully hides the ring/feedback bubble (same
      *  end-state as MainActivity being foregrounded, #35) and posts the "tap to show it again"
      *  notification, since once the ring is gone there's otherwise no on-screen affordance left
      *  to bring it back. */
-    private fun onStyleMenuHideIconTapped() {
+    private fun onHideIconConfirmed() {
         dismissStyleMenu()
         IconHiddenState.setHidden(this, true)
         applyOverlayVisibility()
@@ -1847,9 +1928,9 @@ class WhisperAccessibilityService : AccessibilityService() {
         // Name the recovery paths out loud (#135). This can't use showFeedback(): the call above
         // has already forced the feedback bubble to alpha=0f and queued hideFeedback, so anything
         // written there would be invisible -- the hide is exactly the state that suppresses it.
-        // A Toast is a separate system-owned window and is unaffected. Worth the interruption
-        // precisely once, because a user who loses the notification (Android 14+ still allows
-        // swipe-dismissing even an ongoing one) has no other visible way back.
+        // A Toast is a separate system-owned window and is unaffected. Belt-and-braces alongside
+        // the confirmation page that just named the same paths: the toast is what remains on
+        // screen for a moment *after* the ring vanishes, which is when the loss is felt.
         toast("Icon hidden. Tap the notification, or Settings > Behavior, to show it again")
     }
 

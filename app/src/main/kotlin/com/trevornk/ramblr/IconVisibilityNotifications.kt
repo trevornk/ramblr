@@ -45,9 +45,19 @@ object IconVisibilityNotifications {
      * once gone, the ring was unrecoverable except via BehaviorActivity's [iconHiddenRow], which
      * is View.GONE until the icon is already hidden and therefore cannot be discovered in advance.
      * That combination stranded a real user (a hidden ring surviving reboots with no visible way
-     * back). setOngoing(true) keeps it out of "Clear all"; Android 14+ still permits individual
-     * swipe-dismissal, which is why [WhisperAccessibilityService.onStyleMenuHideIconTapped] also
-     * names the Settings fallback out loud at hide time rather than relying on this alone.
+     * back).
+     *
+     * setOngoing(true) keeps it out of "Clear all" and makes it non-dismissable while the phone is
+     * locked. That is the whole of its effect. It is explicitly NOT a defense against dismissal:
+     * on Android 14+ an individual swipe removes an ongoing notification, confirmed on-device after
+     * the first pass at #135 shipped (the user swiped this exact notification away and was stranded
+     * again -- the very bug this was meant to fix). Foreground-service notifications are not exempt
+     * either; see [shouldRepostHiddenNotification] for why the Tesla-style FGS approach was
+     * investigated and rejected.
+     *
+     * Durability therefore comes from re-posting ([repostIfMissing]), not from any builder flag.
+     * setOngoing is retained only for its two real effects above, which cover the common accidental
+     * cases and avoid a pointless re-post cycle.
      */
     private fun build(ctx: Context): Notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_mic)
@@ -56,6 +66,43 @@ object IconVisibilityNotifications {
         .setOngoing(true)
         .setContentIntent(restoreIntent(ctx))
         .build()
+
+    /**
+     * Whether this app's own "icon hidden" notification is currently in the shade.
+     *
+     * [NotificationManager.getActiveNotifications] is scoped to the calling package and needs no
+     * special permission (unlike NotificationListenerService, which would be a wildly
+     * disproportionate ask for this). Returns false on any failure so a query problem can never
+     * suppress a re-post -- the safe direction is a redundant post, not a missing recovery path.
+     */
+    fun isPosted(ctx: Context): Boolean = try {
+        ctx.getSystemService(NotificationManager::class.java)
+            ?.activeNotifications
+            ?.any { it.id == NOTIFICATION_ID }
+            ?: false
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * Self-heal (#135): re-post the recovery notification if the icon is hidden but the
+     * notification is gone -- the state a swipe-dismissal leaves behind, in which the user has no
+     * on-screen way back to the ring. Called from the accessibility service at low-frequency
+     * checkpoints (connect/unlock); see [shouldRepostHiddenNotification] for the rule and the
+     * rationale for not reacting instantly to dismissal.
+     *
+     * [overlayConnected] is passed in rather than inferred here so this stays a plain notification
+     * helper with no knowledge of the service's lifecycle.
+     */
+    fun repostIfMissing(ctx: Context, overlayConnected: Boolean) {
+        if (!shouldRepostHiddenNotification(
+                iconHidden = IconHiddenState.isHidden(ctx),
+                notificationPosted = isPosted(ctx),
+                overlayConnected = overlayConnected,
+            )
+        ) return
+        postHidden(ctx)
+    }
 
     /** Posts the "icon hidden" notification. Never allowed to fail the caller: a missing
      *  POST_NOTIFICATIONS grant (or any other notification-layer error) must not crash "Hide
