@@ -18,10 +18,56 @@ import java.io.IOException
 data class CleanupStepTimeouts(
     val connectMs: Long = 1_500L,
     val readMs: Long = 7_000L,
+    /**
+     * Whole-call bound (connect + write + read + redirects), clamped to what's actually left of
+     * [CLEANUP_WATERFALL_HARD_CAP_MS] -- see [cloudStepTimeouts] (#137). Null means "leave the
+     * shared client's own callTimeout alone", which is what test fakes and any caller that
+     * doesn't know the deadline get.
+     *
+     * This exists because [connectMs]/[readMs] are per-*phase* budgets: OkHttp will happily
+     * spend connectMs connecting and then a further readMs reading, so bounding the phases
+     * individually does not bound the call. Only callTimeout does.
+     */
+    val callMs: Long? = null,
 ) {
     companion object {
         val DEFAULT = CleanupStepTimeouts()
     }
+}
+
+/**
+ * Floor for a step's whole-call budget (#137). Never 0: OkHttp treats a 0 timeout as *infinite*,
+ * so clamping a spent budget straight down to zero would turn the hard cap into no cap at all --
+ * the exact opposite of the intent. The between-steps gate in [CleanupWaterfallExecutor.execute]
+ * already guarantees a step only starts with budget remaining, so this floor is a safety net for
+ * the sub-millisecond edge, not a routine path.
+ */
+const val MIN_STEP_CALL_BUDGET_MS = 250L
+
+/**
+ * Per-step network timeouts for a cloud step, clamped to the waterfall's remaining wall clock
+ * (#137).
+ *
+ * Before this existed, every cloud step was handed [CleanupStepTimeouts.DEFAULT] verbatim and
+ * [CLEANUP_WATERFALL_HARD_CAP_MS] was only ever checked *between* steps -- so a step dispatched
+ * at 14,999ms of a 15,000ms budget still got its full connect+read allowance and the real worst
+ * case was 14,999 + 1,500 + 7,000 = 23,499ms. Trevor's own benchmark log has a 22,852ms
+ * dictation, which is that arithmetic happening in the field.
+ *
+ * Clamping [CleanupStepTimeouts.callMs] to the remaining budget makes the documented cap
+ * actually hold, because callTimeout bounds the entire call rather than one phase of it.
+ */
+fun cloudStepTimeouts(
+    overallDeadlineAtMs: Long,
+    nowMs: Long,
+    base: CleanupStepTimeouts = CleanupStepTimeouts.DEFAULT,
+): CleanupStepTimeouts {
+    val remainingMs = (overallDeadlineAtMs - nowMs).coerceAtLeast(MIN_STEP_CALL_BUDGET_MS)
+    return base.copy(
+        connectMs = minOf(base.connectMs, remainingMs),
+        readMs = minOf(base.readMs, remainingMs),
+        callMs = remainingMs,
+    )
 }
 
 /**
@@ -339,6 +385,12 @@ object RealCleanupHttpTransport : CleanupHttpTransport {
         val client = NetworkClients.shared.newBuilder()
             .connectTimeout(timeouts.connectMs, TimeUnit.MILLISECONDS)
             .readTimeout(timeouts.readMs, TimeUnit.MILLISECONDS)
+            .apply {
+                // #137: bound the WHOLE call, not just its phases. Without this the step inherits
+                // the shared client's own (much larger) callTimeout, which is how a step starting
+                // just under CLEANUP_WATERFALL_HARD_CAP_MS could still overrun it by ~8.5s.
+                timeouts.callMs?.let { callTimeout(it, TimeUnit.MILLISECONDS) }
+            }
             .build()
         val body = jsonBody.toRequestBody("application/json".toMediaType())
         val requestBuilder = Request.Builder().url(url).post(body)
@@ -618,7 +670,7 @@ object CleanupWaterfallExecutor {
                 AnthropicCleanupProvider.ENDPOINT_URL,
                 AnthropicCleanupProvider.headers(apiKey),
                 AnthropicCleanupProvider.buildRequestBody(text, prompt, step.model).toString(),
-                CleanupStepTimeouts.DEFAULT,
+                cloudStepTimeouts(deadlineAtMs, System.currentTimeMillis()),
                 cancelHolder,
             ) { httpOutcome -> callback(toStepOutcome(httpOutcome, AnthropicCleanupProvider::parseResponse)) }
             return
@@ -629,7 +681,7 @@ object CleanupWaterfallExecutor {
                 GeminiCleanupProvider.endpointUrl(step.model),
                 GeminiCleanupProvider.headers(apiKey),
                 GeminiCleanupProvider.buildRequestBody(text, prompt).toString(),
-                CleanupStepTimeouts.DEFAULT,
+                cloudStepTimeouts(deadlineAtMs, System.currentTimeMillis()),
                 cancelHolder,
             ) { httpOutcome -> callback(toStepOutcome(httpOutcome, GeminiCleanupProvider::parseResponse)) }
             return
@@ -646,7 +698,7 @@ object CleanupWaterfallExecutor {
             PostProcessor.endpointUrl(baseUrl),
             mapOf("Authorization" to "Bearer $apiKey"),
             PostProcessor.buildRequestBody(text, prompt, step.model).toString(),
-            CleanupStepTimeouts.DEFAULT,
+            cloudStepTimeouts(deadlineAtMs, System.currentTimeMillis()),
             cancelHolder,
         ) { httpOutcome -> callback(toStepOutcome(httpOutcome, PostProcessor::parseResponse)) }
     }
