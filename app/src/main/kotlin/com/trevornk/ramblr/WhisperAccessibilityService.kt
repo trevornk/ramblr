@@ -831,6 +831,12 @@ class WhisperAccessibilityService : AccessibilityService() {
                 MotionEvent.ACTION_DOWN -> {
                     armIdlePeekTimer()
                     consumedByPeekRestore = false
+                    // #128: the whole touch path used to be silent, so a tap that reached the
+                    // listener and a tap that never arrived at all (stolen by the system
+                    // edge-swipe gesture, or landing on the window's transparent padding) were
+                    // indistinguishable in logcat -- both left "zero trace". This one line is the
+                    // discriminator: if it's absent for a failed tap, the touch never reached us.
+                    Log.i(TAG, "Ring touch DOWN: peeked=$isPeeked state=${stateMachine.current()} x=${params.x}")
                     // A touch-down on a currently-peeked ring is a restore tap, not the start of a
                     // normal drag/tap/long-press gesture (Feature A): consume it here so it can
                     // never also fall through to onTap()'s mic-toggle on ACTION_UP.
@@ -1040,6 +1046,31 @@ class WhisperAccessibilityService : AccessibilityService() {
         val newScreenW = screenW
         val newScreenH = screenH
         if (!isFoldSizeChange(lastScreenW, lastScreenH, newScreenW, newScreenH)) {
+            // A plain rotation still never repositions a DOCKED ring (unchanged, #41) -- but a
+            // PEEKED ring's window x is defined relative to a screen edge that just moved (#128).
+            // Leaving it alone strands the sliver mid-screen (portrait -> landscape) or entirely
+            // past the new, narrower edge (landscape -> portrait) while isPeeked stays true, so
+            // the next tap lands on nothing and silently does nothing.
+            if (isPeeked && (newScreenW != lastScreenW)) {
+                val ringSize = params.width
+                val margin = (MARGIN_DP * dp).toInt()
+                val peekVisiblePx = (PeekVisibleSize.dpOrDefault(this) * dp).toInt()
+                val (newPeekedX, newDockedX) = peekedPositionForScreenChange(
+                    prePeekX ?: params.x, lastScreenW, newScreenW, ringSize, margin, peekVisiblePx, ringInsetPx()
+                )
+                prePeekX = newDockedX
+                params.x = newPeekedX
+                params.y = proportionalYForScreenChange(params.y, lastScreenH, newScreenH, ringSize, margin)
+                Log.i(TAG, "Rotation while peeked: re-derived x=$newPeekedX (docked $newDockedX) for ${newScreenW}px screen")
+                val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                handler.post {
+                    overlayView?.let { wm.updateViewLayout(it, params) }
+                    feedbackLayoutParams?.let {
+                        positionFeedback(it, params, feedbackView?.height ?: 0)
+                        wm.updateViewLayout(feedbackView, it)
+                    }
+                }
+            }
             lastScreenW = newScreenW
             lastScreenH = newScreenH
             return
@@ -1052,7 +1083,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             val oldDockedX = prePeekX ?: params.x
             val peekVisiblePx = (PeekVisibleSize.dpOrDefault(this) * dp).toInt()
             val (newPeekedX, newDockedX) = peekedPositionForScreenChange(
-                oldDockedX, lastScreenW, newScreenW, ringSize, margin, peekVisiblePx
+                oldDockedX, lastScreenW, newScreenW, ringSize, margin, peekVisiblePx, ringInsetPx()
             )
             prePeekX = newDockedX
             params.x = newPeekedX
@@ -1177,11 +1208,21 @@ class WhisperAccessibilityService : AccessibilityService() {
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val ringSize = params.width
         val peekVisiblePx = (PeekVisibleSize.dpOrDefault(this) * dp).toInt()
-        val targetX = RingPeek.peekedX(params.x, screenW, ringSize, peekVisiblePx)
+        val targetX = RingPeek.peekedX(params.x, screenW, ringSize, peekVisiblePx, ringInsetPx())
 
         prePeekX = params.x
         isPeeked = true
+        Log.i(TAG, "Peeking ring: x=${params.x} -> $targetX (sliver ${peekVisiblePx}px, inset ${ringInsetPx()}px)")
         animateRingX(params, wm, targetX)
+    }
+
+    /** The transparent gap between the ring WINDOW's edge and the mic button actually drawn inside
+     *  it (#128) -- the window is [RING_DP]-scaled while the button is the smaller [BTN_DP],
+     *  centred, so peeking measured against the window leaves ~6dp of nothing on-screen instead of
+     *  ring. See [RingPeek.peekedX]. */
+    private fun ringInsetPx(): Int {
+        val ringSizeDp = OverlayAppearancePrefs.load(this).ringSizeDp
+        return ((ringSizeDp - dpScaledToRing(BTN_DP, ringSizeDp)) * dp / 2).toInt().coerceAtLeast(0)
     }
 
     /** Restores the ring to its pre-peek position immediately -- called on a touch-down that
@@ -1189,9 +1230,21 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  so un-peeking a tap never also toggles the mic. */
     private fun restoreFromPeek() {
         val params = layoutParams ?: return
-        val targetX = prePeekX ?: return
+        // #128: prePeekX being null while isPeeked is true is a state desync, and the old
+        // `?: return` swallowed it without a trace -- the ring stayed peeked, the tap did
+        // nothing, and nothing was logged, exactly matching the reported symptom. Recover by
+        // re-deriving the docked position from the edge the ring is peeked against instead of
+        // silently giving up, and say so in the log.
+        val targetX = prePeekX ?: run {
+            val ringSize = params.width
+            val margin = (MARGIN_DP * dp).toInt()
+            val recovered = if (params.x + ringSize / 2 > screenW / 2) screenW - ringSize - margin else margin
+            Log.w(TAG, "restoreFromPeek: prePeekX was null while peeked (state desync) -- recovering to x=$recovered")
+            recovered
+        }
         isPeeked = false
         prePeekX = null
+        Log.i(TAG, "Restoring ring from peek: x=${params.x} -> $targetX")
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         animateRingX(params, wm, targetX)
         armIdlePeekTimer()

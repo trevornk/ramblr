@@ -44,9 +44,10 @@ fun peekedPositionForScreenChange(
     ringSize: Int,
     margin: Int,
     peekVisiblePx: Int,
+    ringInsetPx: Int = 0,
 ): Pair<Int, Int> {
     val newDockedX = snappedXForScreenChange(oldDockedX, oldScreenW, newScreenW, ringSize, margin)
-    val newPeekedX = RingPeek.peekedX(newDockedX, newScreenW, ringSize, peekVisiblePx)
+    val newPeekedX = RingPeek.peekedX(newDockedX, newScreenW, ringSize, peekVisiblePx, ringInsetPx)
     return newPeekedX to newDockedX
 }
 

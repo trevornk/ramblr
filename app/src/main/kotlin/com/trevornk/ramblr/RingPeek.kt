@@ -30,9 +30,20 @@ object RingPeek {
     fun isSnappedToRightEdge(x: Int, screenW: Int, ringSize: Int): Boolean = x + ringSize / 2 > screenW / 2
 
     /** Target window x while peeked: shifts the ring almost entirely past whichever edge it's
-     *  snapped to, leaving exactly [peekVisiblePx] of it still on-screen, adjacent to that edge. */
-    fun peekedX(x: Int, screenW: Int, ringSize: Int, peekVisiblePx: Int): Int =
-        if (isSnappedToRightEdge(x, screenW, ringSize)) screenW - peekVisiblePx else peekVisiblePx - ringSize
+     *  snapped to, leaving exactly [peekVisiblePx] of it still on-screen, adjacent to that edge.
+     *
+     *  [ringInsetPx] (#128) is the transparent gap between the ring WINDOW's edge and the mic
+     *  button actually drawn inside it -- the window is [RING_DP]-sized while the button is the
+     *  smaller BTN_DP, centred, so every side carries ~6dp of nothing. Measuring the sliver
+     *  against the window put that dead margin on-screen and left only
+     *  (peekVisiblePx - ringInsetPx) of real, tappable ink: 14dp for the shipped 20dp default,
+     *  which is exactly the too-small target [PeekVisibleSize]'s kdoc blames for the original
+     *  peek-restore reliability bug. Offsetting by the inset makes [peekVisiblePx] mean what it
+     *  says -- that much DRAWN ring on-screen -- without changing the ring's drawn size.
+     *  Defaults to 0 so existing callers/tests keep the old window-measured behavior. */
+    fun peekedX(x: Int, screenW: Int, ringSize: Int, peekVisiblePx: Int, ringInsetPx: Int = 0): Int =
+        if (isSnappedToRightEdge(x, screenW, ringSize)) screenW - peekVisiblePx - ringInsetPx
+        else peekVisiblePx - ringSize + ringInsetPx
 
     /** Peeking is only appropriate while the ring is truly idle -- never mid-recording or while
      *  cleanup/transcription is still running, so nothing important disappears mid-flow. */
