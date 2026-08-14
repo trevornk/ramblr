@@ -1824,6 +1824,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         IconHiddenState.setHidden(this, true)
         applyOverlayVisibility()
         IconVisibilityNotifications.postHidden(this)
+        // Name the recovery paths out loud (#135). This can't use showFeedback(): the call above
+        // has already forced the feedback bubble to alpha=0f and queued hideFeedback, so anything
+        // written there would be invisible -- the hide is exactly the state that suppresses it.
+        // A Toast is a separate system-owned window and is unaffected. Worth the interruption
+        // precisely once, because a user who loses the notification (Android 14+ still allows
+        // swipe-dismissing even an ongoing one) has no other visible way back.
+        toast("Icon hidden. Tap the notification, or Settings > Behavior, to show it again")
     }
 
     private fun startPulse() {

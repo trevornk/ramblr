@@ -38,11 +38,22 @@ object IconVisibilityNotifications {
         )
     }
 
+    /**
+     * Ongoing, not auto-cancel (#135): this notification is the primary way back from a hidden
+     * icon, so it must not be a notification the user can casually lose. With setAutoCancel(true)
+     * and no ongoing flag it was removed by "Clear all" and swiped away like any other -- and
+     * once gone, the ring was unrecoverable except via BehaviorActivity's [iconHiddenRow], which
+     * is View.GONE until the icon is already hidden and therefore cannot be discovered in advance.
+     * That combination stranded a real user (a hidden ring surviving reboots with no visible way
+     * back). setOngoing(true) keeps it out of "Clear all"; Android 14+ still permits individual
+     * swipe-dismissal, which is why [WhisperAccessibilityService.onStyleMenuHideIconTapped] also
+     * names the Settings fallback out loud at hide time rather than relying on this alone.
+     */
     private fun build(ctx: Context): Notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_mic)
         .setContentTitle("Ramblr icon hidden")
         .setContentText("Tap to show it again")
-        .setAutoCancel(true)
+        .setOngoing(true)
         .setContentIntent(restoreIntent(ctx))
         .build()
 
