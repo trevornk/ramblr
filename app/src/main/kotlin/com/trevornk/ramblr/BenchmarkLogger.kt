@@ -22,7 +22,53 @@ data class BenchmarkStage(
      *  usage data, instead of only being able to infer it indirectly from wall-clock timing next
      *  to a separately-remembered "I had it on" recollection. */
     val compressedUpload: Boolean? = null,
+    /**
+     * Why this stage failed, or null on success (#138). The provider's own message is the whole
+     * point: before this existed a failure was recorded as a bare `"success": false`, so 21
+     * failures across 910 real records carried zero diagnostic signal and it was impossible to
+     * tell a bad key from a rate limit from a genuine timeout after the fact. The detail already
+     * existed on [CleanupStepOutcome] and was written to logcat -- which is a ring buffer that
+     * rotates within hours, while THIS file is the durable artifact. Exactly backwards.
+     *
+     * Always pass this through [sanitizeError]: provider error envelopes can echo request
+     * content, and this log is deliberately length-only (see [BenchmarkLogger]'s privacy note).
+     */
+    val error: String? = null,
 )
+
+/**
+ * Maximum length of a stored [BenchmarkStage.error]. Long enough for a status line plus a real
+ * provider message, short enough that a response body echoing a long dictation can't be
+ * reconstructed from it.
+ */
+const val MAX_ERROR_DETAIL_CHARS = 200
+
+/**
+ * Scrubs a provider failure message for the length-only benchmark log (#138).
+ *
+ * [BenchmarkLogger] stores lengths, timings and model ids -- never transcript content -- which is
+ * why raw/cleaned text pairs live in the separate, opt-in [QualityLogger] instead. A provider's
+ * error body can quote the request that caused it.
+ *
+ * **What this does and does not guarantee.** Collapsing whitespace is a correctness guarantee:
+ * JSONL is line-oriented, so an embedded newline would split one record into two unparseable
+ * fragments. Truncation, however, only *bounds* content exposure to [MAX_ERROR_DETAIL_CHARS] --
+ * it does not eliminate it, because a body that echoes the request still leaks its first
+ * [MAX_ERROR_DETAIL_CHARS] characters. There is no cap that is simultaneously useful for
+ * diagnosis and provably content-free, since the useful part ("invalid x-api-key", "rate limit
+ * exceeded") and the risky part (an echoed prompt) arrive in the same string.
+ *
+ * That tradeoff is acceptable here because this file is app-private and never uploaded, but it
+ * is a real consideration before sharing a benchmark log. If zero content risk is ever required,
+ * the fix is to log the status code and exception class only and drop provider prose entirely --
+ * strictly less diagnostic value, which is the whole reason it isn't the default.
+ */
+fun sanitizeError(raw: String?): String? {
+    val collapsed = raw?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+    if (collapsed.isEmpty()) return null
+    return if (collapsed.length <= MAX_ERROR_DETAIL_CHARS) collapsed
+    else collapsed.take(MAX_ERROR_DETAIL_CHARS) + "..."
+}
 
 /**
  * End-to-end, user-perceived pipeline timing for one dictation (#115). Unlike [BenchmarkStage]
@@ -168,6 +214,9 @@ object BenchmarkLogger {
         .put("latencyMs", latencyMs)
         .put("success", success)
         .put("compressedUpload", compressedUpload ?: JSONObject.NULL)
+        // Additive (#138), same null-vs-missing convention as the keys above so the 910 existing
+        // records stay parseable by any consumer that doesn't know this key.
+        .put("error", error ?: JSONObject.NULL)
 
     private fun PipelineStage.toJson(): JSONObject = JSONObject()
         .put("stopToDrainMs", stopToDrainMs ?: JSONObject.NULL)

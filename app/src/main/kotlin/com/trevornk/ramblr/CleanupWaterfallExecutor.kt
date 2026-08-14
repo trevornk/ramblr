@@ -583,6 +583,17 @@ object CleanupWaterfallExecutor {
                         model = step.model,
                         latencyMs = System.currentTimeMillis() - startedAtMs,
                         success = outcome is CleanupStepOutcome.Success,
+                        // #138: the reason already existed here and was only going to logcat,
+                        // which rotates within hours. Sanitized because a provider error body can
+                        // echo request content and this log is deliberately length-only.
+                        error = sanitizeError(
+                            when (outcome) {
+                                is CleanupStepOutcome.StepFailed -> outcome.message
+                                is CleanupStepOutcome.ConnectionFailed -> outcome.message
+                                is CleanupStepOutcome.Cancelled -> "Cancelled"
+                                is CleanupStepOutcome.Success -> null
+                            }
+                        ),
                     ),
                     cleanedTextLength = (outcome as? CleanupStepOutcome.Success)?.text?.length,
                 )
