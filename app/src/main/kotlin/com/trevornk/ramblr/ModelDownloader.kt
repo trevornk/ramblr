@@ -321,7 +321,7 @@ const val MUMBLE_CLEANUP_SYSTEM_PROMPT = "You are a transcript cleanup tool. You
  * the prebuilt Q4_K_M asset (URL/sha256 verified 2026-07-06 by downloading the exact asset from
  * the real `amitashwini/mumble-cleanup-2stage` Hugging Face repo and hashing it locally --
  * 397,807,904 bytes, matching the model card's documented ~379 MB Q4_K_M size). That build blew
- * through the full 15s [CLEANUP_WATERFALL_HARD_CAP_MS] and got aborted mid-decode on Trevor's
+ * through the then-15s [CLEANUP_WATERFALL_HARD_CAP_MS] and got aborted mid-decode on Trevor's
  * device -- confirmed not usable there at all -- so it was removed from the catalog entirely and
  * replaced with this self-quantized Q4_0 build, which came in at ~2.9s on-device. No prebuilt
  * Q4_0 GGUF exists upstream, so this was produced locally with the *same* llama-quantize tool
@@ -611,7 +611,7 @@ object ModelDownloader {
      * `kindDir()` (e.g. "cleanup_models") and the archive names the current app version's catalog
      * still recognizes for that kind, returns which installed archive names are orphaned -- present
      * on disk but no longer in any catalog, e.g. because a model was removed after being found
-     * incompatible (like the Q4_K_M mumble-cleanup build blowing the 15s deadline on Trevor's
+     * incompatible (like the Q4_K_M mumble-cleanup build blowing the then-15s deadline on Trevor's
      * device). Split out from the [Context]-based [pruneOrphanedModelDirs] so the actual pruning
      * decision is unit-testable without touching real files.
      */

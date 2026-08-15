@@ -28,13 +28,15 @@ class CloudStepTimeoutsTest {
 
     @Test
     fun `the whole-call bound never exceeds the budget the waterfall has left`() {
-        // The exact scenario from Trevor's benchmark log: a third cleanup step dispatched at
-        // ~12.1s into a 15s budget. Previously it got connect+read on top of that, reaching
-        // ~18.2s; now its whole call is bounded by what remains.
-        val nowMs = start + 12_100L
+        // Modeled on Trevor's benchmark log, where a third cleanup step was dispatched late in
+        // the budget and then got connect+read on top of it, reaching ~18.2s under the old 15s
+        // cap. Expressed relative to the cap so retuning the cap (15s -> 8s, #137 follow-up)
+        // doesn't turn this regression pin into arithmetic about a budget that no longer exists.
+        val remainingMs = 2_900L
+        val nowMs = deadline - remainingMs
         val t = cloudStepTimeouts(deadline, nowMs)
 
-        assertEquals(2_900L, t.callMs)
+        assertEquals(remainingMs, t.callMs)
         assertTrue(
             "call budget must not outlive the waterfall deadline",
             nowMs + t.callMs!! <= deadline,
