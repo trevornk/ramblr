@@ -72,11 +72,25 @@ fun cloudStepTimeouts(
 
 /**
  * Hard cap on the whole waterfall, regardless of how many steps remain, before falling back to
- * raw injection. Kept generous (15s) so a multi-step waterfall (e.g. local -> OmniRoute -> direct
- * fallback) has real room to try more than one step; [LOCAL_LLM_STEP_BUDGET_MS] below is the
- * actual fix for making a slow/stuck local attempt fail fast without eating this whole budget.
+ * raw injection.
+ *
+ * Tuned to 8s from the original 15s against 34 days of real dictation on Trevor's Fold (318
+ * successful cleanups, benchmark_log.jsonl): median 901ms, p95 2879ms, p99 3828ms, slowest
+ * success 7859ms. An 8s cap kills 0 of those 318 -- 6s would kill the 7859ms one and 5s would
+ * kill two -- so this is the tightest cap with no observed regression, with [readMs][
+ * CleanupStepTimeouts.readMs] left at 7s precisely because that is what let the 7859ms call
+ * through.
+ *
+ * The 15s value was never load-bearing; it predated #137, when this cap was only checked
+ * *between* steps and so didn't bound anything in practice. The same log shows two offline
+ * waterfalls running 18.2s and 19.7s under it. Now that #137 makes the deadline real, the cost
+ * of a generous cap is paid entirely by the offline case, where every provider burns its full
+ * timeout in sequence before the chain gives up and injects raw text -- the user is already
+ * getting no cleanup there, so making them wait 15s for that answer is the worst trade in the
+ * chain. [LOCAL_LLM_STEP_BUDGET_MS] below remains the mechanism for keeping one slow local
+ * attempt from eating this budget.
  */
-const val CLEANUP_WATERFALL_HARD_CAP_MS = 15_000L
+const val CLEANUP_WATERFALL_HARD_CAP_MS = 8_000L
 
 /**
  * Wall-clock budget for the LOCAL_LLM step specifically (#98, Claude Fable 5 consult), separate
