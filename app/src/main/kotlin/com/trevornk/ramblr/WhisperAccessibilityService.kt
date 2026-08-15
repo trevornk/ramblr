@@ -33,6 +33,8 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import java.io.File
 import kotlin.concurrent.thread
 import kotlin.math.abs
@@ -2390,6 +2392,26 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Current WorkManager state of [model]'s download, or null when no work has ever been
+     * enqueued for it (#139).
+     *
+     * Queried synchronously because [transcribeLocal] already runs on its own background thread
+     * -- never call this from the main thread. Any failure resolves to null, which makes
+     * [VadModelProvisioning.shouldFetch] fall through to enqueueing; `ExistingWorkPolicy.KEEP`
+     * then collapses the duplicate, so the safe direction is preserved.
+     */
+    private fun vadDownloadStateFor(model: Model): WorkInfo.State? = try {
+        WorkManager.getInstance(this)
+            .getWorkInfosForUniqueWork(ModelDownloadWorker.workName(model.archive))
+            .get()
+            .firstOrNull { !it.state.isFinished }
+            ?.state
+    } catch (e: Exception) {
+        Log.w(TAG, "Couldn't read VAD download state; treating as not in flight", e)
+        null
+    }
+
+    /**
      * Decodes the recording one VAD-detected speech segment at a time when the Silero VAD model
      * is available (#132), falling back to the original whole-file decode when it isn't.
      *
@@ -2402,6 +2424,8 @@ class WhisperAccessibilityService : AccessibilityService() {
      * The fallback is deliberate rather than a hard failure: the VAD model is an optional ~1-2MB
      * download today (see [SILERO_VAD_MODEL]), so a user who has never enabled silence auto-stop
      * would otherwise lose local transcription entirely. Short takes are unaffected either way.
+     * Since #139 this path also provisions that model itself, so the fallback is a transient
+     * state for local-transcription users rather than a permanent one.
      */
     private fun transcribeLocal(file: File, token: Int) {
         thread {
@@ -2410,8 +2434,24 @@ class WhisperAccessibilityService : AccessibilityService() {
             // of one measured from a t0 that never ran (GH #100 benchmark logger).
             val benchmarkStartMs = System.currentTimeMillis()
             try {
-                val vad = ModelDownloader.vadModelFile(this, SILERO_VAD_MODEL)
-                    ?.let { SherpaVadHandle.create(it) }
+                val vadModelFile = ModelDownloader.vadModelFile(this, SILERO_VAD_MODEL)
+                // #139: provision the VAD model for local transcription itself, rather than
+                // leaving it to the unrelated silence-auto-stop toggle (#108). Without this the
+                // segmented decode below is unreachable for anyone who never enabled that
+                // feature, silently pinning them to the unsegmented path #132 was filed to fix.
+                // Asynchronous by design: this take still falls back below, and a later one gets
+                // segmented decode once the ~644KB download lands.
+                if (VadModelProvisioning.shouldFetch(
+                        modelInstalled = vadModelFile != null,
+                        downloadInFlight = ModelDownloadWorker.isInFlight(
+                            vadDownloadStateFor(SILERO_VAD_MODEL)
+                        ),
+                    )
+                ) {
+                    Log.i(TAG, "VAD model missing — enqueueing download for segmented decode (#139)")
+                    ModelDownloadWorker.enqueue(this, SILERO_VAD_MODEL)
+                }
+                val vad = vadModelFile?.let { SherpaVadHandle.create(it) }
 
                 val t0 = System.currentTimeMillis()
                 val durationSeconds = (file.length() / 2 / SAMPLE_RATE).toInt()
