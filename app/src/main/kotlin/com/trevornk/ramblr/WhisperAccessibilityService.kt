@@ -2502,6 +2502,9 @@ class WhisperAccessibilityService : AccessibilityService() {
                         model = localTranscriptionModelId(),
                         latencyMs = System.currentTimeMillis() - benchmarkStartMs,
                         success = false,
+                        // #138: this catch already had the reason and sent it only to logcat,
+                        // which rotates within hours while this file is the durable artifact.
+                        error = sanitizeError(e.toString()),
                     ),
                 )
                 QualityLogger.log(
@@ -2644,6 +2647,10 @@ class WhisperAccessibilityService : AccessibilityService() {
                                 latencyMs = roundTripMs,
                                 success = success,
                                 compressedUpload = compressedFile != null,
+                                // #138: a provider error envelope yields blank text, so this
+                                // records success=false; without the reason a bad key, a rate
+                                // limit and a timeout are indistinguishable after logcat rotates.
+                                error = sanitizeError(result.error),
                             ),
                             rawTextLength = result.text?.length,
                         )
@@ -2702,6 +2709,9 @@ class WhisperAccessibilityService : AccessibilityService() {
                                     latencyMs = System.currentTimeMillis() - geminiStartMs,
                                     success = success,
                                     compressedUpload = compressedFile != null,
+                                    // #138: same as the OpenAI path -- Gemini reports failure as
+                                    // an error envelope with blank text, not an exception.
+                                    error = sanitizeError(result.error),
                                 ),
                                 rawTextLength = result.text?.length,
                             )

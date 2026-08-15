@@ -121,4 +121,99 @@ class BenchmarkErrorDetailTest {
         assertFalse(cleanup.has("error"))
         assertEquals("OPENAI_DIRECT", cleanup.getString("provider"))
     }
+
+    // --- transcription stage -------------------------------------------------------------
+    //
+    // #138 originally landed on the cleanup path only: sanitizeError had exactly one call site
+    // in main, and all four transcription BenchmarkStage constructions omitted `error`, so it
+    // defaulted to null. Every test above pins `cleanup =`, which is precisely why that gap
+    // survived review. These pin the transcription half.
+
+    @Test
+    fun `a failed transcription persists its reason too`() {
+        // The local path's catch block had the exception and sent it only to logcat.
+        val line = BenchmarkLogger.buildLine(
+            timestamp = 1L,
+            correlationId = "c1",
+            transcription = BenchmarkStage(
+                provider = "LOCAL",
+                model = "parakeet_tdt_ctc_110m",
+                latencyMs = 402,
+                success = false,
+                error = sanitizeError("java.lang.OutOfMemoryError: Failed to allocate"),
+            ),
+            cleanup = null,
+            rawTextLength = null,
+            cleanedTextLength = null,
+        )
+
+        val t = JSONObject(line).getJSONObject("transcription")
+        assertFalse(t.getBoolean("success"))
+        assertEquals("java.lang.OutOfMemoryError: Failed to allocate", t.getString("error"))
+    }
+
+    @Test
+    fun `a cloud transcription error envelope is persisted, not just blank text`() {
+        // OpenAI/Gemini report failure as Result(text=null, error="..."), so `success` is
+        // computed from blank text and no exception is ever thrown -- without plumbing
+        // result.error through, these failures record success=false with no reason at all.
+        val line = BenchmarkLogger.buildLine(
+            timestamp = 1L,
+            correlationId = "c1",
+            transcription = BenchmarkStage(
+                provider = "GEMINI",
+                model = "gemini-3.1-flash-lite",
+                latencyMs = 1180,
+                success = false,
+                error = sanitizeError("HTTP 429: rate limit exceeded"),
+            ),
+            cleanup = null,
+            rawTextLength = null,
+            cleanedTextLength = null,
+        )
+
+        val t = JSONObject(line).getJSONObject("transcription")
+        assertEquals("HTTP 429: rate limit exceeded", t.getString("error"))
+    }
+
+    @Test
+    fun `a successful transcription records no error`() {
+        val line = BenchmarkLogger.buildLine(
+            timestamp = 1L,
+            correlationId = "c1",
+            transcription = BenchmarkStage("LOCAL", "parakeet_tdt_ctc_110m", 402, true),
+            cleanup = null,
+            rawTextLength = 42,
+            cleanedTextLength = null,
+        )
+
+        assertTrue(JSONObject(line).getJSONObject("transcription").isNull("error"))
+    }
+
+    @Test
+    fun `transcription and cleanup reasons are recorded independently`() {
+        // A take where transcription succeeded and cleanup failed must not conflate the two.
+        val line = BenchmarkLogger.buildLine(
+            timestamp = 1L,
+            correlationId = "c1",
+            transcription = BenchmarkStage("LOCAL", "parakeet_tdt_ctc_110m", 402, true),
+            cleanup = BenchmarkStage(
+                provider = "OPENAI_DIRECT",
+                model = "gpt-5.4-nano",
+                latencyMs = 9,
+                success = false,
+                error = sanitizeError(
+                    "Unable to resolve host \"api.openai.com\": No address associated with hostname"
+                ),
+            ),
+            rawTextLength = 42,
+            cleanedTextLength = null,
+        )
+
+        val root = JSONObject(line)
+        assertTrue(root.getJSONObject("transcription").isNull("error"))
+        assertTrue(
+            root.getJSONObject("cleanup").getString("error").contains("Unable to resolve host"),
+        )
+    }
 }
