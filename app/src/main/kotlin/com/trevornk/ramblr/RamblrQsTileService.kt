@@ -63,12 +63,31 @@ class RamblrQsTileService : TileService() {
             // the exact permanent silent no-op it was written to prevent. FLAG_IMMUTABLE mirrors
             // IconVisibilityNotifications' PendingIntent; the intent is already explicit
             // (a platform settings action), so nothing here is mutable-by-design.
+            //
+            // The overload split is load-bearing and neither branch is optional: the PendingIntent
+            // overload was only ADDED in API 34, while minSdk is 30. Calling it unguarded throws
+            // NoSuchMethodError on API 30-33, so the #136 fix as originally shipped merely moved
+            // the crash from "Android 14 and up" to "Android 11 through 13" -- the deprecated
+            // Intent overload is still the only one that exists down there, and it does not throw
+            // below 34. Keep both paths until minSdk reaches 34.
             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            val pending = PendingIntent.getActivity(
-                this, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            startActivityAndCollapse(pending)
+            if (shouldUsePendingIntentCollapse(android.os.Build.VERSION.SDK_INT)) {
+                val pending = PendingIntent.getActivity(
+                    this, 0, intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                startActivityAndCollapse(pending)
+            } else {
+                // Lint's StartActivityAndCollapseDeprecated fires here unconditionally: it argues
+                // for the PendingIntent overload, which is exactly what the branch above does. It
+                // has no notion of a minSdk-30 app that must still serve API 30-33, where the
+                // PendingIntent overload does not exist at all. This deprecated call is the only
+                // one that works below 34, and it does not throw there -- so the warning is
+                // correct in general and wrong in this specific branch. Remove along with the
+                // branch when minSdk reaches 34.
+                @Suppress("DEPRECATION", "StartActivityAndCollapseDeprecated")
+                startActivityAndCollapse(intent)
+            }
             return
         }
         WhisperAccessibilityService.requestToggleRecording()

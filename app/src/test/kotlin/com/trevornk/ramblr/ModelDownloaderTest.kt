@@ -177,11 +177,18 @@ class ModelDownloaderTest {
         assertEquals(LOCAL_CLEANUP_MODEL, LOCAL_CLEANUP_MODEL_CATALOG.first { it.recommended })
     }
 
-    @Test fun `mumble-cleanup Q4_0 speed-test model has no source URL (locally quantized, not downloadable) but is still checksummed`() {
-        // No prebuilt Q4_0 GGUF exists on amitashwini/mumble-cleanup-2stage (only f16 and
-        // Q4_K_M are published) -- this entry only exists because it was quantized locally from
-        // the f16 GGUF, so unlike every other catalog entry it has no sourceUrl to download from.
-        assertEquals(null, MUMBLE_CLEANUP_Q4_0_MODEL.sourceUrl)
+    @Test fun `mumble-cleanup Q4_0 speed-test model is downloadable from a pinned HF URL and checksummed`() {
+        // No prebuilt Q4_0 GGUF exists on amitashwini/mumble-cleanup-2stage (only f16 and Q4_K_M
+        // are published), so this entry was quantized locally and then re-hosted under an account
+        // Trevor controls. It downloads like every other entry now -- see the kdoc on
+        // MUMBLE_CLEANUP_Q4_0_MODEL for the upload's verification trail.
+        val url = MUMBLE_CLEANUP_Q4_0_MODEL.sourceUrl
+        assertNotNull("re-hosted: must have a real download URL, not sideload-only", url)
+        assertTrue(url!!.startsWith("https://huggingface.co/"))
+        assertTrue(url.endsWith(".gguf"))
+        // The URL must serve the exact file this entry is checksummed against; a mismatch between
+        // fileName and the URL's basename would download the right bytes to the wrong path.
+        assertTrue(url.endsWith("/${MUMBLE_CLEANUP_Q4_0_MODEL.fileName}"))
         assertFalse(MUMBLE_CLEANUP_Q4_0_MODEL.recommended)
         assertNotEquals(LOCAL_CLEANUP_MODEL.archive, MUMBLE_CLEANUP_Q4_0_MODEL.archive)
         assertNotEquals(LOCAL_CLEANUP_MODEL.fileName, MUMBLE_CLEANUP_Q4_0_MODEL.fileName)
@@ -191,7 +198,19 @@ class ModelDownloaderTest {
     // -- sideload-only classification (#H7) --
 
     @Test fun `a local-cleanup model with no sourceUrl is sideload-only`() {
-        assertTrue(ModelDownloader.isSideloadOnly(MUMBLE_CLEANUP_Q4_0_MODEL))
+        // Uses a synthetic entry rather than a catalog one: every shipping local-cleanup model is
+        // now hosted, but the classifier still has to hold for any future locally-quantized entry
+        // that lands in the catalog before it has somewhere to be downloaded from.
+        val sideloaded = LOCAL_CLEANUP_MODEL.copy(sourceUrl = null)
+        assertTrue(ModelDownloader.isSideloadOnly(sideloaded))
+    }
+
+    @Test fun `every shipping local-cleanup model is downloadable, not sideload-only`() {
+        // Guards the #134 regression directly: a local-cleanup entry with no host silently becomes
+        // un-installable for anyone who cannot adb push it.
+        LOCAL_CLEANUP_MODEL_CATALOG.forEach {
+            assertFalse("${it.name} has no sourceUrl", ModelDownloader.isSideloadOnly(it))
+        }
     }
 
     @Test fun `a local-cleanup model with a real sourceUrl is downloadable, not sideload-only`() {

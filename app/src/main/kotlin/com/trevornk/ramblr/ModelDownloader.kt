@@ -331,12 +331,15 @@ const val MUMBLE_CLEANUP_SYSTEM_PROMPT = "You are a transcript cleanup tool. You
  * i8mm/dotprod dot-product kernels llama.cpp ships for this legacy quant type, where Q4_K_M does
  * not benefit from the same path.
  *
- * `sourceUrl = null`: unlike every other catalog entry, this file has no direct HF download URL --
- * it exists only because it was quantized locally from `mumble-cleanup-2stage-f16.gguf`
- * (verified via the same shasum -a 256 discipline before quantizing: f16 source hash
- * `7659e5dc4df164b50be3dce70d80b191fe7ac378a9e8e44b92e5e4313ef9ff82`). If this ends up being kept
- * long-term, it should be re-hosted (e.g. uploaded back to a HF repo Trevor controls) so
- * [sourceUrl]/[fileName] work like every other entry instead of requiring manual `adb push`.
+ * `sourceUrl`: quantized locally from `mumble-cleanup-2stage-f16.gguf` (f16 source hash
+ * `7659e5dc4df164b50be3dce70d80b191fe7ac378a9e8e44b92e5e4313ef9ff82`, verified with the same
+ * shasum -a 256 discipline before quantizing), then re-hosted at
+ * `trevornk/mumble-cleanup-2stage-GGUF` so this entry downloads like every other one instead of
+ * requiring a manual `adb push`. The uploaded file was verified by downloading it back
+ * anonymously (no auth token, proving the repo is genuinely public) and confirming 352,154,912
+ * bytes hashing to the [sha256] below. That repo carries Apache-2.0, attribution to
+ * `amitashwini/mumble-cleanup-2stage` and `Qwen/Qwen2.5-0.5B-Instruct`, both source hashes, and
+ * the exact llama-quantize command needed to reproduce the file.
  */
 val MUMBLE_CLEANUP_Q4_0_MODEL = Model(
     name = "Mumble Cleanup 2-Stage (Q4_0)",
@@ -351,7 +354,7 @@ val MUMBLE_CLEANUP_Q4_0_MODEL = Model(
     recommended = false,
     sha256 = "000efc700d74636bc3885afe1d8f32dbb3fe813b8198dea79d8fd73efcc2c711",
     isLocalCleanup = true,
-    sourceUrl = null,
+    sourceUrl = "https://huggingface.co/trevornk/mumble-cleanup-2stage-GGUF/resolve/main/mumble-cleanup-2stage-q4_0.gguf",
     fileName = "mumble-cleanup-2stage-q4_0.gguf",
     localSystemPrompt = MUMBLE_CLEANUP_SYSTEM_PROMPT,
     // Apache-2.0 covers both the LoRA fine-tune and its Qwen2.5-0.5B-Instruct base.

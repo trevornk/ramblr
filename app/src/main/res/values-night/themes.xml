@@ -6,9 +6,12 @@
         <item name="colorPrimaryContainer">@color/primary_container</item>
         <item name="colorOnPrimaryContainer">@color/on_primary_container</item>
         
-        <!-- Status / Navigation Bars -->
+        <!-- Status / Navigation Bars. See values/themes.xml for why these are transparent rather
+             than omitted. Dark theme flips the icon tint to light, since the content showing
+             through the bars is now dark. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">?android:attr/colorBackground</item>
-        <item name="android:navigationBarColor">?android:attr/colorBackground</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>
