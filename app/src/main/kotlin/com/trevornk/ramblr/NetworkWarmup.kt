@@ -46,7 +46,11 @@ object NetworkWarmup {
             ProviderKind.OPENAI -> "api.openai.com"
             ProviderKind.ANTHROPIC -> "api.anthropic.com"
             ProviderKind.GEMINI -> "generativelanguage.googleapis.com"
-            ProviderKind.OMNIROUTE -> null // no fixed default host to guess at
+            // #110: unlike the other cloud providers there's no universal default host to guess
+            // at -- OmniRoute is a self-hosted gateway -- but when a dev has configured one via
+            // local.properties (see OmniRoute's kdoc), OmniRoute.BASE_URL is that real,
+            // build-time-known host and should be warmed exactly like everyone else's.
+            ProviderKind.OMNIROUTE -> if (OmniRoute.isConfigured) OmniRoute.BASE_URL.toHttpUrlOrNullHost() else null
             ProviderKind.LOCAL -> null
         }
     }

@@ -129,9 +129,60 @@ fun reconcileStreamingSpan(
  * this field" to insert relative to must check `isShowingHintText()` first, or the hint gets glued
  * onto the front of the dictated text with no separating space. Single shared choke point for that
  * check so it can't be missed at a new call site.
+ *
+ * [selectionStart]/[selectionEnd] are a second, independent line of defence added for #140
+ * (WhatsApp's "Message" composer). `isShowingHintText()` is only reliable for a placeholder rendered
+ * through the framework's own `android:hint` machinery. WhatsApp's composer instead seeds the
+ * placeholder as the field's own text: measured on-device it reports `text='Message'` with
+ * `isShowingHintText=false` AND `hintText=null`, so neither the #47 check nor any hint comparison
+ * can see it. What *does* distinguish it is the text selection: a placeholder has no cursor
+ * position inside it, so the node reports `-1/-1`, whereas a field holding real content always
+ * reports a real insertion point.
+ *
+ * Measured on a Pixel 10a across WhatsApp, Google Keep and Chrome (the full matrix is in #140).
+ * Placeholder states reported `-1/-1`; every field holding genuine text reported an index >= 0,
+ * including the cases most likely to be mistaken for a placeholder:
+ *  - a WhatsApp draft restored after navigating away and back  -> `0/0`
+ *  - Keep note title/body text in an unfocused node            -> `0/0`
+ *  - a web input prefilled via `value=` and programmatically focused, never touched by the
+ *    user, so no selection-changed event had ever fired for it -> `0/0`
+ *
+ * That last case is the specific hazard [resolveInsertionStart] documents below -- selection being
+ * unreported until a selection-changed event occurs -- which is why it was tested explicitly rather
+ * than assumed. It reports `0`, not `-1`, so it is not mistaken for a placeholder.
+ *
+ * The rule is deliberately conservative: it requires the node to be editable and focused, and the
+ * selection to be entirely absent, before overriding what the field claims to contain. An
+ * unfocused node is never blanked by this path, so a stray non-target node holding real text cannot
+ * be destroyed by it. If a future app reports no selection for genuine content, the failure mode is
+ * that the user's existing text is replaced rather than appended to -- hence the narrow guards.
+ *
+ * Note for maintainers: every parameter is required on purpose. Defaults here would let a new call
+ * site silently opt out of the #140 signals and quietly reinstate the bug; a compile error is the
+ * cheaper failure. An earlier attempt at #140 compared `text == hintText` instead. That was
+ * based on a UIAutomator dump of Keep's search field showing `text` and `hint` as an identical
+ * pair -- but UIAutomator does not expose `isShowingHintText`, and reading the real
+ * `AccessibilityNodeInfo` showed Keep already reports `isShowingHintText=true` there. The #47 check
+ * had always covered Keep; the hint comparison was redundant, did nothing for WhatsApp (which
+ * exposes no hint at all), and risked blanking a genuine draft that happened to equal the
+ * placeholder. It was removed in favour of the selection signal above.
  */
-fun resolveRealText(rawText: String?, isShowingHintText: Boolean): String =
-    if (isShowingHintText) "" else rawText.orEmpty()
+fun resolveRealText(
+    rawText: String?,
+    isShowingHintText: Boolean,
+    selectionStart: Int,
+    selectionEnd: Int,
+    isEditable: Boolean,
+    isFocused: Boolean,
+): String = when {
+    isShowingHintText -> ""
+    !rawText.isNullOrBlank() &&
+        isEditable &&
+        isFocused &&
+        selectionStart < 0 &&
+        selectionEnd < 0 -> ""
+    else -> rawText.orEmpty()
+}
 
 /**
  * Decides where the very first partial of a recording should be inserted (#42). Many Android
@@ -147,4 +198,36 @@ fun resolveInsertionStart(selStart: Int, selEnd: Int, currentTextLength: Int): I
     if (selStart < 0 || selEnd < 0) return currentTextLength
     if (selStart == 0 && selEnd == 0 && currentTextLength > 0) return currentTextLength
     return minOf(selStart, selEnd)
+}
+
+/**
+ * The span of existing text that a one-shot injection should overwrite: [start] inclusive,
+ * [endExclusive] exclusive, ready to hand straight to `String.replaceRange`.
+ */
+data class ReplacementSpan(val start: Int, val endExclusive: Int)
+
+/**
+ * The span that a one-shot (non-streaming) injection should overwrite, for the direct
+ * `ACTION_SET_TEXT` path.
+ *
+ * Start is delegated to [resolveInsertionStart] so this path can't disagree with the streaming path
+ * about where the cursor really is -- they previously did, and a WhatsApp draft restored by leaving
+ * and re-entering a chat (which reports `(0, 0)` with the caret visibly at the end) had dictation
+ * prepended rather than appended (#140).
+ *
+ * The end preserves a genuine ranged selection, so dictating over highlighted text still replaces
+ * it, which [resolveInsertionStart] alone would lose by collapsing to a single insertion point.
+ * When the start was overridden as unreliable, the span collapses to a pure insertion -- deleting a
+ * range computed from a selection we just declared untrustworthy would risk destroying real text.
+ * Both ends are clamped into `0..currentTextLength`, because a node can report a stale index past
+ * the end of its own current text and `replaceRange` would otherwise throw uncaught, taking down
+ * the whole accessibility service.
+ */
+fun resolveReplacementSpan(selStart: Int, selEnd: Int, currentTextLength: Int): ReplacementSpan {
+    val start = resolveInsertionStart(selStart, selEnd, currentTextLength)
+    val trusted = selStart >= 0 && selEnd >= 0 && start == minOf(selStart, selEnd)
+    val end = if (trusted) maxOf(selStart, selEnd) else start
+    val safeStart = start.coerceIn(0, currentTextLength)
+    val safeEnd = end.coerceIn(safeStart, currentTextLength)
+    return ReplacementSpan(safeStart, safeEnd)
 }

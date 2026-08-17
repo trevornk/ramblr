@@ -66,6 +66,11 @@ class NetworkWarmupTest {
         // is false in this test run -- mirroring OmniRouteTest, this pins the contract against
         // OmniRoute.isConfigured itself rather than a hardcoded assumption about its value, so the
         // same test is correct here and for any dev with a real local.properties override.
+        //
+        // NOTE: because isConfigured is false on CI, this case alone asserts emptySet() and passes
+        // against the unfixed `-> null` too -- it cannot catch a regression in the environment that
+        // actually gates merges. The override case below is the one with real teeth on CI; keep
+        // both, since only this one pins the BuildConfig-sourced branch a configured dev hits.
         val hosts = NetworkWarmup.hostsToWarm(
             transcriptionCandidates = emptyList(),
             cleanupChain = ProviderChain(listOf(entry(ProviderKind.OMNIROUTE))),
