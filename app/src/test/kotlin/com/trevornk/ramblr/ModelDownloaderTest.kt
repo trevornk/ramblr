@@ -65,6 +65,36 @@ class ModelDownloaderTest {
         assertTrue(MODEL_CATALOG.all { it.sizeMb > 0 })
     }
 
+    @Test fun `local cleanup catalog sizeMb is decimal MB matching each model's real byte size`() {
+        // requiredSpaceBytes multiplies sizeMb by 1_000_000, so these entries have to be decimal
+        // MB. MUMBLE_CLEANUP_Q4_0_MODEL was authored from the MiB figure (336 instead of 352),
+        // silently reserving ~19 MB less than the install needs. Pinning against the real
+        // published byte counts is what makes that class of mistake fail loudly instead of only
+        // showing up as a mid-download out-of-space error on someone's nearly-full phone.
+        val realBytes = mapOf(
+            // sha256 85e32858daafad55b7bcd6b97a1343ee0661188e8036f9862d14d6b563142f50
+            LOCAL_CLEANUP_MODEL.archive to 219_309_792L,
+            // sha256 000efc700d74636bc3885afe1d8f32dbb3fe813b8198dea79d8fd73efcc2c711
+            MUMBLE_CLEANUP_Q4_0_MODEL.archive to 352_154_912L,
+        )
+
+        for (model in LOCAL_CLEANUP_MODEL_CATALOG) {
+            val bytes = realBytes[model.archive]
+                ?: fail("no recorded byte size for ${model.archive}; add it when adding a catalog entry")
+            val expectedDecimalMb = ((bytes as Long) / 1_000_000L).toInt()
+            assertEquals(
+                "${model.archive} sizeMb should be decimal MB ($bytes bytes), not MiB",
+                expectedDecimalMb,
+                model.sizeMb,
+            )
+            // The reservation must actually cover the file it is reserving for.
+            assertTrue(
+                "${model.archive}: requiredSpaceBytes must exceed the real download size",
+                ModelDownloader.requiredSpaceBytes(model.sizeMb, model.isSingleFile) > bytes,
+            )
+        }
+    }
+
     @Test fun `catalog entries have a sourced sha256`() {
         // Every shipped model must carry a real checksum -- see Model.sha256 kdoc.
         // A null here isn't a bug, but it does mean download() refuses to install

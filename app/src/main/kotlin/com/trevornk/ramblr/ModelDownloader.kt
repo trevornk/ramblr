@@ -341,7 +341,12 @@ const val MUMBLE_CLEANUP_SYSTEM_PROMPT = "You are a transcript cleanup tool. You
 val MUMBLE_CLEANUP_Q4_0_MODEL = Model(
     name = "Mumble Cleanup 2-Stage (Q4_0)",
     archive = "mumble-cleanup-2stage-q4_0",
-    sizeMb = 336,
+    // Decimal MB (352,154,912 bytes / 1e6), matching [LOCAL_CLEANUP_MODEL]'s 219 and, more
+    // importantly, matching how [requiredSpaceBytes] actually consumes this field: it multiplies
+    // by 1_000_000, so a MiB-derived number silently under-reserves disk. This previously read
+    // 336 (the MiB figure), quietly asking for ~19 MB less headroom than the install really
+    // needs and risking a late-stage out-of-space failure on a nearly-full device.
+    sizeMb = 352,
     quality = "On-device cleanup · alternative fine-tune, A/B test",
     recommended = false,
     sha256 = "000efc700d74636bc3885afe1d8f32dbb3fe813b8198dea79d8fd73efcc2c711",
@@ -443,6 +448,12 @@ object ModelDownloader {
      * size is [sizeMb] megabytes. [singleFile] selects the rename-in-place headroom over the
      * extraction headroom, and [alreadyDownloadedBytes] credits a resumable partial file on disk
      * (previously a 90%-downloaded model still demanded the full multiple, #88).
+     *
+     * [sizeMb] is DECIMAL megabytes (bytes / 1_000_000), not MiB -- the multiplication below is
+     * the contract. Populating a catalog entry from a MiB figure under-reserves disk by ~4.9%
+     * per unit, which is how [MUMBLE_CLEANUP_Q4_0_MODEL] ended up asking for ~19 MB too little;
+     * [ModelDownloaderTest] pins every catalog entry against its real byte size to keep the two
+     * from drifting apart again.
      */
     fun requiredSpaceBytes(sizeMb: Int, singleFile: Boolean = false, alreadyDownloadedBytes: Long = 0L): Long {
         val base = sizeMb.toLong() * 1_000_000L
