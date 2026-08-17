@@ -45,7 +45,7 @@ val hasReleaseSigning = keystoreProperties.getProperty("storeFile") != null
 
 android {
     namespace = "com.trevornk.ramblr"
-    compileSdk = 34
+    compileSdk = 36
     ndkVersion = "27.2.12479018"
 
     signingConfigs {
@@ -97,7 +97,7 @@ android {
     defaultConfig {
         applicationId = "com.trevornk.ramblr"
         minSdk = 30
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 26
         versionName = "1.0.23"
 
@@ -236,7 +236,7 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.apache.commons:commons-compress:1.27.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha07")
-    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
 
     // Packages arm64-v8a/libonnxruntime.so into the APK; the sherpa-onnx JNI lib (built
     // from source) links against it at runtime. See onnxRuntimeVersion above.
