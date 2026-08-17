@@ -7,11 +7,22 @@
         <item name="colorOnPrimaryContainer">@color/on_primary_container</item>
         
         <!-- Status / Navigation Bars.
-             android:statusBarColor and android:navigationBarColor are deliberately absent: both
-             became no-ops in API 35, and under targetSdk 36 the bars are always transparent with
-             the app's own content drawn behind them. Keeping them would only imply control the
-             app no longer has. windowLightStatusBar still applies: it sets the icon tint, which
-             matters more now that the icons sit directly over app content. -->
+             Transparent, not a solid colour: under edge-to-edge the app's own content is drawn
+             behind the bars and shows through, so the bars pick up the real background on every
+             screen instead of a second colour that has to be kept in sync with it.
+
+             These are set rather than omitted because they are only no-ops from API 35. This app
+             still targets 34 and supports back to 30, where they very much apply, and leaving them
+             unset makes the framework fall back to colorPrimary, painting the status bar blue.
+             From API 35 they are ignored and the same transparent result is enforced by the
+             platform, so this is correct on both sides of the version split.
+
+             The windowLight*Bar flags set the icon tint, which matters more than usual here: the
+             icons now sit directly over app content rather than over a bar colour this theme
+             controls. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
     </style>
 </resources>
