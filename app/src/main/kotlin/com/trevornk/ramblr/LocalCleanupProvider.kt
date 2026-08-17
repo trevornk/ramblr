@@ -30,13 +30,30 @@ object LocalCleanupProvider {
 
     /**
      * The system prompt [CleanupWaterfallExecutor]'s LOCAL_LLM step should actually send for the
-     * currently [selectedModel] -- that model's own [Model.localSystemPrompt] when it declares
-     * one (a fine-tuned model like `mumble-cleanup-2stage` that requires its exact training
-     * prompt), otherwise [PostProcessor.SIMPLE_PROMPT] (the general-purpose default every other
-     * local model -- e.g. LFM2.5 -- is prompted with).
+     * currently [selectedModel]. Context-reading wrapper only -- the selection itself lives in
+     * [systemPromptFor], which is unit-testable without a Context (no Robolectric here, so
+     * pure-logic extraction is how the rest of this module stays covered).
      */
-    fun selectedSystemPrompt(ctx: Context): String =
-        selectedModel(ctx).localSystemPrompt ?: PostProcessor.SIMPLE_PROMPT
+    fun selectedSystemPrompt(ctx: Context, terms: List<String>): String =
+        systemPromptFor(selectedModel(ctx), terms)
+
+    /**
+     * The model's own [Model.localSystemPrompt] when it declares one (a fine-tuned model like
+     * `mumble-cleanup-2stage` that requires its exact training prompt), otherwise the
+     * general-purpose [PostProcessor.SIMPLE_PROMPT] -- always interpolated.
+     *
+     * The interpolation fixes a real on-device failure: only the *cloud* prompt was run through
+     * [PostProcessor.interpolateVocabulary] (in WhisperAccessibilityService), so LFM2.5 got a
+     * literal [PostProcessor.VOCABULARY_PLACEHOLDER] as its system prompt and echoed
+     * `{{vocabulary}}` back as the whole cleaned transcript. Doing it in the one function that
+     * picks the prompt means no caller can reintroduce it by forgetting. Fine-tuned prompts carry
+     * no placeholder, so this is a no-op for them (see [MUMBLE_CLEANUP_SYSTEM_PROMPT]).
+     */
+    fun systemPromptFor(model: Model, terms: List<String>): String =
+        PostProcessor.interpolateVocabulary(
+            model.localSystemPrompt ?: PostProcessor.SIMPLE_PROMPT,
+            terms,
+        )
 
     // A `run(text, prompt, modelPath, engine)` helper used to live here, kdoc-claiming the
     // Settings "Test" button drove local steps through it -- it never had a production caller
