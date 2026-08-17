@@ -348,6 +348,27 @@ tasks.register<JavaExec>("runEvalHarness") {
     classpath = tasks.named<Test>("testGithubDebugUnitTest").get().classpath
 }
 
+// Manual dev tool (#129) -- deliberately NOT wired into test/check/build/CI, exactly like
+// runEvalHarness above. Benchmarks the real production transcription path
+// (GeminiTranscriberClient.transcribe) against the audio fixture corpus in
+// app/src/test/resources/transcription_eval/, scoring WER/CER offline and writing a report to
+// the gitignored eval-reports/ directory.
+//
+// This one uploads AUDIO to Google and spends real credits -- see the "Transcription benchmark"
+// section of README.md before running it. GeminiTranscriptionBenchmark.kt declares only main()
+// (no @Test methods), so Gradle compiles it as a test source but JUnit never discovers it.
+//
+// Usage: GEMINI_API_KEY=... ./gradlew runGeminiTranscriptionBenchmark
+tasks.register<JavaExec>("runGeminiTranscriptionBenchmark") {
+    group = "verification"
+    description = "Manual dev tool: benchmarks GeminiTranscriberClient against the local audio " +
+        "fixture corpus and writes a WER/CER report. Uploads audio to Google and costs real " +
+        "API credits; not part of build/test/check."
+    dependsOn("compileGithubDebugUnitTestKotlin")
+    mainClass.set("com.trevornk.ramblr.tools.GeminiTranscriptionBenchmarkKt")
+    classpath = tasks.named<Test>("testGithubDebugUnitTest").get().classpath
+}
+
 // Native libs (#36/#37, F-Droid prep): both the speech-to-text lib (libsherpa-onnx-jni.so,
 // against the ../sherpa-onnx submodule) and the on-device LLM cleanup shim (against the
 // ../llama.cpp submodule) are built from source via the externalNativeBuild/cmake block in
