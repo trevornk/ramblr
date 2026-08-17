@@ -359,6 +359,46 @@ runs don't clutter the repo; if you want to share or archive a specific report, 
 To add a new prompt variant to the comparison, add it to the `PROMPT_REGISTRY` map at the top of
 `EvalHarness.kt`.
 
+### Transcription benchmark (audio → text)
+
+The prompt eval harness above measures the *cleanup* stage. A separate manual benchmark measures
+the *transcription* stage — how accurately Gemini turns recorded audio into text — by calling the
+real shipped `GeminiTranscriberClient.transcribe` (same request shape, headers, OkHttp client, and
+async callback as production) and scoring the transcripts against ground truth.
+
+- `app/src/test/kotlin/com/trevornk/ramblr/tools/GeminiTranscriptionBenchmark.kt` — the runner, a
+  standalone `main()`, **not** a JUnit test. Compiled by `make test` but never discovered or run
+  by it, exactly like `EvalHarness.kt`.
+- `TranscriptionMetrics.kt` / `TranscriptionEvalManifest.kt` / `WavPcm.kt` — the offline scoring,
+  manifest validation, and WAV→PCM conversion, each covered by real unit tests that *do* run in CI.
+- `app/src/test/resources/transcription_eval/` — the fixture corpus. **Shipped empty**: the
+  manifest is a zero-entry placeholder and no audio is checked in. Read that directory's
+  `README.md` before adding fixtures.
+
+⚠️ **Cost:** this calls the real Gemini API and spends real credits, once per fixture × model ×
+repetition. Cost is *not* reported: `GeminiTranscriberClient.Result` discards the response's
+`usageMetadata`, so token counts aren't observable from the production path, and the report
+deliberately does not estimate them.
+
+⚠️ **Privacy:** this **uploads audio to Google**. Recorded human speech is biometric data — never
+commit it to this repo, and never benchmark a recording you don't have consent to use. Prefer
+synthetic TTS fixtures. See `app/src/test/resources/transcription_eval/README.md`.
+
+```bash
+export GEMINI_API_KEY=AIza...                                     # never committed; no .env is read
+./gradlew runGeminiTranscriptionBenchmark                          # defaults to the catalog's Gemini models
+GEMINI_TRANSCRIPTION_MODELS=gemini-3.5-flash ./gradlew runGeminiTranscriptionBenchmark
+GEMINI_TRANSCRIPTION_REPETITIONS=3 ./gradlew runGeminiTranscriptionBenchmark   # expose run-to-run variance
+TRANSCRIPTION_EVAL_DIR=/path/to/private/corpus ./gradlew runGeminiTranscriptionBenchmark
+```
+
+Each run writes a Markdown and a JSON report to the gitignored `eval-reports/`, recording the
+commit SHA, UTC timestamp, exact model ids, repetition count, call timeout, manifest checksum,
+every raw transcript/error/latency, and aggregated micro-WER/CER, exact-match rates, success rate,
+failure categories, and p50/p95/mean latency. The run refuses to start — rather than quietly
+substituting a default — if the API key is missing, the model list is empty, or any fixture fails
+validation.
+
 ### Tests
 
 ```bash
