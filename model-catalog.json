@@ -1,112 +1,142 @@
 [
   {
+    "useCase": "CLEANUP",
+    "tier": "RECOMMENDED",
+    "costPer1MInputUsd": 0.05,
     "provider": "OPENAI",
     "modelId": "gpt-5.4-nano",
     "displayName": "GPT-5.4 Nano",
-    "description": "Fastest, cheapest -- benchmark-confirmed indistinguishable from Mini for cleanup quality.",
-    "tier": "RECOMMENDED",
-    "useCase": "CLEANUP",
-    "costPer1MInputUsd": 0.05,
-    "costPer1MOutputUsd": 0.40
+    "costPer1MOutputUsd": 0.4,
+    "description": "Fastest, cheapest \u2014 benchmark-confirmed indistinguishable from Mini for cleanup quality."
   },
   {
+    "useCase": "CLEANUP",
+    "tier": "GOOD",
+    "costPer1MInputUsd": 0.25,
     "provider": "OPENAI",
     "modelId": "gpt-5.4-mini",
     "displayName": "GPT-5.4 Mini",
-    "description": "One tier up from Nano -- same real-world cleanup quality, costs more.",
-    "tier": "GOOD",
-    "useCase": "CLEANUP",
-    "costPer1MInputUsd": 0.25,
-    "costPer1MOutputUsd": 2.00
+    "costPer1MOutputUsd": 2,
+    "description": "One tier up from Nano \u2014 same real-world cleanup quality, costs more."
   },
   {
-    "provider": "GEMINI",
-    "modelId": "gemini-2.5-flash-lite",
-    "displayName": "Gemini 2.5 Flash-Lite",
-    "description": "Cheapest Gemini tier -- benchmark-confirmed on par with Flash for cleanup; handles audio transcription too.",
+    "useCase": "TRANSCRIPTION",
     "tier": "RECOMMENDED",
-    "useCase": "BOTH",
-    "costPer1MInputUsd": 0.10,
-    "costPer1MOutputUsd": 0.40
+    "costPer1MInputUsd": 0,
+    "provider": "OPENAI",
+    "modelId": "gpt-transcribe",
+    "displayName": "GPT-Transcribe",
+    "costPer1MOutputUsd": 0,
+    "description": "OpenAI's newest ASR model (2026-07) \u2014 more accurate than GPT-4o Transcribe on OpenAI's and independent benchmarks, and 25% cheaper per minute."
   },
   {
-    "provider": "GEMINI",
-    "modelId": "gemini-2.5-flash",
-    "displayName": "Gemini 2.5 Flash",
-    "description": "One tier up from Flash-Lite -- same real-world cleanup quality, costs more.",
+    "useCase": "TRANSCRIPTION",
     "tier": "GOOD",
-    "useCase": "BOTH",
-    "costPer1MInputUsd": 0.30,
-    "costPer1MOutputUsd": 2.50
+    "costPer1MInputUsd": 0,
+    "provider": "OPENAI",
+    "modelId": "gpt-4o-transcribe",
+    "displayName": "GPT-4o Transcribe",
+    "costPer1MOutputUsd": 0,
+    "description": "Previous default \u2014 solid and Ramblr-benchmark-proven, but GPT-Transcribe measures more accurate and costs less."
   },
   {
+    "useCase": "TRANSCRIPTION",
+    "tier": "ADVANCED",
+    "costPer1MInputUsd": 0,
+    "provider": "OPENAI",
+    "modelId": "whisper-1",
+    "displayName": "Whisper-1",
+    "costPer1MOutputUsd": 0,
+    "description": "OpenAI's original ASR model \u2014 highest error rate of the three; only pick it if you specifically need its legacy output formats."
+  },
+  {
+    "useCase": "BOTH",
+    "tier": "RECOMMENDED",
+    "costPer1MInputUsd": 0.25,
+    "provider": "GEMINI",
+    "modelId": "gemini-3.1-flash-lite",
+    "displayName": "Gemini 3.1 Flash-Lite",
+    "costPer1MOutputUsd": 1.5,
+    "description": "Cheapest Gemini tier \u2014 Google's documented replacement for 2.5 Flash-Lite (which is deprecating); improved audio input for ASR, handles transcription too."
+  },
+  {
+    "useCase": "BOTH",
+    "tier": "GOOD",
+    "costPer1MInputUsd": 1.5,
+    "provider": "GEMINI",
+    "modelId": "gemini-3.5-flash",
+    "displayName": "Gemini 3.5 Flash",
+    "costPer1MOutputUsd": 9,
+    "description": "Google's documented replacement for 2.5 Flash (which is deprecating) \u2014 meaningfully pricier than Flash-Lite (~6x), not a small step up; pick deliberately, not as a default."
+  },
+  {
+    "useCase": "CLEANUP",
+    "tier": "GOOD",
+    "costPer1MInputUsd": 1,
     "provider": "ANTHROPIC",
     "modelId": "claude-haiku-4-5-20251001",
     "displayName": "Claude Haiku 4.5",
-    "description": "Legitimate power-user option if you already have Claude credits -- not defaulted: no transcription capability, and cleanup quality doesn't clearly beat OpenAI/Gemini's cheap tiers.",
-    "tier": "GOOD",
-    "useCase": "CLEANUP",
-    "costPer1MInputUsd": 1.00,
-    "costPer1MOutputUsd": 5.00
+    "costPer1MOutputUsd": 5,
+    "description": "Legitimate power-user option if you already have Claude credits \u2014 not defaulted: no transcription capability, and cleanup quality doesn't clearly beat OpenAI/Gemini's cheap tiers."
   },
   {
+    "useCase": "CLEANUP",
+    "tier": "RECOMMENDED",
+    "costPer1MInputUsd": 0.1,
     "provider": "OMNIROUTE",
     "modelId": "gemini/gemini-flash-lite-latest",
     "displayName": "OmniRoute: Gemini Flash-Lite (auto-upgrading)",
-    "description": "Cheapest, auto-upgrading -- mirrors direct Gemini's own recommended flash-lite tier so you don't overpay just because you're using OmniRoute. Recommended default cleanup path.",
-    "tier": "RECOMMENDED",
-    "useCase": "CLEANUP",
-    "costPer1MInputUsd": 0.10,
-    "costPer1MOutputUsd": 0.40
+    "costPer1MOutputUsd": 0.4,
+    "description": "Cheapest, auto-upgrading \u2014 mirrors direct Gemini's own recommended flash-lite tier so you don't overpay just because you're using OmniRoute. Recommended default cleanup path."
   },
   {
+    "useCase": "CLEANUP",
+    "tier": "GOOD",
+    "costPer1MInputUsd": 0.75,
     "provider": "OMNIROUTE",
     "modelId": "cx/gpt-5.4-mini",
     "displayName": "OmniRoute: GPT-5.4 Mini",
-    "description": "OmniRoute's cheapest available OpenAI-family model (no nano-tier route exists through OmniRoute today). Pinned, not an auto-upgrading alias.",
-    "tier": "GOOD",
-    "useCase": "CLEANUP",
-    "costPer1MInputUsd": 0.75,
-    "costPer1MOutputUsd": 4.50
+    "costPer1MOutputUsd": 4.5,
+    "description": "OmniRoute's cheapest available OpenAI-family model (no nano-tier route exists through OmniRoute today). Pinned, not an auto-upgrading alias."
   },
   {
+    "useCase": "CLEANUP",
+    "tier": "GOOD",
+    "costPer1MInputUsd": 1,
     "provider": "OMNIROUTE",
     "modelId": "cc/claude-haiku-4-5-20251001",
     "displayName": "OmniRoute: Claude Haiku 4.5",
-    "description": "Mirrors direct Anthropic's Haiku entry -- good cleanup quality, cheap. Pinned, not an auto-upgrading alias (no Haiku-specific \"-latest\"/\"auto/\" route exists on OmniRoute today).",
-    "tier": "GOOD",
-    "useCase": "CLEANUP",
-    "costPer1MInputUsd": 1.00,
-    "costPer1MOutputUsd": 5.00
+    "costPer1MOutputUsd": 5,
+    "description": "Mirrors direct Anthropic's Haiku entry \u2014 good cleanup quality, cheap. Pinned, not an auto-upgrading alias (no Haiku-specific \"-latest\"/\"auto/\" route exists on OmniRoute today)."
   },
   {
+    "useCase": "CLEANUP",
+    "tier": "ADVANCED",
+    "costPer1MInputUsd": 1.25,
     "provider": "OMNIROUTE",
     "modelId": "gemini/gemini-pro-latest",
     "displayName": "OmniRoute: Gemini Pro (auto-upgrading)",
-    "description": "Always resolves to Google's current Pro-tier model server-side -- higher cost, for when you deliberately want the strongest available cleanup quality over the cheap default.",
-    "tier": "ADVANCED",
-    "useCase": "CLEANUP",
-    "costPer1MInputUsd": 1.25,
-    "costPer1MOutputUsd": 10.00
+    "costPer1MOutputUsd": 10,
+    "description": "Always resolves to Google's current Pro-tier model server-side \u2014 higher cost, for when you deliberately want the strongest available cleanup quality over the cheap default."
   },
   {
+    "useCase": "CLEANUP",
+    "tier": "ADVANCED",
+    "costPer1MInputUsd": 3,
     "provider": "OMNIROUTE",
     "modelId": "auto/claude-sonnet",
     "displayName": "OmniRoute: Claude Sonnet (auto-upgrading)",
-    "description": "Always resolves to Anthropic's current Sonnet-tier model server-side -- premium, not the cost-efficient default.",
-    "tier": "ADVANCED",
-    "useCase": "CLEANUP",
-    "costPer1MInputUsd": 3.00,
-    "costPer1MOutputUsd": 15.00
+    "costPer1MOutputUsd": 15,
+    "description": "Always resolves to Anthropic's current Sonnet-tier model server-side \u2014 premium, not the cost-efficient default."
   },
   {
+    "useCase": "CLEANUP",
+    "tier": "ADVANCED",
+    "costPer1MInputUsd": 15,
     "provider": "OMNIROUTE",
     "modelId": "auto/claude-opus",
     "displayName": "OmniRoute: Claude Opus (auto-upgrading)",
-    "description": "Always resolves to Anthropic's current Opus-tier model server-side -- the priciest OmniRoute option.",
-    "tier": "ADVANCED",
-    "useCase": "CLEANUP",
-    "costPer1MInputUsd": 15.00,
-    "costPer1MOutputUsd": 75.00
+    "costPer1MOutputUsd": 75,
+    "description": "Always resolves to Anthropic's current Opus-tier model server-side \u2014 the priciest OmniRoute option."
   }
 ]

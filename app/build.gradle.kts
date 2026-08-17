@@ -178,7 +178,21 @@ android {
 
     buildFeatures { buildConfig = true }
 
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                // Forward the opt-in regeneration flag through to the test JVM. Without this,
+                // `-Dramblr.writeModelCatalog=true` only reaches the Gradle daemon and
+                // ModelCatalogFileSyncTest's regeneration branch silently never fires, leaving
+                // you to hand-edit the very file the test exists to keep in sync.
+                it.systemProperty(
+                    "ramblr.writeModelCatalog",
+                    providers.systemProperty("ramblr.writeModelCatalog").getOrElse("false"),
+                )
+            }
+        }
+    }
 
     // Names the built APK "Ramblr-<versionName>-<flavor>-<buildType>.apk" (e.g.
     // Ramblr-1.0.10-github-debug.apk) instead of Gradle's generic default
