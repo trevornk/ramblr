@@ -334,11 +334,14 @@ explanations, headers, or comments about your edits.
     }
 
     /**
-     * Provider-chain entry point for Phase 2 (#95). A single OPENAI entry deliberately runs through
-     * the same simple [process] path, with the OpenAI secret resolved from [ProviderCredentialStore]
-     * by the caller. Any real multi-step chain is adapted to [CleanupWaterfall] and executed by
-     * [CleanupWaterfallExecutor] unchanged, preserving its fail-fast grouping, cursor resume, and
-     * bounded local-inference deadline behavior.
+     * Provider-chain entry point for Phase 2 (#95). Every chain -- including a single OPENAI
+     * entry -- is adapted to [CleanupWaterfall] and executed by [CleanupWaterfallExecutor],
+     * preserving its fail-fast grouping, cursor resume, timeout discipline, and bounded
+     * local-inference deadline behavior (#105: a one-step waterfall was previously special-cased
+     * to call [process] directly via [NetworkClients.shared]'s much longer timeouts, bypassing
+     * [CleanupWaterfallExecutor]'s tighter [CleanupStepTimeouts] and hard cap; see
+     * [CleanupWaterfallPlanner.groupConsecutive] for why a single-step waterfall is already
+     * handled correctly here without any special case).
      */
     fun processProviderChain(
         text: String,
@@ -356,25 +359,16 @@ explanations, headers, or comments about your edits.
         // [CleanupWaterfallExecutor.execute] -- see its own kdoc on these same param names.
         benchmarkContext: android.content.Context? = null,
         benchmarkCorrelationId: String? = null,
+        // Test seam only, mirroring [CleanupWaterfallExecutor.execute]'s own default: production
+        // callers never pass this. Lets a unit test assert that every chain -- including the
+        // single-OpenAI one that #105 used to divert past the executor -- actually reaches
+        // CleanupWaterfallExecutor, without making a network call.
+        transport: CleanupHttpTransport = RealCleanupHttpTransport,
         callback: (Result) -> Unit,
     ) {
         val waterfall = ProviderChainRuntime.cleanupWaterfallFor(chain)
         if (waterfall.steps.isEmpty()) {
             callback(Result(null, "No cleanup steps configured"))
-            return
-        }
-
-        if (ProviderChainRuntime.isSingleOpenAiCleanup(chain)) {
-            val entry = chain.capableEntriesFor(needsTranscription = false).first()
-            process(
-                text = text,
-                prompt = prompt,
-                apiKey = credentialLookup(ProviderKind.OPENAI),
-                cancelHolder = cancelHolder,
-                baseUrl = entry.baseUrlOverride ?: DEFAULT_BASE_URL,
-                model = entry.model,
-                callback = callback,
-            )
             return
         }
 
@@ -385,6 +379,7 @@ explanations, headers, or comments about your edits.
             cursor = cursor,
             cancelHolder = cancelHolder,
             credentialLookup = { slot -> credentialLookup(ProviderChainRuntime.providerKindForCleanupSlot(slot)) },
+            transport = transport,
             localModelPath = localModelPath,
             localPrompt = localPrompt,
             benchmarkContext = benchmarkContext,

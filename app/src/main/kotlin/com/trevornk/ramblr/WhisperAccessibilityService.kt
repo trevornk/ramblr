@@ -2785,10 +2785,12 @@ class WhisperAccessibilityService : AccessibilityService() {
                 return
             }
 
-            // The simple single-OpenAI chain fails before making a network call if its one required
-            // credential is missing. Real multi-step chains resolve credentials inside
+            // A single-OpenAI chain has exactly one required credential and no other step to fall
+            // through to, so a missing key is worth failing fast on here, before the executor makes
+            // a network call it can only fail. Real multi-step chains resolve credentials inside
             // CleanupWaterfallExecutor and can fall through past an unconfigured cloud step to
-            // another provider (including LOCAL).
+            // another provider (including LOCAL). Note this is only a pre-flight check -- since
+            // #105 every chain, this one included, is executed by CleanupWaterfallExecutor.
             if (!ProviderChainRuntime.shouldUseCleanupExecutor(providerChain) &&
                 ProviderCredentialStore.get(this, ProviderKind.OPENAI).isBlank()) {
                 handler.post {

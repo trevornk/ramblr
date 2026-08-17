@@ -37,8 +37,10 @@ object ProviderChainRuntime {
         return cleanupEntries.size == 1 && cleanupEntries[0].kind == ProviderKind.OPENAI
     }
 
-    /** True only when [chain] is exactly one OPENAI entry -- the simple single-provider path
-     *  that bypasses [CleanupWaterfallExecutor] entirely (see [PostProcessor.processProviderChain]). */
+    /** True unless [chain] is exactly one OPENAI entry. Since #105 this no longer selects between
+     *  execution paths -- every chain runs through [CleanupWaterfallExecutor] -- it only marks the
+     *  single-credential chain that [WhisperAccessibilityService] pre-flights for a missing key,
+     *  because it has no second step to fall through to. */
     fun shouldUseCleanupExecutor(chain: ProviderChain): Boolean = !isSingleOpenAiCleanup(chain)
 
     /** Maps executor credential slots to unified provider credential kinds. */

@@ -57,14 +57,10 @@ class ProviderChainRuntimeCleanupAdapterTest {
     }
 
     @Test fun `single OpenAI cleanup chain produces a one-step waterfall for CleanupWaterfallExecutor`() {
-        // Regression test for #105: PostProcessor.processProviderChain used to special-case
-        // isSingleOpenAiCleanup(chain) to call PostProcessor.process() directly (with much
-        // longer NetworkClients.shared timeouts), bypassing CleanupWaterfallExecutor's tighter
-        // CleanupStepTimeouts/CLEANUP_WATERFALL_HARD_CAP_MS. That special case is gone now --
-        // every chain, including this one, is executed via CleanupWaterfallExecutor.execute --
-        // so this pins the underlying invariant that made removing the special case safe: a
-        // single-OpenAI chain is exactly a one-step waterfall, which
-        // CleanupWaterfallPlanner.groupConsecutive already handles as its own single group.
+        // Companion to #105: a single-OpenAI chain is exactly a one-step waterfall, which
+        // CleanupWaterfallPlanner.groupConsecutive already handles as its own single group. That
+        // invariant is what made removing processProviderChain's special case safe. This asserts
+        // only the shape -- see PostProcessorProviderChainRoutingTest for the routing itself.
         val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "gpt-4o-mini")))
 
         val waterfall = ProviderChainRuntime.cleanupWaterfallFor(chain)
