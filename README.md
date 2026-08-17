@@ -389,8 +389,25 @@ export GEMINI_API_KEY=AIza...                                     # never commit
 ./gradlew runGeminiTranscriptionBenchmark                          # defaults to the catalog's Gemini models
 GEMINI_TRANSCRIPTION_MODELS=gemini-3.5-flash ./gradlew runGeminiTranscriptionBenchmark
 GEMINI_TRANSCRIPTION_REPETITIONS=3 ./gradlew runGeminiTranscriptionBenchmark   # expose run-to-run variance
+GEMINI_TRANSCRIPTION_VOCABULARY= ./gradlew runGeminiTranscriptionBenchmark     # measure without vocab biasing
 TRANSCRIPTION_EVAL_DIR=/path/to/private/corpus ./gradlew runGeminiTranscriptionBenchmark
 ```
+
+**Production fidelity.** The benchmark sends the same *prompt* a real dictation sends, not just the
+same transport. Production interpolates the user's personal vocabulary into the transcription
+prompt (`GeminiTranscriberClient.transcribePrompt`, #114 part 2) and prefs are seeded with
+`VocabularyTerms.DEFAULTS` on first run, so the benchmark uses those defaults unless
+`GEMINI_TRANSCRIPTION_VOCABULARY` is set — setting it to the empty string explicitly disables
+vocabulary biasing (a legitimate experiment), and both choices are recorded in the report header.
+It also applies production's pre-flight `canInlineAudio` size gate: a fixture whose PCM exceeds
+`GeminiTranscriberClient.MAX_INLINE_PCM_BYTES` is skipped and bucketed separately, because on a
+real device that recording falls through to the next transcription candidate instead of reaching
+Gemini at all.
+
+Remaining known divergences from a real dictation, none of them fixable offline: the app runs on
+Android with a device-resident recording (this runs on the JVM from a `.wav` fixture), the
+compressed-upload path (#109) sends `audio/aac` from a `MediaCodec` encode rather than
+`audio/wav`, and cost is not reported at all (see above).
 
 Each run writes a Markdown and a JSON report to the gitignored `eval-reports/`, recording the
 commit SHA, UTC timestamp, exact model ids, repetition count, call timeout, manifest checksum,
