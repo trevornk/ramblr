@@ -50,14 +50,14 @@ class ModelLicenseTest {
      * optional-cleanup-only (never a core transcription path) and consent-gated.
      *
      * LFM2.5-350M is the one known exception and is still `recommended`. That is not ideal --
-     * the F-Droid-correct end state is a *free* default -- but the free alternative
-     * ([MUMBLE_CLEANUP_Q4_0_MODEL], Apache-2.0, measurably faster on-device at ~2.9s) has
-     * `sourceUrl = null`: it was quantized locally and never hosted anywhere, so it physically
-     * cannot be downloaded, and promoting it to default today would leave on-device cleanup
-     * broken for every user who can't `adb push` a 336 MB file. Hosting it is the actual fix and
-     * is tracked separately; until then the non-free default is disclosed in the store
-     * description, declared as a NonFreeAssets anti-feature, and gated behind explicit license
-     * consent at [ModelDownloadWorker.enqueue].
+     * the F-Droid-correct end state is a *free* default -- but it is no longer blocked on hosting:
+     * [MUMBLE_CLEANUP_Q4_0_MODEL] (Apache-2.0, measurably faster on-device at ~2.9s, and ahead on
+     * the offline cleanup-quality A/B) is now downloadable from a pinned Hugging Face URL like
+     * every other entry. Flipping which model is `recommended` is a user-visible default change
+     * that needs on-device confirmation of the winner first, so it is deliberately NOT bundled
+     * with the hosting work and remains tracked in #134. Until that flip, the non-free default is
+     * disclosed in the store description, declared as a NonFreeAssets anti-feature, and gated
+     * behind explicit license consent at [ModelDownloadWorker.enqueue].
      */
     @Test fun `the only non-free model is the known optional cleanup exception`() {
         val all = MODEL_CATALOG + STREAMING_MODEL_CATALOG + LOCAL_CLEANUP_MODEL_CATALOG + VAD_MODEL_CATALOG
