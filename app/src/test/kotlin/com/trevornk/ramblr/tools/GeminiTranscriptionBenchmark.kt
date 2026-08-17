@@ -2,6 +2,7 @@ package com.trevornk.ramblr.tools
 
 import com.trevornk.ramblr.GeminiTranscriberClient
 import com.trevornk.ramblr.InFlightCall
+import com.trevornk.ramblr.VocabularyTerms
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -50,6 +51,19 @@ private const val REPETITIONS_ENV = "GEMINI_TRANSCRIPTION_REPETITIONS"
 /** Corpus directory override, for keeping a private fixture corpus outside the repo. */
 private const val EVAL_DIR_ENV = "TRANSCRIPTION_EVAL_DIR"
 
+/**
+ * Comma-separated personal-vocabulary override. Production interpolates the user's vocabulary
+ * into the transcription prompt itself ([GeminiTranscriberClient.transcribePrompt], #114 part 2),
+ * so a benchmark that omitted it would measure a prompt no shipped build ever sends.
+ *
+ * Unset  -> [VocabularyTerms.DEFAULTS], the exact list prefs are seeded with on first run
+ *           ([VocabularyTerms.DEFAULT_SERIALIZED]), i.e. what a real user actually has.
+ * Set to "" -> explicitly no terms, for measuring what vocabulary biasing is worth.
+ *
+ * Both are explicit and both are recorded in the report header; neither is a silent substitution.
+ */
+private const val VOCABULARY_ENV = "GEMINI_TRANSCRIPTION_VOCABULARY"
+
 private const val DEFAULT_EVAL_DIR = "app/src/test/resources/transcription_eval"
 
 /**
@@ -74,6 +88,8 @@ data class BenchmarkConfig(
     val modelIds: List<String>,
     val repetitions: Int,
     val callTimeoutSeconds: Long,
+    /** Vocabulary terms interpolated into the production transcription prompt (see [VOCABULARY_ENV]). */
+    val vocabularyTerms: List<String> = emptyList(),
 ) {
     val totalCalls: Int get() = fixtures.size * modelIds.size * repetitions
 }
@@ -88,6 +104,7 @@ data class BenchmarkArgs(
     val modelsRaw: String?,
     val repetitionsRaw: String?,
     val evalDirRaw: String?,
+    val vocabularyRaw: String? = null,
 )
 
 /**
@@ -119,6 +136,17 @@ fun resolveConfig(args: BenchmarkArgs): BenchmarkConfig {
         else -> raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
     }
     problems.addAll(TranscriptionEvalManifest.validateModelIds(modelIds))
+
+    // Production always sends the user's personal vocabulary in the transcription prompt when
+    // prefs hold any terms, and prefs are seeded with VocabularyTerms.DEFAULTS on first run. An
+    // unset override therefore means "what a real user actually has", not "no terms" — omitting
+    // them would benchmark a prompt no shipped build ever sends. The comma-separated env value is
+    // routed through the production parser (via its newline wire format) so trimming, blank-drop
+    // and case-insensitive dedupe match the app exactly rather than being reimplemented here.
+    val vocabularyTerms: List<String> = when (val raw = args.vocabularyRaw) {
+        null -> VocabularyTerms.DEFAULTS
+        else -> VocabularyTerms.parse(raw.split(",").joinToString("\n"))
+    }
 
     val evalDir = File(args.evalDirRaw?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_EVAL_DIR)
     val manifestFile = File(evalDir, "manifest.json")
@@ -159,6 +187,7 @@ fun resolveConfig(args: BenchmarkArgs): BenchmarkConfig {
         modelIds = modelIds,
         repetitions = repetitions,
         callTimeoutSeconds = CALL_TIMEOUT_SECONDS,
+        vocabularyTerms = vocabularyTerms,
     )
 }
 
@@ -180,6 +209,9 @@ data class CallOutcome(
  *  text because that's all the production Result type exposes — no status code survives it. */
 fun categorizeFailure(error: String?): String = when {
     error == null -> "none"
+    // Checked before the generic buckets: this one is produced locally by the production size
+    // gate, not by the API, so it must never be lumped in with a transport failure.
+    error.contains("too large for Gemini", ignoreCase = true) -> "skipped: exceeds inline audio limit"
     error.contains("timeout", ignoreCase = true) || error.contains("timed out", ignoreCase = true) -> "timeout"
     error.contains("quota", ignoreCase = true) || error.contains("rate limit", ignoreCase = true) ||
         error.contains("RESOURCE_EXHAUSTED", ignoreCase = true) -> "quota/rate-limit"
@@ -192,6 +224,21 @@ fun categorizeFailure(error: String?): String = when {
     else -> "other"
 }
 
+/**
+ * Mirrors production's pre-flight inline-audio size gate
+ * ([WhisperAccessibilityService]'s `ProviderKind.GEMINI` branch, which calls
+ * [GeminiTranscriberClient.canInlineAudio] on the PCM length and falls through to the next
+ * transcription candidate above the threshold). A fixture larger than
+ * [GeminiTranscriberClient.MAX_INLINE_PCM_BYTES] would never reach Gemini on a real device, so
+ * scoring it here would report accuracy for a call production refuses to make. Returns the
+ * production-shaped rejection reason, or null when the clip is within the inline budget.
+ */
+fun inlineAudioRejection(pcmBytes: Long): String? =
+    if (GeminiTranscriberClient.canInlineAudio(pcmBytes)) null
+    else "Recording too large for Gemini transcription ($pcmBytes bytes > " +
+        "${GeminiTranscriberClient.MAX_INLINE_PCM_BYTES} inline limit); production would fall " +
+        "through to the next transcription candidate rather than call Gemini"
+
 /** Blocking wrapper around the async production client: enqueues the real call and waits on a
  *  latch with a hard bound, so one hung callback can't stall a whole benchmark run. */
 private fun transcribeBlocking(
@@ -199,6 +246,7 @@ private fun transcribeBlocking(
     apiKey: String,
     model: String,
     timeoutSeconds: Long,
+    vocabularyTerms: List<String>,
 ): Pair<GeminiTranscriberClient.Result, Long> {
     val latch = CountDownLatch(1)
     // AtomicReference rather than a plain var: the callback runs on an OkHttp dispatcher thread,
@@ -212,6 +260,9 @@ private fun transcribeBlocking(
         apiKey = apiKey,
         model = model,
         cancelHolder = holder,
+        // Production interpolates the user's vocabulary into the transcription prompt (#114
+        // part 2); passing it here keeps the benchmarked prompt byte-identical to the shipped one.
+        vocabularyTerms = vocabularyTerms,
         callback = { r ->
             result.set(r)
             latch.countDown()
@@ -271,7 +322,13 @@ fun renderMarkdown(report: BenchmarkReport): String {
     sb.append("- Repetitions per fixture/model: ${cfg.repetitions}\n")
     sb.append("- Per-call timeout: ${cfg.callTimeoutSeconds}s (plus the production OkHttp client's own timeouts)\n")
     sb.append("- Manifest: `${cfg.manifestFile.path}` (sha256 `${cfg.manifestChecksum}`)\n")
-    sb.append("- Fixtures: ${cfg.fixtures.size}, total calls: ${cfg.totalCalls}\n\n")
+    sb.append("- Fixtures: ${cfg.fixtures.size}, total calls: ${cfg.totalCalls}\n")
+    sb.append(
+        "- Vocabulary terms in prompt: ${cfg.vocabularyTerms.size}" +
+            if (cfg.vocabularyTerms.isEmpty()) " (explicitly disabled)\n"
+            else " — ${cfg.vocabularyTerms.joinToString(", ")}\n"
+    )
+    sb.append("- Inline-audio gate: fixtures over ${GeminiTranscriberClient.MAX_INLINE_PCM_BYTES} PCM bytes are skipped, as production does\n\n")
     sb.append(
         "> Cost accounting is unavailable: `GeminiTranscriberClient.Result` discards the response's " +
             "`usageMetadata`, so token counts are not observable from the production path. No cost " +
@@ -352,6 +409,8 @@ fun renderJson(report: BenchmarkReport): String {
     root.put("manifestSha256", cfg.manifestChecksum)
     root.put("fixtureCount", cfg.fixtures.size)
     root.put("totalCalls", cfg.totalCalls)
+    root.put("vocabularyTerms", JSONArray(cfg.vocabularyTerms))
+    root.put("inlineAudioLimitBytes", GeminiTranscriberClient.MAX_INLINE_PCM_BYTES)
     root.put("costAccounting", "unavailable: GeminiTranscriberClient.Result discards usageMetadata")
 
     val perModel = JSONArray()
@@ -433,6 +492,7 @@ fun main() {
                 modelsRaw = System.getenv(MODELS_ENV),
                 repetitionsRaw = System.getenv(REPETITIONS_ENV),
                 evalDirRaw = System.getenv(EVAL_DIR_ENV),
+                vocabularyRaw = System.getenv(VOCABULARY_ENV),
             )
         )
     } catch (e: TranscriptionEvalManifest.ManifestException) {
@@ -446,6 +506,11 @@ fun main() {
         "Running ${config.fixtures.size} fixture(s) x ${config.modelIds.size} model(s) x " +
             "${config.repetitions} repetition(s) = ${config.totalCalls} call(s) against the real " +
             "Gemini API. This uploads audio to Google and spends real credits."
+    )
+    println(
+        "Prompt vocabulary: ${config.vocabularyTerms.size} term(s)" +
+            if (config.vocabularyTerms.isEmpty()) " (explicitly disabled via $VOCABULARY_ENV)."
+            else " — ${config.vocabularyTerms.joinToString(", ")}"
     )
 
     val outcomes = mutableListOf<CallOutcome>()
@@ -463,10 +528,22 @@ fun main() {
             continue
         }
         try {
+            // Production's size gate runs on the raw PCM, before any Gemini call is made.
+            val rejection = inlineAudioRejection(pcmFile.length())
+            if (rejection != null) {
+                System.err.println("Skipping fixture '${fixture.id}': $rejection")
+                config.modelIds.forEach { model ->
+                    for (rep in 1..config.repetitions) {
+                        outcomes.add(CallOutcome(fixture.id, model, rep, null, rejection, 0))
+                    }
+                }
+                continue
+            }
             for (model in config.modelIds) {
                 for (rep in 1..config.repetitions) {
                     print("  ${fixture.id} x $model rep $rep ... ")
-                    val (result, latencyMs) = transcribeBlocking(pcmFile, key, model, config.callTimeoutSeconds)
+                    val (result, latencyMs) =
+                        transcribeBlocking(pcmFile, key, model, config.callTimeoutSeconds, config.vocabularyTerms)
                     println(if (result.error == null) "ok (${latencyMs}ms)" else "error: ${result.error} (${latencyMs}ms)")
                     outcomes.add(CallOutcome(fixture.id, model, rep, result.text, result.error, latencyMs))
                 }
