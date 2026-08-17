@@ -163,17 +163,199 @@ class StreamingPreviewTest {
     }
 
     // --- resolveRealText (hint-text-is-not-content, #47) ---
+    //
+    // The #47 cases below predate the #140 selection signals, so they pin a plain focused field
+    // holding a real cursor -- the state in which only isShowingHintText decides the outcome.
+
+    /** A focused editable field with a real cursor: the #47 state, before #140's signals apply. */
+    private fun realText(rawText: String?, isShowingHintText: Boolean): String = resolveRealText(
+        rawText = rawText,
+        isShowingHintText = isShowingHintText,
+        selectionStart = 0,
+        selectionEnd = 0,
+        isEditable = true,
+        isFocused = true,
+    )
 
     @Test fun `hint text showing is treated as empty, not the hint string itself`() {
-        assertEquals("", resolveRealText(rawText = "RCS message", isShowingHintText = true))
+        assertEquals("", realText(rawText = "RCS message", isShowingHintText = true))
     }
 
     @Test fun `real typed text is returned unchanged when hint isn't showing`() {
-        assertEquals("already typed", resolveRealText(rawText = "already typed", isShowingHintText = false))
+        assertEquals("already typed", realText(rawText = "already typed", isShowingHintText = false))
     }
 
     @Test fun `null text with hint not showing resolves to empty`() {
-        assertEquals("", resolveRealText(rawText = null, isShowingHintText = false))
+        assertEquals("", realText(rawText = null, isShowingHintText = false))
+    }
+
+    // --- resolveRealText: self-drawn placeholders (#140) ---
+    // WhatsApp's "Message" composer reports isShowingHintText = false AND hintText = null while
+    // getText() still returns "Message", so neither the #47 check nor any hint comparison can see
+    // it. The distinguishing signal measured on-device is the text selection: a placeholder has no
+    // cursor inside it and reports -1/-1, while a field holding real content always reports an
+    // insertion point (>= 0). Every constant below is a value observed on a Pixel 10a.
+
+    @Test fun `WhatsApp's self-drawn placeholder with no selection is treated as empty`() {
+        // Measured: text='Message' hint=null showingHint=false selStart=-1 selEnd=-1
+        assertEquals(
+            "",
+            resolveRealText(
+                rawText = "Message",
+                isShowingHintText = false,
+                selectionStart = -1,
+                selectionEnd = -1,
+                isEditable = true,
+                isFocused = true,
+            ),
+        )
+    }
+
+    @Test fun `the same string typed by the user is kept, because it reports a real cursor`() {
+        // Measured: user typed "Message" -> selStart=7 selEnd=7. Identical text to the placeholder
+        // above, so selection is the only thing separating a real draft from a placeholder.
+        assertEquals(
+            "Message",
+            resolveRealText(
+                rawText = "Message",
+                isShowingHintText = false,
+                selectionStart = 7,
+                selectionEnd = 7,
+                isEditable = true,
+                isFocused = true,
+            ),
+        )
+    }
+
+    @Test fun `a restored WhatsApp draft is never treated as a placeholder`() {
+        // Measured: navigate away from a chat with an unsent draft and return -> selStart=0.
+        // This is the case that would silently destroy a user's unsent message if 0 were
+        // treated the same as -1.
+        assertEquals(
+            "DraftMyDraft",
+            resolveRealText(
+                rawText = "DraftMyDraft",
+                isShowingHintText = false,
+                selectionStart = 0,
+                selectionEnd = 0,
+                isEditable = true,
+                isFocused = true,
+            ),
+        )
+    }
+
+    @Test fun `prefilled text that never received a selection event is kept`() {
+        // Measured in Chrome: <input value="RealPrefilledText"> focused programmatically and never
+        // touched -- the exact "selection not yet reported" hazard resolveInsertionStart documents.
+        // It reports 0, not -1, so it must survive.
+        assertEquals(
+            "RealPrefilledText",
+            resolveRealText(
+                rawText = "RealPrefilledText",
+                isShowingHintText = false,
+                selectionStart = 0,
+                selectionEnd = 0,
+                isEditable = true,
+                isFocused = true,
+            ),
+        )
+    }
+
+    @Test fun `an unfocused node holding real text is never blanked`() {
+        // Measured: Keep note title/body nodes are collected as candidates while unfocused and
+        // hold genuine content. The focus guard keeps this path away from them entirely.
+        assertEquals(
+            "Mushrooms",
+            resolveRealText(
+                rawText = "Mushrooms",
+                isShowingHintText = false,
+                selectionStart = -1,
+                selectionEnd = -1,
+                isEditable = true,
+                isFocused = false,
+            ),
+        )
+    }
+
+    @Test fun `a non-editable node holding real text is never blanked`() {
+        assertEquals(
+            "static label",
+            resolveRealText(
+                rawText = "static label",
+                isShowingHintText = false,
+                selectionStart = -1,
+                selectionEnd = -1,
+                isEditable = false,
+                isFocused = true,
+            ),
+        )
+    }
+
+    @Test fun `Keep's search placeholder is still caught by the framework hint flag`() {
+        // Measured: Keep reports isShowingHintText=true, so #47's original check already covered
+        // it. This is why the earlier text==hint comparison was redundant.
+        assertEquals(
+            "",
+            resolveRealText(
+                rawText = "Search Keep",
+                isShowingHintText = true,
+                selectionStart = -1,
+                selectionEnd = -1,
+                isEditable = true,
+                isFocused = true,
+            ),
+        )
+    }
+
+    @Test fun `blank text is left untouched rather than treated as a placeholder`() {
+        // The placeholder branch deliberately requires non-blank text: a whitespace-only field is
+        // not a placeholder (no app draws one as spaces), and silently trimming the user's
+        // whitespace is not this function's job. It falls through and is returned verbatim.
+        assertEquals(
+            "   ",
+            resolveRealText(
+                rawText = "   ",
+                isShowingHintText = false,
+                selectionStart = -1,
+                selectionEnd = -1,
+                isEditable = true,
+                isFocused = true,
+            ),
+        )
+    }
+
+    @Test fun `a partially reported selection is not treated as a placeholder`() {
+        // Only a fully absent selection (-1/-1) is a placeholder signal; a half-reported
+        // selection is ambiguous and must not blank real content.
+        assertEquals(
+            "real text",
+            resolveRealText(
+                rawText = "real text",
+                isShowingHintText = false,
+                selectionStart = -1,
+                selectionEnd = 3,
+                isEditable = true,
+                isFocused = true,
+            ),
+        )
+    }
+
+    @Test fun `isShowingHintText still wins regardless of selection`() {
+        // The #47 framework-hint check must short-circuit before the #140 signals are consulted,
+        // in every selection state -- otherwise a hint reporting a real cursor would leak through.
+        for (selection in listOf(-1, 0, 4)) {
+            assertEquals(
+                "",
+                resolveRealText(
+                    rawText = "RCS message",
+                    isShowingHintText = true,
+                    selectionStart = selection,
+                    selectionEnd = selection,
+                    isEditable = true,
+                    isFocused = true,
+                ),
+            )
+        }
     }
 
     // --- resolveInsertionStart (first-partial insertion point, #42) ---
@@ -194,5 +376,66 @@ class StreamingPreviewTest {
 
     @Test fun `a genuine (0, 0) report against empty existing text is trusted`() {
         assertEquals(0, resolveInsertionStart(selStart = 0, selEnd = 0, currentTextLength = 0))
+    }
+
+    @Test fun `a restored WhatsApp draft appends at the end rather than prepending (#140)`() {
+        // Regression guard for the direct ACTION_SET_TEXT path in tryInjectIntoNode, which used to
+        // trust node.textSelectionStart directly instead of routing through this helper. Measured
+        // on-device: leaving a WhatsApp chat with an unsent draft and returning reports selStart=0
+        // while the visible cursor sits at the end, so dictating "draft" + " world" produced
+        // " worlddraft". Both paths now agree and insert at the end.
+        assertEquals(5, resolveInsertionStart(selStart = 0, selEnd = 0, currentTextLength = 5))
+    }
+
+    // --- resolveReplacementSpan (one-shot ACTION_SET_TEXT overwrite span, #140) ---
+
+    /** Applies the span the way tryInjectIntoNode does, so the tests assert real user-visible text. */
+    private fun inject(current: String, selStart: Int, selEnd: Int, spoken: String): String {
+        val span = resolveReplacementSpan(selStart, selEnd, current.length)
+        return current.replaceRange(span.start, span.endExclusive, spoken)
+    }
+
+    @Test fun `a restored draft reporting (0, 0) is appended to, not prepended (#140)`() {
+        // The exact on-device failure: WhatsApp draft restored by leaving and re-entering the chat.
+        assertEquals("draft world", inject("draft", selStart = 0, selEnd = 0, spoken = " world"))
+    }
+
+    @Test fun `an unreported selection appends at the end`() {
+        assertEquals("hello world", inject("hello", selStart = -1, selEnd = -1, spoken = " world"))
+    }
+
+    @Test fun `a genuine caret mid-text inserts exactly there`() {
+        assertEquals("hel-X-lo", inject("hel-lo", selStart = 4, selEnd = 4, spoken = "X-"))
+    }
+
+    @Test fun `a genuine ranged selection replaces the highlighted text`() {
+        // Dictating over a highlighted word must still overwrite it rather than insert alongside.
+        assertEquals("hello there", inject("hello world", selStart = 6, selEnd = 11, spoken = "there"))
+    }
+
+    @Test fun `a reversed ranged selection is normalised rather than crashing`() {
+        // Some nodes report the anchor after the focus when the user drags right-to-left.
+        assertEquals("hello there", inject("hello world", selStart = 11, selEnd = 6, spoken = "there"))
+    }
+
+    @Test fun `a genuine (0, 0) caret in an empty field is trusted`() {
+        assertEquals("world", inject("", selStart = 0, selEnd = 0, spoken = "world"))
+    }
+
+    @Test fun `a stale index past the end of the text is clamped instead of throwing`() {
+        // A node can report a selection against a string it is no longer showing; replaceRange
+        // would throw IndexOutOfBoundsException uncaught and kill the accessibility service.
+        assertEquals("hi world", inject("hi", selStart = 99, selEnd = 99, spoken = " world"))
+    }
+
+    @Test fun `a partially reported selection is treated as unreliable and appends`() {
+        assertEquals("hello world", inject("hello", selStart = 0, selEnd = -1, spoken = " world"))
+    }
+
+    @Test fun `an overridden start never deletes existing text`() {
+        // start is overridden to the end as unreliable; the span must collapse to a pure insertion
+        // rather than deleting through to a selEnd derived from the same distrusted report.
+        val span = resolveReplacementSpan(selStart = 0, selEnd = 0, currentTextLength = 5)
+        assertEquals(span.start, span.endExclusive)
     }
 }

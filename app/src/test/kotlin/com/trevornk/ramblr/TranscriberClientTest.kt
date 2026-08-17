@@ -29,6 +29,28 @@ class TranscriberClientTest {
         assertNotNull(r.error)
     }
 
+    // --- transcript trimming (#140) ---
+    // A trailing newline in the model's transcript was injected verbatim into the user's field,
+    // leaving the cursor several lines below the dictated text (reported against Google Keep).
+    // Every other transcription parser in the app already trims; this one was the exception.
+
+    @Test fun `trailing newlines are trimmed off the transcript`() {
+        val r = TranscriberClient.parseResponse("""{"text": "Hello world\n\n\n"}""")
+        assertEquals("Hello world", r.text)
+        assertNull(r.error)
+    }
+
+    @Test fun `leading whitespace is trimmed off the transcript`() {
+        val r = TranscriberClient.parseResponse("""{"text": "  Hello world"}""")
+        assertEquals("Hello world", r.text)
+    }
+
+    @Test fun `interior newlines are preserved`() {
+        // Only the edges are trimmed -- a genuine multi-line dictation must survive intact.
+        val r = TranscriberClient.parseResponse("""{"text": "\nline one\nline two\n"}""")
+        assertEquals("line one\nline two", r.text)
+    }
+
     // -- endpoint construction honors the base-URL override (M5) --
 
     @Test fun `default base url resolves to OpenAI's transcriptions endpoint`() {

@@ -2980,7 +2980,14 @@ class WhisperAccessibilityService : AccessibilityService() {
         val session = streamingSession
         if (session == null) {
             val candidate = findDirectInjectionCandidate() ?: return
-            val current = resolveRealText(candidate.text?.toString(), candidate.isShowingHintText)
+            val current = resolveRealText(
+                candidate.text?.toString(),
+                candidate.isShowingHintText,
+                candidate.textSelectionStart,
+                candidate.textSelectionEnd,
+                candidate.isEditable,
+                candidate.isFocused,
+            )
             val insertionStart = resolveInsertionStart(candidate.textSelectionStart, candidate.textSelectionEnd, current.length)
             val displayText = smartCapitalize(text)
             if (!setNodeText(candidate, replacePartialInField(current, insertionStart, 0, displayText))) {
@@ -2994,7 +3001,14 @@ class WhisperAccessibilityService : AccessibilityService() {
         if (!shouldInjectPartial(text, session.lastInjectedText, session.lastInjectedAtMs, now, STREAMING_PARTIAL_MIN_INTERVAL_MS)) return
         if (!refreshNode(session.node)) { endStreamingSession(); return }
 
-        val current = resolveRealText(session.node.text?.toString(), session.node.isShowingHintText)
+        val current = resolveRealText(
+            session.node.text?.toString(),
+            session.node.isShowingHintText,
+            session.node.textSelectionStart,
+            session.node.textSelectionEnd,
+            session.node.isEditable,
+            session.node.isFocused,
+        )
         val displayText = smartCapitalize(text)
         val updated = replacePartialInField(current, session.insertionStart, session.lastPartialLength, displayText)
         if (!setNodeText(session.node, updated)) { endStreamingSession(); return }
@@ -3546,7 +3560,14 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  than left concatenated alongside the final transcript. */
     private fun tryCloseStreamingSpan(node: AccessibilityNodeInfo, session: StreamingPreviewSession, text: String): InjectAttempt {
         if (!refreshNode(node)) return InjectAttempt(InjectMethod.NONE)
-        val current = resolveRealText(node.text?.toString(), node.isShowingHintText)
+        val current = resolveRealText(
+            node.text?.toString(),
+            node.isShowingHintText,
+            node.textSelectionStart,
+            node.textSelectionEnd,
+            node.isEditable,
+            node.isFocused,
+        )
         val updated = reconcileStreamingSpan(
             current, StreamingSpan(session.insertionStart, session.lastPartialLength), text, isFinalInjectionTarget = true
         ) ?: return InjectAttempt(InjectMethod.NONE)
@@ -3559,7 +3580,14 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  gone stale by now just has nothing left to revert. */
     private fun clearStreamingLeftover(session: StreamingPreviewSession) {
         if (!refreshNode(session.node)) return
-        val current = resolveRealText(session.node.text?.toString(), session.node.isShowingHintText)
+        val current = resolveRealText(
+            session.node.text?.toString(),
+            session.node.isShowingHintText,
+            session.node.textSelectionStart,
+            session.node.textSelectionEnd,
+            session.node.isEditable,
+            session.node.isFocused,
+        )
         val cleared = reconcileStreamingSpan(
             current, StreamingSpan(session.insertionStart, session.lastPartialLength), finalText = "", isFinalInjectionTarget = false
         ) ?: return
@@ -3588,20 +3616,20 @@ class WhisperAccessibilityService : AccessibilityService() {
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
 
         if (node.isEditable || node.className?.toString()?.contains("EditText") == true) {
-            val current = resolveRealText(node.text?.toString(), node.isShowingHintText)
-            val start = if (node.textSelectionStart >= 0) node.textSelectionStart else current.length
-            val end = if (node.textSelectionEnd >= 0) node.textSelectionEnd else start
-            // Clamp to current's actual bounds (audit finding, two-model cross-examined): a node
-            // can self-report a stale/inconsistent selection index -- most plausibly right after
-            // resolveRealText substitutes "" for hint text above while the node's own
-            // textSelectionStart/End still reflects a positive index against the hint string it
-            // was just showing. Without this, replaceRange below throws IndexOutOfBoundsException
-            // uncaught (this method has no try/catch of its own; finishInjection's try/finally only
-            // recycles nodes), which would crash the whole accessibility service. Mirrors the same
-            // clamp StreamingPreview.replacePartialInField already applies for the same reason.
-            val replacementStart = minOf(start, end).coerceIn(0, current.length)
-            val replacementEnd = maxOf(start, end).coerceIn(replacementStart, current.length)
-            val updated = current.replaceRange(replacementStart, replacementEnd, text)
+            val current = resolveRealText(
+                node.text?.toString(),
+                node.isShowingHintText,
+                node.textSelectionStart,
+                node.textSelectionEnd,
+                node.isEditable,
+                node.isFocused,
+            )
+            // Delegated to a pure, unit-tested helper so this direct ACTION_SET_TEXT path and the
+            // streaming path can't disagree about where the caret really is -- they used to, and a
+            // restored WhatsApp draft (which reports (0, 0) with the caret visibly at the end) had
+            // dictation prepended: "draft" + " world" => " worlddraft" (#140).
+            val span = resolveReplacementSpan(node.textSelectionStart, node.textSelectionEnd, current.length)
+            val updated = current.replaceRange(span.start, span.endExclusive, text)
             val setTextOk = setNodeText(node, updated)
             Log.i(TAG, "ACTION_SET_TEXT => $setTextOk")
             if (setTextOk) return InjectAttempt(InjectMethod.DIRECT, priorText = current)

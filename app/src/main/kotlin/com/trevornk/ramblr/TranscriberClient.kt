@@ -31,10 +31,22 @@ object TranscriberClient {
     fun transcriptionEndpoint(baseUrl: String): String =
         (PostProcessor.normalizeBaseUrl(baseUrl) ?: PostProcessor.DEFAULT_BASE_URL) + "/audio/transcriptions"
 
+    /**
+     * Parses `/audio/transcriptions`' JSON body.
+     *
+     * The transcript is trimmed (#140): every other transcription parser in the app already trims
+     * its model text -- [GeminiTranscriberClient.parseResponse], [LocalTranscriber.transcribe] and
+     * [StreamingTranscriber] all do -- and so does every cleanup provider
+     * ([PostProcessor.parseResponse], [AnthropicCleanupProvider.parseResponse], and the LOCAL_LLM
+     * step per #84). This parser was the sole exception, so leading/trailing whitespace and
+     * newlines in the model's transcript were injected verbatim into the user's field, pushing the
+     * cursor onto a new line after the dictated text. Cleanup-off (raw injection) makes this
+     * user-visible directly; with cleanup on, the cleanup step's own trim used to mask it.
+     */
     fun parseResponse(json: String): Result = try {
         val obj = JSONObject(json)
         when {
-            obj.has("text") -> Result(obj.getString("text"), null)
+            obj.has("text") -> Result(obj.getString("text").trim(), null)
             obj.has("error") -> Result(null, obj.getJSONObject("error").getString("message"))
             else -> Result(null, "Unknown response")
         }
