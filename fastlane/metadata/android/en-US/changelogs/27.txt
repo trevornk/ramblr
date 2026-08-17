@@ -1,0 +1,23 @@
+Android 16 support, faster cleanup, and fixes from the F-Droid review.
+
+- Now targets Android 16 (API 36), so the app keeps working on the newest
+  release and stays installable from app stores. Settings and the system bars
+  render correctly under Android's forced edge-to-edge layout.
+- Choosing a cleanup model no longer selects it before you agree to its
+  license. Cancelling the license prompt now leaves your setup untouched, and
+  the model's license is stated in the picker.
+- The recommended on-device cleanup model now downloads normally instead of
+  needing a manual install, and is offered under a free Apache-2.0 license.
+- Cleanup gives up faster when a provider stalls: the hard cap dropped from 15
+  to 8 seconds, and cloud cleanup can no longer overrun the remaining budget,
+  so a slow provider delays your text far less.
+- Dictating into a field that already holds a draft now inserts a space instead
+  of running the words together, and apps that draw their own "Message"
+  placeholder (WhatsApp) no longer get that placeholder treated as real text.
+- Your custom vocabulary now actually reaches the on-device cleanup model.
+- The floating bubble's peek edge is easier to hit and no longer gets stranded
+  off-screen after rotating the device.
+- Recovering the app when its icon is hidden now works even if you swipe the
+  notification away, and the Quick Settings tile fixes two crashes.
+- Local transcription now provisions its own voice-detection model, and failed
+  transcriptions record why they failed.
