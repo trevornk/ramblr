@@ -37,6 +37,110 @@ fun replacePartialInField(current: String, insertionStart: Int, previousLength: 
 }
 
 /**
+ * Characters that dictated text should butt directly against with no separating space, even though
+ * they aren't whitespace (#144). Two groups, both cases where a space would be visibly wrong:
+ * openers that own what follows them (`He said "` + `hello` must not become `He said " hello`), and
+ * joiners mid-token (`Nash-` + `Keller` must not become `Nash- Keller`).
+ */
+private val NO_SEPARATOR_AFTER = setOf(
+    '(', '[', '{', '<',           // openers
+    '"', '\'', '`', '\u201C', '\u2018', // quotes, incl. curly opening forms
+    '-', '\u2013', '\u2014', '_', '/', '\\', // joiners
+)
+
+/**
+ * The separator to place between a field's existing text and text about to be inserted at
+ * [insertionStart] -- `" "` when the two would otherwise run together, `""` otherwise (#144).
+ *
+ * Dictating into a field that already held a draft used to glue the two together
+ * (`Hello john` + `How old is Tom?` => `Hello johnHow old is Tom?`), because every write path
+ * ultimately calls [replacePartialInField]/`replaceRange`, and none of them ever looked at the
+ * character to the left of the insertion point. #140 fixed *where* the text lands; this fixes what
+ * goes in front of it.
+ *
+ * The decision deliberately reads only the character immediately *before* [insertionStart], which
+ * makes it stable across a streaming session: that character is upstream of the span being rewritten
+ * on every partial, so it can't change as the hypothesis grows, and each partial therefore computes
+ * the same separator. Because the separator is prepended to the partial *before* its length is
+ * recorded as `previousLength`, it lives inside the tracked span and is replaced along with it --
+ * never double-counted, never orphaned when the final text closes the span out.
+ *
+ * No separator is added when inserting at the very start of a field (nothing to separate from),
+ * after existing whitespace (already separated), before text that brings its own leading whitespace,
+ * for empty insertions (the streaming-leftover *clear* path passes `""` and must stay a pure
+ * deletion), or after one of [NO_SEPARATOR_AFTER].
+ *
+ * Insertion at a genuine, explicitly-placed caret is treated the same as appending: a caret sitting
+ * directly after a word character gets a space. That's deliberate -- running two words together is
+ * a visible defect, while an extra space is trivially correctable -- and it keeps this rule a pure
+ * function of the text, with no dependence on how the caret came to be where it is.
+ */
+fun leadingSeparatorFor(current: String, insertionStart: Int, insertText: String): String {
+    if (insertText.isEmpty() || insertText.first().isWhitespace()) return ""
+    val precedingIndex = insertionStart.coerceIn(0, current.length) - 1
+    if (precedingIndex < 0) return ""
+    val preceding = current[precedingIndex]
+    if (preceding.isWhitespace() || preceding in NO_SEPARATOR_AFTER) return ""
+    return " "
+}
+
+/**
+ * [insertText] with any [leadingSeparatorFor] separator already applied, ready to hand to
+ * [replacePartialInField] or `replaceRange` as the replacement for a span starting at
+ * [insertionStart]. Call sites use this rather than composing the two by hand so the separator can
+ * never be applied to one write path and forgotten on another.
+ */
+fun withLeadingSeparator(current: String, insertionStart: Int, insertText: String): String =
+    leadingSeparatorFor(current, insertionStart, insertText) + insertText
+
+/**
+ * The full new contents of a field for a one-shot (non-streaming) injection of [text] -- selection
+ * resolution (#140), separator (#144), and the range replacement itself, in one place.
+ *
+ * Exists as a pure function so the composition is JVM-testable end to end. The service's call site
+ * reads its selection/text off a live `AccessibilityNodeInfo`, which can't be constructed in a unit
+ * test (same constraint `ProviderCredentialStoreTest` documents for `Context`), so a test that only
+ * covered the individual helpers would still pass if the call site quietly stopped applying one of
+ * them -- which is exactly what mutation testing caught here. Keeping the whole composition behind
+ * one function reduces the untestable surface to a single delegating line.
+ */
+fun composeOneShotInjection(current: String, selStart: Int, selEnd: Int, text: String): String {
+    val span = resolveReplacementSpan(selStart, selEnd, current.length)
+    return current.replaceRange(span.start, span.endExclusive, withLeadingSeparator(current, span.start, text))
+}
+
+/**
+ * The new field contents and the span bookkeeping for one streaming-preview partial (#29/#144).
+ *
+ * [updatedText] goes straight to the node; [trackedLength] is what the session must record as its
+ * `previousLength` so the next partial replaces this one exactly -- separator included, since the
+ * separator is folded in *before* the length is measured. Returned together, and computed here
+ * rather than at the call site, so the text and the length that describes it can't drift apart.
+ */
+data class StreamingPartialWrite(val updatedText: String, val trackedLength: Int)
+
+/**
+ * Computes one streaming partial write: [displayText] gets its [leadingSeparatorFor] separator and
+ * replaces the previously-tracked span ([previousLength] chars at [insertionStart]; zero for the
+ * first partial of a session, which is a pure insertion).
+ *
+ * Pure for the same reason as [composeOneShotInjection]: the real call sites hold live
+ * `AccessibilityNodeInfo`s, so this is the only layer a unit test can reach.
+ */
+fun composeStreamingPartial(
+    current: String,
+    insertionStart: Int,
+    previousLength: Int,
+    displayText: String
+): StreamingPartialWrite {
+    val separated = withLeadingSeparator(current, insertionStart, displayText)
+    return StreamingPartialWrite(
+        updatedText = replacePartialInField(current, insertionStart, previousLength, separated),
+        trackedLength = separated.length,
+    )
+}
+
+/**
  * Whether the streaming live-preview path should be active: both the explicit opt-in setting and
  * a fully-installed streaming model are required, checked fresh at load time so a model deleted
  * after being enabled just silently falls back to no preview (#29's "cleanly disabled" acceptance
@@ -118,8 +222,12 @@ fun reconcileStreamingSpan(
     isFinalInjectionTarget: Boolean
 ): String? {
     if (session == null) return null
+    // #144: routed through composeStreamingPartial so closing the span applies the same separator
+    // rule the partials inside it were built with -- otherwise closing strips it back off and the
+    // final text re-glues itself to the preceding draft. The clear path passes "", which
+    // leadingSeparatorFor never decorates, so it stays a pure deletion.
     val replacement = if (isFinalInjectionTarget) finalText else ""
-    return replacePartialInField(current, session.insertionStart, session.previousLength, replacement)
+    return composeStreamingPartial(current, session.insertionStart, session.previousLength, replacement).updatedText
 }
 
 /**
