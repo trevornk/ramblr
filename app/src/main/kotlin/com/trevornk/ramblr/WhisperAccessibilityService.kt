@@ -3056,44 +3056,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         return direct
     }
 
-    private fun setNodeText(node: AccessibilityNodeInfo, text: String): Boolean {
-        val args = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
-        }
-        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        if (ok) nudgeSelectionToEnd(node, text.length)
-        return ok
-    }
-
-    /**
-     * Defensive, app-agnostic nudge after a successful ACTION_SET_TEXT (#quirk-compat): the
-     * platform contract already says ACTION_SET_TEXT places the cursor at the end and the widget
-     * "should" fire TYPE_VIEW_TEXT_CHANGED, so on a spec-compliant EditText this is a no-op.
-     * Observed on-device with Google Keep though: a large bulk ACTION_SET_TEXT (as opposed to
-     * incremental per-keystroke input, which is what Keep's own rendering path is normally
-     * exercised by) can land text that's present in the node's reported .text and still
-     * selectable/deletable, but never gets repainted -- independently corroborated by user reports
-     * of Keep's own editor going invisible mid-typing, unrelated to any accessibility service. This
-     * is *not* Keep-specific code: it's the same explicit ACTION_SET_SELECTION call for every node
-     * on every app, on the theory that some custom text renderers only recompute/repaint their
-     * layout in response to an explicit selection-change action rather than trusting ACTION_SET_TEXT
-     * alone. Best-effort -- failure here doesn't invalidate the SET_TEXT that already succeeded.
-     */
-    private fun nudgeSelectionToEnd(node: AccessibilityNodeInfo, textLength: Int) {
-        val args = Bundle().apply {
-            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, textLength)
-            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, textLength)
-        }
-        try {
-            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
-        } catch (e: Exception) {
-            // Best-effort only; some nodes reject selection args entirely (e.g. non-text views
-            // that happened to report isEditable=true). Never let this affect injection success.
-        }
-    }
+    /** Delegates to the extracted [AccessibilityTextDestination] so the streaming-partial path and
+     *  the final-injection path share one, and only one, node-write implementation. */
+    private fun setNodeText(node: AccessibilityNodeInfo, text: String): Boolean =
+        AccessibilityTextDestination(node).replaceAllText(text)
 
     private fun refreshNode(node: AccessibilityNodeInfo): Boolean =
-        try { node.refresh() } catch (e: Exception) { false }
+        AccessibilityTextDestination(node).refresh()
 
     private fun endStreamingSession() {
         streamingSession?.node?.recycle()
@@ -3560,48 +3529,27 @@ class WhisperAccessibilityService : AccessibilityService() {
         return score
     }
 
-    /** Outcome of one injection attempt. [priorText] is the node's full text before replacement —
-     *  only captured on the DIRECT path, since that's the only case where undo can restore it (#27). */
-    private data class InjectAttempt(val method: InjectMethod, val priorText: String? = null)
 
     /** Closes out a streaming-preview session's tracked span with the final text (#45): the
      *  counterpart to [tryInjectIntoNode]'s selection-based insert, used only when [node] is the
      *  exact node [session] was already managing, so the streaming leftover is fully replaced rather
      *  than left concatenated alongside the final transcript. */
-    private fun tryCloseStreamingSpan(node: AccessibilityNodeInfo, session: StreamingPreviewSession, text: String): InjectAttempt {
-        if (!refreshNode(node)) return InjectAttempt(InjectMethod.NONE)
-        val current = resolveRealText(
-            node.text?.toString(),
-            node.isShowingHintText,
-            node.textSelectionStart,
-            node.textSelectionEnd,
-            node.isEditable,
-            node.isFocused,
+    private fun tryCloseStreamingSpan(node: AccessibilityNodeInfo, session: StreamingPreviewSession, text: String): TextCommitResult =
+        DictationTextWriter.commitClosingStreamingSpan(
+            AccessibilityTextDestination(node),
+            StreamingSpan(session.insertionStart, session.lastPartialLength),
+            text,
         )
-        val updated = reconcileStreamingSpan(
-            current, StreamingSpan(session.insertionStart, session.lastPartialLength), text, isFinalInjectionTarget = true
-        ) ?: return InjectAttempt(InjectMethod.NONE)
-        return if (setNodeText(node, updated)) InjectAttempt(InjectMethod.DIRECT, priorText = current) else InjectAttempt(InjectMethod.NONE)
-    }
 
     /** Reverts [session]'s leftover partial in its own node when the final injection ends up landing
      *  somewhere else (#45, e.g. focus moved after recording stopped) -- otherwise that fragment is
      *  left silently orphaned in a field nobody is about to overwrite. Best-effort: a node that's
      *  gone stale by now just has nothing left to revert. */
     private fun clearStreamingLeftover(session: StreamingPreviewSession) {
-        if (!refreshNode(session.node)) return
-        val current = resolveRealText(
-            session.node.text?.toString(),
-            session.node.isShowingHintText,
-            session.node.textSelectionStart,
-            session.node.textSelectionEnd,
-            session.node.isEditable,
-            session.node.isFocused,
+        DictationTextWriter.clearStreamingSpan(
+            AccessibilityTextDestination(session.node),
+            StreamingSpan(session.insertionStart, session.lastPartialLength),
         )
-        val cleared = reconcileStreamingSpan(
-            current, StreamingSpan(session.insertionStart, session.lastPartialLength), finalText = "", isFinalInjectionTarget = false
-        ) ?: return
-        setNodeText(session.node, cleared)
     }
 
     /**
@@ -3620,67 +3568,11 @@ class WhisperAccessibilityService : AccessibilityService() {
      * (which covers most apps, including Discord's message box) avoids the clipboard entirely and
      * with it that toast, while apps that genuinely need paste still get it as the fallback.
      */
-    private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String): InjectAttempt {
-        logNode("Trying node", node)
-
-        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-
-        if (node.isEditable || node.className?.toString()?.contains("EditText") == true) {
-            val current = resolveRealText(
-                node.text?.toString(),
-                node.isShowingHintText,
-                node.textSelectionStart,
-                node.textSelectionEnd,
-                node.isEditable,
-                node.isFocused,
-            )
-            // Delegated to a pure, unit-tested helper so this direct ACTION_SET_TEXT path and the
-            // streaming path can't disagree about where the caret really is -- they used to, and a
-            // restored WhatsApp draft (which reports (0, 0) with the caret visibly at the end) had
-            // dictation prepended: "draft" + " world" => " worlddraft" (#140).
-            // #144: a draft already in the field must not run straight into the dictated text
-            // ("Hello john" + "How old is Tom?" => "Hello johnHow old is Tom?"). Composition lives
-            // in composeOneShotInjection so it stays unit-testable -- this line is deliberately a
-            // pure delegation.
-            val updated = composeOneShotInjection(current, node.textSelectionStart, node.textSelectionEnd, text)
-            val setTextOk = setNodeText(node, updated)
-            Log.i(TAG, "ACTION_SET_TEXT => $setTextOk")
-            if (setTextOk) return InjectAttempt(InjectMethod.DIRECT, priorText = current)
-        }
-
-        findCustomPasteAction(node)?.let { action ->
-            val ok = node.performAction(action.id)
-            Log.i(TAG, "Custom action '${action.label}' (${action.id}) => $ok")
-            if (ok) return InjectAttempt(InjectMethod.FROM_CLIPBOARD)
-        }
-
-        val pasteOk = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-        Log.i(TAG, "ACTION_PASTE => $pasteOk")
-        if (pasteOk) return InjectAttempt(InjectMethod.FROM_CLIPBOARD)
-
-        return InjectAttempt(InjectMethod.NONE)
-    }
+    private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String): TextCommitResult =
+        DictationTextWriter.commit(AccessibilityTextDestination(node), text)
 
     private fun findCustomPasteAction(node: AccessibilityNodeInfo): AccessibilityNodeInfo.AccessibilityAction? =
-        node.actionList.firstOrNull { action ->
-            action.label?.toString()?.contains("paste", ignoreCase = true) == true
-        }
-
-    /**
-     * Debug-only structural trace of an injection candidate. Never logs [AccessibilityNodeInfo.getText]
-     * or [AccessibilityNodeInfo.getContentDescription] — those carry the on-screen contents of
-     * whatever app the user is dictating into, so they must not reach logcat, even in debug builds.
-     */
-    private fun logNode(prefix: String, node: AccessibilityNodeInfo) {
-        if (!BuildConfig.DEBUG) return
-        val actions = node.actionList.joinToString { action ->
-            action.label?.toString() ?: action.id.toString()
-        }
-        Log.d(
-            TAG,
-            "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} actions=[$actions]"
-        )
-    }
+        AccessibilityTextDestination.findCustomPasteAction(node)
 
     private fun currentForegroundPackageName(): String? {
         val root = rootInActiveWindow ?: return null
