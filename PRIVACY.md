@@ -55,9 +55,27 @@ I do not operate a relay server for these requests.
 
 Ramblr keeps a local history of your dictations (the raw transcript and, when cleanup ran, the
 cleaned-up version) so a failed injection never loses your words. This history is stored only
-on-device, in the app's private storage, and is excluded from Android backups (the app sets
-`allowBackup=false`). It is never uploaded anywhere. You can turn history off in Settings, and
+on-device, in the app's private storage, and is excluded from Android backups and from
+device-to-device transfer. It is never uploaded anywhere. You can turn history off in Settings, and
 you can delete recorded entries from the history screen.
+
+## Android backup and device transfer
+
+Ramblr participates in Android's backup and "Copy your data" device-transfer flows, but on a
+strict opt-in basis: only your plain settings (`ramblr.xml` — overlay appearance, personas,
+provider chain ordering, per-app persona mappings, advanced toggles) and your custom overlay
+icon are included.
+
+Everything else is excluded by omission, notably:
+
+- **Your API keys.** These live in Android-Keystore-encrypted storage whose key never leaves the
+  originating device, so restoring their ciphertext elsewhere could not decrypt them anyway. You
+  re-enter your key(s) once on a new device, which is the correct behavior.
+- **Your dictation history.**
+- The downloaded model files and the model-catalog network cache.
+
+The exact rules are readable in the repository at `app/src/main/res/xml/backup_rules.xml`
+(API 30) and `app/src/main/res/xml/data_extraction_rules.xml` (API 31+).
 
 ## Accessibility Service
 
