@@ -6,9 +6,12 @@
         <item name="colorPrimaryContainer">@color/primary_container</item>
         <item name="colorOnPrimaryContainer">@color/on_primary_container</item>
         
-        <!-- Status / Navigation Bars -->
+        <!-- Status / Navigation Bars.
+             android:statusBarColor and android:navigationBarColor are deliberately absent: both
+             became no-ops in API 35, and under targetSdk 36 the bars are always transparent with
+             the app's own content drawn behind them. Keeping them would only imply control the
+             app no longer has. windowLightStatusBar still applies: it sets the icon tint, which
+             matters more now that the icons sit directly over app content. -->
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:statusBarColor">?android:attr/colorBackground</item>
-        <item name="android:navigationBarColor">?android:attr/colorBackground</item>
     </style>
 </resources>

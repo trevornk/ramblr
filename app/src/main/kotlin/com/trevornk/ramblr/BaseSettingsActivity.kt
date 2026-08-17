@@ -1,13 +1,18 @@
 package com.trevornk.ramblr
 
 import android.graphics.Typeface
+import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 
 /**
  * Shared base for every per-category Settings screen (#93): holds the small UI-building helpers
@@ -20,6 +25,53 @@ import androidx.appcompat.app.AppCompatActivity
  * much "Settings is open" from the overlay's point of view as MainActivity was.
  */
 abstract class BaseSettingsActivity : AppCompatActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // targetSdk 36 lays every window out behind the system bars with no opt-out. Declaring it
+        // explicitly means the behaviour is identical on API 30-34, so there is one layout to
+        // reason about and to test on old devices, rather than a path that only appears on 35+.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        super.onCreate(savedInstanceState)
+    }
+
+    /**
+     * Applies edge-to-edge insets to whatever every subclass passes in, so none of the eleven
+     * Settings screens has to remember to do it and a twelfth added later gets it for free. Every
+     * one of them calls this with a root ScrollView.
+     */
+    override fun setContentView(view: View) {
+        super.setContentView(view)
+        applyContentInsets(view)
+    }
+
+    private fun applyContentInsets(content: View) {
+        // Padding, not margin: the bars should show the scrolling content behind them (that is the
+        // point of edge-to-edge), while the content's own resting position stays clear of them.
+        // clipToPadding=false keeps that true for a ScrollView, whose default would otherwise clip
+        // the scrolled content at the padding box and undo the effect.
+        (content as? ViewGroup)?.clipToPadding = false
+
+        ViewCompat.setOnApplyWindowInsetsListener(content) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+
+            val p = WindowInsetsMath.resolve(
+                barsLeft = bars.left, barsTop = bars.top, barsRight = bars.right, barsBottom = bars.bottom,
+                cutoutLeft = cutout.left, cutoutRight = cutout.right,
+                imeBottom = ime.bottom,
+            )
+            v.setPadding(p.left, p.top, p.right, p.bottom)
+
+            // Consume nothing: return the insets unchanged so any child that wants to react to the
+            // keyboard still can. Returning CONSUMED here would silently break those.
+            insets
+        }
+        // The listener above only fires on the next inset dispatch. A view added after the window
+        // already has its insets (which is every one of these, since setContentView runs well
+        // after attach on a warm activity) would otherwise sit unpadded until something moved.
+        ViewCompat.requestApplyInsets(content)
+    }
 
     override fun onResume() {
         super.onResume()
