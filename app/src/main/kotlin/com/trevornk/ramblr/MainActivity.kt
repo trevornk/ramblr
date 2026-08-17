@@ -610,6 +610,28 @@ class MainActivity : BaseSettingsActivity() {
     }
 
     private fun enableOnboardingCleanupLocal(model: Model) {
+        // Ordering matters (#153): a non-free model must not be *selected* until its license is
+        // accepted. This used to write the selection first and prompt afterwards, so cancelling
+        // the license dialog left cleanup enabled and pointed at a model that was never
+        // installed -- the exact slip F-Droid review caught in fdroiddata!42401.
+        //
+        // downloadModelWithLicenseConsent invokes onStarted only when a download was actually
+        // enqueued, and for an already-installed or freely-licensed model it does so
+        // synchronously, so the non-download paths still commit immediately.
+        if (ModelDownloader.isInstalled(this, model)) {
+            commitOnboardingCleanupLocal(model)
+            return
+        }
+        downloadModelWithLicenseConsent(model) {
+            commitOnboardingCleanupLocal(model)
+            toast("Downloading ${model.name}...")
+            refresh()
+        }
+    }
+
+    /** Persists the local-cleanup selection for [model]. Split out of
+     *  [enableOnboardingCleanupLocal] so it can be gated behind license consent (#153). */
+    private fun commitOnboardingCleanupLocal(model: Model) {
         prefs().edit()
             .putBoolean("use_post_processing", true)
             .putString(KEY_LOCAL_CLEANUP_MODEL_NAME, model.archive)
@@ -619,13 +641,6 @@ class MainActivity : BaseSettingsActivity() {
         // live applies here too, even though onboarding usually runs on a fresh chain).
         ProviderChainStore.save(this, ProviderChainStore.load(this).withLocalFloor(model.archive))
         CloudFeatureToggle.setCleanupEnabled(this, false)
-        if (!ModelDownloader.isInstalled(this, model)) {
-            // The recommended cleanup model is non-free (LFM2.5-350M), and this onboarding tap
-            // was previously the single action that downloaded it with no license disclosure at
-            // all -- the exact F-Droid consent problem. Prompt here too, and only claim the
-            // download started if it actually did.
-            downloadModelWithLicenseConsent(model) { toast("Downloading ${model.name}...") }
-        }
         refresh()
     }
 

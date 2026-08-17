@@ -122,8 +122,23 @@ class AdvancedActivity : BaseSettingsActivity() {
         /** Category subtitle for MainActivity's Advanced row (#93, updated #104) -- unlike the
          *  other four categories there's no single on/off/mode signal worth summarizing here
          *  (this screen is redo-setup + four subsections), so this just names what's inside
-         *  rather than picking one value. */
+         *  rather than picking one value.
+         *
+         *  The "updates" item is github-flavor-only and must be gated by the same
+         *  Class.forName check that hides the row itself (#153): the storefront/F-Droid build
+         *  compiles in no self-updater, so advertising an Updates screen it doesn't have was a
+         *  slip caught in F-Droid review (fdroiddata!42401). */
         fun subtitle(context: android.content.Context): String =
-            "Redo setup, overlay appearance, behavior, updates, data & logs"
+            advancedSubtitleText(hasSelfUpdate = hasSelfUpdateSettings())
+
+        /** Whether the self-updater is compiled into this flavor. Mirrors the instance-level
+         *  [selfUpdateSettingsActivityClass] lookup that gates the Updates row, so the row and
+         *  the subtitle that advertises it can never disagree (#153). */
+        private fun hasSelfUpdateSettings(): Boolean = try {
+            Class.forName("com.trevornk.ramblr.SelfUpdateSettingsActivity")
+            true
+        } catch (_: ClassNotFoundException) {
+            false
+        }
     }
 }
