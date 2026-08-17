@@ -103,6 +103,212 @@ class StreamingPreviewTest {
         )
     }
 
+    // --- leadingSeparatorFor / withLeadingSeparator (#144) ---
+
+    @Test fun `dictating after an existing draft gets a separating space`() {
+        // The exact reported case: "Hello john" + "How old is Tom?" used to glue into
+        // "Hello johnHow old is Tom?" on a Pixel 10a WhatsApp composer.
+        val current = "Hello john"
+        assertEquals(
+            "Hello john How old is Tom?",
+            current.replaceRange(
+                current.length, current.length,
+                withLeadingSeparator(current, current.length, "How old is Tom?")
+            )
+        )
+    }
+
+    @Test fun `inserting into an empty field gets no leading space`() {
+        assertEquals("", leadingSeparatorFor("", 0, "hello world"))
+    }
+
+    @Test fun `inserting at the very start of existing text gets no leading space`() {
+        assertEquals("", leadingSeparatorFor("existing", 0, "hello"))
+    }
+
+    @Test fun `a draft already ending in a space is not given a second one`() {
+        assertEquals("", leadingSeparatorFor("Hello john ", 11, "How old"))
+    }
+
+    @Test fun `a draft ending in a newline is already separated`() {
+        assertEquals("", leadingSeparatorFor("first line\n", 11, "second line"))
+    }
+
+    @Test fun `text that brings its own leading whitespace is not given another separator`() {
+        assertEquals("", leadingSeparatorFor("Hello john", 10, " How old"))
+    }
+
+    @Test fun `an empty insertion never produces a stray space`() {
+        // The streaming-leftover clear path relies on this staying a pure deletion.
+        assertEquals("", leadingSeparatorFor("Hello john", 10, ""))
+    }
+
+    @Test fun `an open quote or bracket keeps the dictation butted against it`() {
+        for (opener in listOf("He said \"", "a list (", "an array [", "a brace {", "Nash-", "path/")) {
+            assertEquals(
+                "no separator expected after '${opener.last()}'",
+                "",
+                leadingSeparatorFor(opener, opener.length, "hello")
+            )
+        }
+    }
+
+    @Test fun `a word character before the insertion point gets a separator`() {
+        for (current in listOf("word", "ends with digit 7", "ends with period.", "ends with comma,")) {
+            assertEquals(
+                "separator expected after '${current.last()}'",
+                " ",
+                leadingSeparatorFor(current, current.length, "hello")
+            )
+        }
+    }
+
+    @Test fun `an insertion point past the end of the field is clamped, not thrown`() {
+        assertEquals(" ", leadingSeparatorFor("short", 999, "hello"))
+    }
+
+    @Test fun `a caret placed mid-text separates from the character actually before it`() {
+        // "Hello john" with caret at index 5 (right after "Hello"): the preceding char is 'o'.
+        assertEquals(" ", leadingSeparatorFor("Hello john", 5, "there"))
+        // Caret at index 6 (right after the space): already separated.
+        assertEquals("", leadingSeparatorFor("Hello john", 6, "there"))
+    }
+
+    @Test fun `a streaming session's separator is inside the tracked span, so partials never double it`() {
+        // Simulates the real sequence: first partial establishes the span (separator folded in and
+        // counted in previousLength), later partials replace that whole span. A separator counted
+        // outside the span would accumulate one space per partial.
+        val current = "Hello john"
+        val start = current.length
+
+        val firstSeparated = withLeadingSeparator(current, start, "How")
+        val afterFirst = replacePartialInField(current, start, 0, firstSeparated)
+        assertEquals("Hello john How", afterFirst)
+
+        val secondSeparated = withLeadingSeparator(afterFirst, start, "How old")
+        val afterSecond = replacePartialInField(afterFirst, start, firstSeparated.length, secondSeparated)
+        assertEquals("Hello john How old", afterSecond)
+
+        val thirdSeparated = withLeadingSeparator(afterSecond, start, "How old is Tom")
+        val afterThird = replacePartialInField(afterSecond, start, secondSeparated.length, thirdSeparated)
+        assertEquals("Hello john How old is Tom", afterThird)
+    }
+
+    @Test fun `a shorter streaming revision still keeps exactly one separator`() {
+        val current = "draft"
+        val start = current.length
+        val longSeparated = withLeadingSeparator(current, start, "hello there world")
+        val afterLong = replacePartialInField(current, start, 0, longSeparated)
+        assertEquals("draft hello there world", afterLong)
+
+        val shortSeparated = withLeadingSeparator(afterLong, start, "hello")
+        val afterShort = replacePartialInField(afterLong, start, longSeparated.length, shortSeparated)
+        assertEquals("draft hello", afterShort)
+    }
+
+    @Test fun `the final injection closing a streaming span keeps the separator`() {
+        // #45 handoff + #144: closing the span must not strip the separator back off.
+        val current = "Hello john How old"
+        val updated = reconcileStreamingSpan(
+            current = current,
+            session = StreamingSpan(insertionStart = 10, previousLength = 8),
+            finalText = "How old is Tom?",
+            isFinalInjectionTarget = true
+        )
+        assertEquals("Hello john How old is Tom?", updated)
+    }
+
+    @Test fun `clearing a streaming leftover removes the separator too, leaving the draft untouched`() {
+        // The clear path must restore the field exactly, with no orphaned space.
+        val updated = reconcileStreamingSpan(
+            current = "Hello john How old",
+            session = StreamingSpan(insertionStart = 10, previousLength = 8),
+            finalText = "",
+            isFinalInjectionTarget = false
+        )
+        assertEquals("Hello john", updated)
+    }
+
+    @Test fun `a streaming session starting in an empty field never gains a leading space`() {
+        val start = 0
+        val firstSeparated = withLeadingSeparator("", start, "How")
+        val afterFirst = replacePartialInField("", start, 0, firstSeparated)
+        assertEquals("How", afterFirst)
+
+        val secondSeparated = withLeadingSeparator(afterFirst, start, "How old")
+        val afterSecond = replacePartialInField(afterFirst, start, firstSeparated.length, secondSeparated)
+        assertEquals("How old", afterSecond)
+    }
+
+    // --- composeOneShotInjection / composeStreamingPartial (call-site composition, #140 + #144) ---
+    //
+    // These target the exact composition the service delegates to. Testing only the individual
+    // helpers left both service call sites free to silently stop applying them -- mutation testing
+    // proved it: reverting either call site kept every helper-level test green.
+
+    @Test fun `one-shot injection into a restored draft appends with a separator`() {
+        // The real Pixel 10a case end to end: WhatsApp restored draft reports (0, 0) with the caret
+        // visibly at the end. #140 puts the text at the end; #144 separates it.
+        assertEquals(
+            "Hello john How old is Tom?",
+            composeOneShotInjection("Hello john", selStart = 0, selEnd = 0, text = "How old is Tom?")
+        )
+    }
+
+    @Test fun `one-shot injection into an empty field is just the text`() {
+        assertEquals(
+            "How old is Tom?",
+            composeOneShotInjection("", selStart = -1, selEnd = -1, text = "How old is Tom?")
+        )
+    }
+
+    @Test fun `one-shot injection with an unreported selection appends to existing text`() {
+        assertEquals(
+            "draft hello",
+            composeOneShotInjection("draft", selStart = -1, selEnd = -1, text = "hello")
+        )
+    }
+
+    @Test fun `one-shot injection replacing a highlighted range gets no leading space`() {
+        // Selecting "world" in "hello world" and dictating over it must replace, not append, and
+        // the preceding char is a space so no separator is added either.
+        assertEquals(
+            "hello there",
+            composeOneShotInjection("hello world", selStart = 6, selEnd = 11, text = "there")
+        )
+    }
+
+    @Test fun `one-shot injection replacing a range mid-text separates from the preceding word`() {
+        assertEquals(
+            "hello there",
+            composeOneShotInjection("helloworld", selStart = 5, selEnd = 10, text = "there")
+        )
+    }
+
+    @Test fun `streaming first partial folds the separator into the tracked length`() {
+        val write = composeStreamingPartial("Hello john", insertionStart = 10, previousLength = 0, displayText = "How")
+        assertEquals("Hello john How", write.updatedText)
+        // 4, not 3: the separator is inside the span, so the next partial replaces it too.
+        assertEquals(4, write.trackedLength)
+    }
+
+    @Test fun `streaming partials in a draft never accumulate extra separators`() {
+        var current = "Hello john"
+        var tracked = 0
+        for (partial in listOf("How", "How old", "How old is", "How old is Tom")) {
+            val write = composeStreamingPartial(current, insertionStart = 10, previousLength = tracked, displayText = partial)
+            current = write.updatedText
+            tracked = write.trackedLength
+        }
+        assertEquals("Hello john How old is Tom", current)
+    }
+
+    @Test fun `streaming first partial in an empty field gets no separator`() {
+        val write = composeStreamingPartial("", insertionStart = 0, previousLength = 0, displayText = "How")
+        assertEquals("How", write.updatedText)
+        assertEquals(3, write.trackedLength)
+    }
+
     // --- shouldUseStreamingPreview (streaming-vs-offline gating) ---
 
     @Test fun `streaming preview requires both the setting and an installed model`() {

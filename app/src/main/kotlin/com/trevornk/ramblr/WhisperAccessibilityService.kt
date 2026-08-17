@@ -2992,11 +2992,16 @@ class WhisperAccessibilityService : AccessibilityService() {
             )
             val insertionStart = resolveInsertionStart(candidate.textSelectionStart, candidate.textSelectionEnd, current.length)
             val displayText = smartCapitalize(text)
-            if (!setNodeText(candidate, replacePartialInField(current, insertionStart, 0, displayText))) {
+            // #144: the separator is folded into the partial *before* its length is tracked, so it
+            // sits inside the session's span and gets replaced along with it on every later partial
+            // and by the final text -- never double-added, never left behind. Text and tracked
+            // length come back together from composeStreamingPartial so they can't drift apart.
+            val write = composeStreamingPartial(current, insertionStart, previousLength = 0, displayText = displayText)
+            if (!setNodeText(candidate, write.updatedText)) {
                 candidate.recycle()
                 return
             }
-            streamingSession = StreamingPreviewSession(candidate, insertionStart, displayText.length, text, now)
+            streamingSession = StreamingPreviewSession(candidate, insertionStart, write.trackedLength, text, now)
             return
         }
 
@@ -3012,9 +3017,12 @@ class WhisperAccessibilityService : AccessibilityService() {
             session.node.isFocused,
         )
         val displayText = smartCapitalize(text)
-        val updated = replacePartialInField(current, session.insertionStart, session.lastPartialLength, displayText)
-        if (!setNodeText(session.node, updated)) { endStreamingSession(); return }
-        session.lastPartialLength = displayText.length
+        // #144: recomputed rather than remembered, and deliberately safe to recompute -- the
+        // character it reads sits before insertionStart, upstream of the span being rewritten, so
+        // it's identical on every partial of the session.
+        val write = composeStreamingPartial(current, session.insertionStart, session.lastPartialLength, displayText)
+        if (!setNodeText(session.node, write.updatedText)) { endStreamingSession(); return }
+        session.lastPartialLength = write.trackedLength
         session.lastInjectedText = text
         session.lastInjectedAtMs = now
     }
@@ -3630,8 +3638,11 @@ class WhisperAccessibilityService : AccessibilityService() {
             // streaming path can't disagree about where the caret really is -- they used to, and a
             // restored WhatsApp draft (which reports (0, 0) with the caret visibly at the end) had
             // dictation prepended: "draft" + " world" => " worlddraft" (#140).
-            val span = resolveReplacementSpan(node.textSelectionStart, node.textSelectionEnd, current.length)
-            val updated = current.replaceRange(span.start, span.endExclusive, text)
+            // #144: a draft already in the field must not run straight into the dictated text
+            // ("Hello john" + "How old is Tom?" => "Hello johnHow old is Tom?"). Composition lives
+            // in composeOneShotInjection so it stays unit-testable -- this line is deliberately a
+            // pure delegation.
+            val updated = composeOneShotInjection(current, node.textSelectionStart, node.textSelectionEnd, text)
             val setTextOk = setNodeText(node, updated)
             Log.i(TAG, "ACTION_SET_TEXT => $setTextOk")
             if (setTextOk) return InjectAttempt(InjectMethod.DIRECT, priorText = current)
