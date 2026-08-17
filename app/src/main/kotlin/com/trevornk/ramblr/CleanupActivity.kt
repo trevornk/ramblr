@@ -307,11 +307,7 @@ class CleanupActivity : BaseSettingsActivity() {
             layoutParams = LinearLayout.LayoutParams(LP_MATCH, dp(4)).apply { topMargin = dp(8) }
         }
 
-        // License is shown in the row subtitle, not only inside the consent dialog: a user
-        // choosing between cleanup models should be able to see that one of them isn't
-        // free/open-source before tapping anything (F-Droid review).
-        val licenseNote = if (model.license.isFree) "" else " · ${model.license.name} (not FOSS)"
-        val row = settingsRow(model.name, "${model.quality} · ${model.sizeMb} MB$licenseNote", rightContainer) {
+        val row = settingsRow(model.name, cleanupModelSubtitle(model), rightContainer) {
             onCleanupModelAction(model)
         }
         val textContainer = row.getChildAt(0) as LinearLayout
@@ -468,13 +464,32 @@ class CleanupActivity : BaseSettingsActivity() {
         views.deleteBtn.visibility = if (installed) View.VISIBLE else View.GONE
 
         if (views.progress.visibility == View.GONE) {
-            views.subtitle.text = if (!installed && sideloadOnly) {
-                "${model.quality} · ${model.sizeMb} MB · sideload only"
-            } else {
-                "${model.quality} · ${model.sizeMb} MB"
-            }
+            views.subtitle.text = cleanupModelSubtitle(model, installed = installed)
         }
     }
+
+    /**
+     * The single source of truth for a cleanup model row's subtitle.
+     *
+     * Both the row builder and [refreshCleanupModelRow] must produce the same string, or whichever
+     * runs last silently wins. That is exactly what went wrong in #153: the builder appended the
+     * non-FOSS license note and the refresh -- which runs immediately afterwards and again on every
+     * download/selection change -- rebuilt the subtitle without it, so the note was never visible
+     * for more than a frame. Keeping the formatting here means a future edit can't reintroduce
+     * that drift.
+     *
+     * The license is surfaced in the row rather than only inside the consent dialog so a user
+     * comparing cleanup models can see that one isn't free/open-source before tapping anything
+     * (F-Droid review, fdroiddata!42401).
+     */
+    private fun cleanupModelSubtitle(
+        model: Model,
+        installed: Boolean = ModelDownloader.isInstalled(this, model),
+    ): String = cleanupModelSubtitleText(
+        model = model,
+        installed = installed,
+        sideloadOnly = ModelDownloader.isSideloadOnly(model),
+    )
 
     private fun refreshAllCleanupRows() = LOCAL_CLEANUP_MODEL_CATALOG.forEach { refreshCleanupModelRow(it) }
 
