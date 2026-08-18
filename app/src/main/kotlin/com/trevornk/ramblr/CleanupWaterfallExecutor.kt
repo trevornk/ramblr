@@ -107,6 +107,38 @@ const val CLEANUP_WATERFALL_HARD_CAP_MS = 8_000L
 const val LOCAL_LLM_STEP_BUDGET_MS = 4_000L
 
 /**
+ * Wall-clock budget for a LOCAL_LLM step that is the LAST step in the waterfall, measured from
+ * the waterfall's start (#155). Replaces [CLEANUP_WATERFALL_HARD_CAP_MS] for that one case only.
+ *
+ * Exists because the 8s hard cap was doing two unrelated jobs with one number. Its own kdoc says
+ * what it was tuned for: a user with *no* local model, whose unreachable cloud hosts burn their
+ * timeouts in sequence while the chain grinds toward raw injection. That is a hanging-socket
+ * problem, and 8s is the right answer to it -- the #137 tuning against 318 real cleanups (p99
+ * 3828ms, slowest success 7859ms) is load-bearing and stays exactly as it is for every cloud
+ * step.
+ *
+ * A terminal on-device step has the opposite risk profile. It is a CPU-bound, self-terminating
+ * computation that already carries its own native abort callback (#92), so it cannot hang the way
+ * a dead socket can; and being last, there is no subsequent step whose time it could steal. The
+ * only thing the cloud-shaped cap achieves there is converting a slow-but-healthy completion into
+ * an outright failure. Trevor hit exactly that on a Pixel 10a: a local cleanup finished its work
+ * in 8003ms and was killed at 8000ms, missing by 3ms. For a user with no cloud provider
+ * configured, local cleanup is the ONLY cleanup path, so that 3ms is the difference between
+ * cleaned text and no cleanup at all.
+ *
+ * 12s is chosen as a bound on that observed failure, not a device measurement: it clears the
+ * 8003ms case by ~50% while still guaranteeing the user gets *some* answer in a bounded time.
+ * It is deliberately a fixed ceiling -- no adaptive or calibration machinery -- because the real
+ * latency fix is the shorter prompt landing alongside it (#155's vocabulary cap: prompt-eval
+ * throughput measured 2145 t/s with the short prompt versus 391 t/s with the 22-term vocabulary
+ * prompt), which cuts this path's cost directly rather than guessing at the device.
+ *
+ * Measured from the waterfall's start rather than from "now", so a chain that spent time on
+ * earlier steps cannot extend the total run past this ceiling.
+ */
+const val TERMINAL_LOCAL_LLM_STEP_BUDGET_MS = 12_000L
+
+/**
  * The actual wall-clock deadline a LOCAL_LLM step gets for one completion attempt (#37 follow-up,
  * Trevor hit this directly with a single-step Local-only chain): [LOCAL_LLM_STEP_BUDGET_MS]
  * exists to guarantee a *subsequent* step gets real time to run after a slow/stuck local attempt
@@ -114,11 +146,22 @@ const val LOCAL_LLM_STEP_BUDGET_MS = 4_000L
  * follows it, e.g. a user's simple "Local" cleanup choice with nothing else configured), that
  * same tight 4s budget serves no purpose: there's no later step it's protecting, so it just
  * turns a genuinely healthy but slightly slower completion into an outright failure with no
- * safety net. When [isLastStep] is true, this returns the full remaining [overallDeadlineAtMs]
- * instead (matching every other step group's behavior, which always gets the real deadline).
+ * safety net.
+ *
+ * When [isLastStep] is true this returns [TERMINAL_LOCAL_LLM_STEP_BUDGET_MS] from
+ * [waterfallStartedAtMs] (#155) rather than the cloud-shaped [overallDeadlineAtMs] -- see that
+ * constant's kdoc for why the 8s hard cap is the wrong instrument for a terminal on-device step.
+ * [maxOf] rather than a plain replacement so this can only ever widen the terminal step's
+ * deadline, never shrink it below what it already got.
  */
-fun localLlmStepDeadline(overallDeadlineAtMs: Long, nowMs: Long, isLastStep: Boolean): Long =
-    if (isLastStep) overallDeadlineAtMs else minOf(overallDeadlineAtMs, nowMs + LOCAL_LLM_STEP_BUDGET_MS)
+fun localLlmStepDeadline(
+    overallDeadlineAtMs: Long,
+    nowMs: Long,
+    isLastStep: Boolean,
+    waterfallStartedAtMs: Long = overallDeadlineAtMs - CLEANUP_WATERFALL_HARD_CAP_MS,
+): Long =
+    if (isLastStep) maxOf(overallDeadlineAtMs, waterfallStartedAtMs + TERMINAL_LOCAL_LLM_STEP_BUDGET_MS)
+    else minOf(overallDeadlineAtMs, nowMs + LOCAL_LLM_STEP_BUDGET_MS)
 
 /**
  * Pure grouping/ordering logic for [CleanupWaterfall.steps], split out from the network-calling
@@ -685,6 +728,9 @@ object CleanupWaterfallExecutor {
             // except when this LOCAL_LLM step is the LAST step in the whole waterfall (#37
             // follow-up: Trevor's simple "Local" cleanup choice has nothing after it to protect),
             // in which case it gets the real remaining deadline like every other step group.
+            // waterfallStartedAtMs is left to its default, which recovers the waterfall's start
+            // as `deadlineAtMs - CLEANUP_WATERFALL_HARD_CAP_MS` -- exact here, since execute()
+            // builds deadlineAtMs as startedAtMs + CLEANUP_WATERFALL_HARD_CAP_MS.
             val localDeadlineAtMs = localLlmStepDeadline(deadlineAtMs, System.currentTimeMillis(), isLastStep)
             callback(
                 when (val result = localInference.complete(localPrompt, text, modelPath, localDeadlineAtMs, { cancelHolder.isCancelled })) {
