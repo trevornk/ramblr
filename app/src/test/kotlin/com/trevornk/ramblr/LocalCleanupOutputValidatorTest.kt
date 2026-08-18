@@ -312,4 +312,84 @@ class LocalCleanupOutputValidatorTest {
     private fun ratio(input: String, output: String): Double =
         LocalCleanupOutputValidator.normalizeForLength(output).length.toDouble() /
             LocalCleanupOutputValidator.normalizeForLength(input).length
+
+    // --- #164: the full-length production echo, measured on device ---------------------------
+    //
+    // The fixtures above were captured with an 11-term vocabulary list. #164 reproduced the same
+    // failure class on real hardware (Pixel 10a, arm64 cross-build of tools/llama_cleanup_probe
+    // running production LLMInference.cpp) with the *full* 22-term list actually configured on
+    // the device, and the echo there is the entire clause -- 335 prompt tokens in, 111 generated
+    // tokens out, none of them the transcript. These assert that exact string, byte for byte,
+    // because the validator's whole job is to stop this specific output reaching a text field.
+    //
+    // Deliberately separate from the #155 fixtures rather than replacing them: the 11-term case
+    // proves a partial echo is caught, this proves the full-length one is, and the two have
+    // different overlap lengths.
+
+    /** The 22 terms read from `shared_prefs/ramblr.xml` on the device that reproduced #164. */
+    private val realDeviceVocabulary = listOf(
+        "Nash-Keller", "Wyatt", "Terelle", "Dyson", "Dys", "Adalyn", "Ady", "Emsley", "Emy",
+        "Londyn", "trevor@nashkellermedia.com", "assistant@nashkellermedia.com",
+        "trevornk@gmail.com", "trevor@nashkeller.com", "Selby", "Mobridge", "Affine",
+        "Unishell", "Pi", "Codex", "Claude", "Hetzner",
+    )
+
+    private val realDevicePrompt =
+        LocalCleanupProvider.systemPromptFor(LOCAL_CLEANUP_MODEL, realDeviceVocabulary)
+
+    /** Verbatim `rawText` from `dictation_history.jsonl` on the same device. */
+    private val realDeviceTranscript =
+        "I think I'm gonna go on a walk and then Probably see if there's any chip bunks hanging " +
+            "out down around the park If so, I'll maybe Play catch with Lily and see if she wants " +
+            "to chase after any of those chipmunks. Then after that, I think We'll probably just " +
+            "cruise around, maybe go have some ice cream Stop at the gas station Go to HVy, do a " +
+            "little bit of shopping. because I did see that there was some new Kinder Bueno ice " +
+            "cream that they have there and it looks really good. so I'm thinking I should " +
+            "probably try that out But anyways, I'm just wondering what you're doing tonight"
+
+    @Test fun `REAL 164 full 22-term production echo is rejected`() {
+        // Byte-for-byte what the model returned on device, three runs, deterministically at
+        // temp 0. Without this rejection the user's own email addresses and children's names are
+        // injected into whatever app they dictated into.
+        assertRejected(
+            LocalCleanupValidation.Reason.PROMPT_ECHO,
+            realDeviceTranscript,
+            "Watch for these project names and personal vocabulary terms, which speech-to-text " +
+                "often mishears: Nash-Keller, Wyatt, Terelle, Dyson, Dys, Adalyn, Ady, Emsley, " +
+                "Emy, Londyn, trevor@nashkellermedia.com, assistant@nashkellermedia.com, " +
+                "trevornk@gmail.com, trevor@nashkeller.com, Selby, Mobridge, Affine, Unishell, " +
+                "Pi, Codex, Claude, Hetzner",
+            prompt = realDevicePrompt,
+        )
+    }
+
+    @Test fun `REAL 164 no-vocabulary truncation is rejected as a length collapse`() {
+        // The no-clause control on the same transcript. Not an echo -- the model returned a
+        // grammatical sentence -- but it dropped ~95% of what was said, which is the failure
+        // mode a bare isNotBlank() check shipped for months.
+        assertRejected(
+            LocalCleanupValidation.Reason.LENGTH_COLLAPSE,
+            realDeviceTranscript,
+            "I think I'm going to the park tonight",
+            prompt = LocalCleanupProvider.systemPromptFor(LOCAL_CLEANUP_MODEL, emptyList()),
+        )
+    }
+
+    @Test fun `a correct cleanup of the 164 transcript survives the 22-term prompt`() {
+        // The negative control that keeps the two tests above honest: under the exact prompt and
+        // transcript that produced the failure, genuinely cleaned output must still be accepted.
+        // Without this, "reject everything" would pass the whole #164 suite.
+        assertAccepted(
+            realDeviceTranscript,
+            "I think I'm gonna go on a walk and then probably see if there are any chipmunks " +
+                "hanging out down around the park. If so, I'll maybe play catch with Lily and " +
+                "see if she wants to chase after any of those chipmunks. Then after that, I " +
+                "think we'll probably just cruise around, maybe go have some ice cream, stop at " +
+                "the gas station, go to HyVee, do a little bit of shopping, because I did see " +
+                "that there was some new Kinder Bueno ice cream that they have there and it " +
+                "looks really good. So I'm thinking I should probably try that out. But anyways, " +
+                "I'm just wondering what you're doing tonight.",
+            prompt = realDevicePrompt,
+        )
+    }
 }
