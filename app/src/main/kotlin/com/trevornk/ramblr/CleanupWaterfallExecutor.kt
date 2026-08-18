@@ -364,7 +364,7 @@ object RealLocalInferenceEngine : LocalInferenceEngine {
                 }
                 when {
                     text == null -> LocalInferenceResult.TimedOut("Local cleanup timed out")
-                    text.isNotBlank() -> LocalInferenceResult.Success(text)
+                    text.isNotBlank() -> validated(systemPrompt, userText, text)
                     else -> LocalInferenceResult.Failure("Local model produced an empty response")
                 }
             }
@@ -383,6 +383,29 @@ object RealLocalInferenceEngine : LocalInferenceEngine {
             android.util.Log.e("RealLocalInferenceEngine", "Local cleanup inference failed for $modelPath", e)
             if (isCancelled()) LocalInferenceResult.Cancelled
             else LocalInferenceResult.Failure(e.message ?: "Local inference failed")
+        }
+
+    /**
+     * Gates non-blank model output through [LocalCleanupOutputValidator] (#155) instead of
+     * accepting any non-blank string, which was this engine's entire prior contract.
+     *
+     * A rejection becomes a [LocalInferenceResult.Failure], never [LocalInferenceResult.Cancelled]:
+     * bad local output is this one step failing, so it must fall through to the next waterfall
+     * step (or raw-text injection) exactly like a timeout does -- see [LocalInferenceResult.TimedOut]'s
+     * kdoc for the live regression caused by conflating the two.
+     */
+    private fun validated(systemPrompt: String, userText: String, text: String): LocalInferenceResult =
+        when (val verdict = LocalCleanupOutputValidator.validate(userText, systemPrompt, text)) {
+            is LocalCleanupValidation.Valid -> LocalInferenceResult.Success(text)
+            is LocalCleanupValidation.Rejected -> {
+                // Log the reason, not the text: the prompt-echo case exists precisely because
+                // the output can contain the user's private vocabulary terms.
+                android.util.Log.w(
+                    "RealLocalInferenceEngine",
+                    "Rejected local cleanup output: ${verdict.reason} -- ${verdict.detail}",
+                )
+                LocalInferenceResult.Failure("Local cleanup output rejected (${verdict.reason})")
+            }
         }
 }
 
