@@ -34,6 +34,18 @@ class LLMInference {
     // stores the tokens for the last query
     // appended to `_messages`
     std::vector<llama_token> _promptTokens;
+
+    // The exact prompt-token sequence whose keys/values are currently resident in the KV cache,
+    // i.e. what the *previous* completion decoded. startCompletion diffs the incoming prompt
+    // against this to find the longest reusable prefix, so it must hold real token ids rather
+    // than a length or a hash -- a length alone cannot prove the cached tokens still match after
+    // the user edits their personal vocabulary or switches prompts (#155 follow-up).
+    std::vector<llama_token> _cachedTokens;
+
+    // How many leading prompt tokens the last startCompletion reused from the KV cache instead of
+    // re-decoding. Diagnostics only (exposed via getReusedPrefixLen for the host probe and
+    // instrumentation); the decode path derives everything it needs from `_batch`.
+    size_t _reusedPrefixLen = 0;
     const char*              _chatTemplate = nullptr;
     // true when `_chatTemplate` was strdup'ed by loadModel (caller-supplied template) and must
     // be freed by the destructor; false when it points at model-owned memory (#87).
@@ -90,6 +102,12 @@ class LLMInference {
     float getResponseGenerationTime() const;
 
     int getContextSizeUsed() const;
+
+    // How many leading prompt tokens the most recent startCompletion() served from the KV cache
+    // instead of re-decoding. 0 on the first completion after a load (nothing cached yet) and
+    // whenever the prompt's prefix changed. Used by tools/llama_cleanup_probe to *prove* the
+    // reuse actually happens rather than inferring it from wall-clock timings.
+    size_t getReusedPrefixLen() const;
 
     // Returns true if Jinja template was used, false if legacy fallback was needed.
     bool startCompletion(const char* query);

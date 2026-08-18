@@ -141,18 +141,25 @@ LLMInference::getContextSizeUsed() const {
     return _nCtxUsed;
 }
 
+size_t
+LLMInference::getReusedPrefixLen() const {
+    return _reusedPrefixLen;
+}
+
 bool
 LLMInference::startCompletion(const char *query) {
     if (!_storeChats) {
         _formattedMessages.clear();
         _formattedMessages = std::vector<char>(llama_n_ctx(_ctx));
         // One-shot mode on a reused instance (#74): the batch below carries no positions, so
-        // llama_decode appends after llama_memory_seq_pos_max -- without this clear, a second
+        // llama_decode appends after llama_memory_seq_pos_max -- without a clear, a second
         // completion's prompt would be decoded after (and attend to) the previous completion's
         // tokens, and _nCtxUsed would grow across turns until "context size reached". _messages
         // itself is cleared in stopCompletion, not here: the caller has already added this
         // turn's system message by the time startCompletion runs (see LlamaCppInference.complete).
-        llama_memory_clear(llama_get_memory(_ctx), false);
+        //
+        // The clear is deferred until after tokenization below, because the previous turn's KV
+        // is exactly what prefix reuse needs to keep. See _cachedTokens.
     }
     _responseGenerationTime = 0;
     _responseNumTokens = 0;
@@ -188,15 +195,74 @@ LLMInference::startCompletion(const char *query) {
     }
     _promptTokens = common_tokenize(llama_model_get_vocab(_model), prompt, true, true);
 
+    // Prefix reuse (#155 follow-up). Ramblr's cleanup prompt is a *stable prefix by
+    // construction*: the system prompt (task instructions + the user's personal vocabulary) is
+    // rendered first and is byte-identical across dictations, while only the transcript at the
+    // tail varies. Re-decoding that shared prefix on every completion is pure waste -- it is the
+    // single largest avoidable cost on the local cleanup path, and it grows with the user's
+    // vocabulary, which is why it previously looked like "long vocabularies are slow".
+    //
+    // This is the same optimization llama.cpp's own server performs for `cache_prompt`: find the
+    // longest common prefix between what is already in the KV cache and the new prompt, keep that
+    // much, and evaluate only the divergent tail. We hold a single sequence (id 0), so trimming
+    // is one llama_memory_seq_rm call.
+    //
+    // Correctness: the reused span must match the new prompt token-for-token, so we compare the
+    // actual token ids from the previous turn (_cachedTokens), never a hash or a length. We also
+    // stop one token short of a full match (see below) because llama_decode needs at least one
+    // token to produce logits to sample from.
+    size_t reuse = 0;
+    if (!_storeChats) {
+        const size_t maxReuse = std::min(_cachedTokens.size(), _promptTokens.size());
+        while (reuse < maxReuse && _cachedTokens[reuse] == _promptTokens[reuse]) {
+            reuse++;
+        }
+        // Never reuse the entire new prompt: llama_decode must evaluate >=1 token this turn to
+        // produce the logits completionLoop() samples from. Backing off by one keeps the
+        // invariant that the batch is non-empty even when a dictation repeats verbatim.
+        if (reuse == _promptTokens.size() && reuse > 0) {
+            reuse--;
+        }
+
+        // Drop everything at/after the divergence point, keep [0, reuse). Passing p1 = -1 means
+        // "to the end".
+        //
+        // llama_memory_seq_rm returns false when a PARTIAL removal is impossible -- notably for
+        // recurrent/hybrid memory (LFM2 is a conv+attention hybrid), where per-position eviction
+        // isn't representable. Ignoring that return would leave the cache holding the previous
+        // turn's tokens while we decoded only a short tail against it, silently corrupting the
+        // model's view of the conversation. On failure we fall back to the old unconditional
+        // full clear and reuse nothing, which is exactly the pre-optimization behaviour.
+        const bool trimmed =
+            reuse == 0 ? false
+                       : llama_memory_seq_rm(llama_get_memory(_ctx), 0, (llama_pos) reuse, -1);
+        if (!trimmed) {
+            llama_memory_clear(llama_get_memory(_ctx), false);
+            reuse = 0;
+        }
+
+        LOGi("prefix reuse: %zu/%zu prompt tokens cached, evaluating %zu",
+             reuse, _promptTokens.size(), _promptTokens.size() - reuse);
+    }
+    _reusedPrefixLen = reuse;
+    // The cache now holds exactly [0, reuse) from the previous turn plus the tail we are about to
+    // decode. Record that, and completionLoop appends each generated token as it decodes it, so
+    // _cachedTokens always mirrors the real KV contents at the next diff.
+    _cachedTokens.assign(_promptTokens.begin(), _promptTokens.end());
+
     // create a llama_batch containing a single sequence
     // see llama_batch_init for more details
     delete _batch; // a previous completion's batch would otherwise leak on reuse (#87 item 2)
     _batch = new llama_batch();
-    _batch->token = _promptTokens.data();
-    _batch->n_tokens = _promptTokens.size();
+    // Only the divergent tail is decoded; the reused prefix already sits in the KV cache at
+    // positions [0, reuse). llama_decode appends after llama_memory_seq_pos_max, so the tail
+    // lands at exactly the right positions without us assigning them by hand.
+    _batch->token = _promptTokens.data() + reuse;
+    _batch->n_tokens = (int32_t) (_promptTokens.size() - reuse);
 
     return usedJinja;
 }
+
 
 // taken from:
 // https://github.com/ggerganov/llama.cpp/blob/master/examples/llama.android/llama/src/main/cpp/llama-android.cpp#L38
@@ -277,6 +343,13 @@ LLMInference::completionLoop() {
     _responseGenerationTime += (end - start);
     _responseNumTokens += 1;
     _cacheResponseTokens += piece;
+
+    // Every sampled token is fed back through llama_decode below, so it occupies a KV position
+    // just like a prompt token does. _cachedTokens must therefore mirror the *whole* cache
+    // contents (prompt + generated response), not just the prompt: the next completion trims at
+    // the first divergence, and anything we failed to record would survive past that point and
+    // silently attend to the next turn (#155 follow-up).
+    _cachedTokens.push_back(_currToken);
 
     // re-init the batch with the newly predicted token
     // key, value pairs of all previous tokens have been cached

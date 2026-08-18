@@ -30,7 +30,7 @@ static const int kMaxPieces = 512;
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: %s <model.gguf> <system_prompt> <user_text> [runs] [budget_ms]\n", argv[0]);
+        fprintf(stderr, "usage: %s <model.gguf> <system_prompt> <user_text> [runs] [budget_ms] [vary_text]\n", argv[0]);
         return 1;
     }
     const std::string modelPath = argv[1];
@@ -43,6 +43,9 @@ int main(int argc, char** argv) {
     }
     // 0 (default) = no deadline, matching LlamaCppInference.complete()'s Long.MAX_VALUE case.
     const long budgetMs = argc > 5 ? atol(argv[5]) : 0;
+    // When 1, each run after the first appends a distinct suffix to the transcript, so the system
+    // prompt stays byte-identical while the user text changes -- the actual dictation pattern.
+    const bool varyText = argc > 6 ? atoi(argv[6]) != 0 : false;
 
     LLMInference llm;
     fprintf(stderr, "loading model...\n");
@@ -67,8 +70,18 @@ int main(int argc, char** argv) {
         auto genStart = std::chrono::steady_clock::now();
         std::string response;
         int numPieces = 0;
+        // Vary the transcript per run so this exercises the real dictation pattern -- identical
+        // system prompt, different user text -- which is exactly the case prefix reuse targets.
+        // Without the suffix every run would be byte-identical and reuse would look artificially
+        // perfect (#155 follow-up).
+        std::string thisRunText = userText;
+        if (varyText && run > 1) {
+            thisRunText += " take " + std::to_string(run);
+        }
+        size_t reused = 0;
         try {
-            llm.startCompletion(userText.c_str());
+            llm.startCompletion(thisRunText.c_str());
+            reused = llm.getReusedPrefixLen();
             // Mirrors complete()'s call order: arm the budget after startCompletion, before the
             // first completionLoop decode it bounds (#92).
             llm.setInferenceBudgetMs(budgetMs);
@@ -93,8 +106,8 @@ int main(int argc, char** argv) {
         double genSecs = std::chrono::duration<double>(genEnd - genStart).count();
 
         printf("=== RESPONSE (run %d of %d) ===\n%s\n=== END ===\n", run, numRuns, response.c_str());
-        fprintf(stderr, "run %d: generated %d pieces in %.2fs (%.1f tok/s), context used: %d\n",
-                run, numPieces, genSecs, numPieces / genSecs, llm.getContextSizeUsed());
+        fprintf(stderr, "run %d: generated %d pieces in %.2fs (%.1f tok/s), context used: %d, prefix reused: %zu tokens\n",
+                run, numPieces, genSecs, numPieces / genSecs, llm.getContextSizeUsed(), reused);
     }
     return 0;
 }
