@@ -109,6 +109,10 @@ class LLMInference {
     // reuse actually happens rather than inferring it from wall-clock timings.
     size_t getReusedPrefixLen() const;
 
+    // Logs llama's own load / prompt-eval / generation split for this context. Only meaningful
+    // because loadModel leaves `no_perf` off; see the comment there for why that matters.
+    void logPerfMetrics() const;
+
     // Returns true if Jinja template was used, false if legacy fallback was needed.
     bool startCompletion(const char* query);
 

@@ -69,7 +69,14 @@ LLMInference::loadModel(const char *model_path, float minP, float temperature, b
     ctx_params.n_ctx = contextSize;
     ctx_params.n_batch = contextSize;
     ctx_params.n_threads = nThreads;
-    ctx_params.no_perf = true; // disable performance metrics
+    // Keep llama's own perf counters live. They are what separates model load from prompt
+    // evaluation from token generation; without them a slow completion on-device is a single
+    // opaque wall-clock number, which is exactly why an 8s local cleanup failure was originally
+    // misattributed to prompt length (see
+    // .hermes/plans/2026-08-18-local-cleanup-latency-measured.md). The counters are a few
+    // integer accumulators around calls that already cost milliseconds -- immeasurable next to
+    // the decode itself -- and logPerfMetrics() below emits the breakdown once per completion.
+    ctx_params.no_perf = false;
     _ctx = llama_init_from_model(_model, ctx_params);
     if (!_ctx) {
         LOGe("llama_new_context_with_model() returned null)");
@@ -144,6 +151,26 @@ LLMInference::getContextSizeUsed() const {
 size_t
 LLMInference::getReusedPrefixLen() const {
     return _reusedPrefixLen;
+}
+
+void
+LLMInference::logPerfMetrics() const {
+    if (!_ctx) {
+        return;
+    }
+    // llama_perf_context reports cumulative counters for this context, split into the three
+    // phases that actually matter when a completion is slow: t_load_ms (one-off model load),
+    // t_p_eval_ms/n_p_eval (prompt evaluation) and t_eval_ms/n_eval (token generation). Logging
+    // the split per completion is the difference between "local cleanup took 8s" and knowing
+    // which phase to go fix -- the ambiguity that made a vocabulary cap look like the answer.
+    const llama_perf_context_data perf = llama_perf_context(_ctx);
+    LOGi("perf: load %.2fms | prompt eval %.2fms / %d tokens (%.2f t/s) | gen %.2fms / %d tokens (%.2f t/s) | prefix reused %zu",
+         perf.t_load_ms,
+         perf.t_p_eval_ms, perf.n_p_eval,
+         perf.n_p_eval > 0 && perf.t_p_eval_ms > 0 ? perf.n_p_eval / (perf.t_p_eval_ms / 1000.0) : 0.0,
+         perf.t_eval_ms, perf.n_eval,
+         perf.n_eval > 0 && perf.t_eval_ms > 0 ? perf.n_eval / (perf.t_eval_ms / 1000.0) : 0.0,
+         _reusedPrefixLen);
 }
 
 bool
@@ -389,6 +416,9 @@ LLMInference::stopCompletion() {
     // Disarm the wall-clock deadline so it can't carry into the next completion on a reused
     // instance before that call re-arms it (#92). setInferenceBudgetMs re-arms per completion.
     _abortAtUs.store(0, std::memory_order_relaxed);
+    // One line per completion with the load/prompt-eval/generation split, so a slow local cleanup
+    // in the field can be attributed to a phase instead of guessed at.
+    logPerfMetrics();
 }
 
 LLMInference::~LLMInference() {
