@@ -412,14 +412,15 @@ object RealLocalInferenceEngine : LocalInferenceEngine {
             if (isCancelled()) {
                 LocalInferenceResult.Cancelled
             } else {
+                val masking = NumericSpanProtector.mask(userText)
                 val text = BoundedBlockingCall.runWithDeadline(deadlineAtMs) {
                     LocalCleanupModelHolder.withInference(modelPath) { inference ->
-                        inference.complete(systemPrompt, userText, deadlineAtMs, isCancelled)
+                        inference.complete(systemPrompt, masking.maskedText, deadlineAtMs, isCancelled)
                     }
                 }
                 when {
                     text == null -> LocalInferenceResult.TimedOut("Local cleanup timed out")
-                    text.isNotBlank() -> validated(systemPrompt, userText, text)
+                    text.isNotBlank() -> validated(systemPrompt, userText, masking, text)
                     else -> LocalInferenceResult.Failure("Local model produced an empty response")
                 }
             }
@@ -441,25 +442,35 @@ object RealLocalInferenceEngine : LocalInferenceEngine {
         }
 
     /**
-     * Gates non-blank model output through [LocalCleanupOutputValidator] (#155) instead of
-     * accepting any non-blank string, which was this engine's entire prior contract.
+     * Restores the numeric spans masked before inference (#155) and gates the result through
+     * [LocalCleanupOutputValidator], instead of accepting any non-blank string, which was this
+     * engine's entire prior contract.
+     *
+     * Both halves live in [protectedLocalCleanupOutcome] so their ordering -- restore first, then
+     * validate the RESTORED text against the ORIGINAL transcript -- is unit-testable; this engine
+     * is not constructible from the JVM suite.
      *
      * A rejection becomes a [LocalInferenceResult.Failure], never [LocalInferenceResult.Cancelled]:
      * bad local output is this one step failing, so it must fall through to the next waterfall
      * step (or raw-text injection) exactly like a timeout does -- see [LocalInferenceResult.TimedOut]'s
      * kdoc for the live regression caused by conflating the two.
      */
-    private fun validated(systemPrompt: String, userText: String, text: String): LocalInferenceResult =
-        when (val verdict = LocalCleanupOutputValidator.validate(userText, systemPrompt, text)) {
-            is LocalCleanupValidation.Valid -> LocalInferenceResult.Success(text)
-            is LocalCleanupValidation.Rejected -> {
+    private fun validated(
+        systemPrompt: String,
+        userText: String,
+        masking: NumericMasking,
+        text: String,
+    ): LocalInferenceResult =
+        when (val outcome = protectedLocalCleanupOutcome(userText, systemPrompt, masking, text)) {
+            is ProtectedCleanupOutcome.Accepted -> LocalInferenceResult.Success(outcome.text)
+            is ProtectedCleanupOutcome.Rejected -> {
                 // Log the reason, not the text: the prompt-echo case exists precisely because
                 // the output can contain the user's private vocabulary terms.
                 android.util.Log.w(
                     "RealLocalInferenceEngine",
-                    "Rejected local cleanup output: ${verdict.reason} -- ${verdict.detail}",
+                    "Rejected local cleanup output: ${outcome.label} -- ${outcome.detail}",
                 )
-                LocalInferenceResult.Failure("Local cleanup output rejected (${verdict.reason})")
+                LocalInferenceResult.Failure("Local cleanup output rejected (${outcome.label})")
             }
         }
 }
