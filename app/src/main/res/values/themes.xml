@@ -25,4 +25,19 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
     </style>
+
+    <!-- ProcessTextActivity (#157): a dialog-only surface launched over whatever app the user
+         selected text in. It renders no content of its own, so the window itself must be
+         floating/transparent with no background dim beyond the dialog's own — otherwise the
+         selection-menu tap flashes a full-screen empty Activity over the host app before the
+         style picker appears. Inherits the app theme so the dialogs pick up the same Material3
+         colours as the Settings screens. -->
+    <style name="Theme.PhoneWhisper.Transparent" parent="Theme.PhoneWhisper">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
 </resources>

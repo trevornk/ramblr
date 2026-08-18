@@ -83,6 +83,21 @@ Ramblr uses Android Accessibility Service only to identify the currently focused
 
 Ramblr is not designed to monitor browsing, collect screen content for analytics, or perform background automation.
 
+## Text-selection menu ("Clean up with Ramblr")
+
+Ramblr registers an entry in Android's text-selection menu (the Copy/Paste/Share popup). It is
+invoked only when you select text yourself and then tap Ramblr in that menu; Android hands the
+selected text to Ramblr at that moment and at no other time. This entry point does not use the
+Accessibility Service at all and works whether or not the service is enabled — nothing above
+changes.
+
+The selected text is then treated exactly like a dictated transcript: it runs through the same
+cleanup providers you have configured, so if that configuration includes a cloud provider, the
+selected text is sent to that provider (turn "Use cloud for Cleanup" off to keep cleanup
+on-device). The cleaned result is placed on your clipboard and returned to the app you selected
+the text in; if that app reports the field as read-only, Ramblr copies the result to the
+clipboard and tells you, rather than changing anything.
+
 ## Data collection
 
 I do not run a backend for Ramblr and do not collect user accounts, analytics, or uploaded recordings myself.
