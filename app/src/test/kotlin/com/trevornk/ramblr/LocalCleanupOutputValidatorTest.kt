@@ -193,11 +193,12 @@ class LocalCleanupOutputValidatorTest {
         )
     }
 
-    @Test fun `comma grouping and currency symbols compare equal to the plain digits`() {
+    @Test fun `comma grouping currency and phone punctuation compare by semantic digits`() {
         assertAccepted(
             "the invoice total came to 12500 dollars this quarter",
             "The invoice total came to $12,500 this quarter.",
         )
+        assertAccepted("call 2125553476", "Call (212) 555-3476.")
     }
 
     @Test fun `digits already present in the input must survive verbatim`() {

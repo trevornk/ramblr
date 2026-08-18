@@ -744,16 +744,26 @@ object CleanupWaterfallExecutor {
             // as `deadlineAtMs - CLEANUP_WATERFALL_HARD_CAP_MS` -- exact here, since execute()
             // builds deadlineAtMs as startedAtMs + CLEANUP_WATERFALL_HARD_CAP_MS.
             val localDeadlineAtMs = localLlmStepDeadline(deadlineAtMs, System.currentTimeMillis(), isLastStep)
+            val normalization = SpokenNumberNormalizer.normalize(text)
             callback(
-                when (val result = localInference.complete(localPrompt, text, modelPath, localDeadlineAtMs, { cancelHolder.isCancelled })) {
+                when (
+                    val result = localInference.complete(
+                        localPrompt,
+                        normalization.text,
+                        modelPath,
+                        localDeadlineAtMs,
+                        { cancelHolder.isCancelled },
+                    )
+                ) {
                     is LocalInferenceResult.Success -> {
-                        // Trim to match what both cloud parsers already do to their model text
-                        // (PostProcessor.parseResponse / AnthropicCleanupProvider.parseResponse):
-                        // small local models routinely emit a leading space or newline as the
-                        // first sampled piece, which was injected verbatim (#84).
+                        // Trim to match what both cloud parsers already do to their model text.
                         val trimmed = result.text.trim()
-                        if (trimmed.isNotEmpty()) CleanupStepOutcome.Success(trimmed)
-                        else CleanupStepOutcome.StepFailed("Local model produced an empty response")
+                        when {
+                            trimmed.isEmpty() -> CleanupStepOutcome.StepFailed("Local model produced an empty response")
+                            NumericPreservationVerifier.verify(normalization, trimmed) is NumericPreservation.Rejected ->
+                                CleanupStepOutcome.StepFailed("Local cleanup output rejected (NUMERIC_DIVERGENCE)")
+                            else -> CleanupStepOutcome.Success(trimmed)
+                        }
                     }
                     is LocalInferenceResult.Failure -> CleanupStepOutcome.StepFailed(result.message)
                     is LocalInferenceResult.TimedOut -> CleanupStepOutcome.StepFailed(result.message)

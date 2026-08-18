@@ -116,6 +116,7 @@ class CleanupWaterfallCursorTest {
  *  testable with no real I/O: each call to [send] pops and returns the next queued outcome. */
 private class FakeCleanupHttpTransport(private val outcomes: MutableList<CleanupHttpOutcome>) : CleanupHttpTransport {
     val requestedUrls = mutableListOf<String>()
+    val requestedBodies = mutableListOf<String>()
 
     override fun send(
         url: String,
@@ -126,6 +127,7 @@ private class FakeCleanupHttpTransport(private val outcomes: MutableList<Cleanup
         callback: (CleanupHttpOutcome) -> Unit,
     ) {
         requestedUrls.add(url)
+        requestedBodies.add(jsonBody)
         check(outcomes.isNotEmpty()) { "FakeCleanupHttpTransport ran out of queued outcomes for url=$url" }
         callback(outcomes.removeAt(0))
     }
@@ -487,10 +489,11 @@ class LocalLlmWaterfallStepTest {
         localModelPath: () -> String?,
         credentialLookup: (CleanupCredentialSlot) -> String = { "" },
         localPrompt: String = PostProcessor.SIMPLE_PROMPT,
+        text: String = "raw transcript",
     ): PostProcessor.Result {
         var captured: PostProcessor.Result? = null
         CleanupWaterfallExecutor.execute(
-            text = "raw transcript",
+            text = text,
             prompt = "clean it up",
             waterfall = waterfall,
             cursor = CleanupWaterfallCursor(),
@@ -760,6 +763,45 @@ class LocalLlmWaterfallStepTest {
 
         assertEquals("cleaned via fallback", result.text)
         assertEquals(1, transport.requestedUrls.size)
+    }
+
+    @Test fun `local step normalizes before inference and accepts punctuation-only phone formatting`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf())
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("Call (212) 555-3476.")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+
+        val result = execute(
+            waterfall, transport, engine,
+            localModelPath = { "/path/to/model.gguf" },
+            text = "call two one two five five five three four seven six",
+        )
+
+        assertEquals("call 2125553476", engine.calls.single().second)
+        assertEquals("Call (212) 555-3476.", result.text)
+    }
+
+    @Test fun `numeric verification failure rejects local output and cloud still receives raw text`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned safely by cloud")))
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("The round was $1,200 dollars.")))
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
+            ),
+        )
+        val raw = "the round was one point two million dollars"
+
+        val result = execute(
+            waterfall, transport, engine,
+            localModelPath = { "/path/to/model.gguf" },
+            credentialLookup = { "openai-key" },
+            text = raw,
+        )
+
+        assertEquals("the round was 1200000 dollars", engine.calls.single().second)
+        assertEquals("cleaned safely by cloud", result.text)
+        assertTrue(transport.requestedBodies.single().contains(raw))
+        assertTrue(!transport.requestedBodies.single().contains("1200000"))
     }
 }
 
