@@ -204,7 +204,9 @@ object LocalCleanupOutputValidator {
         val inputRuns = numericRuns(rawInput)
         if (inputRuns.isEmpty()) return null
 
-        val outputValues = numericRuns(modelOutput).flatten().toSet()
+        val outputValues = (
+            numericRuns(modelOutput).flatten() + NumericValueExtractor.extract(modelOutput)
+        ).toSet()
         val missing = inputRuns.firstOrNull { candidates -> candidates.none { it in outputValues } }
             ?: return null
 
