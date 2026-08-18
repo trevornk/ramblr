@@ -128,10 +128,22 @@ const val LOCAL_LLM_STEP_BUDGET_MS = 4_000L
  *
  * 12s is chosen as a bound on that observed failure, not a device measurement: it clears the
  * 8003ms case by ~50% while still guaranteeing the user gets *some* answer in a bounded time.
- * It is deliberately a fixed ceiling -- no adaptive or calibration machinery -- because the real
- * latency fix is the shorter prompt landing alongside it (#155's vocabulary cap: prompt-eval
- * throughput measured 2145 t/s with the short prompt versus 391 t/s with the 22-term vocabulary
- * prompt), which cuts this path's cost directly rather than guessing at the device.
+ * It is deliberately a fixed ceiling -- no adaptive or calibration machinery -- because it is a
+ * safety net, not a latency fix.
+ *
+ * This budget deliberately does NOT rest on any claim about vocabulary length. An earlier
+ * revision justified it with a "2145 t/s short prompt vs 391 t/s 22-term prompt" figure; that
+ * measurement was wrong twice over and has been retracted. Re-measured against the real
+ * lfm2.5-350m-q4_0 with the real production prompts: the "364 -> 702" figures were *character*
+ * counts, not tokens (true tokenized lengths are 100 -> 212), and the throughput gap was a
+ * warmup artifact of an uncontrolled first run -- alternating A/B reps put the 22-term prompt at
+ * 2431-2797 t/s versus 1582-1781 t/s for the short one, i.e. the longer prompt evaluates
+ * *faster* per token because the larger batch uses the CPU better. The personal vocabulary costs
+ * ~15ms of prompt eval, which cannot explain an 8000ms budget overrun.
+ *
+ * The real cost is structural: LLMInference::startCompletion clears the KV cache every
+ * completion, so the system prompt is re-evaluated from scratch on every dictation instead of
+ * reusing its cached prefix. See .hermes/plans/2026-08-18-local-cleanup-latency-measured.md.
  *
  * Measured from the waterfall's start rather than from "now", so a chain that spent time on
  * earlier steps cannot extend the total run past this ceiling.
