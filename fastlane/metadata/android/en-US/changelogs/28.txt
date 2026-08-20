@@ -1,0 +1,8 @@
+Privacy fix: no cloud connection when you have not configured one.
+
+- Ramblr opened a connection to OpenAI's servers ahead of each dictation even
+  when you had no API key saved, cleanup switched off, and transcription set to
+  on-device only. Nothing was ever sent over that connection, but opening it
+  revealed your IP address and the fact that you use Ramblr to a company you had
+  chosen not to involve. Ramblr now prepares a connection only to a service it
+  could actually reach on your behalf.
