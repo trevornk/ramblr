@@ -21,6 +21,21 @@ import okhttp3.Request
  * [hostsToWarm] is the pure, unit-testable part: given the resolved transcription candidates and
  * effective cleanup chain for this dictation, return the distinct hostnames a real call could
  * hit. [warmUpAsync] does the actual (impure, Android-only) connection attempts.
+ *
+ * ## Credential gating (#168)
+ *
+ * A host is only warmed when a real call could actually reach it, which means the provider must
+ * have a credential configured. Both real call paths already refuse to contact a keyless
+ * provider -- [TranscriptionChain.precheck] returns SKIP for OPENAI/GEMINI without a credential,
+ * and [CleanupWaterfallExecutor] fails the step with "No credential configured" before building
+ * a request -- so warming a keyless host opened a connection that, by construction, nothing was
+ * ever going to reuse.
+ *
+ * That was not merely a wasted handshake. F-Droid review of 1.0.24 (fdroiddata!42401) observed
+ * every dictation opening a TLS connection to api.openai.com with cleanup off, Local mode, and
+ * no API key set -- sending the user's IP and an api.openai.com SNI to a proprietary service the
+ * user had explicitly opted out of. The optimization only ever paid off for users who configured
+ * a key; gating on that costs those users nothing and makes the opted-out case silent.
  */
 object NetworkWarmup {
     /**
@@ -29,13 +44,22 @@ object NetworkWarmup {
      * with a [ProviderChainEntry.baseUrlOverride] warms that host instead of the default one, so
      * this stays correct for anyone pointed at a proxy/self-hosted endpoint. LOCAL entries never
      * produce a host -- there's no network call to warm for on-device inference.
+     *
+     * [hasCredential] is the caller's seam onto [ProviderCredentialStore]; an entry whose kind
+     * has no credential contributes no host (#168). This applies to `baseUrlOverride` entries
+     * too: a self-hosted proxy still carries the provider's Authorization header, so the real
+     * call is skipped for exactly the same reason and its host must not be warmed either.
      */
     fun hostsToWarm(
         transcriptionCandidates: List<ProviderChainEntry>,
         cleanupChain: ProviderChain,
+        hasCredential: (ProviderKind) -> Boolean,
     ): Set<String> {
         val entries = transcriptionCandidates + cleanupChain.entries
-        return entries.mapNotNull { entry -> hostFor(entry) }.toSet()
+        return entries
+            .filter { entry -> entry.kind == ProviderKind.LOCAL || hasCredential(entry.kind) }
+            .mapNotNull { entry -> hostFor(entry) }
+            .toSet()
     }
 
     private fun hostFor(entry: ProviderChainEntry): String? {

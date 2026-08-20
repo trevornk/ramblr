@@ -2212,12 +2212,19 @@ class WhisperAccessibilityService : AccessibilityService() {
      * timing [warmUpLocalCleanupModelIfNeeded]/[warmUpTranscribersIfTrimmed] already use. Reads
      * the same [ProviderChainStore]/[CloudFeatureToggle] state the real transcription and cleanup
      * call sites resolve against, so this only opens connections a real call could actually use.
+     *
+     * The [ProviderCredentialStore] gate (#168) is what makes that last sentence true: without
+     * it this warmed a host for a provider that has no key, which both real call paths refuse to
+     * contact, so a Local-mode user with cleanup off and no key still opened a TLS connection to
+     * api.openai.com on every dictation.
      */
     private fun warmUpCloudConnectionsIfNeeded() {
         val chain = ProviderChainStore.load(this)
         val transcriptionCandidates = ProviderChainRuntime.transcriptionCandidates(chain)
         val cleanupChain = ProviderChainRuntime.effectiveChainForCleanup(chain, CloudFeatureToggle.cleanupEnabled(this))
-        val hosts = NetworkWarmup.hostsToWarm(transcriptionCandidates, cleanupChain)
+        val hosts = NetworkWarmup.hostsToWarm(transcriptionCandidates, cleanupChain) { kind ->
+            ProviderCredentialStore.isConfigured(this, kind)
+        }
         NetworkWarmup.warmUpAsync(hosts)
     }
 
