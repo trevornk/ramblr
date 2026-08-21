@@ -403,4 +403,101 @@ class LocalCleanupOutputValidatorTest {
             prompt = realDevicePrompt,
         )
     }
+
+    // --- (d) length expansion (#181) ---------------------------------------------------------
+    //
+    // The general form of #179's degenerate loop. #179 stops generation on verbatim repetition;
+    // this check rejects any output that is a multiple of its input, including one that expanded
+    // by confabulating novel text and so has no repeated window to detect.
+    //
+    // Mutation-check: raise LENGTH_EXPANSION_MAX_RATIO above 3.71, or delete the
+    // checkLengthExpansion call from validate(), and the two rejection tests below must fail.
+
+    @Test fun `REAL 179 degenerate loop output is rejected as an expansion (#181)`() {
+        // Verbatim what mumble-cleanup-2stage returned for the 580-char transcript: 2197 chars,
+        // the same clause eleven times. Before this check it was ACCEPTED -- it echoes no prompt,
+        // loses no number, and is far longer than the collapse floor -- so it went straight into
+        // the user's text field. Measured at 3.71x normalized.
+        assertRejected(
+            LocalCleanupValidation.Reason.LENGTH_EXPANSION,
+            realDeviceTranscript,
+            "I think I'm gonna go on a walk and then probably see if there's any chip-bunks hanging " +
+            "out around the park. If so, I'll maybe Play catch with Lily and see if she wants to " +
+            "chase after any of those chip-bunks hanging out around the park. It looks really good. " +
+            "So I'm gonna probably just cruise around, maybe see if she's gonna chase after any of " +
+            "those chip-buds hanging out around the park. That's and it's probably just really good. " +
+            "So I'm gonna probably try that out, but I'll probably just cruise around, maybe see if " +
+            "she's gonna chase after any of those chip-buds hanging out around the park, and that's " +
+            "and really good. So I'm gonna probably just cruise around, maybe see if she's gonna " +
+            "chase after any of those chip-buds hanging out around the park, and it looks really " +
+            "good. So I'm supposed to try that out, but she's gonna chase after any of those " +
+            "chip-buds hanging out around the park, and it looks really good, so I'm supposed to try " +
+            "that out, but she's gonna chase after any of those chip-buds hanging out around the " +
+            "park, and that's and really good. So I should try that out, but she's gonna chase after " +
+            "any of those chip-buds hanging out around the park, and it looks really good, so I'm " +
+            "supposed to try that out, but she's gonna chase after any of those chip-buds hanging out " +
+            "around the park, and it looks really good, so I'm supposed to try that, I'll probably " +
+            "just cruise around, maybe see if she's gonna chase after any of those chip-buds hanging " +
+            "out around the park, and that's and really good. So, I'm supposed to try that, I'll " +
+            "probably just cruise around, maybe see if she's gonna chase after any of those chip-buds " +
+            "hanging out around the park, and it's probably just really good. So I'm supposed to try " +
+            "that, I'll probably just cruise around, maybe see if she's gonna chase after any of " +
+            "those chip-buds hanging out around the park, and it looks really good, so I'm supposed " +
+            "to try that, I'll probably just cruise around, maybe see if she's gonna chase after any " +
+            "of those chip-buds hanging out around the park, and it's probably just really good. So, " +
+            "I'm supposed to try that, I'll probably just see if she's gonna chase after any of those " +
+            "chip-buds hanging out around the park,",
+            prompt = realDevicePrompt,
+        )
+    }
+
+    @Test fun `output that confabulates novel text past the limit is rejected (#181)`() {
+        // The failure #179's repetition detector cannot see: no repeated window, the model simply
+        // kept writing. Distinct sentences, so a repetition check passes it; the ratio does not.
+        val input = "So I went to the store this morning and picked up some milk and eggs"
+        assertRejected(
+            LocalCleanupValidation.Reason.LENGTH_EXPANSION,
+            input,
+            "So I went to the store this morning and picked up some milk and eggs. " +
+                "The weather was pleasant and the drive took about fifteen minutes. " +
+                "Afterwards I considered stopping for coffee but decided against it. " +
+                "The cashier mentioned that a new bakery had opened across the street. " +
+                "I plan to visit it sometime next week when I have more free time available.",
+            prompt = plainPrompt,
+        )
+    }
+
+    @Test fun `legitimate cleanup that lengthens slightly is not rejected (#181)`() {
+        // The negative control. Correct cleanup routinely lengthens a transcript a little --
+        // punctuation, capitalization, expanding a mumbled word -- and the measured healthy
+        // ceiling was 1.33x. Without this test, dropping the ratio to 1.0 would pass the suite.
+        assertAccepted(
+            "so i went down to the store this morning and i picked up some milk and some eggs",
+            "So, I went down to the store this morning, and I picked up some milk and some eggs.",
+        )
+    }
+
+    @Test fun `a short input is exempt from the expansion check (#181)`() {
+        // Measured: "How old is Tom?" (14 normalized chars) legitimately cleaned to 29 -- a 2.07x
+        // ratio on output that is entirely correct. Short utterances have naturally high ratios,
+        // which is what LENGTH_EXPANSION_MIN_INPUT_CHARS exists for. Deleting the floor fails
+        // this test.
+        assertAccepted("How old is Tom?", "How old is Tom? How old is Tom, exactly?")
+    }
+
+    @Test fun `an over-long prompt echo is still reported as an echo, not an expansion (#181)`() {
+        // Ordering guarantee: the expansion check runs last precisely so the more specific
+        // diagnosis wins. The #164 echo is both an echo AND an expansion; reporting it as an
+        // expansion would lose the reason that actually explains it.
+        assertRejected(
+            LocalCleanupValidation.Reason.PROMPT_ECHO,
+            "This is a second test to see if it inserts",
+            "Watch for these project names and personal vocabulary terms, which speech-to-text " +
+                "often mishears: Nash-Keller, Wyatt, Terelle, Dyson, Dys, Adalyn, Ady, Emsley, " +
+                "Emy, Londyn, trevor@nashkellermedia.com, assistant@nashkellermedia.com, " +
+                "trevornk@gmail.com, trevor@nashkeller.com, Selby, Mobridge, Affine, Unishell, " +
+                "Pi, Codex, Claude, Hetzner",
+            prompt = realDevicePrompt,
+        )
+    }
 }
