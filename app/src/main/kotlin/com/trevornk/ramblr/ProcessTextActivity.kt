@@ -148,7 +148,7 @@ class ProcessTextActivity : Activity() {
             vocabulary,
         )
         val localModel = LocalCleanupProvider.selectedModel(this)
-        val localPrompt = LocalCleanupProvider.selectedSystemPrompt(this, vocabulary)
+        val localPrompt = LocalCleanupProvider.selectedSystemPrompt(this)
         val localModelPath = ModelDownloader.localCleanupModelFile(this, localModel)?.absolutePath
 
         progressDialog = android.app.AlertDialog.Builder(this)

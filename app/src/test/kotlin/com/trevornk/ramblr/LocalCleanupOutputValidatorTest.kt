@@ -22,15 +22,22 @@ import org.junit.Test
 class LocalCleanupOutputValidatorTest {
 
     // The prompt actually sent in the failing condition: SIMPLE_PROMPT with a 22-term clause.
-    private val vocabularyPrompt = LocalCleanupProvider.systemPromptFor(
-        LOCAL_CLEANUP_MODEL,
+    //
+    // Built here via interpolateVocabulary rather than LocalCleanupProvider.systemPromptFor,
+    // because #182 stopped the *local* path from interpolating terms at all. The validator is
+    // deliberately prompt-agnostic -- it echo-checks whatever prompt it is handed -- and a
+    // vocabulary-laden prompt is still exactly what cloud cleanup sends, so this coverage stays
+    // meaningful. Keeping it also means the validator remains correct if vocabulary ever returns
+    // to the local path through the post-processing route #182 describes.
+    private val vocabularyPrompt = PostProcessor.interpolateVocabulary(
+        PostProcessor.SIMPLE_PROMPT,
         listOf(
             "Nash-Keller", "Wyatt", "Terelle", "Ramblr", "FastHTML", "Selby", "Mobridge",
             "Hermes", "Trinity", "sherpa-onnx", "llama.cpp",
         ),
     )
 
-    private val plainPrompt = LocalCleanupProvider.systemPromptFor(LOCAL_CLEANUP_MODEL, emptyList())
+    private val plainPrompt = LocalCleanupProvider.systemPromptFor(LOCAL_CLEANUP_MODEL)
 
     private fun assertRejected(
         expected: LocalCleanupValidation.Reason,
@@ -136,7 +143,7 @@ class LocalCleanupOutputValidatorTest {
 
     @Test fun `the fine-tuned model's own prompt is echo-checked too`() {
         val model = LOCAL_CLEANUP_MODEL_CATALOG.first { it.localSystemPrompt != null }
-        val prompt = LocalCleanupProvider.systemPromptFor(model, listOf("Ramblr"))
+        val prompt = LocalCleanupProvider.systemPromptFor(model)
         assertRejected(
             LocalCleanupValidation.Reason.PROMPT_ECHO,
             "so anyway I was thinking we should ship it on Friday",
@@ -335,8 +342,11 @@ class LocalCleanupOutputValidatorTest {
         "Unishell", "Pi", "Codex", "Claude", "Hetzner",
     )
 
+    // Built directly rather than through systemPromptFor: #182 removed vocabulary from the local
+    // path, but this test reproduces the on-device #164 echo, whose whole subject is a prompt
+    // carrying these 22 terms. The validator must still reject that echo wherever it is sent.
     private val realDevicePrompt =
-        LocalCleanupProvider.systemPromptFor(LOCAL_CLEANUP_MODEL, realDeviceVocabulary)
+        PostProcessor.interpolateVocabulary(PostProcessor.SIMPLE_PROMPT, realDeviceVocabulary)
 
     /** Verbatim `rawText` from `dictation_history.jsonl` on the same device. */
     private val realDeviceTranscript =
@@ -372,7 +382,7 @@ class LocalCleanupOutputValidatorTest {
             LocalCleanupValidation.Reason.LENGTH_COLLAPSE,
             realDeviceTranscript,
             "I think I'm going to the park tonight",
-            prompt = LocalCleanupProvider.systemPromptFor(LOCAL_CLEANUP_MODEL, emptyList()),
+            prompt = LocalCleanupProvider.systemPromptFor(LOCAL_CLEANUP_MODEL),
         )
     }
 

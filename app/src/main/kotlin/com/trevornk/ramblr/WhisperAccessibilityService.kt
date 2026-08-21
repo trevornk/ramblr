@@ -2831,7 +2831,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                 cancelHolder = inFlightCall,
                 credentialLookup = { kind -> ProviderCredentialStore.get(this, kind) },
                 localModelPath = { ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this))?.absolutePath },
-                localPrompt = LocalCleanupProvider.selectedSystemPrompt(this, vocabulary),
+                localPrompt = LocalCleanupProvider.selectedSystemPrompt(this),
                 benchmarkContext = this,
                 benchmarkCorrelationId = correlationIdFor(token),
             ) { result ->

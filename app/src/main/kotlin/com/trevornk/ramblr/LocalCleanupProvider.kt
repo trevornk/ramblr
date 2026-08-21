@@ -34,25 +34,43 @@ object LocalCleanupProvider {
      * [systemPromptFor], which is unit-testable without a Context (no Robolectric here, so
      * pure-logic extraction is how the rest of this module stays covered).
      */
-    fun selectedSystemPrompt(ctx: Context, terms: List<String>): String =
-        systemPromptFor(selectedModel(ctx), terms)
+    fun selectedSystemPrompt(ctx: Context): String = systemPromptFor(selectedModel(ctx))
 
     /**
      * The model's own [Model.localSystemPrompt] when it declares one (a fine-tuned model like
      * `mumble-cleanup-2stage` that requires its exact training prompt), otherwise the
-     * general-purpose [PostProcessor.SIMPLE_PROMPT] -- always interpolated.
+     * general-purpose [PostProcessor.SIMPLE_PROMPT].
      *
-     * The interpolation fixes a real on-device failure: only the *cloud* prompt was run through
-     * [PostProcessor.interpolateVocabulary] (in WhisperAccessibilityService), so LFM2.5 got a
-     * literal [PostProcessor.VOCABULARY_PLACEHOLDER] as its system prompt and echoed
-     * `{{vocabulary}}` back as the whole cleaned transcript. Doing it in the one function that
-     * picks the prompt means no caller can reintroduce it by forgetting. Fine-tuned prompts carry
-     * no placeholder, so this is a no-op for them (see [MUMBLE_CLEANUP_SYSTEM_PROMPT]).
+     * **The personal-vocabulary clause is deliberately NOT interpolated here (#182).** It is
+     * still sent to cloud cleanup, where it works; on-device it made cleanup dramatically worse.
+     * Measured on 10 real transcripts with the shipping validator, LFM2.5's valid-output rate
+     * fell monotonically with the number of configured terms:
+     *
+     *   0 terms -> 8/10      5 terms -> 4/10      22 terms -> 2/10
+     *
+     * The failure is that a 350M model cannot reliably tell a 300-character list of proper nouns
+     * in its instructions from content it is supposed to emit, so it returns the term list itself
+     * as the "cleaned" transcript -- names and email addresses where the user's words should be.
+     * Rewording did not fix it: a terser clause scored 4/10, moving it after the output
+     * instruction 6/10, and moving it into the user message 3/10, all below the 8/10 baseline of
+     * simply not sending it.
+     *
+     * Note this is not a regression for the other catalog entry: `mumble-cleanup-2stage` declares
+     * its own [Model.localSystemPrompt], which carries no [PostProcessor.VOCABULARY_PLACEHOLDER],
+     * so interpolation was always a no-op for it. Local cleanup has therefore never actually
+     * delivered this feature -- it either did nothing or did harm. Making vocabulary work
+     * on-device needs a deterministic post-processing pass over the model's output rather than a
+     * prompt instruction; that is tracked separately in #182.
+     *
+     * The placeholder must still be *removed* rather than left in the string. Shipping a literal
+     * `{{vocabulary}}` to the model was the original on-device bug: LFM2.5 echoed it back as the
+     * entire cleaned transcript. Interpolating an empty term list renders the surrounding
+     * sentence cleanly (see [PostProcessor.vocabularyClause]).
      */
-    fun systemPromptFor(model: Model, terms: List<String>): String =
+    fun systemPromptFor(model: Model): String =
         PostProcessor.interpolateVocabulary(
             model.localSystemPrompt ?: PostProcessor.SIMPLE_PROMPT,
-            terms,
+            emptyList(),
         )
 
     // A `run(text, prompt, modelPath, engine)` helper used to live here, kdoc-claiming the
