@@ -155,13 +155,13 @@ data class Model(
 // interleaved by its own real quality standing, not pinned to the bottom.
 val MODEL_CATALOG = listOf(
     Model("Parakeet 0.6B", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
-        465, "★★★★ Best quality",
+        487, "★★★★ Best quality",
         sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
         license = CC_BY_4_0),
-    // Smallest AND best-value entry in the catalog (100MB, ~7.5% avg WER on the Open ASR
+    // Smallest AND best-value entry in the catalog (104MB, ~7.5% avg WER on the Open ASR
     // Leaderboard) -- recommended default.
     Model("Parakeet 110M", "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
-        100, "★★★ Best value · Smallest", recommended = true,
+        104, "★★★ Best value · Smallest", recommended = true,
         sha256 = "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479cefcabd06cf5703630b",
         license = CC_BY_4_0),
     // Replaces Whisper Base.en for #98 (Claude Fable 5 STT model consult): Canary-180m-flash is
@@ -174,7 +174,7 @@ val MODEL_CATALOG = listOf(
     // 153,692,328-byte asset from the real sherpa-onnx GitHub release and hashing it locally
     // (`shasum -a 256`), same discipline as every other entry in this file.
     Model("Canary 180M Flash", "sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8",
-        147, "★★★★ Multilingual, punctuated",
+        153, "★★★★ Multilingual, punctuated",
         sha256 = "7a38ed8b13f014ad632b09ff8d22e0c6f1359dd046af9235d281dfae841b9ab9",
         license = CC_BY_4_0),
     // Moonshine Tiny REMOVED (#98, follow-up to Trevor's request to clean up mislabeled/confusing
