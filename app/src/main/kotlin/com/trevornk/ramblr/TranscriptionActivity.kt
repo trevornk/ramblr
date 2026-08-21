@@ -110,6 +110,7 @@ class TranscriptionActivity : BaseSettingsActivity() {
 
     private fun refresh() {
         val useLocal = prefs().getBoolean("use_local", true)
+        prefetchVadModel(useLocal)
         cloudSwitch.isChecked = !useLocal
         modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
 
@@ -123,6 +124,28 @@ class TranscriptionActivity : BaseSettingsActivity() {
                 ?.let { selectModel(it.archive) }
         }
         refreshAllCards()
+    }
+
+    /**
+     * Provisions the Silero VAD model whenever this screen shows on-device transcription as the
+     * active mode (#169), covering the user who switches to local here rather than in onboarding.
+     *
+     * Called from [refresh] so it also catches the pre-existing local user who upgraded from a
+     * build without this prefetch: their first visit to this screen provisions the model instead
+     * of leaving it to a dictation that would decode unsegmented. Cheap to call repeatedly — the
+     * predicate short-circuits once the model is on disk, and `ExistingWorkPolicy.KEEP` collapses
+     * a duplicate enqueue during the download window.
+     */
+    private fun prefetchVadModel(useLocal: Boolean) {
+        if (!VadModelProvisioning.shouldPrefetchForLocalMode(
+                localTranscriptionSelected = useLocal,
+                modelInstalled = ModelDownloader.vadModelFile(this, SILERO_VAD_MODEL) != null,
+            )
+        ) {
+            return
+        }
+        android.util.Log.i(TAG, "Local mode active — prefetching VAD model for segmented decode (#169)")
+        ModelDownloadWorker.enqueue(this, SILERO_VAD_MODEL)
     }
 
     /**
@@ -335,6 +358,7 @@ class TranscriptionActivity : BaseSettingsActivity() {
     private fun refreshAllCards() = MODEL_CATALOG.forEach { refreshCard(it) }
 
     companion object {
+        private const val TAG = "TranscriptionActivity"
         private const val LP_MATCH = LinearLayout.LayoutParams.MATCH_PARENT
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
 

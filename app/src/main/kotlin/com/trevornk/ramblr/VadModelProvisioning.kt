@@ -24,6 +24,22 @@ package com.trevornk.ramblr
  * every take while the device is offline or the download is failing. Making a missing model fatal
  * would trade a rare OOM for "local transcription is broken", which is strictly worse. This only
  * ensures the model eventually arrives for the users who actually need it.
+ *
+ * ## Why first use is not early enough (#169)
+ *
+ * [shouldFetch] alone still leaves one guaranteed-bad take. Because the fetch is asynchronous,
+ * *the very dictation that triggers it* always decodes unsegmented — on a fresh install that is
+ * every new user's first long take, measured by an F-Droid reviewer at 9.3 s and 665 MB RSS for
+ * 47 s of audio on a 4 GB device, versus 325 ms once the model is present. First use is not a
+ * rare edge; it is universal, and it lands hardest on exactly the low-RAM devices #132 was filed
+ * for.
+ *
+ * [shouldPrefetchForLocalMode] closes that window by moving provisioning earlier, to the moment
+ * the user *chooses* on-device transcription (onboarding, or the Transcription settings toggle).
+ * The download then overlaps setup — while the user is still granting permissions and picking an
+ * ASR model, which already involves a far larger download — instead of racing their first
+ * dictation. [shouldFetch] deliberately stays as the backstop for anyone who selected local mode
+ * while offline, or upgraded from a build that predates this.
  */
 object VadModelProvisioning {
 
@@ -37,4 +53,23 @@ object VadModelProvisioning {
      */
     fun shouldFetch(modelInstalled: Boolean, downloadInFlight: Boolean): Boolean =
         !modelInstalled && !downloadInFlight
+
+    /**
+     * True when selecting on-device transcription should provision the VAD model up front (#169),
+     * so the first dictation already has it and decodes segmented.
+     *
+     * Deliberately does *not* take a `downloadInFlight` argument, unlike [shouldFetch]. The call
+     * sites are UI callbacks on the main thread, where reading WorkManager state means a blocking
+     * `.get()` that [WhisperAccessibilityService.vadDownloadStateFor] explicitly documents as
+     * background-thread-only. `ExistingWorkPolicy.KEEP` already collapses duplicate enqueues, so
+     * an installed-only check is both sufficient and the cheap one — a filesystem stat rather
+     * than a cross-process query.
+     *
+     * [localTranscriptionSelected] gates the whole thing: a cloud-only user should never pay for
+     * a download they will never use.
+     */
+    fun shouldPrefetchForLocalMode(
+        localTranscriptionSelected: Boolean,
+        modelInstalled: Boolean,
+    ): Boolean = localTranscriptionSelected && !modelInstalled
 }

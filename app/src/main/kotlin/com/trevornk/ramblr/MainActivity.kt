@@ -457,6 +457,31 @@ class MainActivity : BaseSettingsActivity() {
             .show()
     }
 
+    /**
+     * Provisions the Silero VAD model as soon as on-device transcription is chosen (#169).
+     *
+     * Without this the model is only fetched by the first local dictation itself, and because
+     * that fetch is asynchronous the triggering take always decodes unsegmented — the single-shot
+     * native decode #132 exists to avoid, measured at 665 MB RSS on a 4 GB device. Enqueueing at
+     * selection time lets the ~644 KB download overlap the rest of setup so the first real
+     * dictation already has it.
+     *
+     * Best-effort by design: [ModelDownloadWorker.enqueue]'s network constraint means an offline
+     * user simply gets it later, and [VadModelProvisioning.shouldFetch] remains the backstop at
+     * transcription time. Nothing here can block or fail onboarding.
+     */
+    private fun prefetchVadModel() {
+        if (!VadModelProvisioning.shouldPrefetchForLocalMode(
+                localTranscriptionSelected = prefs().getBoolean("use_local", true),
+                modelInstalled = ModelDownloader.vadModelFile(this, SILERO_VAD_MODEL) != null,
+            )
+        ) {
+            return
+        }
+        android.util.Log.i(TAG, "Local mode selected — prefetching VAD model for segmented decode (#169)")
+        ModelDownloadWorker.enqueue(this, SILERO_VAD_MODEL)
+    }
+
     private fun showOnboardingModeStep() {
         markOnboardingStep(STEP_MODE)
         val recommended = MODEL_CATALOG.firstOrNull { it.recommended } ?: MODEL_CATALOG.first()
@@ -471,6 +496,7 @@ class MainActivity : BaseSettingsActivity() {
             .setPositiveButton("Use on-device (recommended)") { _, _ ->
                 dismissOnboarding()
                 prefs().edit().putBoolean("use_local", true).apply()
+                prefetchVadModel()
                 if (ModelDownloader.isInstalled(this, recommended)) {
                     selectOnboardingModel(recommended.archive)
                 } else {
@@ -786,6 +812,7 @@ class MainActivity : BaseSettingsActivity() {
     }
 
     companion object {
+        private const val TAG = "MainActivity"
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
         private const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
         /** Instance-state key: whether the wizard already started this session (#80). */
