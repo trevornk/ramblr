@@ -599,8 +599,7 @@ class MainActivity : BaseSettingsActivity() {
             }
             .setNegativeButton("Use on-device") { _, _ ->
                 dismissOnboarding()
-                enableOnboardingCleanupLocal(recommendedLocal)
-                showOnboardingStreamingStep()
+                enableOnboardingCleanupLocal(recommendedLocal) { showOnboardingStreamingStep() }
             }
             .setNeutralButton("Skip (leave off)") { _, _ -> dismissOnboarding(); showOnboardingStreamingStep() }
             .show()
@@ -635,24 +634,36 @@ class MainActivity : BaseSettingsActivity() {
             .show()
     }
 
-    private fun enableOnboardingCleanupLocal(model: Model) {
-        // Ordering matters (#153): a non-free model must not be *selected* until its license is
-        // accepted. This used to write the selection first and prompt afterwards, so cancelling
-        // the license dialog left cleanup enabled and pointed at a model that was never
-        // installed -- the exact slip F-Droid review caught in fdroiddata!42401.
-        //
-        // downloadModelWithLicenseConsent invokes onStarted only when a download was actually
-        // enqueued, and for an already-installed or freely-licensed model it does so
-        // synchronously, so the non-download paths still commit immediately.
-        if (ModelDownloader.isInstalled(this, model)) {
-            commitOnboardingCleanupLocal(model)
-            return
-        }
-        downloadModelWithLicenseConsent(model) {
-            commitOnboardingCleanupLocal(model)
-            toast("Downloading ${model.name}...")
-            refresh()
-        }
+    /**
+     * Onboarding step 4's "Use on-device" branch.
+     *
+     * Ordering matters (#153): a non-free model must not be *selected* until its license is
+     * accepted. This used to write the selection first and prompt afterwards, so cancelling
+     * the license dialog left cleanup enabled and pointed at a model that was never
+     * installed -- the exact slip F-Droid review caught in fdroiddata!42401.
+     *
+     * Sequencing matters too (#170): the caller used to invoke this and then advance the wizard
+     * on the very next line, but for a not-yet-installed model this only *starts* an
+     * asynchronous license dialog, so step 5 and FINISH SETUP stacked over an unanswered consent
+     * prompt. [advance] is therefore run by [OnboardingCleanupLocalFlow] instead -- after the
+     * license is answered, either way, and never before. See that object for the full rule.
+     */
+    private fun enableOnboardingCleanupLocal(model: Model, advance: () -> Unit) {
+        OnboardingCleanupLocalFlow.start(
+            isInstalled = ModelDownloader.isInstalled(this, model),
+            commit = { commitOnboardingCleanupLocal(model) },
+            advance = advance,
+            requestConsent = { onAccepted, onDeclined ->
+                downloadModelWithLicenseConsent(
+                    model,
+                    onStarted = {
+                        onAccepted()
+                        toast("Downloading ${model.name}...")
+                    },
+                    onDeclined = onDeclined,
+                )
+            },
+        )
     }
 
     /** Persists the local-cleanup selection for [model]. Split out of

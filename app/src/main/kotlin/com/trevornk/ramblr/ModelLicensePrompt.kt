@@ -29,18 +29,35 @@ import android.net.Uri
  *
  * @param onStarted invoked only when a download was actually enqueued, so callers can show
  *   "Downloading..." without claiming a download that the user declined.
+ * @param onDeclined invoked exactly when [onStarted] is not: the prompt was cancelled, dismissed,
+ *   or the enqueue did not happen. Callers that gate further UI on the answer (onboarding, #170)
+ *   need a signal for "the user is done with this dialog and said no", otherwise a wizard waiting
+ *   on consent would stall forever on a dismissed prompt. Exactly one of the two always runs.
+ *   Note that "View license" dismisses the dialog to hand off to a browser, so it reports declined
+ *   too -- the user can re-enter the choice afterwards rather than being held in a modal.
  */
-fun Activity.downloadModelWithLicenseConsent(model: Model, onStarted: () -> Unit = {}) {
+fun Activity.downloadModelWithLicenseConsent(
+    model: Model,
+    onStarted: () -> Unit = {},
+    onDeclined: () -> Unit = {},
+) {
     if (ModelLicenseConsent.canDownload(this, model)) {
-        if (ModelDownloadWorker.enqueue(this, model)) onStarted()
+        if (ModelDownloadWorker.enqueue(this, model)) onStarted() else onDeclined()
         return
     }
+    // Tracked across the whole dialog rather than per-button so that back, outside-tap, "Cancel"
+    // and a failed enqueue all funnel into the same single onDeclined -- and so acceptance never
+    // double-reports through the dismiss listener that follows it.
+    var started = false
     AlertDialog.Builder(this)
         .setTitle("${model.name} uses a non-free license")
         .setMessage(ModelLicenseConsent.consentMessage(model))
         .setPositiveButton("Accept and download") { _, _ ->
             ModelLicenseConsent.recordAccepted(this, model)
-            if (ModelDownloadWorker.enqueue(this, model)) onStarted()
+            if (ModelDownloadWorker.enqueue(this, model)) {
+                started = true
+                onStarted()
+            }
         }
         .setNegativeButton("Cancel", null)
         .setNeutralButton("View license") { _, _ ->
@@ -50,5 +67,6 @@ fun Activity.downloadModelWithLicenseConsent(model: Model, onStarted: () -> Unit
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(model.license.url)))
             }
         }
+        .setOnDismissListener { if (!started) onDeclined() }
         .show()
 }
