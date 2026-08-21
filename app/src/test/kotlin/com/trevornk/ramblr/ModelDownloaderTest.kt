@@ -65,6 +65,36 @@ class ModelDownloaderTest {
         assertTrue(MODEL_CATALOG.all { it.sizeMb > 0 })
     }
 
+    @Test fun `ASR and streaming catalog sizeMb is decimal MB matching each model's real byte size`() {
+        // Same contract, and the same failure mode, as the local-cleanup test below: sizeMb is
+        // consumed by requiredSpaceBytes as DECIMAL MB. These three entries were authored from
+        // MiB figures (100/147/465 instead of 104/153/487), so every ASR install reserved ~4.9%
+        // less disk than it needed. The cleanup test above it existed and passed the whole time
+        // -- it just never covered MODEL_CATALOG or STREAMING_MODEL_CATALOG, which is exactly how
+        // the drift survived. Pin every downloadable catalog, not a subset.
+        val realBytes = mapOf(
+            "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8" to 487_170_055L,
+            "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8" to 104_337_827L,
+            "sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8" to 153_692_328L,
+            "sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06" to 57_267_600L,
+        )
+
+        for (model in MODEL_CATALOG + STREAMING_MODEL_CATALOG) {
+            val bytes = realBytes[model.archive]
+                ?: fail("no recorded byte size for ${model.archive}; add it when adding a catalog entry")
+            val expectedDecimalMb = ((bytes as Long) / 1_000_000L).toInt()
+            assertEquals(
+                "${model.archive} sizeMb should be decimal MB ($bytes bytes), not MiB",
+                expectedDecimalMb,
+                model.sizeMb,
+            )
+            assertTrue(
+                "${model.archive}: requiredSpaceBytes must exceed the real download size",
+                ModelDownloader.requiredSpaceBytes(model.sizeMb, model.isSingleFile) > bytes,
+            )
+        }
+    }
+
     @Test fun `local cleanup catalog sizeMb is decimal MB matching each model's real byte size`() {
         // requiredSpaceBytes multiplies sizeMb by 1_000_000, so these entries have to be decimal
         // MB. MUMBLE_CLEANUP_Q4_0_MODEL was authored from the MiB figure (336 instead of 352),
