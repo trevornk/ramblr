@@ -22,6 +22,9 @@ sealed class LocalCleanupValidation {
 
         /** The output is a fraction of the input -- content was dropped, not cleaned. */
         LENGTH_COLLAPSE,
+
+        /** The output is a multiple of the input -- the model added text instead of cleaning. */
+        LENGTH_EXPANSION,
     }
 }
 
@@ -41,8 +44,10 @@ sealed class LocalCleanupValidation {
  *       vocabulary terms (emails, family names) into whatever app they dictated into
  *
  * All three are worse than no cleanup at all, and all three are detectable without the model:
- * they are properties of (input, systemPrompt, output). Kept deliberately free of Android and
- * llama.cpp dependencies so every branch is a plain JVM unit test.
+ * they are properties of (input, systemPrompt, output). A fourth check (#181) rejects output that
+ * is a multiple of its input, the general form of #179's degenerate repetition loop. Kept
+ * deliberately free of Android and llama.cpp dependencies so every branch is a plain JVM unit
+ * test.
  *
  * Thresholds are biased toward ACCEPTING. A false rejection costs one fallback step; an
  * over-eager validator makes local cleanup useless. Every threshold below is set with real
@@ -88,7 +93,45 @@ object LocalCleanupOutputValidator {
     const val LENGTH_COLLAPSE_MIN_INPUT_CHARS = 24
 
     /**
-     * Runs the three checks in severity order and returns the first rejection, or [Valid].
+     * Maximum multiple of the input's normalized length the output may reach (#181).
+     *
+     * Cleanup removes filler and fixes punctuation; it never meaningfully lengthens a transcript.
+     * Measured over the corpus in `/tmp/qa` using this file's own [normalizeForLength], counting
+     * only output the earlier checks ACCEPT (output already rejected for echoing the prompt says
+     * nothing about where this threshold belongs):
+     *
+     *   healthy accepted output, normalized input >= 24 chars, n=8:  0.57x - 1.33x
+     *   the #179 degenerate repetition loop (580 chars -> 2197):     3.71x
+     *
+     * 2.0x sits between them with headroom on both sides: no false positive on any measured
+     * healthy output at 1.5x or above, and the loop is caught with margin. Consistent with the
+     * rest of this object, the threshold is deliberately loose rather than the tightest value
+     * that still passes -- a false rejection costs one fallback step, but an over-eager check
+     * makes local cleanup useless.
+     *
+     * This is the general guard; #179's detector handles only the verbatim-repetition shape of
+     * the same problem, and would miss a model that expanded by confabulating novel text.
+     */
+    const val LENGTH_EXPANSION_MAX_RATIO = 2.0
+
+    /**
+     * Inputs shorter than this (normalized) skip the expansion check.
+     *
+     * Legitimate expansion ratios are naturally high on very short input: "BETA" -> "Beta." and
+     * spelling out one mumbled word can double a four-word transcript without anything being
+     * wrong. Measured on the same corpus, "How old is Tom?" (14 normalized chars) legitimately
+     * cleaned to 29 chars -- a 2.07x ratio that would trip this check without a floor, while
+     * every sample at or above 24 chars stayed at or below 1.33x.
+     *
+     * Deliberately the same value as [LENGTH_COLLAPSE_MIN_INPUT_CHARS]: both checks are unreliable
+     * on the same short inputs for the same reason, and one floor is easier to reason about than
+     * two. Kept as a separate constant so the two can be tuned independently if the data ever
+     * says they should be.
+     */
+    const val LENGTH_EXPANSION_MIN_INPUT_CHARS = 24
+
+    /**
+     * Runs the four checks in severity order and returns the first rejection, or [Valid].
      *
      * A blank [modelOutput] is NOT this function's business: the caller already treats empty
      * output as its own failure, and reporting it here as a length collapse would be a
@@ -104,6 +147,7 @@ object LocalCleanupOutputValidator {
         checkPromptEcho(rawInput, systemPrompt, modelOutput)?.let { return it }
         checkNumericDivergence(rawInput, modelOutput)?.let { return it }
         checkLengthCollapse(rawInput, modelOutput)?.let { return it }
+        checkLengthExpansion(rawInput, modelOutput)?.let { return it }
         return LocalCleanupValidation.Valid
     }
 
@@ -398,6 +442,44 @@ object LocalCleanupOutputValidator {
             index++
         }
         return kept.joinToString(" ")
+    }
+
+    // --- (d) length expansion --------------------------------------------------------------
+
+    /**
+     * Rejects output that is a multiple of its input (#181) -- the model added text rather than
+     * cleaning what was said.
+     *
+     * The failure this catches is the #179 degenerate loop's general form: 580 characters of
+     * input producing 2197 characters of the same clause eleven times passed every other check
+     * cleanly. #179's detector stops that specific generation, but it keys on verbatim
+     * repetition, so a model that expanded by confabulating -- answering the transcript instead
+     * of cleaning it, continuing the speaker's story, appending commentary -- would produce no
+     * repeated window and reach the user's text field unchallenged.
+     *
+     * Deliberately runs LAST. Every other check names a more specific cause, and an over-long
+     * echo should be reported as [Reason.PROMPT_ECHO] rather than as an expansion.
+     *
+     * The normalization asymmetry that protects [checkLengthCollapse] works in this check's
+     * favour too but in the opposite direction, and is worth stating: [normalizeForLength] shrinks
+     * the input baseline by stripping filler and collapsing spoken numerals, which raises the
+     * measured ratio slightly. The threshold is set from ratios measured the same way, so this is
+     * already priced in.
+     */
+    private fun checkLengthExpansion(
+        rawInput: String,
+        modelOutput: String,
+    ): LocalCleanupValidation.Rejected? {
+        val baseline = normalizeForLength(rawInput)
+        if (baseline.length < LENGTH_EXPANSION_MIN_INPUT_CHARS) return null
+        val output = normalizeForLength(modelOutput)
+        val ratio = output.length.toDouble() / baseline.length
+        if (ratio <= LENGTH_EXPANSION_MAX_RATIO) return null
+        return LocalCleanupValidation.Rejected(
+            LocalCleanupValidation.Reason.LENGTH_EXPANSION,
+            "output is ${String.format(java.util.Locale.ROOT, "%.1f", ratio)}x the input's " +
+                "content length (maximum ${LENGTH_EXPANSION_MAX_RATIO}x)",
+        )
     }
 
     // --- shared vocabulary -----------------------------------------------------------------
