@@ -29,12 +29,112 @@
 #include "LLMInference.h"
 #include <android/log.h>
 #include <cstring>
+#include <dlfcn.h>
 #include <iomanip>
 #include <iostream>
 
 #define TAG "[SmolLMAndroid-Cpp]"
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+namespace {
+
+// Runtime CPU backend selection (#187).
+//
+// The native build uses GGML_CPU_ALL_VARIANTS (see this directory's CMakeLists.txt), which
+// compiles one ggml-cpu library per ARM feature level so a pre-ARMv8.2 device can't SIGILL on
+// dotprod/i8mm/fp16 instructions it doesn't implement. That option requires GGML_BACKEND_DL, so
+// ggml-cpu is no longer linked in -- it must be dlopen'ed and registered before any model load.
+//
+// ggml's own ggml_backend_load_all() cannot find them here. It scans two directories
+// (ggml-backend-reg.cpp: the executable's directory and the process CWD), which for an Android
+// app are /system/bin -- /proc/self/exe resolves to app_process64 -- and /. Neither contains our
+// libraries. Worse, the app ships extractNativeLibs="false" (Google's default and recommendation
+// since AGP 4.2: smaller installs, atomic updates), so the .so files are never unpacked to a real
+// directory at all; they live uncompressed and page-aligned INSIDE base.apk, and
+// nativeLibraryDir is empty. There is no directory for a scan to walk.
+//
+// Android's dynamic linker handles this case natively: dlopen() with a bare soname (no slash)
+// resolves through the calling namespace's library search path, which for an app includes the
+// APK's uncompressed lib/<abi>/ entries. So we ask for each variant by name rather than by path.
+//
+// Selection mirrors ggml_backend_load_best: probe every candidate, keep the highest
+// ggml_backend_score(), then hand that one name to ggml_backend_load() to register. Scoring is
+// safe on any CPU -- each variant's score function comes from ggml-cpu/arch/arm/cpu-feats.cpp,
+// which upstream deliberately compiles without the variant's -march flags and with -fno-lto so it
+// can only ever read AT_HWCAP/AT_HWCAP2 via getauxval and return 0 for an unsupported variant.
+// A variant that scores 0 is closed here and never gets to run a kernel.
+//
+// Names and order match ggml/src/CMakeLists.txt's Android branch (ggml_add_cpu_backend_variant
+// under CMAKE_SYSTEM_NAME MATCHES "Android"); keep them in sync when the submodule pin moves.
+//
+// The three armv9 variants upstream also generates are deliberately EXCLUDED, both here and from
+// the build (see this directory's CMakeLists.txt). ggml's score is a feature-count heuristic, not
+// a speed measurement, so on a device that reports SVE2 the armv9 build always outscores
+// armv8.6_1 and wins selection -- but measured on a Pixel 10a (Tensor G5) it is 1.45x SLOWER on
+// prompt eval than armv8.6_1 (447.88 vs 688.35 t/s, llama-bench pp128, 6 threads, Q4_0), because
+// SVE on this core is 128-bit, exactly NEON's width, so the SVE kernels add overhead without
+// adding throughput. Shipping them would regress every modern device to fix old ones. Devices
+// with SVE still get armv8.6_1's NEON+i8mm path, which is what ships today.
+constexpr const char * kCpuVariantLibs[] = {
+    "libggml-cpu-android_armv8.0_1.so",
+    "libggml-cpu-android_armv8.2_1.so",
+    "libggml-cpu-android_armv8.2_2.so",
+    "libggml-cpu-android_armv8.6_1.so",
+};
+
+typedef int (*ggml_backend_score_fn)(void);
+
+void loadBestCpuBackend() {
+    // Registering twice would add a second, redundant CPU device; loadModel can run repeatedly
+    // over an app session (one call per cleanup) while the registry is process-global.
+    static bool loaded = false;
+    if (loaded) {
+        return;
+    }
+
+    const char * bestName  = nullptr;
+    int          bestScore = 0;
+
+    for (const char * name : kCpuVariantLibs) {
+        void * handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+        if (!handle) {
+            // Expected for any variant not present in this build.
+            LOGi("cpu variant %s not loadable: %s", name, dlerror());
+            continue;
+        }
+
+        auto score_fn = reinterpret_cast<ggml_backend_score_fn>(dlsym(handle, "ggml_backend_score"));
+        const int score = score_fn ? score_fn() : 0;
+        LOGi("cpu variant %s score=%d", name, score);
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestName  = name;
+        }
+        // Close every probe, including the winner: ggml_backend_load() dlopen()s it again below
+        // and owns the handle it registers. dlopen/dlclose are refcounted, so the winning library
+        // is simply re-opened rather than reloaded.
+        dlclose(handle);
+    }
+
+    if (!bestName) {
+        // Nothing scored above zero. Throwing here surfaces as an IllegalStateException through
+        // llama_cleanup_jni.cpp's existing catch, which the Kotlin side already reports as a
+        // cleanup failure with the raw text preserved (#175) -- a bad cleanup, not a dead app.
+        LOGe("no compatible ggml CPU backend for this device");
+        throw std::runtime_error("no compatible CPU backend for this device");
+    }
+
+    LOGi("selected cpu variant %s (score=%d)", bestName, bestScore);
+    if (!ggml_backend_load(bestName)) {
+        LOGe("failed to register cpu backend %s", bestName);
+        throw std::runtime_error("failed to load CPU backend");
+    }
+    loaded = true;
+}
+
+}  // namespace
 
 void
 LLMInference::loadModel(const char *model_path, float minP, float temperature, bool storeChats, long contextSize,
@@ -51,8 +151,10 @@ LLMInference::loadModel(const char *model_path, float minP, float temperature, b
          "\n\tuseMlock = %d",
          model_path, minP, temperature, storeChats, contextSize, chatTemplate, nThreads, useMmap, useMlock);
 
-    // load dynamic backends
-    ggml_backend_load_all();
+    // Select and register the CPU backend matching this device's actual ARM features (#187).
+    // Replaces ggml_backend_load_all(), whose directory scan cannot locate the variant libraries
+    // inside an APK -- see loadBestCpuBackend above.
+    loadBestCpuBackend();
 
     // create an instance of llama_model
     llama_model_params model_params = llama_model_default_params();

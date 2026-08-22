@@ -162,9 +162,23 @@ android {
     // The onnxruntime AAR bundles arm64-v8a/libonnxruntime4j_jni.so -- the JNI glue for
     // onnxruntime's *own* Java API, which the app never touches (sherpa-onnx calls the C++
     // API directly). Drop it so only the two .so files actually used ship in the APK.
+    //
+    // The armv9 ggml CPU variants (#187) are dropped for a different reason: they build fine and
+    // would be selected, but they're slower. llama_cleanup/CMakeLists.txt turns on
+    // GGML_CPU_ALL_VARIANTS for runtime CPU dispatch, which emits seven arm64 variants. ggml
+    // picks by a feature-count score, not by speed, so any SVE2-capable device prefers
+    // armv9.0_1 over armv8.6_1 -- and on a Pixel 10a that measured 1.45x SLOWER on prompt eval
+    // (447.88 vs 688.35 t/s, llama-bench pp128, Q4_0, 6 threads), because Tensor's SVE is
+    // 128-bit, the same width as the NEON kernels it displaces. Excluding them here means
+    // SVE devices fall back to armv8.6_1, i.e. exactly what shipped before this change, and
+    // saves ~4.6MB. Keep in sync with kCpuVariantLibs in LLMInference.cpp (the CMake file
+    // hard-fails if upstream renames these targets).
     packaging {
         jniLibs {
             excludes += "**/libonnxruntime4j_jni.so"
+            excludes += "**/libggml-cpu-android_armv9.0_1.so"
+            excludes += "**/libggml-cpu-android_armv9.2_1.so"
+            excludes += "**/libggml-cpu-android_armv9.2_2.so"
         }
     }
 
