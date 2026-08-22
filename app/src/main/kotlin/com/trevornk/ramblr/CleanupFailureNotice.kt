@@ -57,6 +57,16 @@ object CleanupFailureNotice {
             raw.contains("LENGTH_EXPANSION") -> "model added text you didn't say"
             raw.contains("NUMERIC_DIVERGENCE") -> "model changed a number"
             // Local engine outcomes.
+            // Model-missing is the one failure the user can actually act on (re-download in
+            // Settings), so it must not fall through to UNKNOWN_REASON. Two distinct strings
+            // reach here: the executor's own pre-flight ("not downloaded", when the pref names a
+            // model with no resolved path) and LlamaCppInference's FileNotFoundException ("not
+            // found at $modelPath", when the pref resolves but the file is gone underneath it).
+            // Both collapse to one phrase -- and critically, to a *fixed literal*: the second
+            // string carries the full `/data/user/0/...` path, which must never reach a floating
+            // overlay pill.
+            raw.contains("model not found") || raw.contains("model not downloaded") ->
+                "cleanup model isn't installed"
             raw.contains("timed out") -> "model timed out"
             raw.contains("empty response") -> "model returned nothing"
             raw.contains("exceeded time budget") -> "cleanup took too long"

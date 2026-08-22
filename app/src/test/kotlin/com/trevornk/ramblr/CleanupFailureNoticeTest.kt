@@ -139,4 +139,41 @@ class CleanupFailureNoticeTest {
         assertFalse("raw error echoed: \"$message\"", message.contains("totally novel"))
         assertTrue(message.contains(CleanupFailureNotice.UNKNOWN_REASON))
     }
+
+    @Test fun `a missing cleanup model is named, not reported as an unknown error`() {
+        // Found by on-device verification of #175, not by the original test pass: hiding the
+        // GGUF underneath a configured model produced the real terminal failure and the bubble
+        // read "Cleanup failed (unknown error)". Model-missing is the one cause the user can fix
+        // themselves, so it is the worst one to render as "unknown".
+        //
+        // Both producers are covered: CleanupWaterfallExecutor's pre-flight, and
+        // LlamaCppInference's FileNotFoundException as the executor wraps it.
+        val notDownloaded = "All cleanup steps failed: Local cleanup model not downloaded"
+        val notFound =
+            "All cleanup steps failed: Local cleanup model not found at " +
+                "/data/user/0/com.trevornk.ramblr/files/cleanup_models/lfm2.5-350m-q4_0/lfm2.5-350m-q4_0.gguf"
+
+        for (error in listOf(notDownloaded, notFound)) {
+            val message = CleanupFailureNotice.messageFor(InjectMethod.DIRECT, error)
+            assertFalse(
+                "model-missing degraded to the generic reason: \"$message\"",
+                message.contains(CleanupFailureNotice.UNKNOWN_REASON),
+            )
+            assertTrue("expected the model to be named: \"$message\"", message.contains("cleanup model"))
+        }
+    }
+
+    @Test fun `the model path never reaches the bubble`() {
+        // LlamaCppInference interpolates the absolute model path into its exception message. The
+        // bubble is a floating overlay that renders over whatever app the user is in -- and over
+        // whatever is on their screen when they screenshot it -- so the private data directory
+        // must not survive the mapping.
+        val message = CleanupFailureNotice.messageFor(
+            InjectMethod.DIRECT,
+            "All cleanup steps failed: Local cleanup model not found at " +
+                "/data/user/0/com.trevornk.ramblr/files/cleanup_models/lfm2.5-350m-q4_0/lfm2.5-350m-q4_0.gguf",
+        )
+        assertFalse("leaked a filesystem path: \"$message\"", message.contains("/data/"))
+        assertFalse("leaked the model filename: \"$message\"", message.contains(".gguf"))
+    }
 }

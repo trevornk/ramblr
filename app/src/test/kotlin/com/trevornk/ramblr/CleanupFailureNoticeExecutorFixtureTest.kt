@@ -60,4 +60,33 @@ class CleanupFailureNoticeExecutorFixtureTest {
         assertEquals("All cleanup steps failed: Local model produced an empty response", error)
         assertEquals("model returned nothing", CleanupFailureNotice.summarize(error))
     }
+
+    @Test fun `the executor's own missing-model pre-flight maps to the model-missing phrase`() {
+        // This branch never reaches localInference at all: the executor short-circuits when
+        // localModelPath() is null/blank, so it needs its own fixture rather than a
+        // LocalInferenceResult. On-device this is the string a user with an uninstalled model
+        // hits, and before the fix it rendered as "unknown error".
+        var captured: PostProcessor.Result? = null
+        CleanupWaterfallExecutor.execute(
+            text = "raw transcript",
+            prompt = "clean it up",
+            waterfall = CleanupWaterfall(
+                listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, "lfm2.5-350m-q4_0"))
+            ),
+            cursor = CleanupWaterfallCursor(),
+            cancelHolder = InFlightCall(),
+            credentialLookup = { "" },
+            transport = CleanupHttpTransport { _, _, _, _, _, _ ->
+                error("no cloud step in a local-only chain")
+            },
+            localInference = LocalInferenceEngine { _, _, _, _, _ ->
+                error("must short-circuit before inference when the model is absent")
+            },
+            localModelPath = { null },
+            callback = { captured = it },
+        )
+        val error = (captured ?: error("callback never fired")).error
+        assertEquals("All cleanup steps failed: Local cleanup model not downloaded", error)
+        assertEquals("cleanup model isn't installed", CleanupFailureNotice.summarize(error))
+    }
 }
