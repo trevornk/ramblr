@@ -88,27 +88,73 @@ set(GIT_EXE "GIT_EXE-NOTFOUND" CACHE FILEPATH "" FORCE)
 # unless a child CMakeLists.txt overrides them -- verified none of them do. That covers every
 # SHARED target the compatibility dialog flagged (llama, llama-common, ggml, ggml-base,
 # ggml-cpu), plus llama-cleanup-jni itself since it's added after this point too.
+#
+# MODULE_LINKER_FLAGS matters as of #187: with GGML_BACKEND_DL on, ggml's own
+# ggml_add_backend_library() creates each ggml-cpu variant with `add_library(... MODULE ...)`
+# rather than SHARED (see ggml/src/CMakeLists.txt), and CMake applies CMAKE_MODULE_LINKER_FLAGS
+# -- not CMAKE_SHARED_LINKER_FLAGS -- to MODULE targets. Without this line the seven
+# libggml-cpu-android_*.so files link at the linker's 4KB default while every other library in
+# the APK is 16KB aligned; confirmed on-device, where Android's own compatibility dialog listed
+# exactly those seven and nothing else.
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
+set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
 
-# CPU feature targeting (#37 follow-up, real on-device timeout hit): ggml's GGML_NATIVE
-# defaults OFF for any cross-compiled build (this NDK build included -- see
-# CMAKE_CROSSCOMPILING in llama.cpp/ggml/CMakeLists.txt), and with GGML_CPU_ARM_ARCH unset
-# ggml-cpu/CMakeLists.txt's ARCH_FLAGS stays completely empty -- i.e. the ARM CPU quantized
+# CPU feature targeting (#37 follow-up, then #187): ggml's GGML_NATIVE defaults OFF for any
+# cross-compiled build (this NDK build included -- see CMAKE_CROSSCOMPILING in
+# llama.cpp/ggml/CMakeLists.txt), and with neither GGML_CPU_ARM_ARCH nor GGML_CPU_ALL_VARIANTS
+# set, ggml-cpu/CMakeLists.txt's ARCH_FLAGS stays completely empty -- i.e. the ARM CPU quantized
 # matmul kernels compile against the compiler's baseline armv8-a target only, with NO dotprod,
 # i8mm, or fp16-vector-arithmetic acceleration, regardless of what the real device supports.
 # llama.cpp's ARM CPU backend has dedicated fast paths for Q4_0 quantized matmul keyed on
 # exactly these instructions (see ggml-cpu/CMakeLists.txt's check_arm_feature block), so leaving
 # them off is a real, avoidable multiple-x decode slowdown, not just an untuned default.
-# armv8.6-a+dotprod+i8mm+fp16 is confirmed present on Trevor's real device (Pixel 10 Pro Fold
-# `/proc/cpuinfo` Features line: asimddp, i8mm, asimdhp/fphp) -- ndk.abiFilters already
-# restricts this app to arm64-v8a only and it isn't yet distributed beyond this one device
-# (see #99, Play Store distribution still unevaluated), so hardcoding to this device's real
-# baseline is safe today. Revisit with GGML_CPU_ALL_VARIANTS (runtime dispatch) instead of a
-# hardcoded -march if/when this ships to arbitrary ARM64 hardware.
-set(GGML_CPU_ARM_ARCH "armv8.6-a+dotprod+i8mm+fp16" CACHE STRING "" FORCE)
+#
+# This was originally a hardcoded `-march=armv8.6-a+dotprod+i8mm+fp16`, matching Trevor's own
+# Pixel. That is a compile-time choice with no runtime fallback, so on any pre-ARMv8.2 ARM64
+# device the very first Q4_0 matmul executes an unsupported instruction and the process dies
+# with SIGILL -- not a catchable Kotlin exception (#187; the F-Droid reviewer's Redmi Note 8T,
+# Snapdragon 665 / Cortex-A73, is exactly this case). Now that the app ships beyond one device,
+# switch to ggml's own runtime dispatch, which is what the old comment here said to revisit.
+#
+# GGML_CPU_ALL_VARIANTS builds one ggml-cpu library per ARM feature level and picks the best
+# supported one at runtime. It requires GGML_BACKEND_DL (ggml's own hard requirement, see
+# ggml/src/CMakeLists.txt), which turns ggml-cpu into a dlopen'ed module rather than a link-time
+# dependency -- hence the explicit loader in LLMInference.cpp, which replaces the default
+# search-path behavior that cannot work inside an APK.
+#
+# Why this is SIGILL-safe: each variant exports a ggml_backend_score() built from
+# ggml-cpu/arch/arm/cpu-feats.cpp, which reads real CPU features via getauxval(AT_HWCAP/AT_HWCAP2)
+# and returns 0 when the device lacks any feature the variant was compiled for. Upstream compiles
+# that file WITHOUT the variant's -march flags and with -fno-lto specifically so the check itself
+# can never execute an unsupported instruction (see ggml_add_cpu_backend_features' comment about
+# LTO inlining causing exactly this crash). A rejected variant is unloaded before any kernel runs.
+set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
+set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
 
 add_subdirectory(../../../../../llama.cpp llama.cpp)
+
+# Drop the armv9 CPU variants (#187). GGML_CPU_ALL_VARIANTS generates seven Android variants;
+# these three are excluded from packaging because ggml would actively prefer them and be slower
+# for it. Its ggml_backend_score() counts CPU features rather than measuring throughput, so any
+# device reporting SVE2 scores armv9.0_1 (55) above armv8.6_1 (23) -- confirmed in this app's own
+# logcat on a Pixel 10a. Measured with llama-bench on that same device (Q4_0, 6 threads, pp128):
+# armv8.6_1 688.35 t/s vs armv9.0_1 447.88 t/s, i.e. the "better" variant is 1.45x slower,
+# because SVE is 128-bit on this core -- no wider than the NEON path it replaces. SVE-capable
+# devices fall back to armv8.6_1, which is exactly the kernel set shipping today.
+#
+# The actual exclusion is done by app/build.gradle.kts's packaging.jniLibs.excludes, not here:
+# AGP builds native targets by explicit name, so EXCLUDE_FROM_ALL doesn't stop them being built
+# or packaged. This block only fails the build if upstream's variant names change, so the
+# exclusion list and kCpuVariantLibs in LLMInference.cpp can't silently drift out of sync with
+# the submodule.
+foreach(variant ggml-cpu-android_armv9.0_1 ggml-cpu-android_armv9.2_1 ggml-cpu-android_armv9.2_2)
+    if (NOT TARGET ${variant})
+        message(FATAL_ERROR "Expected ggml CPU variant target ${variant} not found -- the \
+llama.cpp submodule's Android variant list changed. Re-check ggml/src/CMakeLists.txt, then update \
+packaging.jniLibs.excludes in app/build.gradle.kts and kCpuVariantLibs in LLMInference.cpp.")
+    endif()
+endforeach()
 
 # Real fix for the GGML_COMMIT non-determinism (F-Droid MR re-re-verification, 2026-07-16):
 # the GIT_EXE-NOTFOUND pin above cannot block find_program() from re-discovering a real `git`
