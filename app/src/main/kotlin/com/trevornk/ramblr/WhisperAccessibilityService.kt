@@ -2854,7 +2854,11 @@ class WhisperAccessibilityService : AccessibilityService() {
                         // CleanupStepOutcome -- it was just being discarded here.
                         val reason = result.error?.takeIf { it.isNotBlank() } ?: "unknown error"
                         Log.w(TAG, "Cleanup failed, injecting raw text: $reason")
-                        injectText(text, feedback = "Cleanup failed ($reason) — raw copied to clipboard", feedbackDurationMs = 4000)
+                        // #175: pass the raw error, not a finished message -- injectText() builds
+                        // the user-facing notice once the injection method is known, so it can
+                        // state the truth about the clipboard and keep executor diagnostics
+                        // (nested prefixes, provider error bodies) out of a floating overlay.
+                        injectText(text, cleanupError = reason, feedbackDurationMs = 4000)
                     }
                     resetToIdle()
                 }
@@ -2929,7 +2933,11 @@ class WhisperAccessibilityService : AccessibilityService() {
             // rather than leaving the stale candidate text sitting in history (#73).
             injectText(
                 resolution.textToInject,
-                feedback = "Cleanup skipped — raw copied to clipboard",
+                // #175 (same false-clipboard claim, different path): this is the preview
+                // discard/timeout, not a cleanup failure, so it keeps its own wording -- but it
+                // was making the identical untrue promise. A DIRECT injection wipes the clipboard
+                // immediately, so "raw copied to clipboard" sent the user to an empty clipboard.
+                feedback = "Cleanup skipped — inserted raw text",
                 existingHistoryTimestamp = preview.historyTimestamp,
             )
         }
@@ -3107,6 +3115,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         feedbackDurationMs: Long = 2000,
         paidFallbackGroup: CleanupStepGroup? = null,
         existingHistoryTimestamp: Long? = null,
+        // #175: set when this injection is a cleanup-failure fall-through. Carries the executor's
+        // raw error so the notice can be built below, once `method` is known -- the message has to
+        // state whether the clipboard actually holds anything, and that depends on the injection
+        // method, which isn't decided until injection has been attempted. Passing a finished
+        // string from the call site is what made the old message claim a clipboard copy that
+        // DIRECT injections wipe immediately (see [CleanupFailureNotice]).
+        cleanupError: String? = null,
     ) {
         pendingClipboardRestore?.let { handler.removeCallbacks(it) }
         pendingClipboardRestore = null
@@ -3144,14 +3159,14 @@ class WhisperAccessibilityService : AccessibilityService() {
             Log.i(TAG, "No injection candidates on first scan; retrying in ${INJECTION_RETRY_DELAY_MS}ms")
             val retry = Runnable {
                 pendingInjectionRetry = null
-                finishInjection(findInjectionCandidates(), text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff, historyTimestamp)
+                finishInjection(findInjectionCandidates(), text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff, historyTimestamp, cleanupError)
             }
             pendingInjectionRetry = retry
             handler.postDelayed(retry, INJECTION_RETRY_DELAY_MS)
             return
         }
 
-        finishInjection(candidates, text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff, historyTimestamp)
+        finishInjection(candidates, text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff, historyTimestamp, cleanupError)
     }
 
     private fun finishInjection(
@@ -3163,6 +3178,9 @@ class WhisperAccessibilityService : AccessibilityService() {
         feedbackDurationMs: Long,
         streamingHandoff: StreamingPreviewSession?,
         historyTimestamp: Long,
+        // #175: threaded through from injectText() rather than resolved there, because the notice
+        // depends on the injection method -- which isn't decided until the write attempts below.
+        cleanupError: String? = null,
     ) {
         Log.i(TAG, "Injecting text into ${candidates.size} candidate node(s)")
 
@@ -3253,10 +3271,13 @@ class WhisperAccessibilityService : AccessibilityService() {
         // any explicit feedback the caller passed (raw-text-retry, cleanup-failed, etc.) is
         // meaningful and must survive as-is.
         val resolvedFeedback = injectionFeedbackFor(method, feedback)
+        // #175: a cleanup-failure fall-through resolves its own message here, where `method` --
+        // and therefore what the clipboard actually holds -- is finally known.
+        val baseFeedback = cleanupError?.let { CleanupFailureNotice.messageFor(method, it) } ?: resolvedFeedback
         val displayFeedback = when {
             retryRawOffered -> "Tap to use raw text"
-            isFallback -> resolvedFeedback?.let { "$it · tap to copy again" }
-            else -> resolvedFeedback
+            isFallback -> baseFeedback?.let { "$it · tap to copy again" }
+            else -> baseFeedback
         }
         // #120: bias the bubble away from overlapping the field it just injected into, when that
         // node's on-screen bounds are known (DIRECT injections only -- that's the only path with
