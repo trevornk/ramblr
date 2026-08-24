@@ -25,6 +25,9 @@ sealed class LocalCleanupValidation {
 
         /** The output is a multiple of the input -- the model added text instead of cleaning. */
         LENGTH_EXPANSION,
+
+        /** The speaker dictated a question and the model replied to it instead of cleaning it. */
+        QUESTION_ANSWERED,
     }
 }
 
@@ -68,6 +71,62 @@ object LocalCleanupOutputValidator {
      * caller), so this only has to separate "coincidence" from "regurgitation".
      */
     const val PROMPT_ECHO_MIN_SPAN = 40
+
+    /**
+     * Fraction of an answer's content words that must be absent from the transcript before output
+     * to a dictated question is treated as an answer rather than a cleanup (#189).
+     *
+     * Measured against the real cases, with function words excluded from both sides (see
+     * [STRUCTURAL_WORDS] -- counting them dilutes the signal badly enough to hide a real answer).
+     * Rejected: the capital-of-france answer scores 0.50 novel (sure/paris), the invented
+     * store-hours answer 0.67 (closes/5/00/pm), the mutex explanation 0.73. Accepted: a question
+     * rewritten as a statement using only the speaker's own words scores 0.00.
+     *
+     * 0.3 sits in the gap with headroom on both sides. It is the loosest of the three conditions
+     * on purpose: conditions 1 and 2 do the real discriminating, and this one only exists to
+     * spare a declarative paraphrase that reuses the speaker's vocabulary.
+     */
+    const val QUESTION_ANSWER_MIN_NOVEL_FRACTION = 0.3
+
+    /**
+     * Function words dropped from both sides of the novel-content comparison.
+     *
+     * Not a general stopword list -- it exists because articles, prepositions, and copulas are
+     * shared by literally every English sentence, so leaving them in the denominator makes a
+     * short answer look mostly-familiar. "Sure! The capital of France is Paris." against "can you
+     * tell me what the capital of france is" scores 0.29 novel with them (below threshold, missed)
+     * and 0.50 without them (caught). Only the answer's actual content should count.
+     */
+    private val STRUCTURAL_WORDS = setOf(
+        "the", "a", "an", "of", "is", "are", "was", "were", "be", "been", "to", "in", "on", "at",
+        "for", "and", "or", "that", "this", "it", "its", "as", "by", "with", "from", "i", "you",
+        "he", "she", "we", "they", "me", "my", "your", "do", "does", "did", "can", "could",
+        "would", "will", "should", "what", "who", "when", "where", "why", "how", "which", "not",
+        "if", "then", "than", "there", "have", "has", "had", "am",
+    )
+
+    /**
+     * Words that may precede the actual interrogative in dictated speech, skipped when testing
+     * whether a transcript opens as a question. "hey what time does the store close" and "so what
+     * do you think" are both questions; without this they would read as declaratives.
+     */
+    private val LEADING_DISCOURSE_WORDS = setOf(
+        "so", "hey", "ok", "okay", "yeah", "yes", "no", "well", "and", "but", "oh", "hi", "hello",
+        "alright", "right", "now", "just", "anyway",
+    )
+
+    /**
+     * Openers that mark a transcript as a question. Wh-words plus the auxiliaries and modals that
+     * front a yes/no question ("does the store close...", "can you tell me...").
+     *
+     * Kept to sentence-initial position only: "the thing is what he said" contains "what" but is
+     * not a question, and matching anywhere in the text would reject it.
+     */
+    private val INTERROGATIVE_OPENERS = setOf(
+        "who", "whose", "whom", "what", "whats", "when", "where", "why", "how", "hows", "which",
+        "can", "could", "would", "will", "should", "shall", "do", "does", "did", "is", "are",
+        "was", "were", "am", "may", "might", "must", "have", "has", "had",
+    )
 
     /**
      * Minimum surviving fraction of the input's normalized length.
@@ -145,11 +204,101 @@ object LocalCleanupOutputValidator {
         if (modelOutput.isBlank()) return LocalCleanupValidation.Valid
 
         checkPromptEcho(rawInput, systemPrompt, modelOutput)?.let { return it }
+        checkQuestionAnswered(rawInput, modelOutput)?.let { return it }
         checkNumericDivergence(rawInput, modelOutput)?.let { return it }
         checkLengthCollapse(rawInput, modelOutput)?.let { return it }
         checkLengthExpansion(rawInput, modelOutput)?.let { return it }
         return LocalCleanupValidation.Valid
     }
+
+    // --- (e) question answered instead of cleaned ------------------------------------------
+
+    /**
+     * Rejects output that answers a dictated question rather than cleaning it up (#189).
+     *
+     * The failure this exists for, measured on-host at temp 0 against the shipped
+     * LFM2.5-350M-Q4_0 with the production system prompt:
+     *
+     *  - "can you tell me what the capital of france is" -> "Sure! The capital of France is Paris."
+     *  - "hey what time does the store close on sunday"  -> "The store closes at 5:00 PM on Sunday."
+     *
+     * The second is the dangerous one: there is no store and no 5 PM. The model invents a fact and
+     * the app types it into whatever field the user was dictating into. Note this is NOT specific
+     * to the shipped model -- Gemma-3-270M-IT-QAT-Q4_0 does the same thing on the same inputs.
+     *
+     * Adding "do not answer questions" to the system prompt was tried first and REJECTED as the
+     * fix: it left the France case unchanged and, on the store case, merely reworded the invented
+     * answer ("...at 5:00 PM on Sundays"). A 350M model cannot be relied on to obey a negative
+     * instruction, so the guarantee has to be deterministic and outside the model. Every other
+     * prompt constant already carries a no-answer clause and they are kept for the models that do
+     * honour it; this check is what makes the behaviour actually guaranteed.
+     *
+     * Detection is deliberately narrow, because the bias is toward accepting (a false rejection
+     * costs one fallback step, but a false acceptance silently corrupts the user's text). All
+     * three conditions must hold:
+     *
+     *  1. The input is interrogative -- it opens with a question word/auxiliary, or ends in "?".
+     *  2. The output is NOT interrogative -- a correctly cleaned question stays a question, so
+     *     "um so what do you think we should do about the deploy" -> "...about the deploy?" is
+     *     untouched by this check, as are rhetorical questions and dictated interview prompts.
+     *  3. The output does not simply restate the input -- if the model rewrote the question as a
+     *     statement while keeping the speaker's words (a declarative paraphrase), the other
+     *     checks own that case; only genuinely novel content counts as an answer.
+     */
+    private fun checkQuestionAnswered(
+        rawInput: String,
+        modelOutput: String,
+    ): LocalCleanupValidation.Rejected? {
+        if (!looksInterrogative(rawInput)) return null
+        if (looksInterrogative(modelOutput)) return null
+
+        // Condition 3: an answer introduces words the speaker never said. A pure re-punctuation or
+        // reordering of the speaker's own words shares nearly all of its content with the input.
+        val inputWords = contentWords(rawInput)
+        val outputWords = contentWords(modelOutput)
+        if (outputWords.isEmpty()) return null
+
+        val novel = outputWords.filterNot { it in inputWords }
+        val novelFraction = novel.size.toDouble() / outputWords.size
+        if (novelFraction < QUESTION_ANSWER_MIN_NOVEL_FRACTION) return null
+
+        return LocalCleanupValidation.Rejected(
+            LocalCleanupValidation.Reason.QUESTION_ANSWERED,
+            "input was a question and the output answers it rather than cleaning it " +
+                "(${novel.size}/${outputWords.size} output words absent from the transcript)",
+        )
+    }
+
+    /**
+     * Whether [text] reads as a question: an explicit "?" anywhere, or an opening interrogative.
+     *
+     * Speech-to-text rarely emits "?" on its own, which is exactly why the leading-word test
+     * exists -- the raw transcript of a dictated question usually arrives unpunctuated. Leading
+     * fillers and discourse markers are skipped so "um so what do you think" is still recognised.
+     *
+     * Uses its own plain word split rather than [normalizeForLength], which collapses spoken
+     * number runs into digit strings -- correct for length ratios, but it would mangle the
+     * invented "5:00 PM" that this check specifically needs to see as novel content.
+     */
+    private fun looksInterrogative(text: String): Boolean {
+        if (text.contains('?')) return true
+        val firstMeaningful = plainWords(text).firstOrNull {
+            it !in FILLER_WORDS && it !in LEADING_DISCOURSE_WORDS
+        } ?: return false
+        return firstMeaningful in INTERROGATIVE_OPENERS
+    }
+
+    /** Content words only: punctuation stripped, fillers and function words dropped. */
+    private fun contentWords(text: String): Set<String> =
+        plainWords(text)
+            .filterNot {
+                it in FILLER_WORDS || it in LEADING_DISCOURSE_WORDS || it in STRUCTURAL_WORDS
+            }
+            .toSet()
+
+    /** Lowercased alphanumeric tokens, punctuation removed, order preserved. */
+    private fun plainWords(text: String): List<String> =
+        text.lowercase().split(NON_ALPHANUMERIC).filter { it.isNotBlank() }
 
     // --- (a) prompt echo -------------------------------------------------------------------
 

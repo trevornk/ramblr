@@ -56,6 +56,7 @@ object CleanupFailureNotice {
             raw.contains("LENGTH_COLLAPSE") -> "model dropped most of the text"
             raw.contains("LENGTH_EXPANSION") -> "model added text you didn't say"
             raw.contains("NUMERIC_DIVERGENCE") -> "model changed a number"
+            raw.contains("QUESTION_ANSWERED") -> "model answered instead of cleaning up"
             // Local engine outcomes.
             // Model-missing is the one failure the user can actually act on (re-download in
             // Settings), so it must not fall through to UNKNOWN_REASON. Two distinct strings
