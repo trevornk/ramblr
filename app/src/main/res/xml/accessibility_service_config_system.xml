@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Config for SystemControlsAccessibilityService = the "System controls" mode component (#156
+     dual-component design). Identical to accessibility_service_config.xml (which backs the
+     default "Floating icon" component) EXCEPT for flagRequestAccessibilityButton — keep the
+     rest of the two files in lockstep.
+
+     flagRequestAccessibilityButton (#156, originally added by #211): opts this component into
+     the OS-rendered accessibility shortcut surfaces (nav-bar button / floating button, the
+     2-finger a11y gesture, and the hold-both-volume-keys shortcut — all of which funnel into
+     the same AccessibilityButtonController callback the base class registers). MUST be static
+     XML: with targetSdk > 29 the framework ignores runtime attempts to set this flag
+     (AccessibilityServiceInfo.java:508-511, AOSP).
+
+     The flag also reclassifies this component as INVISIBLE_TOGGLE (targetSdk > Q + this flag is
+     the whole classification), which is why it lives in its own component: the OS couples an
+     INVISIBLE_TOGGLE service's enabled state to its shortcut bindings (last shortcut off = whole
+     service off). That trade-off is opt-in — the component ships android:enabled="false" in the
+     manifest and is only enabled when the user picks "System controls" on the Invocation screen.
+     The #220 guard-rail banner covers the kill-by-shortcut-switch trap while this component is
+     the active one. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewFocused"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagRequestAccessibilityButton"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100"
+    android:description="@string/accessibility_description" />

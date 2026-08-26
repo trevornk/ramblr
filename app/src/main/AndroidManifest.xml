@@ -153,6 +153,17 @@
             </intent-filter>
         </activity>
 
+        <!-- #156 dual-component design: the same service class ships as TWO components because
+             flagRequestAccessibilityButton is static-XML-only (targetSdk > 29) yet decides the
+             OS-side classification (TOGGLE vs INVISIBLE_TOGGLE) — so each "world" needs its own
+             component, and exactly one is PM-enabled at a time (InvocationServiceMode).
+
+             Component 1 (DEFAULT, enabled): WhisperAccessibilityService = "Floating icon" mode.
+             Its config XML declares NO button flag -> ordinary TOGGLE service: independent
+             Settings switch, floating ring only, no system button/gesture, no invisible-toggle
+             trap. The name is deliberately unchanged from every prior release so existing
+             installs' enabled_accessibility_services entries keep pointing at it — an update
+             restores pre-#211 ring-only behavior with zero migration. -->
         <service
             android:name=".WhisperAccessibilityService"
             android:exported="false"
@@ -163,6 +174,31 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Component 2 (OPT-IN, android:enabled="false"): SystemControlsAccessibilityService =
+             "System controls" mode. A trivial subclass (same behavior, same process-local
+             statics) whose config XML DOES declare flagRequestAccessibilityButton, enabling the
+             nav-bar/floating a11y button, the a11y gesture, and volume-keys-hold invocation —
+             at the cost of the INVISIBLE_TOGGLE coupling (#156), which the guard-rail banner
+             covers. Disabled by default so fresh installs and updates show exactly ONE "Ramblr"
+             entry in system Settings; the Invocation screen's mode switch flips the two
+             components via PackageManager.setComponentEnabledSetting (InvocationServiceMode).
+             android:label stays the plain app name: only one component is ever PM-enabled at a
+             time, so Settings never lists both, and the plain name reads cleanest in the
+             shortcut UIs (a11y button chooser, volume-keys first-use dialog). -->
+        <service
+            android:name=".SystemControlsAccessibilityService"
+            android:enabled="false"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config_system" />
         </service>
 
         <!-- Quick Settings tile (#127): alternative dictation trigger for users who hide the

@@ -1,15 +1,21 @@
 package com.trevornk.ramblr
 
-import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.Settings
 import android.util.Log
 
 /**
- * The Android side of the invocation chooser's OS-shortcut state: reads the three
+ * The Android side of the invocation screen's OS-shortcut state: reads the three
  * `Settings.Secure` accessibility component lists (readable by any app, no permission) and --
  * only when the optional WRITE_SECURE_SETTINGS tier is granted via adb (#156) -- writes them.
+ *
+ * Dual-component aware (#156 rework): Ramblr ships two service components
+ * ([WhisperAccessibilityService] / [SystemControlsAccessibilityService], see
+ * [InvocationServiceMode]), and the OS lists may name either -- e.g. an install that predates
+ * the rework still has the old component bound in `accessibility_button_targets`. All READS
+ * therefore match EITHER component ("is any Ramblr service/binding present"), while WRITES that
+ * add an entry always use the currently-active component, and writes that remove clean up both.
  *
  * All list editing is delegated to the pure helpers in [InvocationMethods] so the
  * preserve-other-apps'-entries invariant is unit-tested; this object only does the
@@ -50,25 +56,33 @@ object InvocationSecureSettings {
      */
     const val ACTION_ACCESSIBILITY_DETAILS_SETTINGS = "android.settings.ACCESSIBILITY_DETAILS_SETTINGS"
 
-    /** Ramblr's service component in the full flatten form the OS itself writes. */
+    /** The ACTIVE service component (per the current #156 mode) in the full flatten form the OS
+     *  itself writes -- what new bindings and deep links must target. */
     fun serviceComponent(context: Context): String =
-        ComponentName(context, WhisperAccessibilityService::class.java).flattenToString()
+        InvocationServiceMode.activeComponent(context).flattenToString()
 
     /** Whether the optional advanced tier is active: `pm grant`-ed WRITE_SECURE_SETTINGS. */
     fun canWrite(context: Context): Boolean =
         context.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
             PackageManager.PERMISSION_GRANTED
 
-    // --- Reads (no permission needed) ---
+    // --- Reads (no permission needed; match EITHER Ramblr component -- see class kdoc) ---
+
+    /** Whether [list] contains ANY Ramblr service component, in either flatten form. */
+    private fun anyRamblrIn(context: Context, list: String?): Boolean =
+        InvocationServiceMode.allComponents(context).any { componentListContains(list, it) }
 
     fun isButtonTargetBound(context: Context): Boolean =
-        componentListContains(read(context, KEY_BUTTON_TARGETS), serviceComponent(context))
+        anyRamblrIn(context, read(context, KEY_BUTTON_TARGETS))
 
     fun isVolumeKeysBound(context: Context): Boolean =
-        componentListContains(read(context, KEY_SHORTCUT_TARGET_SERVICE), serviceComponent(context))
+        anyRamblrIn(context, read(context, KEY_SHORTCUT_TARGET_SERVICE))
 
+    /** Whether ANY Ramblr component is in `enabled_accessibility_services` -- the health check
+     *  used app-wide (setup rows, onboarding, guard rail) since either component counts as
+     *  "the service is enabled". */
     fun isServiceEnabled(context: Context): Boolean =
-        componentListContains(read(context, KEY_ENABLED_SERVICES), serviceComponent(context))
+        anyRamblrIn(context, read(context, KEY_ENABLED_SERVICES))
 
     /** Whether ANY OS shortcut still binds Ramblr -- the guard rail's "targets empty" input. */
     fun anyShortcutBound(context: Context): Boolean =
@@ -79,14 +93,23 @@ object InvocationSecureSettings {
 
     // --- Writes (advanced tier only; all return success and never throw) ---
 
-    /** Adds/removes Ramblr in [key]'s component list, preserving every other app's entries
-     *  verbatim (read-modify-write through the tested pure helpers). Returns false -- caller
-     *  falls back to the deep-link flow -- if the permission is missing or the write throws. */
+    /**
+     * Adds/removes Ramblr in [key]'s component list, preserving every other app's entries
+     * verbatim (read-modify-write through the tested pure helpers). Adding uses the ACTIVE
+     * component; removing sweeps BOTH components so stale pre-rework bindings (which name the
+     * old component) get cleaned up by the same tap. Returns false -- caller falls back to the
+     * deep-link flow -- if the permission is missing or the write throws.
+     */
     fun setBinding(context: Context, key: String, bound: Boolean): Boolean {
         if (!canWrite(context)) return false
-        val component = serviceComponent(context)
         val current = read(context, key)
-        val updated = if (bound) componentListAdd(current, component) else componentListRemove(current, component)
+        val updated = if (bound) {
+            componentListAdd(current, serviceComponent(context))
+        } else {
+            InvocationServiceMode.allComponents(context)
+                .fold(current as String?) { list, component -> componentListRemove(list, component) }
+                .orEmpty()
+        }
         return try {
             Settings.Secure.putString(context.contentResolver, key, updated)
         } catch (e: SecurityException) {
@@ -98,10 +121,10 @@ object InvocationSecureSettings {
     }
 
     /**
-     * The advanced tier's true one-tap re-enable (#156 guard rail): put Ramblr back into
-     * `enabled_accessibility_services`, preserving other services' entries (e.g. Tasker's)
-     * verbatim. Base tier can't do this -- its banner deep-links to the service's Settings page
-     * instead.
+     * The advanced tier's true one-tap re-enable (#156 guard rail): put the ACTIVE component
+     * back into `enabled_accessibility_services`, preserving other services' entries (e.g.
+     * Tasker's) verbatim. Base tier can't do this -- its banner deep-links to the service's
+     * Settings page instead.
      */
     fun reEnableService(context: Context): Boolean =
         setBinding(context, KEY_ENABLED_SERVICES, bound = true)

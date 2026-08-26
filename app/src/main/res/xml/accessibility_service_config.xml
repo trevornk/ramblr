@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- accessibilityFlags (H3 audit, declared 2026-08-26): flagRetrieveInteractiveWindows is what
+<!-- Config for WhisperAccessibilityService = the "Floating icon" mode component (#156 dual-
+     component design). Its twin, accessibility_service_config_system.xml, backs
+     SystemControlsAccessibilityService and differs in exactly one way: it adds
+     flagRequestAccessibilityButton. Keep everything else in the two files identical.
+
+     accessibilityFlags (H3 audit, declared 2026-08-26): flagRetrieveInteractiveWindows is what
      makes AccessibilityService.getWindows() return anything at all; without it the framework
      always hands back an empty list, and WhisperAccessibilityService.findInjectionCandidates()'s
      multi-window scan (dialogs, popups, split-screen) was dead code, silently degrading those
@@ -7,17 +12,21 @@
      (effective flags = 0), and flagDefault would newly make Ramblr the default handler for its
      feedbackGeneric type, a behavior change unrelated to the window scan.
 
-     flagRequestAccessibilityButton (#156, plan §2.5): opts Ramblr into the OS-rendered
-     accessibility shortcut (nav-bar button, floating shortcut, or volume-key hold; the user
-     picks in Settings > Accessibility > Ramblr > shortcut). MUST be static XML: with
-     targetSdk > 29 the framework ignores runtime attempts to set this flag
-     (AccessibilityServiceInfo.java:508-511, AOSP). Declaring it only makes the OS offer the
-     shortcut UI; whether the button appears is entirely the user's system-level choice, so this
-     changes nothing for users who never enable it. -->
+     flagRequestAccessibilityButton is deliberately ABSENT here (#156 rework of #211/#220): the
+     flag is not just "offer the a11y button" — it also reclassifies the service as
+     INVISIBLE_TOGGLE (AccessibilityUtil.getAccessibilityServiceFragmentType reads ONLY
+     targetSdk + this flag), which makes the OS weld the service's enabled state to its shortcut
+     bindings: turning off the last "Ramblr shortcut" switch in system Settings silently turns
+     off the whole service. Without the flag this component is an ordinary TOGGLE service —
+     independent on/off switch in Settings, no system button/gesture, no trap — i.e. the exact
+     pre-#211 behavior. Existing installs' enabled_accessibility_services entries already point
+     at this component, so on update they get ring-only behavior back with zero migration.
+     Users who want the system button/gesture/volume-keys opt into the
+     SystemControlsAccessibilityService component via the in-app Invocation screen instead. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeViewFocused"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagRequestAccessibilityButton"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
     android:notificationTimeout="100"
     android:description="@string/accessibility_description" />
