@@ -2674,7 +2674,17 @@ class WhisperAccessibilityService : AccessibilityService() {
                     }
                     if (TranscriptionChain.hasNextCandidate(index, candidates.size)) {
                         Log.w(TAG, "Transcription candidate #$index (${entry.kind}) failed: ${error ?: "unusable"}; trying next candidate")
-                        attempt(index + 1)
+                        // M2 (2026-08-25 audit): the guard re-check above belongs on main, but
+                        // attempt() itself must not run there -- a fallback candidate's request
+                        // prep is real work (a GEMINI candidate readBytes()es the whole PCM, up
+                        // to ~10MB, and base64s it to ~13MB inside GeminiTranscriberClient before
+                        // OkHttp ever sees it). Mirrors the thread { continueTranscription(...) }
+                        // hop resolveLateRecordingOnMain/startMaxDurationTranscription already
+                        // use: attempt(0) already runs on that reader thread, so everything
+                        // attempt() touches is exercised off-main today -- the thread{}/
+                        // handler.post handoffs order every access to the walk's shared state
+                        // (remainingCompressedFile, guard, candidates).
+                        thread { attempt(index + 1) }
                     } else {
                         file.delete()
                         remainingCompressedFile?.delete()

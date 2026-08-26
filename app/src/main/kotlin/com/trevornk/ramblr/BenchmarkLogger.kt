@@ -2,6 +2,7 @@ package com.trevornk.ramblr
 
 import android.content.Context
 import java.io.File
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONObject
 
@@ -127,6 +128,19 @@ object BenchmarkLogger {
 
     private const val FILE_NAME = "benchmark_log.jsonl"
 
+    /**
+     * All file I/O ([log]'s append + [rotateIfNeeded]'s up-to-[ROTATE_AT_BYTES] read/rewrite)
+     * runs here instead of on the caller's thread (M1 audit, 2026-08-26): finishInjection calls
+     * [log] on the MAIN thread, and a rotation there synchronously read 3MB and rewrote the file
+     * mid-injection. Logging is fire-and-forget, so callers never need the result -- but write
+     * ORDER matters for a line-oriented log, which is why this is a single thread and not a
+     * pool: submissions execute strictly in submission order. Daemon so a lingering queued write
+     * can never hold the process alive.
+     */
+    private val ioExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "BenchmarkLogger-io").apply { isDaemon = true }
+    }
+
     /** Once the log file exceeds this size, it's rotated down to [KEEP_BYTES_AFTER_ROTATION] of
      *  its newest (tail) content rather than growing unbounded across many real-world sessions. */
     const val ROTATE_AT_BYTES = 3 * 1024 * 1024L
@@ -155,6 +169,10 @@ object BenchmarkLogger {
      * All file I/O is wrapped in `runCatching`: this is a diagnostics-only side channel for
      * later analysis, and must never be allowed to crash or block Trevor's actual dictation --
      * a full disk or a transient I/O error here should be silently swallowed, not surfaced.
+     * Since M1 the I/O also runs asynchronously on [ioExecutor], so a caller on the main thread
+     * (finishInjection's pipeline line) pays only for building the JSON line, never for the
+     * append or a 3MB rotation. Timestamp and line content are captured synchronously at call
+     * time; only the disk write is deferred.
      */
     fun log(
         context: Context,
@@ -176,8 +194,12 @@ object BenchmarkLogger {
                 pipeline = pipeline,
             )
             val file = logFile(context)
-            rotateIfNeeded(file)
-            file.appendText(line + "\n")
+            ioExecutor.execute {
+                runCatching {
+                    rotateIfNeeded(file)
+                    file.appendText(line + "\n")
+                }
+            }
         }
     }
 
