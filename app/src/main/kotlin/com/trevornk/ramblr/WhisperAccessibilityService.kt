@@ -145,9 +145,16 @@ private data class PendingInjection(
     val historyTimestamp: Long,
 )
 
-class WhisperAccessibilityService : AccessibilityService() {
+open class WhisperAccessibilityService : AccessibilityService() {
 
     companion object {
+        /** The connected service instance, whichever of the two #156 components it is: this
+         *  companion is shared by [WhisperAccessibilityService] and its empty subclass
+         *  [SystemControlsAccessibilityService] (JVM statics live on the base class), and
+         *  onServiceConnected/onDestroy assign/clear it for both. Every `instance != null`
+         *  service-health check in the app therefore accepts EITHER component for free -- and
+         *  nothing in this class may compare against its own concrete component name; use
+         *  [InvocationServiceMode.activeComponent] for that. */
         var instance: WhisperAccessibilityService? = null
 
         /** SharedPreferences keys for the persisted overlay drag position (#101). */
@@ -560,11 +567,14 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * OS accessibility-shortcut trigger (#156, plan §2.5): with `flagRequestAccessibilityButton`
-     * declared in the service XML (static-only for targetSdk > 29), the user can enable a
-     * nav-bar button, floating shortcut, or volume-key hold for Ramblr in the system's
-     * Settings > Accessibility > Ramblr shortcut UI -- an invocation surface that keeps working
-     * with the floating ring hidden and adds no new permission.
+     * OS accessibility-shortcut trigger (#156 dual-component design): with
+     * `flagRequestAccessibilityButton` declared in [SystemControlsAccessibilityService]'s config
+     * XML (static-only for targetSdk > 29), the user can enable a nav-bar button, floating
+     * shortcut, or volume-key hold for Ramblr -- an invocation surface that keeps working with
+     * the floating ring hidden and adds no new permission. The registration lives here in the
+     * base class and runs for BOTH components; on the default floating-icon component (no flag
+     * in its XML) it's a harmless no-op -- the OS never routes a button event to a service
+     * without the flag, so the callback simply never fires.
      *
      * Routes through [requestToggleRecording] rather than [onTap] directly so it shares the QS
      * tile's #136 guard: never start a recording while the icon is hidden and invisible -- a
