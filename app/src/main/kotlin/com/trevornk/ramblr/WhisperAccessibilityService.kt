@@ -2156,11 +2156,18 @@ class WhisperAccessibilityService : AccessibilityService() {
         val engine = RecordingEngine(cacheDir, stateMachine)
         val started = engine.start(
             onFinished = { result ->
-                silenceAutoStopSession?.release()
-                silenceAutoStopSession = null
-                val compressedFile = aacEncoderSession?.finish()
-                aacEncoderSession?.release()
-                aacEncoderSession = null
+                // H1 (#193): release the per-recording LOCALS captured by this closure, never the
+                // fields. A reader stalled in AudioRecord.read() can outlive a rapid
+                // cancel->restart; by the time its onFinished runs, the fields already hold the
+                // NEW recording's sessions, and releasing those would kill the new recording's
+                // silence auto-stop and finalize its AAC encoder mid-recording. The fields are
+                // only nulled when they still reference these exact instances -- the same
+                // identity-guard pattern onRecordingFinished uses for `recordingEngine === engine`.
+                autoStopSession?.release()
+                if (silenceAutoStopSession === autoStopSession) silenceAutoStopSession = null
+                val compressedFile = aacSession?.finish()
+                aacSession?.release()
+                if (aacEncoderSession === aacSession) aacEncoderSession = null
                 val finalResult = if (compressedFile != null) result.copy(compressedFile = compressedFile) else result
                 onRecordingFinished(engine, finalResult)
             },
