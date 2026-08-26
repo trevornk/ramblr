@@ -2,21 +2,21 @@
   {
     "useCase": "CLEANUP",
     "tier": "RECOMMENDED",
-    "costPer1MInputUsd": 0.05,
+    "costPer1MInputUsd": 0.2,
     "provider": "OPENAI",
     "modelId": "gpt-5.6-luna",
     "displayName": "GPT-5.6 Luna",
-    "costPer1MOutputUsd": 0.4,
+    "costPer1MOutputUsd": 1.2,
     "description": "OpenAI's current cheapest tier (successor of GPT-5.4 Nano) \u2014 fastest and cheapest for cleanup."
   },
   {
     "useCase": "CLEANUP",
     "tier": "GOOD",
-    "costPer1MInputUsd": 0.25,
+    "costPer1MInputUsd": 0.75,
     "provider": "OPENAI",
     "modelId": "gpt-5.4-mini",
     "displayName": "GPT-5.4 Mini",
-    "costPer1MOutputUsd": 2,
+    "costPer1MOutputUsd": 4.5,
     "description": "Previous-generation mid tier \u2014 same real-world cleanup quality, costs more."
   },
   {
@@ -52,12 +52,12 @@
   {
     "useCase": "CLEANUP",
     "tier": "RECOMMENDED",
-    "costPer1MInputUsd": 0.25,
+    "costPer1MInputUsd": 0.3,
     "provider": "GEMINI",
     "modelId": "gemini-3.5-flash-lite",
     "displayName": "Gemini 3.5 Flash-Lite",
-    "costPer1MOutputUsd": 1.5,
-    "description": "Cheapest Gemini tier (GA July 2026) \u2014 current cleanup pick. Deliberately not used for transcription: it's ~3x slower than 3.1 Flash-Lite on audio input."
+    "costPer1MOutputUsd": 2.5,
+    "description": "Current-generation lite tier (GA July 2026) \u2014 current cleanup pick. Deliberately not used for transcription: it's ~3x slower than 3.1 Flash-Lite on audio input."
   },
   {
     "useCase": "BOTH",
@@ -77,7 +77,7 @@
     "modelId": "gemini-3.5-flash",
     "displayName": "Gemini 3.5 Flash",
     "costPer1MOutputUsd": 9,
-    "description": "Google's documented replacement for 2.5 Flash (which is deprecating) \u2014 meaningfully pricier than Flash-Lite (~6x), not a small step up; pick deliberately, not as a default."
+    "description": "Google's documented replacement for 2.5 Flash (which is deprecating) \u2014 meaningfully pricier than Flash-Lite (~4-5x), not a small step up; pick deliberately, not as a default."
   },
   {
     "useCase": "CLEANUP",
@@ -92,11 +92,11 @@
   {
     "useCase": "CLEANUP",
     "tier": "RECOMMENDED",
-    "costPer1MInputUsd": 0.1,
+    "costPer1MInputUsd": 0.3,
     "provider": "OMNIROUTE",
     "modelId": "gemini/gemini-flash-lite-latest",
     "displayName": "OmniRoute: Gemini Flash-Lite (auto-upgrading)",
-    "costPer1MOutputUsd": 0.4,
+    "costPer1MOutputUsd": 2.5,
     "description": "Cheapest, auto-upgrading \u2014 mirrors direct Gemini's own recommended flash-lite tier so you don't overpay just because you're using OmniRoute. Recommended default cleanup path."
   },
   {
@@ -122,31 +122,31 @@
   {
     "useCase": "CLEANUP",
     "tier": "ADVANCED",
-    "costPer1MInputUsd": 1.25,
+    "costPer1MInputUsd": 2,
     "provider": "OMNIROUTE",
     "modelId": "gemini/gemini-pro-latest",
     "displayName": "OmniRoute: Gemini Pro (auto-upgrading)",
-    "costPer1MOutputUsd": 10,
+    "costPer1MOutputUsd": 12,
     "description": "Always resolves to Google's current Pro-tier model server-side \u2014 higher cost, for when you deliberately want the strongest available cleanup quality over the cheap default."
   },
   {
     "useCase": "CLEANUP",
     "tier": "ADVANCED",
-    "costPer1MInputUsd": 3,
+    "costPer1MInputUsd": 2,
     "provider": "OMNIROUTE",
     "modelId": "auto/claude-sonnet",
     "displayName": "OmniRoute: Claude Sonnet (auto-upgrading)",
-    "costPer1MOutputUsd": 15,
+    "costPer1MOutputUsd": 10,
     "description": "Always resolves to Anthropic's current Sonnet-tier model server-side \u2014 premium, not the cost-efficient default."
   },
   {
     "useCase": "CLEANUP",
     "tier": "ADVANCED",
-    "costPer1MInputUsd": 15,
+    "costPer1MInputUsd": 5,
     "provider": "OMNIROUTE",
     "modelId": "auto/claude-opus",
     "displayName": "OmniRoute: Claude Opus (auto-upgrading)",
-    "costPer1MOutputUsd": 75,
+    "costPer1MOutputUsd": 25,
     "description": "Always resolves to Anthropic's current Opus-tier model server-side \u2014 the priciest OmniRoute option."
   }
 ]

@@ -89,8 +89,11 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         description = "OpenAI's current cheapest tier (successor of GPT-5.4 Nano) — fastest and cheapest for cleanup.",
         tier = ModelTier.RECOMMENDED,
         useCase = ModelUseCase.CLEANUP,
-        costPer1MInputUsd = 0.05,
-        costPer1MOutputUsd = 0.40,
+        // 2026-08-26 price refresh: $0.20/$1.20 per OpenAI's pricing page (post the 2026-07-30
+        // 80% Luna price cut). The old 0.05/0.40 was GPT-5.4 Nano's price, carried over
+        // unchanged when #194 swapped the model id in this entry.
+        costPer1MInputUsd = 0.20,
+        costPer1MOutputUsd = 1.20,
     ),
     ModelCatalogEntry(
         provider = ProviderKind.OPENAI,
@@ -99,8 +102,10 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         description = "Previous-generation mid tier — same real-world cleanup quality, costs more.",
         tier = ModelTier.GOOD,
         useCase = ModelUseCase.CLEANUP,
-        costPer1MInputUsd = 0.25,
-        costPer1MOutputUsd = 2.00,
+        // 2026-08-26: $0.75/$4.50 per OpenAI's pricing page -- matching the cx/gpt-5.4-mini
+        // OmniRoute mirror below, which already had it right.
+        costPer1MInputUsd = 0.75,
+        costPer1MOutputUsd = 4.50,
     ),
     // Real 20-clip benchmark (2026-07-10): gpt-4o-transcribe beat whisper-1 on both WER
     // (2.86% vs 4.29%) and latency (~42% faster avg), zero dropped words on either including a
@@ -140,22 +145,25 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
 
     // --- Gemini: only direct provider that's transcription-capable (multimodal audio-in) as
     // well as cleanup-capable. Cleanup and transcription defaults deliberately DIVERGE here
-    // (2026-08-25): 3.5-flash-lite (GA July 2026) is the current cheapest tier and the cleanup
+    // (2026-08-25): 3.5-flash-lite (GA July 2026) is the current-generation lite tier and the cleanup
     // RECOMMENDED pick, but it measures ~3x slower than 3.1-flash-lite on audio input, so
     // 3.1-flash-lite stays the transcription RECOMMENDED pick (and
     // GeminiTranscriberClient.DEFAULT_MODEL) on purpose -- 3.5-flash-lite is tagged CLEANUP so
     // the transcription picker never offers the slower model as its default. Note 3.5-flash
-    // still carries a real ~6x price jump over the lite tier (not a smooth one-tier step) --
+    // still carries a real ~4-5x price jump over the lite tier (not a smooth one-tier step) --
     // flagged honestly below rather than understated. ---
     ModelCatalogEntry(
         provider = ProviderKind.GEMINI,
         modelId = "gemini-3.5-flash-lite",
         displayName = "Gemini 3.5 Flash-Lite",
-        description = "Cheapest Gemini tier (GA July 2026) — current cleanup pick. Deliberately not used for transcription: it's ~3x slower than 3.1 Flash-Lite on audio input.",
+        description = "Current-generation lite tier (GA July 2026) — current cleanup pick. Deliberately not used for transcription: it's ~3x slower than 3.1 Flash-Lite on audio input.",
         tier = ModelTier.RECOMMENDED,
         useCase = ModelUseCase.CLEANUP,
-        costPer1MInputUsd = 0.25,
-        costPer1MOutputUsd = 1.50,
+        // 2026-08-26 price refresh: $0.30/$2.50 per ai.google.dev's pricing page. The old
+        // 0.25/1.50 was 3.1-flash-lite's price, carried over when this entry was added -- 3.5's
+        // lite tier is slightly pricier than 3.1's, not identical.
+        costPer1MInputUsd = 0.30,
+        costPer1MOutputUsd = 2.50,
     ),
     ModelCatalogEntry(
         provider = ProviderKind.GEMINI,
@@ -171,7 +179,7 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         provider = ProviderKind.GEMINI,
         modelId = "gemini-3.5-flash",
         displayName = "Gemini 3.5 Flash",
-        description = "Google's documented replacement for 2.5 Flash (which is deprecating) — meaningfully pricier than Flash-Lite (~6x), not a small step up; pick deliberately, not as a default.",
+        description = "Google's documented replacement for 2.5 Flash (which is deprecating) — meaningfully pricier than Flash-Lite (~4-5x), not a small step up; pick deliberately, not as a default.",
         tier = ModelTier.GOOD,
         useCase = ModelUseCase.BOTH,
         costPer1MInputUsd = 1.50,
@@ -220,8 +228,13 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         description = "Cheapest, auto-upgrading — mirrors direct Gemini's own recommended flash-lite tier so you don't overpay just because you're using OmniRoute. Recommended default cleanup path.",
         tier = ModelTier.RECOMMENDED,
         useCase = ModelUseCase.CLEANUP,
-        costPer1MInputUsd = 0.10,
-        costPer1MOutputUsd = 0.40,
+        // 2026-08-26 price refresh: an auto-upgrading alias is billed at whatever it currently
+        // resolves to -- today that's the 3.5-flash-lite generation ($0.30/$2.50, matching the
+        // direct Gemini entry above). The old 0.10/0.40 was 2.5-flash-lite's price, stale two
+        // lite generations back. If Google moves the alias, this display price staled again --
+        // same maintenance contract as every other price in this catalog (gist-updatable, #98).
+        costPer1MInputUsd = 0.30,
+        costPer1MOutputUsd = 2.50,
     ),
     ModelCatalogEntry(
         provider = ProviderKind.OMNIROUTE,
@@ -250,8 +263,11 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         description = "Always resolves to Google's current Pro-tier model server-side — higher cost, for when you deliberately want the strongest available cleanup quality over the cheap default.",
         tier = ModelTier.ADVANCED,
         useCase = ModelUseCase.CLEANUP,
-        costPer1MInputUsd = 1.25,
-        costPer1MOutputUsd = 10.00,
+        // 2026-08-26: current Pro tier is Gemini 3.1 Pro at $2/$12 (ai.google.dev). The old
+        // 1.25/10 was 2.5 Pro's price. (3.1 Pro doubles input pricing above 200K tokens --
+        // irrelevant at cleanup's transcript sizes.)
+        costPer1MInputUsd = 2.00,
+        costPer1MOutputUsd = 12.00,
     ),
     ModelCatalogEntry(
         provider = ProviderKind.OMNIROUTE,
@@ -260,8 +276,11 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         description = "Always resolves to Anthropic's current Sonnet-tier model server-side — premium, not the cost-efficient default.",
         tier = ModelTier.ADVANCED,
         useCase = ModelUseCase.CLEANUP,
-        costPer1MInputUsd = 3.00,
-        costPer1MOutputUsd = 15.00,
+        // 2026-08-26: current Sonnet tier is Sonnet 5 at $2/$10 -- Anthropic made the launch
+        // pricing permanent (the scheduled Sept 2026 rise to $3/$15 was cancelled, per their
+        // pricing page). The old 3/15 was the pre-Sonnet-5 tier price.
+        costPer1MInputUsd = 2.00,
+        costPer1MOutputUsd = 10.00,
     ),
     ModelCatalogEntry(
         provider = ProviderKind.OMNIROUTE,
@@ -270,7 +289,9 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         description = "Always resolves to Anthropic's current Opus-tier model server-side — the priciest OmniRoute option.",
         tier = ModelTier.ADVANCED,
         useCase = ModelUseCase.CLEANUP,
-        costPer1MInputUsd = 15.00,
-        costPer1MOutputUsd = 75.00,
+        // 2026-08-26: current Opus tier is Opus 5 at $5/$25 (platform.claude.com). The old
+        // 15/75 was Opus 4.1's price -- Anthropic cut the Opus tier 3x with 4.5/5.
+        costPer1MInputUsd = 5.00,
+        costPer1MOutputUsd = 25.00,
     ),
 )
