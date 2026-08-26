@@ -39,4 +39,30 @@ object VocabularyTerms {
      * an empty string when [terms] is empty so callers can skip sending anything.
      */
     fun asTranscriptionPrompt(terms: List<String>): String = terms.joinToString(", ")
+
+    /**
+     * Whether the vocabulary terms are actually applied anywhere in the user's current
+     * configuration (#185). After #182 removed the vocabulary clause from local cleanup (it made
+     * LFM2.5 echo the term list) and #131 closed local-ASR hotword biasing as not-planned, the
+     * terms only reach the two CLOUD paths:
+     *
+     *  - cloud transcription ([TranscriberClient.vocabularyFormParts] / Gemini's inline prompt)
+     *  - cloud cleanup ([PostProcessor.interpolateVocabulary] on the persona prompt)
+     *
+     * A fully-local setup -- local ASR plus local-only cleanup, the F-Droid-recommended,
+     * privacy-motivated configuration -- ignores every term. The Settings UI uses this to say so
+     * instead of letting users discover it from behavior.
+     *
+     * [cloudCleanupActive] must already fold in everything cloud cleanup needs (cleanup on,
+     * the cloud gate enabled, and a cloud-capable chain entry present); this stays a pure
+     * function of the two path-level booleans.
+     */
+    fun inEffect(cloudTranscriptionActive: Boolean, cloudCleanupActive: Boolean): Boolean =
+        cloudTranscriptionActive || cloudCleanupActive
+
+    /** The user-facing note shown when [inEffect] is false (#185); null when terms do apply. */
+    fun localOnlyNote(cloudTranscriptionActive: Boolean, cloudCleanupActive: Boolean): String? =
+        if (inEffect(cloudTranscriptionActive, cloudCleanupActive)) null
+        else "Your current setup is fully on-device, so these terms are not used: local " +
+            "transcription and local cleanup don't support vocabulary biasing."
 }

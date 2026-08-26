@@ -462,8 +462,28 @@ class BehaviorActivity : BaseSettingsActivity() {
     )
 
     private fun vocabularySummary(): String {
+        val note = vocabularyLocalOnlyNote()
         val terms = vocabularyTerms()
-        return if (terms.isEmpty()) "No custom terms" else terms.joinToString(", ")
+        val termsPart = if (terms.isEmpty()) "No custom terms" else terms.joinToString(", ")
+        // #185: the raw term list reads as confirmation the terms are in force -- when the
+        // current chain is fully local they aren't, so say so right on the row.
+        return if (note == null) termsPart else "Not used in local-only mode — $termsPart"
+    }
+
+    /** Non-null when the user's current configuration ignores the vocabulary entirely (#185):
+     *  cloud transcription off AND no active cloud cleanup path. Mirrors the real runtime gates:
+     *  transcription's `use_local` pref, cleanup's master toggle, [CloudFeatureToggle]'s cloud
+     *  gate, and whether the chain still has a cloud-capable cleanup entry at all. */
+    private fun vocabularyLocalOnlyNote(): String? {
+        val cloudTranscription = !prefs().getBoolean("use_local", true)
+        val cloudCleanup = PostProcessingToggle.isEnabled(this) &&
+            CloudFeatureToggle.cleanupEnabled(this) &&
+            ProviderChainStore.load(this).capableEntriesFor(needsTranscription = false)
+                .any { it.kind != ProviderKind.LOCAL }
+        return VocabularyTerms.localOnlyNote(
+            cloudTranscriptionActive = cloudTranscription,
+            cloudCleanupActive = cloudCleanup,
+        )
     }
 
     private fun promptVocabulary() {
@@ -474,9 +494,21 @@ class BehaviorActivity : BaseSettingsActivity() {
             gravity = Gravity.TOP or Gravity.START
             setText(VocabularyTerms.serialize(vocabularyTerms()))
         }
+        // #185: since #182 (local cleanup no longer receives the terms) and #131 (local ASR
+        // hotword biasing not planned), the terms only reach cloud transcription and cloud
+        // cleanup -- the old copy claimed a blanket effect on "the cleanup step", which is
+        // false in fully-local mode. State the real scope, and when the current setup is
+        // local-only, say the terms are inert instead of letting behavior reveal it.
+        val message = buildString {
+            append(
+                "Project names or jargon that speech-to-text often mishears. One per line.\n\n" +
+                    "Applies to cloud transcription and cloud cleanup."
+            )
+            vocabularyLocalOnlyNote()?.let { append("\n\n").append(it) }
+        }
         android.app.AlertDialog.Builder(this)
             .setTitle("Personal vocabulary")
-            .setMessage("Project names or jargon the cleanup step often mishears. One per line.")
+            .setMessage(message)
             .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
             .setPositiveButton("Save") { _, _ ->
                 val terms = VocabularyTerms.parse(input.text.toString())
