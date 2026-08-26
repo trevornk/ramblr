@@ -43,6 +43,7 @@ class BehaviorActivity : BaseSettingsActivity() {
     private var silenceAutoStopPendingEnable = false
     private lateinit var vocabularyRowSub: TextView
     private lateinit var localThreadsRowSub: TextView
+    private lateinit var canaryLanguageRowSub: TextView
     private lateinit var compressedUploadSwitch: MaterialSwitch
     // Built unconditionally and shown/hidden in refresh() (#L16): building it only when hidden at
     // onCreate meant hiding the icon via the overlay while this screen was paused left no way back
@@ -228,6 +229,15 @@ class BehaviorActivity : BaseSettingsActivity() {
         localThreadsRowSub = localThreadsRow.findViewWithTag("subtitle")
         root.addView(localThreadsRow)
 
+        // Canary source language (#177): same developer-ish tuning tier as the threads knob
+        // above. Only the Canary model reads this -- see CanaryLanguage's kdoc for why the
+        // wrong language token doesn't just degrade output but collapses it entirely.
+        val canaryLanguageRow = settingsRow("Canary language", canaryLanguageSummary()) {
+            promptCanaryLanguage()
+        }
+        canaryLanguageRowSub = canaryLanguageRow.findViewWithTag("subtitle")
+        root.addView(canaryLanguageRow)
+
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
             addView(root)
@@ -256,6 +266,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         compressedUploadSwitch.isChecked = CompressedUploadToggle.isEnabled(this)
         vocabularyRowSub.text = vocabularySummary()
         localThreadsRowSub.text = localThreadsSummary()
+        canaryLanguageRowSub.text = canaryLanguageSummary()
         autoPeekDelayRow.findViewWithTag<TextView>("subtitle").text = autoPeekDelaySummary()
         peekSizeRow.findViewWithTag<TextView>("subtitle").text = peekSizeSummary()
     }
@@ -572,6 +583,59 @@ class BehaviorActivity : BaseSettingsActivity() {
             .setCustomTitle(titleView)
             .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
                 LocalTranscriptionThreads.setThreads(this, presets[which])
+                refresh()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // --- Canary source language (#177) ---
+
+    private val canaryLanguageLabels = mapOf(
+        "en" to "English (en)",
+        "es" to "Spanish (es)",
+        "de" to "German (de)",
+        "fr" to "French (fr)",
+    )
+
+    private fun canaryLanguageSummary(): String {
+        val lang = CanaryLanguage.languageOrDefault(this)
+        val label = canaryLanguageLabels[lang] ?: lang
+        return "$label -- the language you speak when dictating with the Canary local model. " +
+            "Only affects Canary; other models ignore this"
+    }
+
+    /** Fixed-list picker modeled on [promptLocalTranscriptionThreads]: exactly the four languages
+     *  the shipped canary-180m-flash model supports, no free-form entry. */
+    private fun promptCanaryLanguage() {
+        // Same AlertDialog gotcha as promptLocalTranscriptionThreads: setMessage() and
+        // setSingleChoiceItems() share the content area, so the explanatory copy must ride in a
+        // custom title view or the language list silently never renders.
+        val languages = CanaryLanguage.SUPPORTED
+        val labels = languages.map { canaryLanguageLabels[it] ?: it }.toTypedArray()
+        val current = CanaryLanguage.languageOrDefault(this)
+        val checkedIndex = languages.indexOf(current).let { if (it < 0) 0 else it }
+        val titleView = vertical(dp(20), dp(20)).apply {
+            addView(TextView(this@BehaviorActivity).apply {
+                text = "Canary language"
+                textSize = 20f
+                setTextColor(attrColor(android.R.attr.textColorPrimary))
+            })
+            addView(TextView(this@BehaviorActivity).apply {
+                text = "The language you speak when dictating with the Canary local model. " +
+                    "Canary needs to be told the source language -- with the wrong one it " +
+                    "produces garbage instead of text. Only affects the Canary model; other " +
+                    "local models detect or fix their language on their own."
+                textSize = 14f
+                setTextColor(attrColor(android.R.attr.textColorSecondary))
+                setPadding(0, dp(8), 0, 0)
+            })
+        }
+        android.app.AlertDialog.Builder(this)
+            .setCustomTitle(titleView)
+            .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
+                CanaryLanguage.setLanguage(this, languages[which])
                 refresh()
                 dialog.dismiss()
             }
