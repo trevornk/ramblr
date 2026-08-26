@@ -232,9 +232,10 @@ Current transcription catalog:
 
 | Model | Size | Notes |
 |---|---:|---|
-| Parakeet 110M | 100 MB | Best value · smallest, recommended default |
-| Canary 180M Flash | 147 MB | Multilingual (en/es/de/fr), punctuated |
-| Parakeet 0.6B | 465 MB | Best quality, slower |
+| Parakeet 0.6B (v3) | 487 MB | Recommended default · multilingual (25 languages) |
+| Parakeet Unified 0.6B | 501 MB | Best quality (English) · non-free license, consent-gated |
+| Canary 180M Flash | 154 MB | Multilingual (en/es/de/fr), punctuated |
+| Parakeet 110M | 104 MB | Smallest · fastest |
 
 A separate small streaming model powers the live preview overlay, and a small GGUF model
 (Mumble Cleanup 2-Stage, an Apache-2.0 Qwen2.5-0.5B fine-tune, by default) powers fully on-device

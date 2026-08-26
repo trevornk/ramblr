@@ -67,6 +67,27 @@ class ModelDownloaderTest {
         assertTrue(MODEL_CATALOG.all { it.sizeMb > 0 })
     }
 
+    @Test fun `the recommended ASR default is Parakeet 0dot6B v3, flipped from the 110M (#177)`() {
+        // Exactly one entry may carry `recommended` -- it's what MainActivity's onboarding
+        // auto-downloads and what resolveActiveModel's no-selection fallback keys off; two would
+        // make "the default" ambiguous, zero would fall through to list order (same single-default
+        // invariant ModelLicenseTest pins for the cleanup catalog).
+        assertEquals(1, MODEL_CATALOG.count { it.recommended })
+        // Since #177 (2026-08-26) the default is Parakeet 0.6B v3: best freely-licensed model on
+        // the measured eval (2.38% WER vs the 110M's 3.02%, LibriSpeech test-clean 300 utts, and
+        // the 110M uniquely produced garbage-token errors). Parakeet Unified 0.6B measured better
+        // (1.67%) but is consent-gated (NVIDIA license) and must never be the default -- that
+        // half of the invariant is pinned in ModelLicenseTest.
+        assertEquals(
+            "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+            MODEL_CATALOG.first { it.recommended }.archive,
+        )
+        // The flip is a fresh-install-only change: an existing device's explicit "model_name"
+        // pick and the blank-pref first-installed fallback never consult `recommended`, so the
+        // 110M must stay in the catalog for the users who already have it installed.
+        assertTrue(MODEL_CATALOG.any { it.archive == "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8" })
+    }
+
     @Test fun `ASR and streaming catalog sizeMb is decimal MB matching each model's real byte size`() {
         // Same contract, and the same failure mode, as the local-cleanup test below: sizeMb is
         // consumed by requiredSpaceBytes as DECIMAL MB. These three entries were authored from

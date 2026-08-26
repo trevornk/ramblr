@@ -170,12 +170,11 @@ data class Model(
 // interleaved by its own real quality standing, not pinned to the bottom.
 val MODEL_CATALOG = listOf(
     // NVIDIA parakeet-unified-en-0.6b (HF release 2026-04-07), int8 non-streaming sherpa-onnx
-    // export -- the biggest quality jump available to the local path: ~5.9% avg WER vs. ~7.5%
-    // for the recommended Parakeet 110M, both on the HF Open ASR Leaderboard's pre-2026-08-21
-    // 7-column scoring (#177: the leaderboard re-scored on 2026-08-21 with 9 columns including
-    // two private Appen/DataoceanAI sets, so these figures are NOT comparable to the live page;
-    // under the new scoring Parakeet 0.6B v3 reads 6.04 and 110M is absent from the top-39).
-    // The ranking direction is unchanged either way. Aimed squarely at
+    // export -- the biggest quality jump available to the local path: 1.67% WER on the #177
+    // measured eval (LibriSpeech test-clean, 300 utts, 2026-08-26 -- the same harness scored
+    // every local ASR entry, so these figures ARE comparable to each other, unlike the mixed
+    // pre-/post-2026-08-21 Open ASR Leaderboard regimes the catalog previously quoted).
+    // Aimed squarely at
     // the semantic-substitution error class ('carp'→'car') from the 2026-08-25 audit. Built-in
     // punctuation + capitalization; English-only; non-streaming export. URL/sha256 verified
     // 2026-08-25 by downloading the exact 501,350,460-byte tar.bz2 from the sherpa-onnx
@@ -184,37 +183,46 @@ val MODEL_CATALOG = listOf(
     // Archive layout also verified from that download: encoder.int8.onnx + decoder.int8.onnx +
     // joiner.int8.onnx + tokens.txt, which matches LocalTranscriber.detectModelConfig's
     // NeMo-transducer branch (encoder+decoder+joiner => modelType "nemo_transducer") with zero
-    // code changes. NOT `recommended`: Parakeet 110M stays the default -- the #198 Pixel 10 Pro
-    // Fold benchmark (2026-08-26, AsrDecodeBenchmark, int8, median of 3) measured this model at
-    // 0.71s/0.50s decode for a 7.4s clip and 4.03s/2.68s for a 37.2s clip (2/4 threads,
-    // RTF ~0.11/0.07) vs. the 110M's 0.23s/0.19s and 1.45s/1.13s (RTF ~0.04/0.03) -- unified is
-    // fully interactive and earns its top-quality slot, but a 3x-faster, 5x-smaller, consent-free
-    // default is the right recommendation for first-run UX. NVIDIA Open Model License (see
-    // NVIDIA_OPEN_MODEL_LICENSE): non-free per DFSG/FSF/OSI, so this entry is consent-gated; the
-    // free 110M/tdt-v3/Canary tiers remain, keeping core dictation independent of any non-free
-    // model.
+    // code changes. NOT `recommended` despite the best measured WER: the NVIDIA Open Model
+    // License (see NVIDIA_OPEN_MODEL_LICENSE) is non-free per DFSG/FSF/OSI, so this entry is
+    // consent-gated, and per the #134 policy a consent-gated model must never be what onboarding
+    // auto-downloads. The recommendation goes to the best *freely-licensed* entry (Parakeet
+    // 0.6B v3, below); this stays the opt-in top-quality upgrade. The free v3/110M/Canary tiers
+    // remain, keeping core dictation independent of any non-free model. #198 Pixel 10 Pro Fold
+    // benchmark (2026-08-26, AsrDecodeBenchmark, int8, median of 3): 0.71s/0.50s decode for a
+    // 7.4s clip, 4.03s/2.68s for a 37.2s clip (2/4 threads, RTF ~0.11/0.07) -- fully interactive.
     Model("Parakeet Unified 0.6B", "sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
         501, "★★★★★ Best quality (English)",
         sha256 = "99f63605b3a85a54c250c0869670a687b7d6598a47bf2421515e1f839a76e150",
         license = NVIDIA_OPEN_MODEL_LICENSE),
-    // The 25-language CC-BY-4.0 option, no consent friction -- was labeled "Best quality" until
-    // Parakeet Unified 0.6B (above) took the best-English slot; v3's multilingual coverage is
-    // its real differentiator now.
+    // Recommended default since #177 (flipped from Parakeet 110M, 2026-08-26): the best
+    // freely-licensed model on the measured eval -- 2.38% WER vs. the 110M's 3.02% (LibriSpeech
+    // test-clean, 300 utts, 2026-08-26), and the 110M uniquely produced a garbage-error class
+    // (sheriff→shheriff, brother→brke, to→def) that no 0.6B-class model showed. Parakeet
+    // Unified 0.6B (above, 1.67%) measures better still but is consent-gated (NVIDIA license),
+    // and per #134 the default must be free with no consent friction -- CC-BY-4.0 qualifies.
+    // 25-language coverage is a bonus differentiator over the English-only alternatives. The
+    // flip only moves the `recommended` flag: a user's explicit "model_name" selection and the
+    // blank-pref fallback (first *installed* model -- see WhisperAccessibilityService.
+    // initLocalModel and TranscriptionActivity) never consult this flag, so existing installs
+    // keep whatever model they have; only fresh-install onboarding downloads this instead.
     Model("Parakeet 0.6B", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
-        487, "★★★★ Multilingual",
+        487, "★★★★ Recommended · Multilingual", recommended = true,
         sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
         license = CC_BY_4_0),
-    // Smallest AND best-value entry in the catalog (104MB, ~7.5% avg WER -- 7.49 on the Open ASR
-    // Leaderboard's pre-2026-08-21 scoring; not re-scored under the 2026-08-21 9-column regime,
-    // see #177) -- recommended default.
+    // Smallest and fastest entry in the catalog (104MB; #198 on-device benchmark: 0.23s/0.19s
+    // decode for a 7.4s clip). No longer `recommended` since #177: the measured eval put it at
+    // 3.02% WER vs. Parakeet 0.6B v3's 2.38% (LibriSpeech test-clean, 300 utts, 2026-08-26),
+    // and it was the only local model producing garbage-token errors (sheriff→shheriff,
+    // brother→brke, to→def) -- kept as the small/fast option for storage-constrained devices.
     Model("Parakeet 110M", "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
-        104, "★★★ Best value · Smallest", recommended = true,
+        104, "★★★ Smallest · Fastest",
         sha256 = "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479cefcabd06cf5703630b",
         license = CC_BY_4_0),
     // Replaces Whisper Base.en for #98 (Claude Fable 5 STT model consult): Canary-180m-flash is
-    // strictly better in the same size class -- 7.12% avg WER vs. Whisper Base.en's 10.32%,
-    // both on the Open ASR Leaderboard's pre-2026-08-21 scoring (#177: it reads 6.77 under the
-    // 2026-08-21 9-column re-score -- quote figures only with their regime, the columns changed),
+    // strictly better in the same size class -- 2.44% WER on the #177 measured eval (LibriSpeech
+    // test-clean, 300 utts, 2026-08-26), effectively tied with Parakeet 0.6B v3's 2.38% at a
+    // third of the size, where Whisper Base.en measured ~10.32% on the old leaderboard scoring,
     // plus real punctuation/capitalization and en/es/de/fr support,
     // where Whisper Base.en also pads every utterance to a fixed 30-second window regardless of
     // actual dictation length. Real attention-decoder architecture (a bit slower per token than
@@ -232,9 +240,9 @@ val MODEL_CATALOG = listOf(
     // nearly double Parakeet 110M's ~7.5% -- while ALSO being larger on disk (103MB vs. 100MB).
     // It was labeled "Fast alternative" and described in comments as "the smallest genuinely-good
     // English option," neither of which was true: it's strictly dominated by Parakeet 110M on
-    // every axis (size, WER, and it's the existing recommended default already installed for most
-    // users) with no redeeming tradeoff left to offer. A tier that loses on every axis isn't a
-    // real choice, just confusion.
+    // every axis (size, WER, and at the time 110M was the recommended default already installed
+    // for most users) with no redeeming tradeoff left to offer. A tier that loses on every axis
+    // isn't a real choice, just confusion.
     // NeMo Conformer CTC Small REMOVED for #98 (Claude Fable 5 STT model consult): despite being
     // the smallest entry by raw size (76MB), it outputs lowercase text with no punctuation at
     // all -- disqualifying for a dictation app regardless of WER, since every other model here
