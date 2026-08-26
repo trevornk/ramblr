@@ -170,8 +170,12 @@ data class Model(
 // interleaved by its own real quality standing, not pinned to the bottom.
 val MODEL_CATALOG = listOf(
     // NVIDIA parakeet-unified-en-0.6b (HF release 2026-04-07), int8 non-streaming sherpa-onnx
-    // export -- the biggest quality jump available to the local path: ~5.9% avg WER on the HF
-    // Open ASR leaderboard set vs. ~7.5% for the recommended Parakeet 110M, aimed squarely at
+    // export -- the biggest quality jump available to the local path: ~5.9% avg WER vs. ~7.5%
+    // for the recommended Parakeet 110M, both on the HF Open ASR Leaderboard's pre-2026-08-21
+    // 7-column scoring (#177: the leaderboard re-scored on 2026-08-21 with 9 columns including
+    // two private Appen/DataoceanAI sets, so these figures are NOT comparable to the live page;
+    // under the new scoring Parakeet 0.6B v3 reads 6.04 and 110M is absent from the top-39).
+    // The ranking direction is unchanged either way. Aimed squarely at
     // the semantic-substitution error class ('carp'→'car') from the 2026-08-25 audit. Built-in
     // punctuation + capitalization; English-only; non-streaming export. URL/sha256 verified
     // 2026-08-25 by downloading the exact 501,350,460-byte tar.bz2 from the sherpa-onnx
@@ -200,15 +204,18 @@ val MODEL_CATALOG = listOf(
         487, "★★★★ Multilingual",
         sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
         license = CC_BY_4_0),
-    // Smallest AND best-value entry in the catalog (104MB, ~7.5% avg WER on the Open ASR
-    // Leaderboard) -- recommended default.
+    // Smallest AND best-value entry in the catalog (104MB, ~7.5% avg WER -- 7.49 on the Open ASR
+    // Leaderboard's pre-2026-08-21 scoring; not re-scored under the 2026-08-21 9-column regime,
+    // see #177) -- recommended default.
     Model("Parakeet 110M", "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8",
         104, "★★★ Best value · Smallest", recommended = true,
         sha256 = "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479cefcabd06cf5703630b",
         license = CC_BY_4_0),
     // Replaces Whisper Base.en for #98 (Claude Fable 5 STT model consult): Canary-180m-flash is
-    // strictly better in the same size class -- 7.12% avg WER vs. Whisper Base.en's 10.32%
-    // (Open ASR Leaderboard), plus real punctuation/capitalization and en/es/de/fr support,
+    // strictly better in the same size class -- 7.12% avg WER vs. Whisper Base.en's 10.32%,
+    // both on the Open ASR Leaderboard's pre-2026-08-21 scoring (#177: it reads 6.77 under the
+    // 2026-08-21 9-column re-score -- quote figures only with their regime, the columns changed),
+    // plus real punctuation/capitalization and en/es/de/fr support,
     // where Whisper Base.en also pads every utterance to a fixed 30-second window regardless of
     // actual dictation length. Real attention-decoder architecture (a bit slower per token than
     // Parakeet's CTC/TDT decoders, but batch transcription -- not live-critical the way streaming
