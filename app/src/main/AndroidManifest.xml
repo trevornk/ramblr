@@ -16,6 +16,19 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- #156 advanced tier: NEVER granted at install (signature|privileged|development), so this
+         declaration is inert for every normal user. It exists so a power user can opt in once via
+         `adb shell pm grant com.trevornk.ramblr android.permission.WRITE_SECURE_SETTINGS` (the
+         Tasker pattern), which lets Ramblr manage its own OS accessibility-shortcut bindings
+         (accessibility_button_targets / accessibility_shortcut_target_service) and re-enable its
+         service in-app: raw Secure writes bypass the invisible-toggle "last shortcut off kills
+         the service" sync that #156 is about. Feature-detected at every use
+         (InvocationSecureSettings.canWrite); everything falls back to system-Settings deep links
+         without it. tools:ignore because lint flags any non-app-grantable permission, which is
+         exactly the point here. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:allowBackup="true"
@@ -64,6 +77,10 @@
         <activity android:name=".CloudProviderActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <activity android:name=".AdvancedActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <!-- Invocation-method chooser (#156): same internal-only + fold/unfold handling as the
+             other per-category Settings screens above. -->
+        <activity android:name=".InvocationActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <!-- Advanced's four sub-Activities (#104 restructure): mirror AdvancedActivity's own
              configChanges declaration above for the same Pixel Fold fold/unfold reasoning. -->

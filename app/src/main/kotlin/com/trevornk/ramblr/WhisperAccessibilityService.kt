@@ -538,6 +538,10 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        // #156 guard rail: record that this install has a working service (the signal that
+        // separates "killed by the OS shortcut switch" from "never enabled") and re-arm the
+        // recovery banner's dismissal for the next fresh detection.
+        InvocationGuardRail.recordServiceConnected(this)
         CustomPersonaStore.ensureLegacySeeded(this)
         ProviderChainMigration.runIfNeeded(this)
         showOverlay()

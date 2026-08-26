@@ -35,6 +35,8 @@ class MainActivity : BaseSettingsActivity() {
     private lateinit var livePreviewRowSub: TextView
     private lateinit var cloudRowSub: TextView
     private lateinit var vocabularyRowSub: TextView
+    private lateinit var invocationRowSub: TextView
+    private lateinit var serviceKilledBanner: View
 
     // First-run wizard state (#6). Tracked in-memory so a dialog already on screen is never
     // duplicated by a stray onResume, and reset per Activity instance so a fresh launch always
@@ -75,6 +77,13 @@ class MainActivity : BaseSettingsActivity() {
             setPadding(dp(24), dp(64), dp(24), dp(24))
         }
         root.addView(header)
+
+        // #156 guard rail: the invisible-toggle recovery banner. Built unconditionally and
+        // shown/hidden in refresh() (the #L16 lesson from BehaviorActivity's iconHiddenRow --
+        // the triggering state changes precisely while this Activity is paused, in system
+        // Settings), so onResume picks up a fresh kill immediately.
+        serviceKilledBanner = buildServiceKilledBanner()
+        root.addView(serviceKilledBanner)
 
         // Status row -- tapping it (re-)launches the setup walkthrough when setup isn't done yet
         // (#52); once ready it's just informational, same as before.
@@ -123,6 +132,17 @@ class MainActivity : BaseSettingsActivity() {
         }
         vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
         root.addView(vocabularyRow)
+
+        // Invocation-method chooser (#156): one screen for every way to start dictation --
+        // app-owned (ring, QS tile) and OS-owned (a11y button/gesture, volume keys) -- with the
+        // invisible-toggle education the OS's own UI lacks. Top-level rather than under
+        // Advanced/Behavior: the OS-owned methods are how #156's service-kill trap gets sprung,
+        // so the safe path to them should be as discoverable as the trap is.
+        val invocationRow = settingsRow("Invocation", "Checking...") {
+            startActivity(Intent(this, InvocationActivity::class.java))
+        }
+        invocationRowSub = invocationRow.findViewWithTag("subtitle")
+        root.addView(invocationRow)
 
         root.addView(settingsRow("Advanced", AdvancedActivity.subtitle(this)) {
             startActivity(Intent(this, AdvancedActivity::class.java))
@@ -250,6 +270,9 @@ class MainActivity : BaseSettingsActivity() {
         livePreviewRowSub.text = LivePreviewActivity.subtitle(this)
         cloudRowSub.text = CloudProviderActivity.subtitle(this)
         vocabularyRowSub.text = vocabularyMainRowSubtitleText(VocabularyEditor.terms(this).size)
+        invocationRowSub.text = InvocationActivity.subtitle(this)
+        serviceKilledBanner.visibility =
+            if (InvocationGuardRail.shouldShowBanner(this)) View.VISIBLE else View.GONE
 
         // Ready logic -- see OnboardingWizard.isSetupComplete for what "ready" means (#52).
         val ready = OnboardingWizard.isSetupComplete(
@@ -265,6 +288,87 @@ class MainActivity : BaseSettingsActivity() {
     }
 
     private fun hasPerm(p: String) = ContextCompat.checkSelfPermission(this, p) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    // --- #156 guard rail: "Ramblr was turned off by the system shortcut switch" banner ---
+
+    /**
+     * The recovery banner for the invisible-toggle kill (#156): the OS disables the whole
+     * service when its last shortcut is removed in system Settings, silently and with the app
+     * closed. Detection is [InvocationGuardRail.shouldShowBanner] (pure decision:
+     * [shouldShowServiceKilledBanner], unit-tested); this just builds the card once -- visibility
+     * is owned by [refresh], mirroring how the other rows update.
+     *
+     * Tap = the best available recovery per tier: with WRITE_SECURE_SETTINGS granted, a true
+     * one-tap re-enable (raw write to enabled_accessibility_services, preserving other services'
+     * entries); base tier deep-links straight to Ramblr's own Accessibility page where the
+     * enable switch lives. Dismiss = quiet until a FRESH kill (the dismissal is cleared when the
+     * service next connects), so the banner never turns into a nag.
+     */
+    private fun buildServiceKilledBanner(): View {
+        val banner = vertical(dp(16), dp(12)).apply {
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(withAlpha(attrColor(com.google.android.material.R.attr.colorPrimary), 0x22))
+            }
+            layoutParams = android.widget.LinearLayout.LayoutParams(LP_MATCH, LP_WRAP).apply {
+                setMargins(dp(16), 0, dp(16), dp(8))
+            }
+            visibility = View.GONE
+        }
+        banner.addView(TextView(this).apply {
+            text = "Ramblr was turned off by the system shortcut switch"
+            textSize = 16f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(attrColor(android.R.attr.textColorPrimary))
+        })
+        banner.addView(TextView(this).apply {
+            text = if (InvocationSecureSettings.canWrite(this@MainActivity))
+                "Tap to turn it back on."
+            else
+                "Tap to open its Accessibility page and turn it back on."
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(0, dp(4), 0, 0)
+        })
+        val dismiss = TextView(this).apply {
+            text = "Dismiss"
+            textSize = 14f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
+            setPadding(dp(8), dp(8), dp(8), dp(4))
+            setOnClickListener {
+                InvocationGuardRail.dismissBanner(this@MainActivity)
+                refresh()
+            }
+        }
+        banner.addView(dismiss)
+        banner.setOnClickListener { onServiceKilledBannerTapped() }
+        return banner
+    }
+
+    private fun onServiceKilledBannerTapped() {
+        // Advanced tier: true one-tap re-enable via a raw Secure write (#156 memo §3 -- raw
+        // writes bypass the invisible-toggle sync, and here that's exactly what we want: restore
+        // enabled_accessibility_services without the OS "helpfully" re-syncing shortcuts).
+        if (InvocationSecureSettings.reEnableService(this)) {
+            toast("Ramblr re-enabled")
+            refresh()
+            return
+        }
+        // Base tier: the OS offers no app-side re-enable, so the best path IS the service's own
+        // Settings page (resolvable since API 30 = minSdk; the action is a string constant --
+        // see InvocationSecureSettings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS -- because the SDK
+        // symbol is @hide), where the enable switch is one tap away.
+        val details = Intent(InvocationSecureSettings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).putExtra(
+            Intent.EXTRA_COMPONENT_NAME,
+            android.content.ComponentName(this, WhisperAccessibilityService::class.java).flattenToString(),
+        )
+        try {
+            startActivity(details)
+        } catch (_: android.content.ActivityNotFoundException) {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+    }
 
     // --- Onboarding wizard (#6/#52/#80/#98) -- kept on MainActivity, see class kdoc ---
 
