@@ -252,7 +252,12 @@ class TranscriptionActivity : BaseSettingsActivity() {
             return
         }
         if (ModelDownloadWorker.isInFlight(modelDownloadState[model.archive])) return
-        ModelDownloadWorker.enqueue(this, model)
+        // Routed through the consent prompt (not enqueue directly) since #197 put the first
+        // non-free entry in MODEL_CATALOG: enqueue's own consent chokepoint would correctly
+        // refuse Parakeet Unified 0.6B without recorded consent, but silently -- a dead tap.
+        // For every freely-licensed entry this is byte-for-byte the old enqueue behavior
+        // (canDownload short-circuits true, no dialog).
+        downloadModelWithLicenseConsent(model)
     }
 
     private fun observeDownload(model: Model) {

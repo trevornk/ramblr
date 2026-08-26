@@ -52,6 +52,21 @@ val APACHE_2_0 = ModelLicense("Apache-2.0", "https://www.apache.org/licenses/LIC
  */
 val LFM_OPEN_LICENSE_1_0 = ModelLicense("LFM Open License v1.0", "https://www.liquid.ai/lfm-license", isFree = false)
 
+/**
+ * NVIDIA Open Model License -- **not** a free/open-source license, despite permitting both
+ * redistribution and commercial use. It is not DFSG/FSF/OSI-approved and carries use
+ * restrictions a FLOSS license may not (e.g. a litigation-termination clause and
+ * product-liability/safety conditions on use), and [ModelLicense]'s own kdoc reserves
+ * `isFree = true` for DFSG/FSF/OSI-free licenses -- so this MUST be `isFree = false`, which is
+ * also what correctly routes any model under it through the existing
+ * [Model.requiresLicenseConsent] opt-in flow the F-Droid inclusion policy requires.
+ */
+val NVIDIA_OPEN_MODEL_LICENSE = ModelLicense(
+    "NVIDIA Open Model License",
+    "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+    isFree = false,
+)
+
 data class Model(
     val name: String,
     val archive: String,
@@ -154,8 +169,35 @@ data class Model(
 // the one non-tiered "alternative architecture" entry (multilingual, punctuated) and is
 // interleaved by its own real quality standing, not pinned to the bottom.
 val MODEL_CATALOG = listOf(
+    // NVIDIA parakeet-unified-en-0.6b (HF release 2026-04-07), int8 non-streaming sherpa-onnx
+    // export -- the biggest quality jump available to the local path: ~5.9% avg WER on the HF
+    // Open ASR leaderboard set vs. ~7.5% for the recommended Parakeet 110M, aimed squarely at
+    // the semantic-substitution error class ('carp'→'car') from the 2026-08-25 audit. Built-in
+    // punctuation + capitalization; English-only; non-streaming export. URL/sha256 verified
+    // 2026-08-25 by downloading the exact 501,350,460-byte tar.bz2 from the sherpa-onnx
+    // asr-models GitHub release and hashing it locally (`shasum -a 256`), same discipline as
+    // every other entry -- sizeMb 501 is DECIMAL MB per requiredSpaceBytes' documented contract.
+    // Archive layout also verified from that download: encoder.int8.onnx + decoder.int8.onnx +
+    // joiner.int8.onnx + tokens.txt, which matches LocalTranscriber.detectModelConfig's
+    // NeMo-transducer branch (encoder+decoder+joiner => modelType "nemo_transducer") with zero
+    // code changes. NOT `recommended`: Parakeet 110M stays the default -- the #198 Pixel 10 Pro
+    // Fold benchmark (2026-08-26, AsrDecodeBenchmark, int8, median of 3) measured this model at
+    // 0.71s/0.50s decode for a 7.4s clip and 4.03s/2.68s for a 37.2s clip (2/4 threads,
+    // RTF ~0.11/0.07) vs. the 110M's 0.23s/0.19s and 1.45s/1.13s (RTF ~0.04/0.03) -- unified is
+    // fully interactive and earns its top-quality slot, but a 3x-faster, 5x-smaller, consent-free
+    // default is the right recommendation for first-run UX. NVIDIA Open Model License (see
+    // NVIDIA_OPEN_MODEL_LICENSE): non-free per DFSG/FSF/OSI, so this entry is consent-gated; the
+    // free 110M/tdt-v3/Canary tiers remain, keeping core dictation independent of any non-free
+    // model.
+    Model("Parakeet Unified 0.6B", "sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
+        501, "★★★★★ Best quality (English)",
+        sha256 = "99f63605b3a85a54c250c0869670a687b7d6598a47bf2421515e1f839a76e150",
+        license = NVIDIA_OPEN_MODEL_LICENSE),
+    // The 25-language CC-BY-4.0 option, no consent friction -- was labeled "Best quality" until
+    // Parakeet Unified 0.6B (above) took the best-English slot; v3's multilingual coverage is
+    // its real differentiator now.
     Model("Parakeet 0.6B", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
-        487, "★★★★ Best quality",
+        487, "★★★★ Multilingual",
         sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
         license = CC_BY_4_0),
     // Smallest AND best-value entry in the catalog (104MB, ~7.5% avg WER on the Open ASR

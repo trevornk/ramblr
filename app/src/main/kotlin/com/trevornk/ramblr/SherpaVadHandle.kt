@@ -21,7 +21,9 @@ class SherpaVadHandle private constructor(private val vad: Vad) : VadHandle, Aut
 
     override fun isEmpty(): Boolean = vad.empty()
 
-    override fun front(): FloatArray = vad.front().samples
+    // Maps the native SpeechSegment 1:1 -- the start index was always available natively; the
+    // interface just used to discard it before the pre-roll fix (#196) needed it.
+    override fun front(): VadSegment = vad.front().let { VadSegment(it.start, it.samples) }
 
     override fun pop() = vad.pop()
 

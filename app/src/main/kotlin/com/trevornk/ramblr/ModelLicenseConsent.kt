@@ -62,13 +62,32 @@ object ModelLicenseConsent {
      * User-facing explanation shown before download. States the restriction in concrete terms
      * rather than "non-free": a user deciding whether to accept needs to know what the license
      * actually does, and "not FLOSS" alone doesn't tell them.
+     *
+     * The restriction and what-the-model-is-for sentences are per-license/per-kind rather than
+     * hardcoded (#197): this copy predates Parakeet Unified 0.6B, when the only non-free model
+     * was the LFM cleanup GGUF, and its "limiting commercial use by larger companies" / "only
+     * used for optional on-device cleanup" claims would both be flatly untrue shown in front of
+     * an NVIDIA-OML ASR download -- a consent gate that misstates the terms defeats its purpose.
      */
-    fun consentMessage(model: Model): String =
-        "\"${model.name}\" is not free/open-source software, unlike Ramblr itself (GPLv3).\n\n" +
+    fun consentMessage(model: Model): String {
+        val restriction = when (model.license) {
+            LFM_OPEN_LICENSE_1_0 ->
+                "notably limiting commercial use by larger companies"
+            NVIDIA_OPEN_MODEL_LICENSE ->
+                "notably attaching conditions to how the model may be used and terminating " +
+                    "the license on litigation over it"
+            else -> "see the terms for the specific restrictions"
+        }
+        val role = if (model.isLocalCleanup) {
+            "only used for optional on-device cleanup"
+        } else {
+            "an optional alternative transcription model -- the standard models remain available"
+        }
+        return "\"${model.name}\" is not free/open-source software, unlike Ramblr itself (GPLv3).\n\n" +
             "It is published by its authors under the ${model.license.name}, which places " +
-            "restrictions on use that an open-source license would not — notably limiting " +
-            "commercial use by larger companies.\n\n" +
-            "The model is downloaded from its publisher, not bundled with Ramblr, and is only " +
-            "used for optional on-device cleanup. You can use Ramblr fully without it.\n\n" +
+            "restrictions on use that an open-source license would not — $restriction.\n\n" +
+            "The model is downloaded from its publisher, not bundled with Ramblr, and is " +
+            "$role. You can use Ramblr fully without it.\n\n" +
             "License terms: ${model.license.url}"
+    }
 }

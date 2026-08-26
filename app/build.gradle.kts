@@ -103,6 +103,12 @@ android {
 
         buildConfigField("String", "OMNIROUTE_BASE_URL", "\"$omniRouteBaseUrl\"")
 
+        // Instrumentation infra exists solely for the on-device ASR decode benchmark
+        // (AsrDecodeBenchmark, #198) -- there were no androidTest sources at all before it.
+        // The stock AndroidJUnitRunner is enough: the benchmark is a plain instrumented test
+        // reading -e args, no custom runner behavior needed.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -261,6 +267,13 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+
+    // On-device ASR decode benchmark only (AsrDecodeBenchmark, #198) -- the androidTest source
+    // set has exactly that one class. junit:junit is already the unit-test framework above;
+    // androidx.test's ext-junit + runner are the standard instrumentation pair for
+    // AndroidJUnitRunner. No androidx.test:rules -- nothing in the benchmark needs a rule.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
 
 // Unzips the onnxruntime AAR's C/C++ headers and arm64-v8a libonnxruntime.so into
