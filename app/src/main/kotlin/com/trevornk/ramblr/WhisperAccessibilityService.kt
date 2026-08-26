@@ -85,6 +85,41 @@ data class PipelineTiming(
 )
 
 /**
+ * Holder for the current dictation's [PipelineTiming] with explicit lifecycle verbs (H2, #192).
+ *
+ * The previous bare `@Volatile var` field was only ever cleared by [consume] (in
+ * `finishInjection`) or overwritten by the next dictation's [start] -- so a dictation that ended
+ * on a NON-happy path (no speech detected, long-press cancel, watchdog timeout, transcription
+ * error) left its timing populated, and the next unrelated `injectText()` call (e.g. the feedback
+ * bubble's raw-text retry) consumed it and wrote a benchmark line whose
+ * `injectionAttemptMs`/`totalMs` were measured from the *previous, abandoned* dictation's stop
+ * tap. [abandon] is the missing verb: every non-happy-path exit drops the timeline so it can
+ * never be misattributed later.
+ *
+ * Same memory semantics as the field it replaces (a single volatile reference, no CAS): exactly
+ * one dictation is ever in flight at a time -- `guard`/`activeToken` enforce that invariant --
+ * and the one benign cross-thread copy race (reader-thread [markDrained] vs a simultaneous
+ * main-thread write, audit L6) is unchanged.
+ */
+class PipelineTimingSlot {
+    @Volatile private var timing: PipelineTiming? = null
+
+    /** Anchors a fresh dictation timeline, overwriting anything left behind. */
+    fun start(timing: PipelineTiming) { this.timing = timing }
+
+    /** Stamps the reader-drain instant onto the active timeline; no-op when none is active. */
+    fun markDrained(nowMs: Long) { timing = timing?.copy(drainAtMs = nowMs) }
+
+    /** Returns the active timeline and clears it -- consume-exactly-once, or null when the
+     *  dictation this injection belongs to never had / already used / abandoned its timing. */
+    fun consume(): PipelineTiming? = timing.also { timing = null }
+
+    /** Drops the timeline on a non-happy-path exit (no-speech, cancel, watchdog, transcription
+     *  error) so a later, unrelated injection can never consume stale timing (H2, #192). */
+    fun abandon() { timing = null }
+}
+
+/**
  * #118: the default "Copied to clipboard" feedback is only true when the text really did land on
  * the clipboard for the user to paste -- a DIRECT (ACTION_SET_TEXT) injection never reads the
  * clipboard at all, so showing that message there is misleading noise. Any caller-supplied,
@@ -353,14 +388,16 @@ class WhisperAccessibilityService : AccessibilityService() {
     private var screenStateReceiver: android.content.BroadcastReceiver? = null
     @Volatile private var activeToken: Int = 0
     /** #115: wall-clock markers for the current dictation's user-perceived, stop-tap-to-injection
-     *  timeline. Set the instant [activeToken] is minted (stop tap, or the max-duration auto-stop
-     *  path's synthetic "stop") and consumed once in [finishInjection] to write the end-to-end
-     *  [PipelineStage] benchmark line, then cleared so a later, unrelated retry-tap injectText()
-     *  call (e.g. [onFeedbackTapped]'s raw-text retry) doesn't attribute stale timing to itself.
-     *  A plain field (not a per-token map) is safe here because exactly one dictation is ever
-     *  in flight at a time -- [guard]/[activeToken] already enforce that invariant everywhere
-     *  else in this class. */
-    @Volatile private var pipelineTiming: PipelineTiming? = null
+     *  timeline. Started the instant [activeToken] is minted (stop tap, or the max-duration
+     *  auto-stop path's synthetic "stop") and consumed once in [finishInjection] to write the
+     *  end-to-end [PipelineStage] benchmark line. Every non-happy-path exit -- no speech
+     *  detected, long-press cancel, watchdog timeout, transcription-chain failure -- abandons the
+     *  timeline instead of leaving it populated (H2, #192), so a later, unrelated injectText()
+     *  call (e.g. [onFeedbackTapped]'s raw-text retry) can never attribute stale timing to
+     *  itself. A single slot (not a per-token map) is safe here because exactly one dictation is
+     *  ever in flight at a time -- [guard]/[activeToken] already enforce that invariant
+     *  everywhere else in this class. */
+    private val pipelineTiming = PipelineTimingSlot()
     private val handler = Handler(Looper.getMainLooper())
     private val hideFeedback = Runnable {
         setFeedbackTouchable(false)
@@ -2159,7 +2196,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun stopAndTranscribe() {
         if (!stateMachine.tryStartTranscribing()) return
         activeToken = guard.start()
-        pipelineTiming = PipelineTiming(stopTapAtMs = System.currentTimeMillis(), correlationId = correlationIdFor(activeToken))
+        pipelineTiming.start(PipelineTiming(stopTapAtMs = System.currentTimeMillis(), correlationId = correlationIdFor(activeToken)))
         armWatchdog(activeToken)
         enterTranscribingUi()
     }
@@ -2232,6 +2269,9 @@ class WhisperAccessibilityService : AccessibilityService() {
     private fun cancelTranscription() {
         if (stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING) return
         inFlightCall.cancel()
+        // H2 (#192): this dictation will never reach finishInjection, so drop its timeline now --
+        // otherwise the next unrelated injection would consume it as its own.
+        pipelineTiming.abandon()
         resetToIdle()
         toast("Transcription cancelled")
     }
@@ -2247,6 +2287,9 @@ class WhisperAccessibilityService : AccessibilityService() {
             watchdogRunnable = null
             if (guard.isCurrent(token)) {
                 inFlightCall.cancel()
+                // H2 (#192): a timed-out dictation never reaches finishInjection; drop its
+                // timeline so a later unrelated injection can't consume it.
+                pipelineTiming.abandon()
                 resetToIdle()
                 toast("Transcription timed out")
             }
@@ -2265,13 +2308,12 @@ class WhisperAccessibilityService : AccessibilityService() {
         cancelWatchdog()
         guard.cancel()
         activeToken = 0
-        // #115: deliberately NOT cleared here. resetToIdle() runs immediately after beginPreview()
+        // #115: deliberately NOT abandoned here. resetToIdle() runs immediately after beginPreview()
         // too (preview-before-inject, #40) -- well before the real injectText() call that resolves
-        // the preview, possibly seconds later on a timeout. Clearing here would silently drop
-        // pipeline timing for every previewed dictation. Left to be consumed once by
-        // finishInjection() (which nulls it after reading) or naturally overwritten by the next
-        // dictation's stopAndTranscribe()/startMaxDurationTranscription() -- see pipelineTiming's
-        // kdoc for why a stale value can never be misattributed to an unrelated injectText() call.
+        // the preview, possibly seconds later on a timeout. Abandoning here would silently drop
+        // pipeline timing for every previewed dictation. Instead each non-happy-path exit
+        // (cancel, watchdog, no-speech, reset(msg)) calls pipelineTiming.abandon() itself (H2,
+        // #192), and the happy path consumes exactly once in finishInjection().
         stateMachine.reset()
         setBusy(false)
         setAppearance(COLOR_IDLE)
@@ -2290,7 +2332,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         // this reader thread, rather than waiting for the main-thread token resolution below --
         // resolveLateRecordingOnMain's hop can add a real, variable delay that would otherwise be
         // silently folded into this measurement.
-        pipelineTiming = pipelineTiming?.copy(drainAtMs = System.currentTimeMillis())
+        pipelineTiming.markDrained(System.currentTimeMillis())
 
         val token = when {
             activeToken != 0 && guard.isCurrent(activeToken) -> activeToken
@@ -2352,7 +2394,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             // happened (this whole branch runs after onRecordingFinished already returned) before
             // any pipelineTiming existed to record it against.
             val nowMs = System.currentTimeMillis()
-            pipelineTiming = PipelineTiming(stopTapAtMs = nowMs, correlationId = correlationIdFor(token), drainAtMs = nowMs)
+            pipelineTiming.start(PipelineTiming(stopTapAtMs = nowMs, correlationId = correlationIdFor(token), drainAtMs = nowMs))
             armWatchdog(token)
             enterTranscribingUi()
             toast("Recording limit reached (10 min) — transcribing…")
@@ -2364,6 +2406,17 @@ class WhisperAccessibilityService : AccessibilityService() {
         val file = result.pcmFile
         if (file == null) { reset("No audio captured"); return }
         if (result.errorMessage != null) Log.e(TAG, "Recording ended with error: ${result.errorMessage}")
+
+        // M3a (#192): a recording under the minimum duration floor (~300ms of PCM) cannot contain
+        // usable speech -- discard it with the existing "No speech detected" UX *before* paying
+        // for a full local decode or cloud upload that would only ever produce a blank transcript.
+        if (isBelowMinimumDuration(file.length(), SAMPLE_RATE)) {
+            Log.i(TAG, "Recording below ${MIN_RECORDING_DURATION_MS}ms floor (${file.length()} bytes); discarding")
+            file.delete()
+            result.compressedFile?.delete()
+            reset("No speech detected")
+            return
+        }
 
         val useLocal = prefs().getBoolean("use_local", true)
         val allowCloudFallback = DictationModeToggle.allowCloudFallback(this)
@@ -2750,9 +2803,26 @@ class WhisperAccessibilityService : AccessibilityService() {
 
     private fun handleTranscriptionResult(text: String?, token: Int) {
         if (text.isNullOrBlank()) {
+            // H2 (#192): a no-speech dictation never reaches finishInjection -- abandon its
+            // timing so a later unrelated injection (e.g. feedback-bubble raw-text retry) can't
+            // consume it and write a garbage benchmark line.
+            pipelineTiming.abandon()
             handler.post {
                 if (!guard.isCurrent(token)) return@post
                 toast("No speech detected")
+                resetToIdle()
+            }
+            return
+        }
+
+        // M3b (#192): a non-blank but content-free transcript (ASR hallucinations like "." or
+        // "you"-length fragments) has nothing for a cleanup model to improve -- running the full
+        // waterfall (network calls, LOCAL_LLM load) on it is pure waste. Inject it raw directly.
+        if (isJunkTranscript(text)) {
+            Log.i(TAG, "Transcript is content-free (len=${text.length}); skipping cleanup waterfall")
+            handler.post {
+                if (!guard.isCurrent(token)) return@post
+                injectText(text)
                 resetToIdle()
             }
             return
@@ -2949,6 +3019,10 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  bytes captured, or missing API key) -- so it hops (#72). */
     private fun reset(msg: String) {
         toast(msg)
+        // H2 (#192): every reset(msg) call site is a terminal error/give-up exit (no audio, chain
+        // exhausted, recording error, ...) after which no finishInjection will run for this
+        // dictation -- abandon its timing so it can't be misattributed to a later injection.
+        pipelineTiming.abandon()
         handler.post { resetToIdle() }
     }
 
@@ -3236,8 +3310,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         // nulled right after reading) so a later, unrelated retry-tap injectText() call (e.g.
         // onFeedbackTapped's raw-text retry, or a preview commit that runs well after the
         // original stop tap) never attributes this dictation's stale timing to itself.
-        pipelineTiming?.let { timing ->
-            pipelineTiming = null
+        pipelineTiming.consume()?.let { timing ->
             val nowMs = System.currentTimeMillis()
             BenchmarkLogger.log(
                 context = this,
