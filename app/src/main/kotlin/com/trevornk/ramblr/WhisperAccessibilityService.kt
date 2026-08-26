@@ -357,6 +357,49 @@ class WhisperAccessibilityService : AccessibilityService() {
      *  MediaMuxer) is ever created. */
     @Volatile private var aacEncoderSession: AacEncoderSession? = null
     private val guard = TranscriptionGuard()
+    /**
+     * Bounded partial wakelock across the recording+transcription window (M6 audit, 2026-08-26).
+     * Screen-off long dictations otherwise risk the CPU being throttled mid local decode (the
+     * multi-minute sherpa path), and OEM battery managers are quicker to silence the mic for an
+     * app holding no wakelock. Lazily created once (PowerManager.newWakeLock), then reused for
+     * every dictation; non-reference-counted so acquire/release are idempotent under the rapid
+     * cancel->restart races #193 documents -- a re-acquire simply refreshes the timeout, and a
+     * second release is a no-op instead of a RuntimeException.
+     *
+     * Deliberately minimal scope: a full foregroundServiceType="microphone" FGS migration is the
+     * robust fix for OEM mic silencing and is tracked as future work in #204 -- this is the
+     * bounded, low-risk slice of it.
+     */
+    private var transcriptionWakeLock: android.os.PowerManager.WakeLock? = null
+
+    /** Leak backstop for [transcriptionWakeLock]: recording caps at 10 min and a worst-case
+     *  local decode adds multi-minute tail, so 20 min comfortably covers one dictation while
+     *  guaranteeing the OS drops the lock even if every release path were somehow missed. Each
+     *  [acquireTranscriptionWakeLock] refreshes this window for the new dictation. */
+    private val TRANSCRIPTION_WAKELOCK_TIMEOUT_MS = 20 * 60 * 1000L
+
+    /** Acquires (or refreshes) the bounded partial wakelock for a dictation that just started
+     *  recording. Main thread only (called from [startRecording]). Any failure is swallowed:
+     *  a wakelock is an optimization for screen-off reliability, never worth failing a
+     *  dictation over. */
+    private fun acquireTranscriptionWakeLock() {
+        runCatching {
+            val lock = transcriptionWakeLock ?: (getSystemService(Context.POWER_SERVICE) as android.os.PowerManager)
+                .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "ramblr:transcription")
+                .apply { setReferenceCounted(false) }
+                .also { transcriptionWakeLock = it }
+            lock.acquire(TRANSCRIPTION_WAKELOCK_TIMEOUT_MS)
+        }.onFailure { Log.w(TAG, "Couldn't acquire transcription wakelock", it) }
+    }
+
+    /** Releases the wakelock at a pipeline terminal state. isHeld-guarded (and the lock is
+     *  non-reference-counted), so calling this from multiple teardown paths -- [resetToIdle]'s
+     *  always-runs funnel and [onDestroy]'s belt-and-suspenders -- is safe. */
+    private fun releaseTranscriptionWakeLock() {
+        runCatching {
+            transcriptionWakeLock?.takeIf { it.isHeld }?.release()
+        }.onFailure { Log.w(TAG, "Couldn't release transcription wakelock", it) }
+    }
     /** Per-process-launch unique prefix for [correlationIdFor] (real bug fix, 2026-07-17):
      *  [guard]'s underlying token is an in-process [java.util.concurrent.atomic.AtomicInteger]
      *  that always restarts at 1 on a fresh accessibility-service process (app update, OS memory
@@ -635,6 +678,9 @@ class WhisperAccessibilityService : AccessibilityService() {
         cancelWatchdog()
         guard.cancel()
         inFlightCall.cancel()
+        // M6 belt-and-suspenders: service teardown is terminal for any in-flight dictation, and
+        // resetToIdle() may never run for it. isHeld-guarded, so a no-dictation destroy is a no-op.
+        releaseTranscriptionWakeLock()
         // The cancel above makes any in-flight local completion abort at its next piece check
         // (#83), so the holder's daemon thread can close the cached ~1 GB cleanup model promptly
         // without this main-thread teardown waiting on it (#74).
@@ -2186,6 +2232,10 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
 
         recordingEngine = engine
+        // M6: recording is genuinely live -- open the bounded wakelock window that spans
+        // recording + transcription; resetToIdle() (the terminal-state funnel) closes it.
+        // Placed after the `started` check so a failed recorder start never acquires.
+        acquireTranscriptionWakeLock()
         setBusy(false)
         // Deferred (Trevor-reported bug fix, see animateRingX's kdoc): with SingleTapRestoreToggle
         // on, this exact call site can run while restoreFromPeek()'s animator is still mid-flight
@@ -2315,6 +2365,12 @@ class WhisperAccessibilityService : AccessibilityService() {
         cancelWatchdog()
         guard.cancel()
         activeToken = 0
+        // M6: the pipeline is terminal here -- injection finished, cancel, watchdog, or error
+        // (reset(msg) funnels here too) -- so the recording+transcription wakelock window ends.
+        // isHeld-guarded and non-reference-counted, so the paths where no dictation was running
+        // (e.g. preview-before-inject's early resetToIdle) are harmless no-ops or early releases
+        // that the next startRecording() re-acquires.
+        releaseTranscriptionWakeLock()
         // #115: deliberately NOT abandoned here. resetToIdle() runs immediately after beginPreview()
         // too (preview-before-inject, #40) -- well before the real injectText() call that resolves
         // the preview, possibly seconds later on a timeout. Abandoning here would silently drop
