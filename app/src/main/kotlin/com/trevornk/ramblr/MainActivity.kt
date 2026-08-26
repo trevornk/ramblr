@@ -34,6 +34,7 @@ class MainActivity : BaseSettingsActivity() {
     private lateinit var cleanupRowSub: TextView
     private lateinit var livePreviewRowSub: TextView
     private lateinit var cloudRowSub: TextView
+    private lateinit var vocabularyRowSub: TextView
 
     // First-run wizard state (#6). Tracked in-memory so a dialog already on screen is never
     // duplicated by a stray onResume, and reset per Activity instance so a fresh launch always
@@ -112,6 +113,16 @@ class MainActivity : BaseSettingsActivity() {
         }
         cloudRowSub = cloudRow.findViewWithTag("subtitle")
         root.addView(cloudRow)
+
+        // Top-level Personal vocabulary entry (#217): the editor stayed reachable only via
+        // Advanced > Behavior for so long that #140's reporter asked for the feature without
+        // finding it. Same shared editor as the Behavior row ([VocabularyEditor]) -- this row
+        // just makes it discoverable, with a live term count as its subtitle.
+        val vocabularyRow = settingsRow("Personal vocabulary", "Checking...") {
+            VocabularyEditor.prompt(this) { refresh() }
+        }
+        vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
+        root.addView(vocabularyRow)
 
         root.addView(settingsRow("Advanced", AdvancedActivity.subtitle(this)) {
             startActivity(Intent(this, AdvancedActivity::class.java))
@@ -238,6 +249,7 @@ class MainActivity : BaseSettingsActivity() {
         cleanupRowSub.text = CleanupActivity.subtitle(this)
         livePreviewRowSub.text = LivePreviewActivity.subtitle(this)
         cloudRowSub.text = CloudProviderActivity.subtitle(this)
+        vocabularyRowSub.text = vocabularyMainRowSubtitleText(VocabularyEditor.terms(this).size)
 
         // Ready logic -- see OnboardingWizard.isSetupComplete for what "ready" means (#52).
         val ready = OnboardingWizard.isSetupComplete(

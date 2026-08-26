@@ -45,3 +45,32 @@ fun advancedSubtitleText(hasSelfUpdate: Boolean): String {
     val updates = if (hasSelfUpdate) "updates, " else ""
     return "Redo setup, overlay appearance, behavior, ${updates}data & logs"
 }
+
+/**
+ * The main settings screen's "Personal vocabulary" row subtitle (#217): a live term count plus a
+ * one-line pitch, e.g. `"12 terms — names and jargon the models should get right"`. The count is
+ * the discoverability hook -- #140's reporter looked for exactly this feature and couldn't find
+ * it, so the row leads with evidence that it exists and is populated.
+ */
+fun vocabularyMainRowSubtitleText(termCount: Int): String {
+    val count = when (termCount) {
+        0 -> "No terms yet"
+        1 -> "1 term"
+        else -> "$termCount terms"
+    }
+    return "$count — names and jargon the models should get right"
+}
+
+/**
+ * The Behavior screen's "Personal vocabulary" row subtitle: the term list itself, prefixed with
+ * the #185 inert-setting warning when nothing in the current configuration applies the terms.
+ * Extracted from BehaviorActivity's private `vocabularySummary` (#217) so it's unit-testable and
+ * shared through [VocabularyEditor.rowSummary].
+ */
+fun vocabularyRowSummaryText(terms: List<String>, inert: Boolean): String {
+    val termsPart = if (terms.isEmpty()) "No custom terms" else terms.joinToString(", ")
+    // #185: the raw term list reads as confirmation the terms are in force -- when nothing
+    // in the current setup applies them (local ASR with cleanup fully off, since #182's
+    // post-pass made local cleanup vocabulary-capable) they aren't, so say so on the row.
+    return if (inert) "Not used while cleanup is off — $termsPart" else termsPart
+}
