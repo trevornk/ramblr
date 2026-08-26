@@ -105,6 +105,35 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <!-- Package-visibility decoys (Android 11+ declared package visibility,
+                 https://developer.android.com/training/package-visibility).
+
+                 Hosts building the text-selection toolbar call
+                 queryIntentActivities(ACTION_PROCESS_TEXT, "text/plain") from their own
+                 process, so the *host's* <queries> rules decide whether Ramblr's handler is
+                 returned at all. Gmail, Google Messages and Keep do NOT declare a
+                 PROCESS_TEXT <queries> entry — they only become able to see a handler app
+                 when one of their generic <queries> intents (ACTION_VIEW variants) matches
+                 some exported intent-filter in that app. ChatGPT/Kiwix appear in those
+                 toolbars because their deep-link/file VIEW filters happen to match; Ramblr
+                 (and Claude) had no matching filter, so the entry was silently filtered out
+                 (device-verified on a Pixel 10 Pro Fold, Android 16).
+
+                 The two filters below exist solely to match those generic VIEW queries.
+                 They deliberately omit android.intent.category.DEFAULT, so implicit
+                 intents can never resolve to this activity — Ramblr does not appear in any
+                 link-open chooser (adb-verified) and the activity remains reachable only
+                 explicitly. Hosts whose <queries> contain no VIEW intent at all (e.g.
+                 SchildiChat) still cannot see any third-party handler; that is
+                 host-app-side and unfixable from here. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+            </intent-filter>
         </activity>
 
         <service
