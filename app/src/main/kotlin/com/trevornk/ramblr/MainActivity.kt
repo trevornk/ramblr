@@ -601,7 +601,17 @@ class MainActivity : BaseSettingsActivity() {
                 dismissOnboarding()
                 enableOnboardingCleanupLocal(recommendedLocal) { showOnboardingStreamingStep() }
             }
-            .setNeutralButton("Skip (leave off)") { _, _ -> dismissOnboarding(); showOnboardingStreamingStep() }
+            // #174: the label asserts an end state ("leave off"), so the handler must actually
+            // write it. A pure no-op diverged from the label whenever onboarding re-ran on a
+            // device with cleanup already on (Advanced -> "Redo setup walkthrough"): the user
+            // picked "leave off" and finished with cleanup still enabled. A user re-running
+            // setup and choosing this option is expressing intent about the end state, not
+            // asking to preserve whatever was configured before.
+            .setNeutralButton("Skip (leave off)") { _, _ ->
+                dismissOnboarding()
+                PostProcessingToggle.setEnabled(this, false)
+                showOnboardingStreamingStep()
+            }
             .show()
     }
 
