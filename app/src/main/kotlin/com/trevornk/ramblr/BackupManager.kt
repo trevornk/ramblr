@@ -13,10 +13,12 @@ import org.w3c.dom.Element
 /**
  * Manual, on-demand backup/restore of the on-device data that's NOT already covered by Android's
  * automatic backup mechanism (see backup_rules.xml / data_extraction_rules.xml, which only ever
- * carry `ramblr.xml` + `overlay_icon.png`) -- specifically `dictation_history.jsonl`,
- * `benchmark_log.jsonl`, and `quality_log.jsonl` (GH #103). Prompted by a real scenario: a
+ * carry `ramblr.xml` + `overlay_icon.png`) -- specifically `dictation_history.jsonl` and
+ * `benchmark_log.jsonl` (GH #103). Prompted by a real scenario: a
  * signature-key change (debug -> release signed APK) forces an uninstall, which would otherwise
- * silently lose all three.
+ * silently lose them. (`quality_log.jsonl` was originally included too, but is excluded since
+ * #191: it stores verbatim dictation text behind an off-by-default toggle, so it stays strictly
+ * on-device.)
  *
  * Deliberately excludes the three EncryptedSharedPreferences files (`ramblr_secure.xml`,
  * `ramblr_cleanup_credentials.xml`, `ramblr_provider_credentials.xml`) -- same reasoning already
@@ -41,6 +43,11 @@ import org.w3c.dom.Element
 object BackupManager {
     const val ENTRY_DICTATION_HISTORY = "dictation_history.jsonl"
     const val ENTRY_BENCHMARK_LOG = "benchmark_log.jsonl"
+
+    /** No longer written to new backups (#191: the quality log stores verbatim dictation text
+     *  behind an off-by-default toggle, so it must not silently ride along in backup zips), but
+     *  the constant stays so a legacy backup containing this entry is still *recognized* — it
+     *  now falls into [RestoreResult.skippedEntries] instead of being restored. */
     const val ENTRY_QUALITY_LOG = "quality_log.jsonl"
     const val ENTRY_PREFS = "ramblr_prefs.xml"
 
@@ -55,7 +62,9 @@ object BackupManager {
     fun targetFiles(context: Context): Map<String, File> = mapOf(
         ENTRY_DICTATION_HISTORY to File(context.filesDir, ENTRY_DICTATION_HISTORY),
         ENTRY_BENCHMARK_LOG to BenchmarkLogger.logFile(context),
-        ENTRY_QUALITY_LOG to QualityLogger.logFile(context),
+        // ENTRY_QUALITY_LOG is deliberately absent (#191): quality_log.jsonl holds verbatim
+        // dictation text and is opt-in-only, so it neither leaves the device in a backup zip
+        // nor gets overwritten by a restore.
         // SharedPreferences XML files live in a fixed sibling of filesDir, one directory up:
         // <filesDir>/../shared_prefs/<name>.xml. There's no public Context accessor for this
         // path (only for the parsed SharedPreferences object itself), but the location is a

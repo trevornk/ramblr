@@ -59,6 +59,17 @@ on-device, in the app's private storage, and is excluded from Android backups an
 device-to-device transfer. It is never uploaded anywhere. You can turn history off in Settings, and
 you can delete recorded entries from the history screen.
 
+## Quality log (off by default)
+
+Ramblr has an optional diagnostic "quality log" for comparing transcription/cleanup providers. When
+— and only when — you enable it in Settings → Data & Logs, each dictation's raw transcript and
+cleaned-up text, along with the provider and model that produced them, are appended to a file in
+the app's private on-device storage. It is **off by default**: nothing is written unless you turn
+it on. The log never leaves the device on its own — it is excluded from Android backups, from
+device-to-device transfer, and from the app's own manual backup files; the only way it leaves the
+device is if you explicitly share it with the "Share quality log" button. Turning the toggle off
+offers to delete the already-saved log, and uninstalling the app removes it.
+
 ## Android backup and device transfer
 
 Ramblr participates in Android's backup and "Copy your data" device-transfer flows, but on a

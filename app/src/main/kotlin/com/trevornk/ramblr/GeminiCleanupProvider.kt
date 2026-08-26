@@ -29,10 +29,12 @@ object GeminiCleanupProvider {
      *  key out of the URL entirely, mirroring [AnthropicCleanupProvider.headers]'s `x-api-key`. */
     fun headers(key: String): Map<String, String> = mapOf("x-goog-api-key" to key)
 
-    // gemini-2.5-flash -> gemini-3.1-flash-lite: 2.5-flash is on Google's deprecation path
-    // (shutdown Oct 16, 2026); 3.1-flash-lite is Google's own documented replacement for the
-    // flash-lite tier and matches ModelCatalogEntry's RECOMMENDED Gemini pick (2026-07-10).
-    const val DEFAULT_MODEL = "gemini-3.1-flash-lite"
+    // gemini-3.1-flash-lite -> gemini-3.5-flash-lite (2026-08-25): 3.5-flash-lite (GA July 2026)
+    // is the current cheapest Gemini tier and the catalog's RECOMMENDED cleanup pick. CLEANUP
+    // ONLY: [GeminiTranscriberClient.DEFAULT_MODEL] deliberately stays gemini-3.1-flash-lite --
+    // 3.5-flash-lite measures ~3x slower on audio input, so the audio path keeps the faster
+    // model on purpose (see ModelCatalogEntry's Gemini section).
+    const val DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
     /**
      * Builds the generateContent request body: [prompt] as `systemInstruction`, [text] as the
