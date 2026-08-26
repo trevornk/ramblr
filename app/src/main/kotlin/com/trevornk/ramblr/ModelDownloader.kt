@@ -306,13 +306,23 @@ val STREAMING_MODEL_CATALOG = listOf(STREAMING_MODEL)
  * rating as this entry despite being either unusable-on-this-hardware or flat-out broken --
  * confusing, not a real choice. One real, working, benchmarked-against-alternatives model beats
  * three options where two don't actually work.
+ *
+ * No longer the default since #134 (2026-08-26): the 35-transcript cleanup-quality A/B scored
+ * [MUMBLE_CLEANUP_Q4_0_MODEL] ahead overall (80.6% vs 66.3% -- see that entry's kdoc for the
+ * per-criterion breakdown), so the Apache-2.0 fine-tune is now `recommended`. This entry is
+ * deliberately KEPT as a consent-gated alternative rather than dropped: it won the A/B's
+ * no-hallucination criterion (80.0 vs 68.6, n=35), a tradeoff some users may prefer, and the
+ * license-consent gate it needs already exists ([Model.requiresLicenseConsent] at the
+ * [ModelDownloadWorker.enqueue] chokepoint -- that flow is unchanged). Dropping it also wouldn't
+ * simplify the F-Droid metadata: Parakeet Unified 0.6B (#197) keeps NonFreeAssets declared
+ * regardless.
  */
 val LOCAL_CLEANUP_MODEL = Model(
     name = "LFM2.5 350M (Q4_0)",
     archive = "lfm2.5-350m-q4_0",
     sizeMb = 219,
-    quality = "On-device cleanup",
-    recommended = true,
+    quality = "On-device cleanup · lowest-hallucination alternative",
+    recommended = false,
     sha256 = "85e32858daafad55b7bcd6b97a1343ee0661188e8036f9862d14d6b563142f50",
     isLocalCleanup = true,
     sourceUrl = "https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/main/LFM2.5-350M-Q4_0.gguf",
@@ -355,9 +365,17 @@ const val MUMBLE_CLEANUP_SYSTEM_PROMPT = "You are a transcript cleanup tool. You
  * and the base Qwen2.5-0.5B-Instruct model -- free for any use, no revenue-cap license terms
  * unlike LFM2.5.
  *
- * `recommended = false`: LFM2.5-350M stays the default so installing this is purely additive for
- * Trevor's A/B test, not a silent swap of what every existing user gets. Whichever wins gets
- * promoted to `recommended` in a follow-up once real-world testing confirms it.
+ * `recommended = true` since #134 (flipped 2026-08-26): the entry originally shipped with
+ * `recommended = false` so installing it was purely additive for Trevor's A/B test, with the
+ * winner to be promoted "once real-world testing confirms it". That condition is now met: the
+ * 35-transcript blind A/B (scored per-criterion against the real production prompts; corpus,
+ * raw outputs, and scores archived in the #134 work log) had this model ahead overall at 80.6%
+ * vs. LFM2.5-350M's 66.3% -- fillers 94.3 vs 68.6, punctuation 91.4 vs 51.4, meaning
+ * preservation 62.9 vs 48.6, proper nouns 85.7 vs 82.9 -- with fewer catastrophic outputs
+ * (7 vs 10). LFM2.5 won exactly one criterion (no-hallucination, 80.0 vs 68.6), which is why it
+ * stays in the catalog as a consent-gated alternative rather than being dropped (see
+ * [LOCAL_CLEANUP_MODEL]). Promoting the Apache-2.0 entry also makes the *default* on-device
+ * cleanup model freely licensed -- the #134 acceptance criterion, pinned in ModelLicenseTest.
  *
  * History: the upstream model only publishes f16 and Q4_K_M GGUFs. The original catalog entry was
  * the prebuilt Q4_K_M asset (URL/sha256 verified 2026-07-06 by downloading the exact asset from
@@ -392,8 +410,8 @@ val MUMBLE_CLEANUP_Q4_0_MODEL = Model(
     // 336 (the MiB figure), quietly asking for ~19 MB less headroom than the install really
     // needs and risking a late-stage out-of-space failure on a nearly-full device.
     sizeMb = 352,
-    quality = "On-device cleanup · alternative fine-tune, A/B test",
-    recommended = false,
+    quality = "On-device cleanup · recommended",
+    recommended = true,
     sha256 = "000efc700d74636bc3885afe1d8f32dbb3fe813b8198dea79d8fd73efcc2c711",
     isLocalCleanup = true,
     sourceUrl = "https://huggingface.co/trevornk/mumble-cleanup-2stage-GGUF/resolve/main/mumble-cleanup-2stage-q4_0.gguf",
@@ -403,7 +421,9 @@ val MUMBLE_CLEANUP_Q4_0_MODEL = Model(
     license = APACHE_2_0,
 )
 
-val LOCAL_CLEANUP_MODEL_CATALOG = listOf(LOCAL_CLEANUP_MODEL, MUMBLE_CLEANUP_Q4_0_MODEL)
+// Recommended-first, mirroring MODEL_CATALOG's best-first convention: CleanupActivity renders
+// picker rows in this list's order, so the recommended (and default-resolved) entry reads first.
+val LOCAL_CLEANUP_MODEL_CATALOG = listOf(MUMBLE_CLEANUP_Q4_0_MODEL, LOCAL_CLEANUP_MODEL)
 
 /**
  * The Silero VAD ONNX model used by silence-based auto-stop (#108, mode 1). Not bundled in the

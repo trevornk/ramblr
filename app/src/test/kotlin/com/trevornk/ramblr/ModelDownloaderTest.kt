@@ -206,10 +206,12 @@ class ModelDownloaderTest {
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.all { it.sha256!!.matches(Regex("[0-9a-f]{64}")) })
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.contains(LOCAL_CLEANUP_MODEL))
         assertTrue(LOCAL_CLEANUP_MODEL_CATALOG.contains(MUMBLE_CLEANUP_Q4_0_MODEL))
-        // Exactly one default: installing the new A/B entries must not silently change what every
-        // existing user's fresh install (or resolveActiveModel's recommended-fallback) resolves to.
+        // Exactly one default. Since #134 (2026-08-26) that default is the Apache-2.0 mumble
+        // fine-tune: the A/B this entry was added for scored it ahead overall (80.6% vs 66.3%,
+        // n=35 -- see MUMBLE_CLEANUP_Q4_0_MODEL's kdoc), and a free-licensed default is the #134
+        // acceptance criterion (the licensing side is pinned in ModelLicenseTest).
         assertEquals(1, LOCAL_CLEANUP_MODEL_CATALOG.count { it.recommended })
-        assertEquals(LOCAL_CLEANUP_MODEL, LOCAL_CLEANUP_MODEL_CATALOG.first { it.recommended })
+        assertEquals(MUMBLE_CLEANUP_Q4_0_MODEL, LOCAL_CLEANUP_MODEL_CATALOG.first { it.recommended })
     }
 
     @Test fun `mumble-cleanup Q4_0 speed-test model is downloadable from a pinned HF URL and checksummed`() {
@@ -224,7 +226,9 @@ class ModelDownloaderTest {
         // The URL must serve the exact file this entry is checksummed against; a mismatch between
         // fileName and the URL's basename would download the right bytes to the wrong path.
         assertTrue(url.endsWith("/${MUMBLE_CLEANUP_Q4_0_MODEL.fileName}"))
-        assertFalse(MUMBLE_CLEANUP_Q4_0_MODEL.recommended)
+        // Recommended since the #134 flip (2026-08-26) -- the catalog invariants test above pins
+        // the single-default property; this pins that it's THIS entry that carries it.
+        assertTrue(MUMBLE_CLEANUP_Q4_0_MODEL.recommended)
         assertNotEquals(LOCAL_CLEANUP_MODEL.archive, MUMBLE_CLEANUP_Q4_0_MODEL.archive)
         assertNotEquals(LOCAL_CLEANUP_MODEL.fileName, MUMBLE_CLEANUP_Q4_0_MODEL.fileName)
         assertTrue(MUMBLE_CLEANUP_Q4_0_MODEL.sha256!!.matches(Regex("[0-9a-f]{64}")))
