@@ -38,13 +38,22 @@ object InvocationGuardRail {
         prefs(context).edit().putBoolean(KEY_BANNER_DISMISSED, true).apply()
     }
 
-    /** Assembles the live inputs for the pure [shouldShowServiceKilledBanner] decision. Uses
-     *  `enabled_accessibility_services` (not [WhisperAccessibilityService.instance]) for the
-     *  "enabled now" input: the enabled set is what the invisible-toggle sync edits, and a
-     *  connected-but-crashed service would otherwise false-positive the banner. */
+    /** Assembles the live inputs for the pure [shouldShowServiceKilledBanner] decision.
+     *
+     *  Dual-component rework: the banner is gated on SYSTEM_CONTROLS mode being active
+     *  ([InvocationServiceMode.currentMode]) -- only that component is INVISIBLE_TOGGLE-
+     *  classified, so only it can be killed by the shortcut sync; in floating-icon mode a
+     *  disabled service is an ordinary user choice and never the trap.
+     *
+     *  Uses `enabled_accessibility_services` (not [WhisperAccessibilityService.instance]) for
+     *  the "enabled now" input: the enabled set is what the invisible-toggle sync edits, and a
+     *  connected-but-crashed service would otherwise false-positive the banner. The read
+     *  matches EITHER Ramblr component, which converges correctly mid-mode-switch too. */
     fun shouldShowBanner(context: Context): Boolean {
         val p = prefs(context)
         return shouldShowServiceKilledBanner(
+            systemControlsModeActive =
+                InvocationServiceMode.currentMode(context) == InvocationMode.SYSTEM_CONTROLS,
             serviceWasEnabled = p.getBoolean(KEY_SERVICE_WAS_ENABLED, false),
             serviceEnabledNow = InvocationSecureSettings.isServiceEnabled(context),
             anyShortcutBound = InvocationSecureSettings.anyShortcutBound(context),
