@@ -236,8 +236,9 @@ Current transcription catalog:
 | Canary 180M Flash | 147 MB | Multilingual (en/es/de/fr), punctuated |
 | Parakeet 0.6B | 465 MB | Best quality, slower |
 
-A separate small streaming model powers the live preview overlay, and a small GGUF model (LFM2.5
-350M by default) powers fully on-device cleanup. The app downloads and extracts all of these
+A separate small streaming model powers the live preview overlay, and a small GGUF model
+(Mumble Cleanup 2-Stage, an Apache-2.0 Qwen2.5-0.5B fine-tune, by default) powers fully on-device
+cleanup. The app downloads and extracts all of these
 directly from their upstream release archives/Hugging Face — nothing is bundled into the APK, and
 downloads are checksum-verified before use.
 
