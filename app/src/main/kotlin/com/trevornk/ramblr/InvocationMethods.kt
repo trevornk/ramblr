@@ -279,3 +279,28 @@ fun invocationAdvancedTierSubtitleText(granted: Boolean): String =
 /** The exact adb command the advanced tier needs, shown in its dialog for copy/paste. */
 fun wssAdbCommand(packageName: String): String =
     "adb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS"
+
+/**
+ * The seamless (WRITE_SECURE_SETTINGS) tier's Secure-settings writes for a mode switch, in
+ * mandatory order. Pure so the ordering invariant is unit-testable; executed by
+ * [InvocationServiceMode.switchMode].
+ *
+ * ENTERING system mode the button target must be bound BEFORE the enabled-services swap: the
+ * swap makes the OS re-run its INVISIBLE_TOGGLE shortcut<->service sync, which strips an
+ * enabled entry that has no shortcut bound (the #156 trap in reverse). LEAVING system mode the
+ * swap must come FIRST (the floating component is TOGGLE-classified and immune), then the
+ * shortcut keys are swept clean -- removing them first would fire the forward trap while the
+ * system component was still the enabled one.
+ */
+enum class SeamlessWrite { BIND_BUTTON_TARGET, SWAP_ENABLED_SERVICES, UNBIND_ALL_SHORTCUTS }
+
+fun seamlessSwitchWrites(target: InvocationMode): List<SeamlessWrite> = when (target) {
+    InvocationMode.SYSTEM_CONTROLS -> listOf(
+        SeamlessWrite.BIND_BUTTON_TARGET,
+        SeamlessWrite.SWAP_ENABLED_SERVICES,
+    )
+    InvocationMode.FLOATING_ICON -> listOf(
+        SeamlessWrite.SWAP_ENABLED_SERVICES,
+        SeamlessWrite.UNBIND_ALL_SHORTCUTS,
+    )
+}

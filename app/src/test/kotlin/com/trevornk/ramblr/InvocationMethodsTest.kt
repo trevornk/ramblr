@@ -392,4 +392,40 @@ class InvocationMethodsTest {
             wssAdbCommand("com.trevornk.ramblr"),
         )
     }
+
+    // --- seamlessSwitchWrites ordering invariant (#156 race fix, device-verified) ---
+
+    @Test
+    fun seamlessWrites_enteringSystemMode_bindsButtonTargetBeforeSwap() {
+        val writes = seamlessSwitchWrites(InvocationMode.SYSTEM_CONTROLS)
+        assertEquals(
+            listOf(SeamlessWrite.BIND_BUTTON_TARGET, SeamlessWrite.SWAP_ENABLED_SERVICES),
+            writes,
+        )
+    }
+
+    @Test
+    fun seamlessWrites_leavingSystemMode_swapsBeforeUnbindingShortcuts() {
+        val writes = seamlessSwitchWrites(InvocationMode.FLOATING_ICON)
+        assertEquals(
+            listOf(SeamlessWrite.SWAP_ENABLED_SERVICES, SeamlessWrite.UNBIND_ALL_SHORTCUTS),
+            writes,
+        )
+    }
+
+    @Test
+    fun seamlessWrites_enteringSystemMode_neverUnbindsShortcuts() {
+        assertFalse(
+            seamlessSwitchWrites(InvocationMode.SYSTEM_CONTROLS)
+                .contains(SeamlessWrite.UNBIND_ALL_SHORTCUTS),
+        )
+    }
+
+    @Test
+    fun seamlessWrites_leavingSystemMode_neverBindsButtonTarget() {
+        assertFalse(
+            seamlessSwitchWrites(InvocationMode.FLOATING_ICON)
+                .contains(SeamlessWrite.BIND_BUTTON_TARGET),
+        )
+    }
 }
