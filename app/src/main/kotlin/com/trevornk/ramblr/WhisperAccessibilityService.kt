@@ -3015,6 +3015,9 @@ class WhisperAccessibilityService : AccessibilityService() {
                 credentialLookup = { kind -> ProviderCredentialStore.get(this, kind) },
                 localModelPath = { ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this))?.absolutePath },
                 localPrompt = LocalCleanupProvider.selectedSystemPrompt(this),
+                // #182 option 2: local cleanup applies the same terms as a deterministic
+                // post-pass over its output instead of in its prompt (which broke LFM2.5).
+                localVocabulary = vocabulary,
                 benchmarkContext = this,
                 benchmarkCorrelationId = correlationIdFor(token),
             ) { result ->

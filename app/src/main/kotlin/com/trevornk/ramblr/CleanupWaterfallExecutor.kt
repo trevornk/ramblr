@@ -572,6 +572,12 @@ object CleanupWaterfallExecutor {
         // once a properly fine-tuned local cleanup model replaces the current generic one -- is a
         // one-line change here, not a hunt through the executor.
         localPrompt: String = PostProcessor.SIMPLE_PROMPT,
+        // Personal-vocabulary terms applied to LOCAL_LLM output as a deterministic post-pass
+        // (#182 option 2, [VocabularyPostCorrector]). Cloud steps get vocabulary via prompt
+        // interpolation on [prompt] instead, which works there -- the two paths are mutually
+        // exclusive by construction, so terms are never applied twice to one result. Defaulted
+        // empty so existing tests/call sites keep their exact behavior unless they opt in.
+        localVocabulary: List<String> = emptyList(),
         // Injectable wall clock (defaults to the real one) so the hard-cap path is unit-testable
         // without sleeping -- previously it read System.currentTimeMillis() directly, so the
         // "exceeded time budget" branch had no deterministic test (audit test-gap #6). Its siblings
@@ -628,7 +634,7 @@ object CleanupWaterfallExecutor {
                 return
             }
 
-            performStep(steps[index], text, prompt, localPrompt, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
+            performStep(steps[index], text, prompt, localPrompt, localVocabulary, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
                 logStepOutcome(steps[index], startedAtMs, outcome, benchmarkContext, benchmarkCorrelationId)
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
@@ -717,6 +723,7 @@ object CleanupWaterfallExecutor {
         text: String,
         prompt: String,
         localPrompt: String,
+        localVocabulary: List<String>,
         credentialLookup: (CleanupCredentialSlot) -> String,
         transport: CleanupHttpTransport,
         localInference: LocalInferenceEngine,
@@ -762,7 +769,13 @@ object CleanupWaterfallExecutor {
                             trimmed.isEmpty() -> CleanupStepOutcome.StepFailed("Local model produced an empty response")
                             NumericPreservationVerifier.verify(normalization, trimmed) is NumericPreservation.Rejected ->
                                 CleanupStepOutcome.StepFailed("Local cleanup output rejected (NUMERIC_DIVERGENCE)")
-                            else -> CleanupStepOutcome.Success(trimmed)
+                            // #182 option 2: personal vocabulary reaches local cleanup as a
+                            // deterministic post-pass over ACCEPTED output, never as prompt
+                            // text (which made LFM2.5 echo the term list). Runs after the
+                            // validator and the numeric check so corrections are applied to
+                            // output that has already earned acceptance -- and never to text
+                            // that is about to be discarded for a fallback step.
+                            else -> CleanupStepOutcome.Success(VocabularyPostCorrector.correct(trimmed, localVocabulary))
                         }
                     }
                     is LocalInferenceResult.Failure -> CleanupStepOutcome.StepFailed(result.message)
