@@ -545,6 +545,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         // was swiped away, this is the first moment we can put the way back on screen again.
         // Runs after showOverlay() so the overlay really is connected by the time we claim it is.
         IconVisibilityNotifications.repostIfMissing(this, overlayConnected = overlayView != null)
+        registerAccessibilityButton()
         registerNetworkCallback()
         registerScreenStateReceiver()
         thread { cleanupOrphanedRecordings() }
@@ -552,6 +553,37 @@ class WhisperAccessibilityService : AccessibilityService() {
         // Try to load local model in background
         thread { initLocalModel() }
         thread { initStreamingModel() }
+    }
+
+    /**
+     * OS accessibility-shortcut trigger (#156, plan §2.5): with `flagRequestAccessibilityButton`
+     * declared in the service XML (static-only for targetSdk > 29), the user can enable a
+     * nav-bar button, floating shortcut, or volume-key hold for Ramblr in the system's
+     * Settings > Accessibility > Ramblr shortcut UI -- an invocation surface that keeps working
+     * with the floating ring hidden and adds no new permission.
+     *
+     * Routes through [requestToggleRecording] rather than [onTap] directly so it shares the QS
+     * tile's #136 guard: never start a recording while the icon is hidden and invisible -- a
+     * silent live mic is a privacy problem, and both non-ring surfaces reach this path with the
+     * ring potentially at alpha=0. [onServiceConnected] can re-fire without a new service
+     * instance; re-registering the same callback object is safe because the framework stores
+     * callbacks in a set keyed per callback instance, and ours lives in a val.
+     */
+    private val accessibilityButtonCallback =
+        object : android.accessibilityservice.AccessibilityButtonController.AccessibilityButtonCallback() {
+            override fun onClicked(controller: android.accessibilityservice.AccessibilityButtonController) {
+                requestToggleRecording()
+            }
+        }
+
+    private fun registerAccessibilityButton() {
+        try {
+            accessibilityButtonController.registerAccessibilityButtonCallback(accessibilityButtonCallback)
+        } catch (e: Exception) {
+            // Some OEM skins bury or omit the accessibility button entirely; failing to register
+            // must never take down the primary ring surface with it.
+            Log.e(TAG, "Could not register accessibility button callback", e)
+        }
     }
 
     /**

@@ -5,11 +5,19 @@
      multi-window scan (dialogs, popups, split-screen) was dead code, silently degrading those
      targets to clipboard fallback. Deliberately NOT flagDefault: no flags were declared before
      (effective flags = 0), and flagDefault would newly make Ramblr the default handler for its
-     feedbackGeneric type, a behavior change unrelated to the window scan. -->
+     feedbackGeneric type, a behavior change unrelated to the window scan.
+
+     flagRequestAccessibilityButton (#156, plan §2.5): opts Ramblr into the OS-rendered
+     accessibility shortcut (nav-bar button, floating shortcut, or volume-key hold; the user
+     picks in Settings > Accessibility > Ramblr > shortcut). MUST be static XML: with
+     targetSdk > 29 the framework ignores runtime attempts to set this flag
+     (AccessibilityServiceInfo.java:508-511, AOSP). Declaring it only makes the OS offer the
+     shortcut UI; whether the button appears is entirely the user's system-level choice, so this
+     changes nothing for users who never enable it. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeViewFocused"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagRetrieveInteractiveWindows"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagRequestAccessibilityButton"
     android:canRetrieveWindowContent="true"
     android:notificationTimeout="100"
     android:description="@string/accessibility_description" />
