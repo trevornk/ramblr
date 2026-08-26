@@ -2,7 +2,6 @@ package com.trevornk.ramblr
 
 import android.os.Bundle
 import android.text.InputType
-import android.view.Gravity
 import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -215,7 +214,9 @@ class BehaviorActivity : BaseSettingsActivity() {
         root.addView(iconHiddenRow)
 
         root.addView(sectionHeader("Vocabulary"))
-        val vocabularyRow = settingsRow("Personal vocabulary", vocabularySummary()) { promptVocabulary() }
+        val vocabularyRow = settingsRow("Personal vocabulary", VocabularyEditor.rowSummary(this)) {
+            VocabularyEditor.prompt(this) { refresh() }
+        }
         vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
         root.addView(vocabularyRow)
 
@@ -264,7 +265,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         silenceAutoStopThresholdRow.findViewWithTag<TextView>("subtitle").text = silenceAutoStopThresholdSummary()
         refreshSilenceAutoStopSummary()
         compressedUploadSwitch.isChecked = CompressedUploadToggle.isEnabled(this)
-        vocabularyRowSub.text = vocabularySummary()
+        vocabularyRowSub.text = VocabularyEditor.rowSummary(this)
         localThreadsRowSub.text = localThreadsSummary()
         canaryLanguageRowSub.text = canaryLanguageSummary()
         autoPeekDelayRow.findViewWithTag<TextView>("subtitle").text = autoPeekDelaySummary()
@@ -466,78 +467,8 @@ class BehaviorActivity : BaseSettingsActivity() {
             .show()
     }
 
-    // --- Personal vocabulary (#26) ---
-
-    private fun vocabularyTerms() = VocabularyTerms.parse(
-        prefs().getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED)
-    )
-
-    private fun vocabularySummary(): String {
-        val note = vocabularyLocalOnlyNote()
-        val terms = vocabularyTerms()
-        val termsPart = if (terms.isEmpty()) "No custom terms" else terms.joinToString(", ")
-        // #185: the raw term list reads as confirmation the terms are in force -- when nothing
-        // in the current setup applies them (local ASR with cleanup fully off, since #182's
-        // post-pass made local cleanup vocabulary-capable) they aren't, so say so on the row.
-        return if (note == null) termsPart else "Not used while cleanup is off — $termsPart"
-    }
-
-    /** Non-null when the user's current configuration ignores the vocabulary entirely (#185):
-     *  cloud transcription off AND no active cleanup path of any kind. Mirrors the real runtime
-     *  gates: transcription's `use_local` pref, cleanup's master toggle, [CloudFeatureToggle]'s
-     *  cloud gate, the chain's cleanup-capable entries, and -- for the local path, which applies
-     *  terms via [VocabularyPostCorrector]'s output post-pass since #182 -- an actually
-     *  installed local cleanup model ([ModelDownloader.localCleanupModelFile] non-null, the same
-     *  check the executor's LOCAL_LLM branch fails on). */
-    private fun vocabularyLocalOnlyNote(): String? {
-        val cloudTranscription = !prefs().getBoolean("use_local", true)
-        val cleanupOn = PostProcessingToggle.isEnabled(this)
-        val cleanupEntries = ProviderChainStore.load(this).capableEntriesFor(needsTranscription = false)
-        val cloudCleanup = cleanupOn &&
-            CloudFeatureToggle.cleanupEnabled(this) &&
-            cleanupEntries.any { it.kind != ProviderKind.LOCAL }
-        val localCleanup = cleanupOn &&
-            cleanupEntries.any { it.kind == ProviderKind.LOCAL } &&
-            ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this)) != null
-        return VocabularyTerms.localOnlyNote(
-            cloudTranscriptionActive = cloudTranscription,
-            cloudCleanupActive = cloudCleanup,
-            localCleanupActive = localCleanup,
-        )
-    }
-
-    private fun promptVocabulary() {
-        val input = EditText(this).apply {
-            hint = "One term per line, e.g. FastHTML"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            minLines = 3
-            gravity = Gravity.TOP or Gravity.START
-            setText(VocabularyTerms.serialize(vocabularyTerms()))
-        }
-        // #185/#182: the terms reach cloud transcription, cloud cleanup (prompt interpolation),
-        // and -- since #182's option-2 post-pass -- local cleanup, where they are applied as a
-        // deterministic correction over the model's output rather than in its prompt. Only
-        // local transcription ignores them (#131), so the inert-setting note now fires only
-        // when cleanup is off entirely on a local-transcription setup.
-        val message = buildString {
-            append(
-                "Project names or jargon that speech-to-text often mishears. One per line.\n\n" +
-                    "Applies to cloud transcription and to cleanup (cloud and local)."
-            )
-            vocabularyLocalOnlyNote()?.let { append("\n\n").append(it) }
-        }
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Personal vocabulary")
-            .setMessage(message)
-            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
-            .setPositiveButton("Save") { _, _ ->
-                val terms = VocabularyTerms.parse(input.text.toString())
-                prefs().edit().putString("custom_vocabulary_terms", VocabularyTerms.serialize(terms)).apply()
-                refresh()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
+    // Personal vocabulary (#26) editor + summaries moved to [VocabularyEditor] (#217), shared
+    // with MainActivity's top-level row.
 
     // --- Local transcription thread count (#107) ---
 

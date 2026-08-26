@@ -128,4 +128,45 @@ class SettingsSubtitlesTest {
             assertFalse("dangling comma in: $subtitle", subtitle.trim().endsWith(","))
         }
     }
+
+    // --- main-screen vocabulary row subtitle (#217) -------------------------------------------
+
+    @Test fun `main vocabulary subtitle leads with the term count`() {
+        val subtitle = vocabularyMainRowSubtitleText(12)
+        assertTrue("expected '12 terms' prefix in: $subtitle", subtitle.startsWith("12 terms"))
+        assertTrue(subtitle.contains("names and jargon"))
+    }
+
+    @Test fun `main vocabulary subtitle singularizes one term`() {
+        assertTrue(vocabularyMainRowSubtitleText(1).startsWith("1 term —"))
+    }
+
+    @Test fun `main vocabulary subtitle does not claim zero terms exist`() {
+        val subtitle = vocabularyMainRowSubtitleText(0)
+        // "0 terms" reads like a bug; the empty state should still invite the user in.
+        assertTrue("expected 'No terms yet' in: $subtitle", subtitle.startsWith("No terms yet"))
+    }
+
+    @Test fun `default vocabulary seed count formats without surprises`() {
+        // The subtitle a fresh install actually shows: the #26 seed list, pluralized.
+        val subtitle = vocabularyMainRowSubtitleText(VocabularyTerms.DEFAULTS.size)
+        assertTrue(subtitle.startsWith("${VocabularyTerms.DEFAULTS.size} terms"))
+    }
+
+    // --- behavior-screen vocabulary row summary (#217 extraction of #185 logic) ---------------
+
+    @Test fun `behavior vocabulary summary lists the terms when active`() {
+        assertEquals("Pi, Codex", vocabularyRowSummaryText(listOf("Pi", "Codex"), inert = false))
+    }
+
+    @Test fun `behavior vocabulary summary shows the empty state`() {
+        assertEquals("No custom terms", vocabularyRowSummaryText(emptyList(), inert = false))
+    }
+
+    @Test fun `behavior vocabulary summary warns when the terms are inert`() {
+        // #185: the raw term list must not read as confirmation the terms are in force.
+        val subtitle = vocabularyRowSummaryText(listOf("Pi"), inert = true)
+        assertTrue("expected the inert warning in: $subtitle", subtitle.startsWith("Not used while cleanup is off"))
+        assertTrue("terms must still be listed in: $subtitle", subtitle.contains("Pi"))
+    }
 }
