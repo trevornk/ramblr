@@ -3608,6 +3608,12 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
 
         windows
+            // H3: this scan only went live 2026-08-26, when flagRetrieveInteractiveWindows was
+            // first declared in accessibility_service_config.xml -- before that getWindows()
+            // always returned empty and only rootInActiveWindow above ever produced candidates.
+            // Parent will regression-test IME/keyboard behavior on-device before merge (baseline:
+            // a 2026-08-25 investigation proved a Chrome NTP keyboard-hide bug was NOT Ramblr --
+            // it reproduced with ALL accessibility services disabled).
             ?.filter { it.isActive || it.isFocused }
             ?.forEach { window ->
                 val root = window.root ?: return@forEach
