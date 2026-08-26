@@ -35,4 +35,23 @@ object TranscriptionChain {
 
     /** True when a candidate after [index] exists in a chain of [candidateCount] candidates. */
     fun hasNextCandidate(index: Int, candidateCount: Int): Boolean = index + 1 < candidateCount
+
+    /**
+     * Whether the PCM recording may be deleted after candidate [candidateIndex]'s outcome (M5
+     * audit, 2026-08-26). The PCM is the *only* copy of the user's audio: once it's gone, no
+     * later candidate can retry, so it must stay alive for exactly as long as the walk might
+     * still need it --
+     *
+     *  - success: the transcript exists, nothing downstream needs audio -- delete.
+     *  - failure with a candidate remaining: the next candidate needs the audio -- keep.
+     *  - failure on the last candidate: the chain is exhausted, the dictation is over -- delete.
+     *
+     * Before M5, `transcribeLocal` deleted the PCM in its `finally` unconditionally, so a LOCAL
+     * candidate that failed post-load took the audio down with it and a configured cloud
+     * candidate after it in the chain had nothing left to transcribe -- the dictation died with
+     * "Local error: ..." instead of falling through. This is the pinned contract that prevents
+     * that class of bug for every candidate kind.
+     */
+    fun shouldDeletePcm(candidateIndex: Int, candidateCount: Int, success: Boolean): Boolean =
+        success || !hasNextCandidate(candidateIndex, candidateCount)
 }

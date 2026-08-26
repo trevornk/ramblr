@@ -1,7 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- accessibilityFlags (H3 audit, declared 2026-08-26): flagRetrieveInteractiveWindows is what
+     makes AccessibilityService.getWindows() return anything at all; without it the framework
+     always hands back an empty list, and WhisperAccessibilityService.findInjectionCandidates()'s
+     multi-window scan (dialogs, popups, split-screen) was dead code, silently degrading those
+     targets to clipboard fallback. Deliberately NOT flagDefault: no flags were declared before
+     (effective flags = 0), and flagDefault would newly make Ramblr the default handler for its
+     feedbackGeneric type, a behavior change unrelated to the window scan. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeViewFocused"
     android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
     android:notificationTimeout="100"
     android:description="@string/accessibility_description" />

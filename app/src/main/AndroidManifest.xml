@@ -7,6 +7,12 @@
     <!-- Install-time, no user prompt: needed to register the default-network callback that
          resets the cleanup waterfall cursor on SSID/VPN changes (#61, ADR-0001). -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Install-time, no user prompt (M6 audit, 2026-08-26): holds a bounded PARTIAL_WAKE_LOCK
+         ("ramblr:transcription") across the recording+transcription window so a screen-off long
+         dictation isn't CPU-throttled mid local decode. Acquired when recording starts, released
+         when the pipeline reaches a terminal state (resetToIdle/onDestroy), with a hard acquire
+         timeout as a leak backstop; see WhisperAccessibilityService.acquireTranscriptionWakeLock. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />

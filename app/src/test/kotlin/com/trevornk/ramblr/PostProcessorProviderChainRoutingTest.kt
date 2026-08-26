@@ -8,7 +8,8 @@ import org.junit.Test
  * Covers which execution path [PostProcessor.processProviderChain] dispatches a chain down (#105).
  *
  * The bug: a single-OpenAI cleanup chain -- the most common configuration in production -- was
- * special-cased to call [PostProcessor.process] directly through `NetworkClients.shared`
+ * special-cased to call a since-deleted `PostProcessor.process()` helper directly through
+ * `NetworkClients.shared`
  * (20s connect / 120s read / 180s call), bypassing [CleanupWaterfallExecutor]'s far tighter
  * [CleanupStepTimeouts] and hard cap. A stalled cleanup on the default config could therefore hang
  * for minutes instead of failing over to raw-text injection in seconds, and benchmark correlation
@@ -63,7 +64,8 @@ class PostProcessorProviderChainRoutingTest {
         val (transport, result) = run(chain)
 
         // Reaching the injected transport at all is the assertion: the old special case called
-        // PostProcessor.process(), which builds its own OkHttp call and would never touch this.
+        // the now-deleted PostProcessor.process() (removed as dead code, M4 audit 2026-08-26),
+        // which built its own OkHttp call and would never touch this.
         assertEquals(1, transport.urls.size)
         assertEquals("cleaned", result.text)
     }

@@ -1,16 +1,10 @@
 package com.trevornk.ramblr
 
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.IOException
 
 object PostProcessor {
     data class Result(val text: String?, val error: String?)
-
-    private val client = NetworkClients.shared
 
     /** Default OpenAI-compatible base URL, used when the user hasn't configured a custom one (see #4). */
     const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -307,64 +301,13 @@ explanations, headers, or comments about your edits.
         }
     }
 
-    fun process(
-        text: String,
-        prompt: String,
-        apiKey: String,
-        cancelHolder: InFlightCall,
-        baseUrl: String = DEFAULT_BASE_URL,
-        model: String = DEFAULT_MODEL,
-        callback: (Result) -> Unit
-    ) {
-        val body = buildRequestBody(text, prompt, model).toString().toRequestBody("application/json".toMediaType())
-
-        // A malformed base URL (or one OkHttp otherwise rejects) throws IllegalArgumentException
-        // from Request.Builder().url() rather than failing the call — caught here so a bad custom
-        // endpoint reports through the same Result/callback path as a network failure, instead of
-        // crashing. See #4.
-        val request = try {
-            Request.Builder()
-                .url(endpointUrl(baseUrl))
-                .header("Authorization", "Bearer $apiKey")
-                .post(body)
-                .build()
-        } catch (e: IllegalArgumentException) {
-            callback(Result(null, "Invalid cleanup endpoint: ${e.message}"))
-            return
-        }
-
-        val call = client.newCall(request)
-        cancelHolder.set(call)
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                cancelHolder.clear(call)
-                callback(Result(null, e.message))
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                cancelHolder.clear(call)
-                // Read via HttpBodyReader (#62): a body read that throws inside onResponse is
-                // swallowed by OkHttp (onFailure never fires), so this callback would otherwise
-                // never be invoked and the dictation would hang until the watchdog.
-                val responseBody = HttpBodyReader.read(response).getOrElse { e ->
-                    callback(Result(null, e.message))
-                    return
-                }
-                if (!response.isSuccessful && responseBody.isBlank()) {
-                    callback(Result(null, "HTTP ${response.code}"))
-                    return
-                }
-                callback(parseResponse(responseBody))
-            }
-        })
-    }
-
     /**
      * Provider-chain entry point for Phase 2 (#95). Every chain -- including a single OPENAI
      * entry -- is adapted to [CleanupWaterfall] and executed by [CleanupWaterfallExecutor],
      * preserving its fail-fast grouping, cursor resume, timeout discipline, and bounded
      * local-inference deadline behavior (#105: a one-step waterfall was previously special-cased
-     * to call [process] directly via [NetworkClients.shared]'s much longer timeouts, bypassing
+     * to call a since-deleted `process()` helper directly via [NetworkClients.shared]'s much
+     * longer timeouts (180s call cap -- the M4 audit trap, removed 2026-08-26), bypassing
      * [CleanupWaterfallExecutor]'s tighter [CleanupStepTimeouts] and hard cap; see
      * [CleanupWaterfallPlanner.groupConsecutive] for why a single-step waterfall is already
      * handled correctly here without any special case).

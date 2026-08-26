@@ -101,4 +101,25 @@ class TranscriptionChainTest {
 
         assertEquals(listOf(0, 1), attempted) // reached the LOCAL floor after OpenAI failed
     }
+
+    // --- shouldDeletePcm: the M5 PCM-lifetime contract ---
+
+    @Test fun `success always deletes the PCM, wherever in the chain it happened`() {
+        assertTrue(TranscriptionChain.shouldDeletePcm(candidateIndex = 0, candidateCount = 2, success = true))
+        assertTrue(TranscriptionChain.shouldDeletePcm(candidateIndex = 1, candidateCount = 2, success = true))
+        assertTrue(TranscriptionChain.shouldDeletePcm(candidateIndex = 0, candidateCount = 1, success = true))
+    }
+
+    @Test fun `a mid-chain failure keeps the PCM alive for the next candidate`() {
+        // The M5 bug: LOCAL at index 0 of [LOCAL, OPENAI] failed post-decode and deleted the
+        // PCM in its finally, so OPENAI had nothing left to transcribe. The contract: a failing
+        // candidate with a successor must NOT delete the audio.
+        assertFalse(TranscriptionChain.shouldDeletePcm(candidateIndex = 0, candidateCount = 2, success = false))
+        assertFalse(TranscriptionChain.shouldDeletePcm(candidateIndex = 1, candidateCount = 3, success = false))
+    }
+
+    @Test fun `failure on the last candidate deletes the PCM -- the chain is exhausted`() {
+        assertTrue(TranscriptionChain.shouldDeletePcm(candidateIndex = 1, candidateCount = 2, success = false))
+        assertTrue(TranscriptionChain.shouldDeletePcm(candidateIndex = 0, candidateCount = 1, success = false))
+    }
 }
