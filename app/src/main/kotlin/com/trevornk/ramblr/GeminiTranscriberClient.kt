@@ -29,7 +29,9 @@ object GeminiTranscriberClient {
     // gemini-2.5-flash -> gemini-3.1-flash-lite: 2.5-flash is on Google's deprecation path
     // (shutdown Oct 16, 2026). 3.1-flash-lite's own model card documents explicit "improved
     // audio input... for ASR" gains and lists transcription as a first-class use case, so it's
-    // safe for this multimodal audio-in path too (2026-07-10).
+    // safe for this multimodal audio-in path too (2026-07-10). DELIBERATELY NOT bumped to
+    // gemini-3.5-flash-lite alongside the 2026-08-25 cleanup-default refresh: 3.5-flash-lite
+    // measures ~3x slower on audio input, so the transcription path keeps the faster model.
     const val DEFAULT_MODEL = "gemini-3.1-flash-lite"
     const val TRANSCRIBE_PROMPT = "Transcribe this audio exactly as spoken. Return only the transcript text, with no commentary, labels, or extra formatting."
 

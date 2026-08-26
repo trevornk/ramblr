@@ -194,6 +194,25 @@ class PostProcessorTest {
     }
 
     @Test
+    fun buildRequestBodyAutoOmitsTemperatureForGpt56FamilyByDefault() {
+        // #194: with gpt-5.6-luna now a shipped cleanup default, the production path
+        // (CleanupWaterfallExecutor doesn't pass omitTemperature) must omit temperature for the
+        // 5.6 family automatically, or every cleanup call would fail with "Unsupported value".
+        val body = PostProcessor.buildRequestBody("raw text", "system prompt", "gpt-5.6-luna")
+        assertFalse(body.has("temperature"))
+    }
+
+    @Test
+    fun rejectsTemperatureCoversReasoningFamiliesButNotCurrentDefaults() {
+        assertTrue(PostProcessor.rejectsTemperature("gpt-5.6-luna"))
+        assertTrue(PostProcessor.rejectsTemperature("gpt-5.6-terra"))
+        assertTrue(PostProcessor.rejectsTemperature("o1-mini"))
+        assertFalse(PostProcessor.rejectsTemperature("gpt-5.4-mini"))
+        assertFalse(PostProcessor.rejectsTemperature("gpt-5.4-nano"))
+        assertFalse(PostProcessor.rejectsTemperature("omniroute-local-7b"))
+    }
+
+    @Test
     fun buildRequestBodyIncludesTemperatureByDefaultForBackcompat() {
         // Every existing call site (CleanupWaterfallExecutor) doesn't pass omitTemperature, so
         // the default must keep including it -- this is the real production request shape today.

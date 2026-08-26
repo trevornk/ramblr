@@ -84,9 +84,9 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
     // to the transcription endpoint). ---
     ModelCatalogEntry(
         provider = ProviderKind.OPENAI,
-        modelId = "gpt-5.4-nano",
-        displayName = "GPT-5.4 Nano",
-        description = "Fastest, cheapest — benchmark-confirmed indistinguishable from Mini for cleanup quality.",
+        modelId = "gpt-5.6-luna",
+        displayName = "GPT-5.6 Luna",
+        description = "OpenAI's current cheapest tier (successor of GPT-5.4 Nano) — fastest and cheapest for cleanup.",
         tier = ModelTier.RECOMMENDED,
         useCase = ModelUseCase.CLEANUP,
         costPer1MInputUsd = 0.05,
@@ -96,7 +96,7 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         provider = ProviderKind.OPENAI,
         modelId = "gpt-5.4-mini",
         displayName = "GPT-5.4 Mini",
-        description = "One tier up from Nano — same real-world cleanup quality, costs more.",
+        description = "Previous-generation mid tier — same real-world cleanup quality, costs more.",
         tier = ModelTier.GOOD,
         useCase = ModelUseCase.CLEANUP,
         costPer1MInputUsd = 0.25,
@@ -139,19 +139,29 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
     ),
 
     // --- Gemini: only direct provider that's transcription-capable (multimodal audio-in) as
-    // well as cleanup-capable, so its entries are tagged BOTH. 2.5-flash/-lite -> 3.1-flash-lite/
-    // 3.5-flash (2026-07-10): 2.5-flash and 2.5-flash-lite are both on Google's deprecation path
-    // (shutdown Oct 16, 2026); Google's own deprecation table maps 2.5-flash-lite ->
-    // 3.1-flash-lite and 2.5-flash -> 3.5-flash. 3.1-flash-lite's model card documents explicit
-    // "improved audio input... for ASR" gains, confirming it's safe for the transcription use
-    // case too. Note 3.5-flash carries a real ~6x price jump over 3.1-flash-lite (not a smooth
-    // one-tier step like the old 2.5-flash/-lite pair) -- flagged honestly below rather than
-    // understated, but it's still the officially documented stable migration target. ---
+    // well as cleanup-capable. Cleanup and transcription defaults deliberately DIVERGE here
+    // (2026-08-25): 3.5-flash-lite (GA July 2026) is the current cheapest tier and the cleanup
+    // RECOMMENDED pick, but it measures ~3x slower than 3.1-flash-lite on audio input, so
+    // 3.1-flash-lite stays the transcription RECOMMENDED pick (and
+    // GeminiTranscriberClient.DEFAULT_MODEL) on purpose -- 3.5-flash-lite is tagged CLEANUP so
+    // the transcription picker never offers the slower model as its default. Note 3.5-flash
+    // still carries a real ~6x price jump over the lite tier (not a smooth one-tier step) --
+    // flagged honestly below rather than understated. ---
+    ModelCatalogEntry(
+        provider = ProviderKind.GEMINI,
+        modelId = "gemini-3.5-flash-lite",
+        displayName = "Gemini 3.5 Flash-Lite",
+        description = "Cheapest Gemini tier (GA July 2026) — current cleanup pick. Deliberately not used for transcription: it's ~3x slower than 3.1 Flash-Lite on audio input.",
+        tier = ModelTier.RECOMMENDED,
+        useCase = ModelUseCase.CLEANUP,
+        costPer1MInputUsd = 0.25,
+        costPer1MOutputUsd = 1.50,
+    ),
     ModelCatalogEntry(
         provider = ProviderKind.GEMINI,
         modelId = "gemini-3.1-flash-lite",
         displayName = "Gemini 3.1 Flash-Lite",
-        description = "Cheapest Gemini tier — Google's documented replacement for 2.5 Flash-Lite (which is deprecating); improved audio input for ASR, handles transcription too.",
+        description = "Recommended for transcription — much faster than 3.5 Flash-Lite on audio input; improved audio input for ASR. Still fine for cleanup too.",
         tier = ModelTier.RECOMMENDED,
         useCase = ModelUseCase.BOTH,
         costPer1MInputUsd = 0.25,

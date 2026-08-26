@@ -242,9 +242,10 @@ class BundledDefaultModelCatalogTest {
         assertTrue(anthropicTranscription.isEmpty())
     }
 
-    @Test fun `OpenAI's cheapest tier -- nano -- is recommended, not the pricier mini tier`() {
+    @Test fun `OpenAI's cheapest tier -- luna -- is recommended, not the pricier mini tier`() {
+        // v4 (2026-08-25, #194): gpt-5.6-luna superseded gpt-5.4-nano as OpenAI's cheapest tier.
         val recommended = ModelCatalogResolver.recommendedEntryFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI)
-        assertEquals("gpt-5.4-nano", recommended?.modelId)
+        assertEquals("gpt-5.6-luna", recommended?.modelId)
     }
 
     @Test fun `OpenAI's recommended transcription entry is gpt-transcribe and matches the shipped code default`() {
@@ -258,10 +259,21 @@ class BundledDefaultModelCatalogTest {
         assertEquals(TranscriberClient.DEFAULT_MODEL, recommended[0].modelId)
     }
 
-    @Test fun `Gemini's cheapest tier -- flash-lite -- is recommended and transcription-capable`() {
-        val recommended = ModelCatalogResolver.recommendedEntryFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.GEMINI)
-        assertEquals("gemini-3.1-flash-lite", recommended?.modelId)
-        assertTrue(recommended!!.useCase.supportsTranscription())
+    @Test fun `Gemini's recommended cleanup pick matches the shipped cleanup default`() {
+        // v4 (2026-08-25, #194): cleanup and transcription defaults deliberately diverge.
+        // The top CLEANUP entry must match GeminiCleanupProvider.DEFAULT_MODEL...
+        val cleanup = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.GEMINI, ModelUseCase.CLEANUP)
+        assertEquals("gemini-3.5-flash-lite", cleanup.first().modelId)
+        assertEquals(GeminiCleanupProvider.DEFAULT_MODEL, cleanup.first().modelId)
+    }
+
+    @Test fun `Gemini's recommended transcription pick stays the faster 3-1-flash-lite and matches the shipped audio default`() {
+        // ...while the top TRANSCRIPTION entry stays gemini-3.1-flash-lite: 3.5-flash-lite is
+        // ~3x slower on audio input, so the audio path deliberately keeps the faster model.
+        val transcription = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.GEMINI, ModelUseCase.TRANSCRIPTION)
+        assertEquals("gemini-3.1-flash-lite", transcription.first().modelId)
+        assertEquals(GeminiTranscriberClient.DEFAULT_MODEL, transcription.first().modelId)
+        assertTrue(transcription.first().useCase.supportsTranscription())
     }
 
     @Test fun `the catalog round-trips through JSON serialization unchanged`() {

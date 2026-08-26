@@ -4,10 +4,10 @@
     "tier": "RECOMMENDED",
     "costPer1MInputUsd": 0.05,
     "provider": "OPENAI",
-    "modelId": "gpt-5.4-nano",
-    "displayName": "GPT-5.4 Nano",
+    "modelId": "gpt-5.6-luna",
+    "displayName": "GPT-5.6 Luna",
     "costPer1MOutputUsd": 0.4,
-    "description": "Fastest, cheapest \u2014 benchmark-confirmed indistinguishable from Mini for cleanup quality."
+    "description": "OpenAI's current cheapest tier (successor of GPT-5.4 Nano) \u2014 fastest and cheapest for cleanup."
   },
   {
     "useCase": "CLEANUP",
@@ -17,7 +17,7 @@
     "modelId": "gpt-5.4-mini",
     "displayName": "GPT-5.4 Mini",
     "costPer1MOutputUsd": 2,
-    "description": "One tier up from Nano \u2014 same real-world cleanup quality, costs more."
+    "description": "Previous-generation mid tier \u2014 same real-world cleanup quality, costs more."
   },
   {
     "useCase": "TRANSCRIPTION",
@@ -50,6 +50,16 @@
     "description": "OpenAI's original ASR model \u2014 highest error rate of the three; only pick it if you specifically need its legacy output formats."
   },
   {
+    "useCase": "CLEANUP",
+    "tier": "RECOMMENDED",
+    "costPer1MInputUsd": 0.25,
+    "provider": "GEMINI",
+    "modelId": "gemini-3.5-flash-lite",
+    "displayName": "Gemini 3.5 Flash-Lite",
+    "costPer1MOutputUsd": 1.5,
+    "description": "Cheapest Gemini tier (GA July 2026) \u2014 current cleanup pick. Deliberately not used for transcription: it's ~3x slower than 3.1 Flash-Lite on audio input."
+  },
+  {
     "useCase": "BOTH",
     "tier": "RECOMMENDED",
     "costPer1MInputUsd": 0.25,
@@ -57,7 +67,7 @@
     "modelId": "gemini-3.1-flash-lite",
     "displayName": "Gemini 3.1 Flash-Lite",
     "costPer1MOutputUsd": 1.5,
-    "description": "Cheapest Gemini tier \u2014 Google's documented replacement for 2.5 Flash-Lite (which is deprecating); improved audio input for ASR, handles transcription too."
+    "description": "Recommended for transcription \u2014 much faster than 3.5 Flash-Lite on audio input; improved audio input for ASR. Still fine for cleanup too."
   },
   {
     "useCase": "BOTH",

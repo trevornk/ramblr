@@ -38,7 +38,7 @@ object ProviderChainMigration {
      * every version between the device's last-applied version and this one, so a device that
      * skipped several app updates still picks up every intermediate mapping in order.
      */
-    private const val MIGRATION_VERSION = 3
+    private const val MIGRATION_VERSION = 4
 
     /**
      * (provider, old shipped-default model id) -> new shipped-default model id. Only exact
@@ -56,6 +56,20 @@ object ProviderChainMigration {
         // a device whose single `model` field held gpt-4o-transcribe (e.g. via the v1
         // whisper-1 rewrite applied when gpt-4o-transcribe was the current default).
         (ProviderKind.OPENAI to "gpt-4o-transcribe") to TranscriberClient.DEFAULT_MODEL,
+        // v4 (2026-08-25): cleanup-default refresh (#194).
+        // - gpt-5.4-nano was the catalog's RECOMMENDED OpenAI cleanup pick (what the picker and
+        //   onboarding seeded on every configured device) until superseded by gpt-5.6-luna,
+        //   OpenAI's current cheapest tier. The new id is a literal here because the shipped
+        //   value lives in BUNDLED_DEFAULT_MODEL_CATALOG, not a DEFAULT_MODEL constant.
+        (ProviderKind.OPENAI to "gpt-5.4-nano") to "gpt-5.6-luna",
+        // - gemini-3.1-flash-lite -> gemini-3.5-flash-lite for the CLEANUP `model` field only.
+        //   Audio safety: even for pre-#101 shared-field-era chains this can't flip anyone's
+        //   transcription path to the ~3x-slower 3.5-flash-lite -- the Gemini audio call reads
+        //   `transcriptionModel ?: GeminiTranscriberClient.DEFAULT_MODEL` (never `model`), this
+        //   migration's null-seeding uses GeminiTranscriberClient.DEFAULT_MODEL (still
+        //   3.1-flash-lite), and SUPERSEDED_TRANSCRIPTION_MODELS deliberately has NO entry for
+        //   3.1-flash-lite, so every non-null transcriptionModel keeps its value.
+        (ProviderKind.GEMINI to "gemini-3.1-flash-lite") to GeminiCleanupProvider.DEFAULT_MODEL,
     )
 
     /**
