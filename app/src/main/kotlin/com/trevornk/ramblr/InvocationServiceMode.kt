@@ -135,8 +135,39 @@ object InvocationServiceMode {
             PackageManager.DONT_KILL_APP,
         )
 
-        // Step 2 (seamless tier): swap our entry in enabled_accessibility_services.
-        val seamless = swapEnabledServicesEntry(context, oldComponent, newComponent)
+        // Step 2 (seamless tier): the Secure-settings writes, in the ORDER the invisible-toggle
+        // sync demands (device-verified 2026-08-26 on Pixel 10a; ordering invariant encoded and
+        // unit-tested as [seamlessSwitchWrites]):
+        //  - ENTERING system mode: bind the a11y-button target BEFORE the enabled-services swap.
+        //    The moment the swap write lands, the OS re-evaluates the INVISIBLE_TOGGLE coupling;
+        //    if no shortcut is bound yet it strips our freshly-added entry right back out (the
+        //    kill trap running in reverse) and the switch silently fails. Pre-binding the target
+        //    makes the enable stick. A stale binding left by a failed later step is harmless.
+        //  - LEAVING system mode: swap FIRST (the floating component is TOGGLE-classified, so
+        //    the sync ignores it), THEN sweep Ramblr out of both shortcut keys. Removing the
+        //    bindings while the system component was still the enabled one would trip the
+        //    forward trap (last shortcut removed -> service stripped) before our swap landed.
+        val seamless = seamlessSwitchWrites(target).all { step ->
+            when (step) {
+                SeamlessWrite.BIND_BUTTON_TARGET ->
+                    InvocationSecureSettings.setBinding(
+                        context, InvocationSecureSettings.KEY_BUTTON_TARGETS, bound = true,
+                    )
+                SeamlessWrite.SWAP_ENABLED_SERVICES ->
+                    swapEnabledServicesEntry(context, oldComponent, newComponent)
+                SeamlessWrite.UNBIND_ALL_SHORTCUTS -> {
+                    // Best-effort cleanup; failure here must not report the whole switch as
+                    // needing a Settings tap (the service is already correctly enabled).
+                    InvocationSecureSettings.setBinding(
+                        context, InvocationSecureSettings.KEY_BUTTON_TARGETS, bound = false,
+                    )
+                    InvocationSecureSettings.setBinding(
+                        context, InvocationSecureSettings.KEY_SHORTCUT_TARGET_SERVICE, bound = false,
+                    )
+                    true
+                }
+            }
+        }
 
         // Step 3: retire the old component (kills it if it was the live service -- inherent).
         pm.setComponentEnabledSetting(
