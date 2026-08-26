@@ -489,6 +489,7 @@ class LocalLlmWaterfallStepTest {
         localModelPath: () -> String?,
         credentialLookup: (CleanupCredentialSlot) -> String = { "" },
         localPrompt: String = PostProcessor.SIMPLE_PROMPT,
+        localVocabulary: List<String> = emptyList(),
         text: String = "raw transcript",
     ): PostProcessor.Result {
         var captured: PostProcessor.Result? = null
@@ -503,6 +504,7 @@ class LocalLlmWaterfallStepTest {
             localInference = localInference,
             localModelPath = localModelPath,
             localPrompt = localPrompt,
+            localVocabulary = localVocabulary,
             callback = { captured = it },
         )
         return captured ?: error("callback never fired")
@@ -549,6 +551,53 @@ class LocalLlmWaterfallStepTest {
 
         assertEquals(1, engine.calls.size)
         assertEquals(PostProcessor.SIMPLE_PROMPT, engine.calls[0].first)
+    }
+
+    // --- #182 option 2: vocabulary post-pass over accepted local output ------------------------
+
+    @Test fun `accepted local output goes through the vocabulary post-pass`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf())
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("Deployed it on hetzler last night.")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
+
+        val result = execute(
+            waterfall, transport, engine,
+            localModelPath = { "/data/data/app/files/cleanup_models/model.gguf" },
+            localVocabulary = listOf("Hetzner"),
+        )
+
+        assertEquals("Deployed it on Hetzner last night.", result.text)
+        // The terms must reach the model's OUTPUT, never its prompt (#182: prompt interpolation
+        // is what made LFM2.5 echo the term list).
+        assertEquals(PostProcessor.SIMPLE_PROMPT, engine.calls[0].first)
+    }
+
+    @Test fun `the vocabulary post-pass defaults to a no-op when no terms are passed`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf())
+        val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("Deployed it on hetzler last night.")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
+
+        val result = execute(waterfall, transport, engine, localModelPath = { "/data/data/app/files/cleanup_models/model.gguf" })
+
+        assertEquals("Deployed it on hetzler last night.", result.text)
+    }
+
+    @Test fun `cloud output is not run through the vocabulary post-pass`() {
+        // Cloud cleanup gets vocabulary via prompt interpolation on [prompt] -- applying the
+        // post-pass there too would double-apply the feature. A cloud result containing a
+        // near-miss must come back verbatim even with localVocabulary configured.
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("Deployed it on hetzler last night.")))
+        val engine = FakeLocalInferenceEngine(mutableListOf())
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.OMNIROUTE, "some-model")))
+
+        val result = execute(
+            waterfall, transport, engine,
+            localModelPath = { null },
+            credentialLookup = { "a-key" },
+            localVocabulary = listOf("Hetzner"),
+        )
+
+        assertEquals("Deployed it on hetzler last night.", result.text)
     }
 
     @Test fun `a cancelled local inference stops the waterfall instead of falling through`() {

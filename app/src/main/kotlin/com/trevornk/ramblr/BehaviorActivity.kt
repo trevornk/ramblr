@@ -465,24 +465,33 @@ class BehaviorActivity : BaseSettingsActivity() {
         val note = vocabularyLocalOnlyNote()
         val terms = vocabularyTerms()
         val termsPart = if (terms.isEmpty()) "No custom terms" else terms.joinToString(", ")
-        // #185: the raw term list reads as confirmation the terms are in force -- when the
-        // current chain is fully local they aren't, so say so right on the row.
-        return if (note == null) termsPart else "Not used in local-only mode — $termsPart"
+        // #185: the raw term list reads as confirmation the terms are in force -- when nothing
+        // in the current setup applies them (local ASR with cleanup fully off, since #182's
+        // post-pass made local cleanup vocabulary-capable) they aren't, so say so on the row.
+        return if (note == null) termsPart else "Not used while cleanup is off — $termsPart"
     }
 
     /** Non-null when the user's current configuration ignores the vocabulary entirely (#185):
-     *  cloud transcription off AND no active cloud cleanup path. Mirrors the real runtime gates:
-     *  transcription's `use_local` pref, cleanup's master toggle, [CloudFeatureToggle]'s cloud
-     *  gate, and whether the chain still has a cloud-capable cleanup entry at all. */
+     *  cloud transcription off AND no active cleanup path of any kind. Mirrors the real runtime
+     *  gates: transcription's `use_local` pref, cleanup's master toggle, [CloudFeatureToggle]'s
+     *  cloud gate, the chain's cleanup-capable entries, and -- for the local path, which applies
+     *  terms via [VocabularyPostCorrector]'s output post-pass since #182 -- an actually
+     *  installed local cleanup model ([ModelDownloader.localCleanupModelFile] non-null, the same
+     *  check the executor's LOCAL_LLM branch fails on). */
     private fun vocabularyLocalOnlyNote(): String? {
         val cloudTranscription = !prefs().getBoolean("use_local", true)
-        val cloudCleanup = PostProcessingToggle.isEnabled(this) &&
+        val cleanupOn = PostProcessingToggle.isEnabled(this)
+        val cleanupEntries = ProviderChainStore.load(this).capableEntriesFor(needsTranscription = false)
+        val cloudCleanup = cleanupOn &&
             CloudFeatureToggle.cleanupEnabled(this) &&
-            ProviderChainStore.load(this).capableEntriesFor(needsTranscription = false)
-                .any { it.kind != ProviderKind.LOCAL }
+            cleanupEntries.any { it.kind != ProviderKind.LOCAL }
+        val localCleanup = cleanupOn &&
+            cleanupEntries.any { it.kind == ProviderKind.LOCAL } &&
+            ModelDownloader.localCleanupModelFile(this, LocalCleanupProvider.selectedModel(this)) != null
         return VocabularyTerms.localOnlyNote(
             cloudTranscriptionActive = cloudTranscription,
             cloudCleanupActive = cloudCleanup,
+            localCleanupActive = localCleanup,
         )
     }
 
@@ -494,15 +503,15 @@ class BehaviorActivity : BaseSettingsActivity() {
             gravity = Gravity.TOP or Gravity.START
             setText(VocabularyTerms.serialize(vocabularyTerms()))
         }
-        // #185: since #182 (local cleanup no longer receives the terms) and #131 (local ASR
-        // hotword biasing not planned), the terms only reach cloud transcription and cloud
-        // cleanup -- the old copy claimed a blanket effect on "the cleanup step", which is
-        // false in fully-local mode. State the real scope, and when the current setup is
-        // local-only, say the terms are inert instead of letting behavior reveal it.
+        // #185/#182: the terms reach cloud transcription, cloud cleanup (prompt interpolation),
+        // and -- since #182's option-2 post-pass -- local cleanup, where they are applied as a
+        // deterministic correction over the model's output rather than in its prompt. Only
+        // local transcription ignores them (#131), so the inert-setting note now fires only
+        // when cleanup is off entirely on a local-transcription setup.
         val message = buildString {
             append(
                 "Project names or jargon that speech-to-text often mishears. One per line.\n\n" +
-                    "Applies to cloud transcription and cloud cleanup."
+                    "Applies to cloud transcription and to cleanup (cloud and local)."
             )
             vocabularyLocalOnlyNote()?.let { append("\n\n").append(it) }
         }

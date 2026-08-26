@@ -324,6 +324,11 @@ explanations, headers, or comments about your edits.
         // a fine-tuned local model (e.g. mumble-cleanup-2stage) can override SIMPLE_PROMPT with its
         // own required training prompt via [LocalCleanupProvider.selectedSystemPrompt].
         localPrompt: String = SIMPLE_PROMPT,
+        // Personal-vocabulary terms for the LOCAL_LLM step's deterministic output post-pass
+        // (#182 option 2) -- passed straight through to [CleanupWaterfallExecutor.execute]'s
+        // localVocabulary; see its kdoc for why local gets a post-pass while cloud steps keep
+        // prompt interpolation.
+        localVocabulary: List<String> = emptyList(),
         // Optional benchmark/quality-log correlation (GH #100, #102), passed straight through to
         // [CleanupWaterfallExecutor.execute] -- see its own kdoc on these same param names.
         benchmarkContext: android.content.Context? = null,
@@ -351,6 +356,7 @@ explanations, headers, or comments about your edits.
             transport = transport,
             localModelPath = localModelPath,
             localPrompt = localPrompt,
+            localVocabulary = localVocabulary,
             benchmarkContext = benchmarkContext,
             benchmarkCorrelationId = benchmarkCorrelationId,
             callback = callback,

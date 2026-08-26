@@ -64,10 +64,12 @@ object LocalCleanupProvider {
      *
      * Note this is not a regression for the other catalog entry: `mumble-cleanup-2stage` declares
      * its own [Model.localSystemPrompt], which carries no [PostProcessor.VOCABULARY_PLACEHOLDER],
-     * so interpolation was always a no-op for it. Local cleanup has therefore never actually
-     * delivered this feature -- it either did nothing or did harm. Making vocabulary work
-     * on-device needs a deterministic post-processing pass over the model's output rather than a
-     * prompt instruction; that is tracked separately in #182.
+     * so interpolation was always a no-op for it. Vocabulary support for local cleanup is instead
+     * delivered by [VocabularyPostCorrector] (#182 option 2): a deterministic fuzzy-match
+     * correction pass applied to the model's ACCEPTED output in the executor's LOCAL_LLM branch.
+     * Being output-side and model-agnostic, it works identically for both catalog entries and
+     * cannot contaminate any prompt -- which is why this function must keep interpolating an
+     * empty list forever.
      *
      * The placeholder must still be *removed* rather than left in the string. Shipping a literal
      * `{{vocabulary}}` to the model was the original on-device bug: LFM2.5 echoed it back as the

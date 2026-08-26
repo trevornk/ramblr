@@ -42,27 +42,42 @@ object VocabularyTerms {
 
     /**
      * Whether the vocabulary terms are actually applied anywhere in the user's current
-     * configuration (#185). After #182 removed the vocabulary clause from local cleanup (it made
-     * LFM2.5 echo the term list) and #131 closed local-ASR hotword biasing as not-planned, the
-     * terms only reach the two CLOUD paths:
+     * configuration (#185, updated for #182 option 2). The terms reach three paths:
      *
      *  - cloud transcription ([TranscriberClient.vocabularyFormParts] / Gemini's inline prompt)
      *  - cloud cleanup ([PostProcessor.interpolateVocabulary] on the persona prompt)
+     *  - LOCAL cleanup, as a deterministic post-pass over the model's output
+     *    ([VocabularyPostCorrector], #182 option 2) -- NOT via the prompt, which made LFM2.5
+     *    echo the term list; the post-pass is model-agnostic, so `mumble-cleanup-2stage` gets
+     *    vocabulary support too despite declaring its own placeholder-free training prompt.
      *
-     * A fully-local setup -- local ASR plus local-only cleanup, the F-Droid-recommended,
-     * privacy-motivated configuration -- ignores every term. The Settings UI uses this to say so
-     * instead of letting users discover it from behavior.
+     * Only local *transcription* still ignores the terms (#131 closed local-ASR hotword biasing
+     * as not-planned). So the fully-local privacy configuration -- local ASR plus local cleanup
+     * -- now DOES apply the vocabulary, at the cleanup stage; the terms are only inert when no
+     * cleanup path is active at all on top of local transcription. The Settings UI uses this to
+     * say so instead of letting users discover it from behavior.
      *
-     * [cloudCleanupActive] must already fold in everything cloud cleanup needs (cleanup on,
-     * the cloud gate enabled, and a cloud-capable chain entry present); this stays a pure
-     * function of the two path-level booleans.
+     * Each `*Active` flag must already fold in everything that path needs to actually run
+     * (toggles, gates, chain entries, an installed model for local cleanup); this stays a pure
+     * function of the three path-level booleans.
      */
-    fun inEffect(cloudTranscriptionActive: Boolean, cloudCleanupActive: Boolean): Boolean =
-        cloudTranscriptionActive || cloudCleanupActive
+    fun inEffect(
+        cloudTranscriptionActive: Boolean,
+        cloudCleanupActive: Boolean,
+        localCleanupActive: Boolean,
+    ): Boolean = cloudTranscriptionActive || cloudCleanupActive || localCleanupActive
 
-    /** The user-facing note shown when [inEffect] is false (#185); null when terms do apply. */
-    fun localOnlyNote(cloudTranscriptionActive: Boolean, cloudCleanupActive: Boolean): String? =
-        if (inEffect(cloudTranscriptionActive, cloudCleanupActive)) null
-        else "Your current setup is fully on-device, so these terms are not used: local " +
-            "transcription and local cleanup don't support vocabulary biasing."
+    /** The user-facing note shown when [inEffect] is false (#185); null when terms do apply.
+     *  Since #182's post-pass made local cleanup vocabulary-capable, this only fires when local
+     *  transcription runs with no active cleanup at all -- the one remaining configuration where
+     *  the terms genuinely do nothing. */
+    fun localOnlyNote(
+        cloudTranscriptionActive: Boolean,
+        cloudCleanupActive: Boolean,
+        localCleanupActive: Boolean,
+    ): String? =
+        if (inEffect(cloudTranscriptionActive, cloudCleanupActive, localCleanupActive)) null
+        else "Your current setup is local transcription with cleanup off, so these terms are " +
+            "not used: local transcription doesn't support vocabulary biasing. They apply " +
+            "once cleanup is enabled."
 }
