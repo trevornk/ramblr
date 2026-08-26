@@ -138,4 +138,78 @@ class QualityLoggerTest {
         QualityLogger.rotateIfNeeded(file) // must not throw
         assertFalse(file.exists())
     }
+
+    // --- Opt-in gate (#191) ---
+
+    @Test fun `log is disabled by default and writes nothing`() {
+        val file = File.createTempFile("quality_log_gate", ".jsonl").apply { delete() }
+        try {
+            QualityLogger.log(
+                FakeSharedPreferences(), file,
+                correlationId = "tok-gate-1",
+                rawText = "words that must never be persisted without opt-in",
+            )
+            assertFalse("disabled QualityLogger.log must not create the file", file.exists())
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test fun `log writes nothing when the pref is explicitly false`() {
+        val file = File.createTempFile("quality_log_gate", ".jsonl").apply { delete() }
+        try {
+            val prefs = FakeSharedPreferences(mutableMapOf(QualityLogger.KEY_ENABLED to false))
+            QualityLogger.log(prefs, file, correlationId = "tok-gate-2", rawText = "still gated")
+            assertFalse(file.exists())
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test fun `log appends a parseable line when the pref is enabled`() {
+        val file = File.createTempFile("quality_log_gate", ".jsonl").apply { delete() }
+        try {
+            val prefs = FakeSharedPreferences(mutableMapOf(QualityLogger.KEY_ENABLED to true))
+            QualityLogger.log(
+                prefs, file,
+                correlationId = "tok-gate-3",
+                transcription = QualityStage("OPENAI", "gpt-transcribe"),
+                rawText = "opted-in words",
+            )
+            assertTrue("enabled QualityLogger.log must write the file", file.exists())
+            val json = JSONObject(file.readText().trim())
+            assertEquals("tok-gate-3", json.getString("correlationId"))
+            assertEquals("opted-in words", json.getString("rawText"))
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test fun `isEnabled defaults to false and reflects the stored value`() {
+        assertFalse(QualityLogger.isEnabled(FakeSharedPreferences()))
+        assertTrue(QualityLogger.isEnabled(FakeSharedPreferences(mutableMapOf(QualityLogger.KEY_ENABLED to true))))
+    }
+
+    /** Minimal in-memory [android.content.SharedPreferences] fake — boolean-only surface,
+     *  mirroring the one in [DebugVisibilityToggleTest]. */
+    private class FakeSharedPreferences(
+        private val values: MutableMap<String, Any?> = mutableMapOf()
+    ) : android.content.SharedPreferences {
+        override fun getAll(): MutableMap<String, *> = values
+        override fun getString(key: String?, defValue: String?): String? = throw UnsupportedOperationException()
+        override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? =
+            throw UnsupportedOperationException()
+        override fun getInt(key: String?, defValue: Int): Int = throw UnsupportedOperationException()
+        override fun getLong(key: String?, defValue: Long): Long = throw UnsupportedOperationException()
+        override fun getFloat(key: String?, defValue: Float): Float = throw UnsupportedOperationException()
+        override fun getBoolean(key: String?, defValue: Boolean): Boolean = values[key] as? Boolean ?: defValue
+        override fun contains(key: String?): Boolean = values.containsKey(key)
+        override fun edit(): android.content.SharedPreferences.Editor = throw UnsupportedOperationException()
+        override fun registerOnSharedPreferenceChangeListener(
+            listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?
+        ) {}
+        override fun unregisterOnSharedPreferenceChangeListener(
+            listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?
+        ) {}
+    }
 }

@@ -124,6 +124,8 @@ class BackupManagerTest {
         // targetFiles() is the single source of truth for what a backup contains; this asserts
         // its key set directly rather than exercising I/O, so it fails loudly if a future edit
         // ever adds one of the excluded encrypted stores to the map (GH #103 constraint).
+        // ENTRY_QUALITY_LOG is deliberately NOT in this set since #191: the quality log stores
+        // verbatim dictation text and never rides along in backups.
         val excluded = setOf(
             "ramblr_secure.xml",
             "ramblr_cleanup_credentials.xml",
@@ -132,10 +134,30 @@ class BackupManagerTest {
         val includedKeys = setOf(
             BackupManager.ENTRY_DICTATION_HISTORY,
             BackupManager.ENTRY_BENCHMARK_LOG,
-            BackupManager.ENTRY_QUALITY_LOG,
             BackupManager.ENTRY_PREFS,
         )
         assertTrue(excluded.none { it in includedKeys })
+    }
+
+    @Test fun `a legacy backup containing a quality log entry is skipped on restore, not written (#191)`() {
+        // Old backups (pre-#191) legitimately contain quality_log.jsonl. Restoring one against
+        // the current target set must report that entry as skipped rather than resurrecting
+        // transcript text onto a device whose quality logging may be (and defaults to) off.
+        val legacyQualityLog = tempFile("legacy_quality", "{\"rawText\":\"old dictated words\"}\n")
+        val dest = File.createTempFile("backup", ".zip").apply { deleteOnExit(); delete() }
+        BackupManager.zipFiles(dest, mapOf(BackupManager.ENTRY_QUALITY_LOG to legacyQualityLog))
+
+        val restoreTarget = File.createTempFile("restore_quality", ".tmp").apply { deleteOnExit(); delete() }
+        val result = dest.inputStream().use { input ->
+            // Mirror targetFiles()' current key set: no ENTRY_QUALITY_LOG key.
+            BackupManager.unzipToTargets(input, mapOf(BackupManager.ENTRY_PREFS to restoreTarget))
+        }
+
+        assertTrue(result.restoredEntries.isEmpty())
+        assertEquals(setOf(BackupManager.ENTRY_QUALITY_LOG), result.skippedEntries)
+        assertFalse(restoreTarget.exists())
+
+        legacyQualityLog.delete(); dest.delete()
     }
 
     // --- parsePrefsXml (regression: restore silently returning seeded defaults, #103 follow-up) ---

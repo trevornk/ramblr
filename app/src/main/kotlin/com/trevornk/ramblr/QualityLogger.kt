@@ -1,6 +1,7 @@
 package com.trevornk.ramblr
 
 import android.content.Context
+import android.content.SharedPreferences
 import java.io.File
 import org.json.JSONObject
 
@@ -21,6 +22,11 @@ data class QualityStage(
  * device over several days (GH #105). One line per completed dictation stage, each line a
  * self-contained JSON object -- deliberately NOT a JSON array, so a crash or a concurrent read
  * mid-write can never corrupt lines already flushed, and a consumer can stream-parse it.
+ *
+ * Off by default (#191): because this log stores the *actual text* of every dictation, [log]
+ * writes nothing unless the user explicitly flips the quality-logging toggle in
+ * [DataLogsActivity] ([KEY_ENABLED]). It is also deliberately excluded from [BackupManager]
+ * backup zips for the same reason.
  *
  * This is [BenchmarkLogger]'s deliberate complement, not a replacement or a merge target:
  * [BenchmarkLogger] intentionally never logs actual dictated text (a considered privacy decision
@@ -44,6 +50,28 @@ object QualityLogger {
 
     private const val FILE_NAME = "quality_log.jsonl"
 
+    /** Same plain prefs file every other Settings toggle uses ([DebugVisibilityToggle],
+     *  [DataLogsActivity]'s history toggle, ...). */
+    private const val PREFS_NAME = "ramblr"
+
+    /** Gates [log] (#191). Default **off**: quality logging stores verbatim raw/cleaned dictation
+     *  text on disk, so it must be an explicit opt-in — mirroring how `dictation_history_enabled`
+     *  gates history, except this one defaults to disabled because it's a diagnostics tool, not a
+     *  user-facing safety net. */
+    const val KEY_ENABLED = "quality_log_enabled"
+    const val ENABLED_DEFAULT = false
+
+    fun isEnabled(prefs: SharedPreferences): Boolean = prefs.getBoolean(KEY_ENABLED, ENABLED_DEFAULT)
+
+    fun isEnabled(context: Context): Boolean = isEnabled(prefs(context))
+
+    fun setEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ENABLED, enabled).apply()
+    }
+
+    private fun prefs(context: Context) =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
     /** Once the log file exceeds this size, it's rotated down to [KEEP_BYTES_AFTER_ROTATION] of
      *  its newest (tail) content rather than growing unbounded across many real-world sessions.
      *  Set generously larger than [BenchmarkLogger.ROTATE_AT_BYTES]: this log stores real (but
@@ -63,6 +91,9 @@ object QualityLogger {
      * e.g. a transcription-only call site that has no cleanup outcome yet, or a cleanup-only call
      * site logging just the cleaned side of an already-logged transcription.
      *
+     * No-ops unless the user has explicitly enabled quality logging ([KEY_ENABLED], default off,
+     * #191): this file stores verbatim dictation text, so nothing may be written without opt-in.
+     *
      * All file I/O is wrapped in `runCatching`: this is a diagnostics-only side channel for
      * later manual review, and must never be allowed to crash or block Trevor's actual dictation
      * -- a full disk or a transient I/O error here should be silently swallowed, not surfaced.
@@ -76,6 +107,24 @@ object QualityLogger {
         cleanedText: String? = null,
     ) {
         runCatching {
+            log(prefs(context), logFile(context), correlationId, transcription, cleanup, rawText, cleanedText)
+        }
+    }
+
+    /** [log]'s prefs+file core, split out (same spirit as [buildLine]) so the enabled-gate is
+     *  directly unit-testable against a fake [SharedPreferences] and a temp file without a real
+     *  [Context]. */
+    fun log(
+        prefs: SharedPreferences,
+        file: File,
+        correlationId: String,
+        transcription: QualityStage? = null,
+        cleanup: QualityStage? = null,
+        rawText: String? = null,
+        cleanedText: String? = null,
+    ) {
+        if (!isEnabled(prefs)) return
+        runCatching {
             val line = buildLine(
                 timestamp = System.currentTimeMillis(),
                 correlationId = correlationId,
@@ -84,7 +133,6 @@ object QualityLogger {
                 rawText = rawText,
                 cleanedText = cleanedText,
             )
-            val file = logFile(context)
             rotateIfNeeded(file)
             file.appendText(line + "\n")
         }

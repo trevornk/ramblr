@@ -47,7 +47,8 @@ const val MAX_ERROR_DETAIL_CHARS = 200
  * Scrubs a provider failure message for the length-only benchmark log (#138).
  *
  * [BenchmarkLogger] stores lengths, timings and model ids -- never transcript content -- which is
- * why raw/cleaned text pairs live in the separate, opt-in [QualityLogger] instead. A provider's
+ * why raw/cleaned text pairs live in the separate [QualityLogger] instead, itself gated behind an
+ * off-by-default toggle (`quality_log_enabled`, #191). A provider's
  * error body can quote the request that caused it.
  *
  * **What this does and does not guarantee.** Collapsing whitespace is a correctness guarantee:

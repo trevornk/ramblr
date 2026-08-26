@@ -25,6 +25,7 @@ import kotlin.concurrent.thread
 class DataLogsActivity : BaseSettingsActivity() {
 
     private lateinit var historyEnabledSwitch: com.google.android.material.materialswitch.MaterialSwitch
+    private lateinit var qualityLogEnabledSwitch: com.google.android.material.materialswitch.MaterialSwitch
     private lateinit var backupRowSub: TextView
 
     /** SAF file picker for restore (#103): OpenDocument (not GetContent) so the returned Uri
@@ -65,10 +66,11 @@ class DataLogsActivity : BaseSettingsActivity() {
         // --- Backup / restore (#103) ---
         root.addView(sectionHeader("Backup & restore"))
         root.addView(TextView(this).apply {
-            text = "Saves dictation history, benchmark log, quality log, and settings to a file " +
+            text = "Saves dictation history, benchmark log, and settings to a file " +
                 "you choose where to send. API keys are never included -- they're encrypted to " +
                 "this device's hardware Keystore and can't be restored elsewhere, so you'll " +
-                "re-enter them once on a new device."
+                "re-enter them once on a new device. The quality log is never included either: " +
+                "it contains your actual dictated text, so it stays strictly on this device."
             textSize = 14f
             setTextColor(attrColor(android.R.attr.textColorSecondary))
             setPadding(dp(24), 0, dp(24), dp(8))
@@ -76,14 +78,14 @@ class DataLogsActivity : BaseSettingsActivity() {
 
         val backupRow = settingsRow(
             "Backup all data",
-            "Share a backup file containing history, logs, and settings"
+            "Share a backup file containing history, the benchmark log, and settings"
         ) { createAndShareBackup() }
         backupRowSub = backupRow.findViewWithTag("subtitle")
         root.addView(backupRow)
 
         root.addView(settingsRow(
             "Restore from backup",
-            "Pick a backup file to restore. This overwrites existing history, logs, and settings"
+            "Pick a backup file to restore. This overwrites existing history, benchmark log, and settings"
         ) { pickRestoreFile.launch(arrayOf("application/zip", "application/octet-stream")) })
 
         // --- Benchmark / quality logs ---
@@ -93,6 +95,16 @@ class DataLogsActivity : BaseSettingsActivity() {
             "Share benchmark log",
             "Send the on-device transcription/cleanup benchmark log (timings and model ids only, no dictation text) to any app"
         ) { shareBenchmarkLog() })
+
+        qualityLogEnabledSwitch = com.google.android.material.materialswitch.MaterialSwitch(this).apply {
+            isChecked = QualityLogger.isEnabled(this@DataLogsActivity)
+            isClickable = false
+        }
+        root.addView(settingsRow(
+            "Save quality log",
+            "Keeps the raw and cleaned text of every dictation on-device for provider/model quality review. Off by default",
+            qualityLogEnabledSwitch
+        ) { onQualityLogToggle(!qualityLogEnabledSwitch.isChecked) })
 
         root.addView(settingsRow(
             "Share quality log",
@@ -114,6 +126,7 @@ class DataLogsActivity : BaseSettingsActivity() {
 
     private fun refresh() {
         historyEnabledSwitch.isChecked = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
+        qualityLogEnabledSwitch.isChecked = QualityLogger.isEnabled(this)
     }
 
     // --- Backup / restore (#103) ---
@@ -169,7 +182,7 @@ class DataLogsActivity : BaseSettingsActivity() {
         android.app.AlertDialog.Builder(this)
             .setTitle("Restore from backup?")
             .setMessage(
-                "This overwrites the dictation history, benchmark log, quality log, and " +
+                "This overwrites the dictation history, benchmark log, and " +
                     "settings currently on this device with the contents of the selected file. " +
                     "This can't be undone."
             )
@@ -204,6 +217,33 @@ class DataLogsActivity : BaseSettingsActivity() {
                 refresh()
             }
         }
+    }
+
+    // --- Quality log opt-in (#191) ---
+
+    /** Mirrors [onHistoryToggle]'s shape: enabling is immediate, disabling offers to also delete
+     *  the transcript text already on disk — the log stores verbatim dictations, so turning the
+     *  feature off is exactly when a user is most likely to want the existing file gone too. */
+    private fun onQualityLogToggle(enabled: Boolean) {
+        if (enabled) {
+            QualityLogger.setEnabled(this, true)
+            refresh()
+            return
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Turn off quality logging")
+            .setMessage("New dictations won't be added to the quality log. Delete the transcript text already saved in it?")
+            .setPositiveButton("Delete log") { _, _ ->
+                QualityLogger.setEnabled(this, false)
+                QualityLogger.logFile(this).delete()
+                refresh()
+            }
+            .setNegativeButton("Keep log") { _, _ ->
+                QualityLogger.setEnabled(this, false)
+                refresh()
+            }
+            .setOnCancelListener { refresh() }
+            .show()
     }
 
     // --- Dictation History (#25) ---
