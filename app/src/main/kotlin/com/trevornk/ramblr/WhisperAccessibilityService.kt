@@ -2493,8 +2493,16 @@ class WhisperAccessibilityService : AccessibilityService() {
      * would otherwise lose local transcription entirely. Short takes are unaffected either way.
      * Since #139 this path also provisions that model itself, so the fallback is a transient
      * state for local-transcription users rather than a permanent one.
+     *
+     * PCM lifetime (M5 audit, 2026-08-26): [file] is deleted here on success (the transcript
+     * exists, nothing downstream needs audio) and on failure of the *direct* pure-local path
+     * ([onChainFailure] null -- nothing could retry, so keeping it would only leak cache). When
+     * the provider-chain walk calls this as a candidate it passes [onChainFailure], taking the
+     * failure-path PCM lifetime for itself: the file is kept alive so the next candidate can
+     * still transcribe it, and [transcribeApi]'s `advanceOrGiveUp` deletes it once the chain is
+     * exhausted -- the [TranscriptionChain.shouldDeletePcm] contract.
      */
-    private fun transcribeLocal(file: File, token: Int) {
+    private fun transcribeLocal(file: File, token: Int, onChainFailure: ((String) -> Unit)? = null) {
         thread {
             // Benchmark-log timing starts before the read/decode too, so a failure there (rare,
             // but possible on a corrupt/truncated PCM file) still gets an honest latency instead
@@ -2533,8 +2541,10 @@ class WhisperAccessibilityService : AccessibilityService() {
                     } ?: throw IllegalStateException("Local model was unloaded during transcription")
                 } finally {
                     vad?.close()
-                    file.delete()
                 }
+                // Success: the transcript exists, so no candidate (chain or otherwise) needs the
+                // audio anymore -- mirrors the delete-on-success the cloud candidates do (M5).
+                file.delete()
                 val ms = System.currentTimeMillis() - t0
                 Log.i(TAG, "Local transcription: ${ms}ms, ${durationSeconds}s audio")
                 BenchmarkLogger.log(
@@ -2582,17 +2592,24 @@ class WhisperAccessibilityService : AccessibilityService() {
                         model = localTranscriptionModelId(),
                     ),
                 )
-                // Local transcription's audio file is already gone (read-then-delete
-                // above), so a cloud fallback here needs the raw PCM again -- but re-reading a
-                // deleted file isn't possible. Since local transcription failure this late
-                // (post-decode) is rare and re-recording is cheap, cloud fallback for
-                // transcription is only wired at the "model not loaded yet" branch in
-                // continueTranscription, not this in-flight-failure path; report the error
-                // honestly instead of silently retrying without audio.
-                handler.post {
-                    if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
-                    toast("Local error: ${e.message}")
-                    resetToIdle()
+                if (onChainFailure != null) {
+                    // Chain-candidate path (M5): the PCM is deliberately NOT deleted -- the walk
+                    // owns its lifetime now (see kdoc above), so the next candidate can still
+                    // upload it. advanceOrGiveUp hops to main, re-checks the guard, and either
+                    // advances or deletes the audio and surfaces this error at chain exhaustion.
+                    onChainFailure("Local error: ${e.message}")
+                } else {
+                    // Direct pure-local path (continueTranscription): no chain walk owns the PCM
+                    // and nothing can retry without one, so delete it here and report honestly.
+                    // Cloud fallback for this path is only wired at the "model not loaded yet"
+                    // branch in continueTranscription -- a post-load failure this late is rare
+                    // and re-recording is cheap.
+                    file.delete()
+                    handler.post {
+                        if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
+                        toast("Local error: ${e.message}")
+                        resetToIdle()
+                    }
                 }
             }
         }
@@ -2622,10 +2639,18 @@ class WhisperAccessibilityService : AccessibilityService() {
             return
         }
 
+        // M5: which compressed .m4a copy (if any) the walk still holds. A LOCAL candidate never
+        // uploads, so its branch deletes the compressed copy and nulls this -- and now that LOCAL
+        // can *fail through* to a later cloud candidate (see its branch below), that candidate
+        // must see null (upload raw PCM) rather than a File pointing at deleted bytes. Only ever
+        // written before a candidate runs and read after its completion posts back, so the
+        // walk's existing thread handoffs (thread{}/handler.post) order every access.
+        var remainingCompressedFile: File? = compressedFile
+
         fun attempt(index: Int) {
             if (index >= candidates.size) {
                 file.delete()
-                compressedFile?.delete()
+                remainingCompressedFile?.delete()
                 reset("Set API key in Ramblr app")
                 return
             }
@@ -2644,7 +2669,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                         // Cancelled or watchdog already reset the UI: nothing more to try, but the
                         // PCM is still ours to clean up.
                         file.delete()
-                        compressedFile?.delete()
+                        remainingCompressedFile?.delete()
                         return@post
                     }
                     if (TranscriptionChain.hasNextCandidate(index, candidates.size)) {
@@ -2652,7 +2677,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                         attempt(index + 1)
                     } else {
                         file.delete()
-                        compressedFile?.delete()
+                        remainingCompressedFile?.delete()
                         reset("Error: ${error ?: "transcription failed"}")
                     }
                 }
@@ -2695,12 +2720,16 @@ class WhisperAccessibilityService : AccessibilityService() {
                     // #114 parts 1/2: bias transcription itself toward the user's vocabulary, not
                     // just the cleanup stage -- same terms already read below at the cleanup call
                     // site (see vocabularyTerms()).
+                    // M5: capture the compressed copy this attempt actually uploads as a local
+                    // (the #193 locals-capture pattern) -- remainingCompressedFile can be nulled
+                    // by a LOCAL candidate, and this callback must report/delete what IT sent.
+                    val uploadCompressedFile = remainingCompressedFile
                     TranscriberClient.transcribe(
                         file, apiKey, inFlightCall,
                         baseUrl = entry.baseUrlOverride ?: PostProcessor.DEFAULT_BASE_URL,
                         model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
                         vocabularyTerms = vocabularyTerms(),
-                        compressedFile = compressedFile,
+                        compressedFile = uploadCompressedFile,
                     ) { result ->
                         val roundTripMs = System.currentTimeMillis() - transcribeStartMs
                         Log.i(TAG, "OpenAI transcription HTTP round-trip took ${roundTripMs}ms")
@@ -2713,7 +2742,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                                 model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
                                 latencyMs = roundTripMs,
                                 success = success,
-                                compressedUpload = compressedFile != null,
+                                compressedUpload = uploadCompressedFile != null,
                                 // #138: a provider error envelope yields blank text, so this
                                 // records success=false; without the reason a bad key, a rate
                                 // limit and a timeout are indistinguishable after logcat rotates.
@@ -2732,7 +2761,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                         )
                         if (success) {
                             file.delete()
-                            compressedFile?.delete()
+                            uploadCompressedFile?.delete()
                             handleTranscriptionResult(result.text, token)
                         } else {
                             advanceOrGiveUp(result.error ?: "empty transcript")
@@ -2741,8 +2770,17 @@ class WhisperAccessibilityService : AccessibilityService() {
                 }
                 ProviderKind.LOCAL -> {
                     Log.i(TAG, "Transcription via ProviderChain provider=${entry.kind}")
-                    compressedFile?.delete()
-                    transcribeLocal(file, token)
+                    // The local transcriber reads raw PCM, never an upload (#109) -- but null the
+                    // walk-level handle too (M5), so a cloud candidate reached via LOCAL's new
+                    // fail-through below uploads the raw PCM instead of a deleted .m4a path.
+                    remainingCompressedFile?.delete()
+                    remainingCompressedFile = null
+                    // M5: as a chain candidate, LOCAL's failure must behave like any cloud
+                    // candidate's -- keep the PCM alive and walk on via advanceOrGiveUp (which
+                    // deletes it at chain exhaustion) instead of transcribeLocal's direct-path
+                    // delete-and-reset. See transcribeLocal's PCM-lifetime kdoc and
+                    // TranscriptionChain.shouldDeletePcm.
+                    transcribeLocal(file, token, onChainFailure = { error -> advanceOrGiveUp(error) })
                 }
                 ProviderKind.GEMINI -> {
                     val apiKey = ProviderCredentialStore.get(this, ProviderKind.GEMINI)
@@ -2761,10 +2799,12 @@ class WhisperAccessibilityService : AccessibilityService() {
                         Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (Gemini generateContent audio)")
                         val geminiModel = entry.transcriptionModel?.ifBlank { null } ?: GeminiTranscriberClient.DEFAULT_MODEL
                         val geminiStartMs = System.currentTimeMillis()
+                        // M5: same locals-capture as the OpenAI branch above.
+                        val uploadCompressedFile = remainingCompressedFile
                         GeminiTranscriberClient.transcribe(
                             file, apiKey, geminiModel, inFlightCall,
                             vocabularyTerms = vocabularyTerms(),
-                            compressedFile = compressedFile,
+                            compressedFile = uploadCompressedFile,
                         ) { result ->
                             val success = result.text != null && result.text.isNotBlank()
                             BenchmarkLogger.log(
@@ -2775,7 +2815,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                                     model = geminiModel,
                                     latencyMs = System.currentTimeMillis() - geminiStartMs,
                                     success = success,
-                                    compressedUpload = compressedFile != null,
+                                    compressedUpload = uploadCompressedFile != null,
                                     // #138: same as the OpenAI path -- Gemini reports failure as
                                     // an error envelope with blank text, not an exception.
                                     error = sanitizeError(result.error),
@@ -2793,7 +2833,7 @@ class WhisperAccessibilityService : AccessibilityService() {
                             )
                             if (success) {
                                 file.delete()
-                                compressedFile?.delete()
+                                uploadCompressedFile?.delete()
                                 handleTranscriptionResult(result.text, token)
                             } else {
                                 advanceOrGiveUp(result.error ?: "empty transcript")
