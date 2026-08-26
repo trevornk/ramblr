@@ -148,7 +148,17 @@ add_subdirectory(../../../../../llama.cpp llama.cpp)
 # or packaged. This block only fails the build if upstream's variant names change, so the
 # exclusion list and kCpuVariantLibs in LLMInference.cpp can't silently drift out of sync with
 # the submodule.
-foreach(variant ggml-cpu-android_armv9.0_1 ggml-cpu-android_armv9.2_1 ggml-cpu-android_armv9.2_2)
+#
+# Guard the KEPT variants too, not just the excluded ones (#187 follow-up): kCpuVariantLibs in
+# LLMInference.cpp dlopen()s the four shipped variants by hardcoded soname. If a submodule bump
+# renamed those targets, this build would still succeed -- the renamed libraries would package
+# under new names, every dlopen would miss, and loadBestCpuBackend() would throw "no compatible
+# CPU backend" on every device at runtime. Failing configure here turns that runtime regression
+# into a build error pointing at the two lists that need updating.
+foreach(variant
+        ggml-cpu-android_armv8.0_1 ggml-cpu-android_armv8.2_1
+        ggml-cpu-android_armv8.2_2 ggml-cpu-android_armv8.6_1
+        ggml-cpu-android_armv9.0_1 ggml-cpu-android_armv9.2_1 ggml-cpu-android_armv9.2_2)
     if (NOT TARGET ${variant})
         message(FATAL_ERROR "Expected ggml CPU variant target ${variant} not found -- the \
 llama.cpp submodule's Android variant list changed. Re-check ggml/src/CMakeLists.txt, then update \
