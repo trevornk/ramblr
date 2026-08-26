@@ -3359,6 +3359,15 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // DIRECT injections wipe immediately (see [CleanupFailureNotice]).
         cleanupError: String? = null,
     ) {
+        // Smart vocabulary suggestions (#216): every accepted dictation funnels through this
+        // method -- direct injection, cleanup results, and preview-accepts alike (discarded
+        // previews never reach here, so they never feed the counters). One fire-and-forget
+        // call; the collector is toggle-gated, runs off-thread, and swallows its own errors,
+        // so dictation can never be affected. When cleanup didn't run (rawText == null) the
+        // accepted text doubles as the raw side, which yields no correction pairs -- exactly
+        // right, since nothing was corrected.
+        VocabularySuggestionCollector.collect(this, rawText = rawText ?: text, finalText = text)
+
         pendingClipboardRestore?.let { handler.removeCallbacks(it) }
         pendingClipboardRestore = null
         pendingInjectionRetry?.let { handler.removeCallbacks(it) }

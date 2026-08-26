@@ -22,6 +22,18 @@ object VocabularyEditor {
         prefs(context).getString(PREF_KEY, VocabularyTerms.DEFAULT_SERIALIZED)
     )
 
+    /** Appends [term] to the vocabulary exactly as if typed into the editor dialog (#216: the
+     *  suggestion UI's Add action) — same prefs key, same parse/serialize normalization, so a
+     *  duplicate (case-insensitive) is a no-op just as it would be in the dialog. */
+    fun addTerm(context: Context, term: String) {
+        val updated = VocabularyTerms.parse(
+            VocabularyTerms.serialize(terms(context) + term)
+        )
+        prefs(context).edit()
+            .putString(PREF_KEY, VocabularyTerms.serialize(updated))
+            .apply()
+    }
+
     /** The Behavior row's subtitle: the term list itself, prefixed with the #185 inert-setting
      *  warning when nothing in the current configuration applies the terms. */
     fun rowSummary(context: Context): String =

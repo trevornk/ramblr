@@ -41,6 +41,9 @@ class BehaviorActivity : BaseSettingsActivity() {
      *  from an unrelated download (or one already in flight before this screen opened). */
     private var silenceAutoStopPendingEnable = false
     private lateinit var vocabularyRowSub: TextView
+    private lateinit var vocabSuggestionsSwitch: MaterialSwitch
+    private lateinit var suggestionsContainer: LinearLayout
+    private lateinit var dismissedSuggestionsRow: LinearLayout
     private lateinit var localThreadsRowSub: TextView
     private lateinit var canaryLanguageRowSub: TextView
     private lateinit var compressedUploadSwitch: MaterialSwitch
@@ -220,6 +223,39 @@ class BehaviorActivity : BaseSettingsActivity() {
         vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
         root.addView(vocabularyRow)
 
+        // Smart vocabulary suggestions (#216): master toggle plus the dynamic Suggested-terms
+        // section and the Dismissed-suggestions review row. Turning the toggle off clears all
+        // accumulated candidate counters (off = nothing retained -- see
+        // VocabularySuggestionsToggle's kdoc); the dismissed list survives it, being user
+        // decisions rather than collected counters.
+        vocabSuggestionsSwitch = MaterialSwitch(this).apply {
+            isChecked = VocabularySuggestionsToggle.isEnabled(this@BehaviorActivity)
+            isClickable = false
+        }
+        root.addView(settingsRow(
+            "Smart vocabulary suggestions",
+            "Notices words dictation keeps correcting or that keep recurring, and suggests adding them to your vocabulary. Everything stays on this device; turning this off also deletes what's been noticed so far",
+            vocabSuggestionsSwitch
+        ) {
+            val newVal = !vocabSuggestionsSwitch.isChecked
+            VocabularySuggestionsToggle.setEnabled(this, newVal)
+            vocabSuggestionsSwitch.isChecked = newVal
+            refresh()
+        })
+
+        // Rebuilt from scratch on every refresh(): suggestions change between resumes (new
+        // dictations) and after every Add/Dismiss, and the row count varies, so declarative
+        // rebuild beats trying to patch child views in place.
+        suggestionsContainer = vertical(0, 0)
+        root.addView(suggestionsContainer)
+
+        dismissedSuggestionsRow = settingsRow(
+            "Dismissed suggestions",
+            "Checking...",
+            indent = 1
+        ) { promptDismissedSuggestions() }
+        root.addView(dismissedSuggestionsRow)
+
         // Local transcription thread count (#107): a developer-ish tuning knob, not a mainstream
         // everyday setting, so it lives down here rather than cluttering Transcription's main
         // local-model picker. See LocalTranscriptionThreads' kdoc for why the default stays 2.
@@ -266,11 +302,90 @@ class BehaviorActivity : BaseSettingsActivity() {
         refreshSilenceAutoStopSummary()
         compressedUploadSwitch.isChecked = CompressedUploadToggle.isEnabled(this)
         vocabularyRowSub.text = VocabularyEditor.rowSummary(this)
+        vocabSuggestionsSwitch.isChecked = VocabularySuggestionsToggle.isEnabled(this)
+        refreshSuggestionSections()
         localThreadsRowSub.text = localThreadsSummary()
         canaryLanguageRowSub.text = canaryLanguageSummary()
         autoPeekDelayRow.findViewWithTag<TextView>("subtitle").text = autoPeekDelaySummary()
         peekSizeRow.findViewWithTag<TextView>("subtitle").text = peekSizeSummary()
     }
+
+    // --- Smart vocabulary suggestions (#216) ---
+
+    /**
+     * Rebuilds the Suggested-terms section and the Dismissed-suggestions row. The section only
+     * exists when the toggle is on AND there is at least one over-threshold suggestion; the
+     * dismissed row shows whenever the dismissed list is non-empty (even with the toggle off,
+     * so the user can always review what they've dismissed).
+     */
+    private fun refreshSuggestionSections() {
+        suggestionsContainer.removeAllViews()
+        if (VocabularySuggestionsToggle.isEnabled(this)) {
+            val suggestions = VocabularySuggestionStore.pendingSuggestions(this, VocabularyEditor.terms(this))
+            if (suggestions.isNotEmpty()) {
+                suggestionsContainer.addView(subsectionHeader("Suggested terms"))
+                for (suggestion in suggestions) {
+                    suggestionsContainer.addView(settingsRow(
+                        suggestion.term,
+                        suggestion.evidenceLine(),
+                        indent = 1
+                    ) { promptSuggestion(suggestion) })
+                }
+            }
+        }
+        dismissedSuggestionsRow.findViewWithTag<TextView>("subtitle").text =
+            dismissedSuggestionsSummary()
+        dismissedSuggestionsRow.visibility =
+            if (VocabularySuggestionStore.dismissedTerms(this).isEmpty()) View.GONE else View.VISIBLE
+    }
+
+    private fun dismissedSuggestionsSummary(): String {
+        val count = VocabularySuggestionStore.dismissedTerms(this).size
+        return "$count term${if (count == 1) "" else "s"} you chose not to add. Tap to review or restore"
+    }
+
+    /** Add/Dismiss decision dialog for one suggestion. Add goes through [VocabularyEditor.addTerm]
+     *  so the term lands exactly like a manually typed one; both paths drop the candidate's
+     *  counters ([VocabularySuggestionStore.dismiss] / [VocabularySuggestionStore.removeCandidate]). */
+    private fun promptSuggestion(suggestion: VocabularySuggestionStore.Suggestion) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Add \u201C${suggestion.term}\u201D to vocabulary?")
+            .setMessage(
+                suggestion.evidenceLine() + ".\n\nAdding it helps transcription and cleanup " +
+                    "get it right. Dismissing stops it from being suggested again."
+            )
+            .setPositiveButton("Add") { _, _ ->
+                VocabularyEditor.addTerm(this, suggestion.term)
+                VocabularySuggestionStore.removeCandidate(this, suggestion.term)
+                refresh()
+            }
+            .setNegativeButton("Dismiss") { _, _ ->
+                VocabularySuggestionStore.dismiss(this, suggestion.term)
+                refresh()
+            }
+            .setNeutralButton("Cancel", null)
+            .show()
+    }
+
+    /** The Dismissed-suggestions review list: each entry restorable with one tap (#216). A
+     *  restored term becomes an eligible candidate again, counters restarting from zero. */
+    private fun promptDismissedSuggestions() {
+        val dismissed = VocabularySuggestionStore.dismissedTerms(this)
+        if (dismissed.isEmpty()) return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Dismissed suggestions")
+            .setItems(dismissed.map { "$it \u2014 tap to restore" }.toTypedArray()) { _, which ->
+                val term = dismissed[which]
+                VocabularySuggestionStore.restore(this, term)
+                toastShort("\u201C$term\u201D can be suggested again")
+                refresh()
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun toastShort(message: String) =
+        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_SHORT).show()
 
     // --- Auto-hide delay (Feature A follow-up) ---
 
