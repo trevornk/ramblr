@@ -358,10 +358,12 @@ class MainActivity : BaseSettingsActivity() {
         // Base tier: the OS offers no app-side re-enable, so the best path IS the service's own
         // Settings page (resolvable since API 30 = minSdk; the action is a string constant --
         // see InvocationSecureSettings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS -- because the SDK
-        // symbol is @hide), where the enable switch is one tap away.
+        // symbol is @hide), where the enable switch is one tap away. Targets whichever component
+        // the current #156 mode says should be active (the banner only fires in system-controls
+        // mode, so in practice this is SystemControlsAccessibilityService).
         val details = Intent(InvocationSecureSettings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).putExtra(
             Intent.EXTRA_COMPONENT_NAME,
-            android.content.ComponentName(this, WhisperAccessibilityService::class.java).flattenToString(),
+            InvocationServiceMode.activeComponent(this).flattenToString(),
         )
         try {
             startActivity(details)

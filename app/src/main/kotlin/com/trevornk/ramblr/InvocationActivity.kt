@@ -12,25 +12,38 @@ import android.widget.TextView
 import com.google.android.material.materialswitch.MaterialSwitch
 
 /**
- * "Invocation" settings screen (#156): one place to see and choose every way of starting a
- * dictation -- the app-owned floating ring and QS tile, and the OS-owned accessibility
- * button/gesture and volume-keys hold.
+ * "Invocation" settings screen (#156, dual-component rework): the mode chooser at the top picks
+ * which of Ramblr's two service components is active, and the rows below configure the
+ * individual invocation surfaces.
  *
- * The OS-owned rows exist because of the invisible-toggle trap this screen is really about
- * (#156 memo): Ramblr is an INVISIBLE_TOGGLE-class service, so system Settings couples the
- * service's on/off state to its shortcut bindings -- turning off the LAST "Ramblr shortcut"
- * switch there also turns off Ramblr itself. The app cannot manage those bindings through any
- * supported API (enableShortcutsForTargets is @hide + MANAGE_ACCESSIBILITY), so the base tier
- * deep-links to the service's own system page (ACTION_ACCESSIBILITY_DETAILS_SETTINGS, API 30+ =
- * minSdk) BEHIND an explainer dialog that names the trap before the user meets it.
+ * The two modes exist because `flagRequestAccessibilityButton` is static-XML-only (targetSdk >
+ * 29) yet decides the OS classification of the whole service:
  *
- * The optional advanced tier (WRITE_SECURE_SETTINGS via a one-time adb grant, feature-detected
- * per tap) upgrades the OS-owned rows to real in-app toggles: raw Settings.Secure writes bypass
- * the invisible-toggle sync entirely (device-verified), so bindings change without the Settings
- * round-trip and without ever tripping the service kill. See [InvocationSecureSettings].
+ *  - FLOATING ICON (default, [WhisperAccessibilityService], no flag): ordinary TOGGLE service.
+ *    Ramblr's own ring starts dictation; the system Settings switch is independent and there is
+ *    no invisible-toggle trap. This is the pre-#211 world, restored for everyone by default.
+ *  - SYSTEM CONTROLS (opt-in, [SystemControlsAccessibilityService], flag declared): the OS
+ *    a11y button/gesture and the volume-keys hold invoke dictation -- at the price of the
+ *    INVISIBLE_TOGGLE coupling (last shortcut off kills the service), which the #220 guard-rail
+ *    banner watches for while this mode is active.
+ *
+ * Mode switching ([InvocationServiceMode.switchMode]) flips which component is PM-enabled. With
+ * the optional WRITE_SECURE_SETTINGS tier (adb grant, feature-detected) the switch is seamless:
+ * `enabled_accessibility_services` is rewritten in the same motion, so the service hops
+ * components without a Settings visit. Without it, the switch PM-flips the components (killing
+ * the running service -- the confirmation dialog warns about exactly this) and then deep-links
+ * to system Settings, where the single visible Ramblr entry needs one enable tap.
+ *
+ * The floating ring stays available in BOTH modes (someone on system controls may still want
+ * it) but is defaulted OFF on the switch into system mode so there aren't two floating buttons;
+ * the volume-keys and button rows are inert in floating-icon mode -- for a TOGGLE-class service
+ * the volume-keys shortcut would toggle the SERVICE on/off (AMS semantics), not dictation, so
+ * offering it there would be a trap of its own.
  */
 class InvocationActivity : BaseSettingsActivity() {
 
+    private lateinit var floatingModeCardSub: TextView
+    private lateinit var systemModeCardSub: TextView
     private lateinit var ringSwitch: MaterialSwitch
     private lateinit var ringRowSub: TextView
     private lateinit var systemButtonRowSub: TextView
@@ -48,10 +61,26 @@ class InvocationActivity : BaseSettingsActivity() {
             setPadding(dp(24), dp(64), dp(24), dp(24))
         })
 
+        // --- Mode chooser: two exclusive cards, one per service component. ---
+        root.addView(sectionHeader("Mode"))
+
+        val floatingCard = settingsRow("Floating icon (default)", "Checking...") {
+            onModeCardTapped(InvocationMode.FLOATING_ICON)
+        }
+        floatingModeCardSub = floatingCard.findViewWithTag("subtitle")
+        root.addView(floatingCard)
+
+        val systemCard = settingsRow("System controls", "Checking...") {
+            onModeCardTapped(InvocationMode.SYSTEM_CONTROLS)
+        }
+        systemModeCardSub = systemCard.findViewWithTag("subtitle")
+        root.addView(systemCard)
+
         root.addView(sectionHeader("How to start dictation"))
 
-        // --- Floating ring (app-owned): a direct toggle over IconHiddenState, the same flag the
-        // long-press "Hide icon" menu and BehaviorActivity's restore row already share.
+        // --- Floating ring (app-owned, works in BOTH modes): a direct toggle over
+        // IconHiddenState, the same flag the long-press "Hide icon" menu and BehaviorActivity's
+        // restore row already share.
         ringSwitch = MaterialSwitch(this).apply { isClickable = false }
         val ringRow = settingsRow("Floating ring", "Checking...", ringSwitch) {
             val nowHidden = !IconHiddenState.isHidden(this)
@@ -69,8 +98,12 @@ class InvocationActivity : BaseSettingsActivity() {
         ringRowSub = ringRow.findViewWithTag("subtitle")
         root.addView(ringRow)
 
-        // --- System accessibility button / gesture (OS-owned).
+        // --- System accessibility button / gesture (OS-owned; system mode only).
         val systemButtonRow = settingsRow("System accessibility button / gesture", "Checking...") {
+            if (InvocationServiceMode.currentMode(this) != InvocationMode.SYSTEM_CONTROLS) {
+                toast("Switch to System controls mode first")
+                return@settingsRow
+            }
             onOsShortcutRowTapped(
                 key = InvocationSecureSettings.KEY_BUTTON_TARGETS,
                 currentlyBound = InvocationSecureSettings.isButtonTargetBound(this),
@@ -85,10 +118,17 @@ class InvocationActivity : BaseSettingsActivity() {
         systemButtonRowSub = systemButtonRow.findViewWithTag("subtitle")
         root.addView(systemButtonRow)
 
-        // --- Volume-keys hold (OS-owned). Note (#156 memo, AMS 4295-4331): for a button-flag
-        // service this shortcut can only ever ENABLE the service or fire the dictation callback,
-        // never disable it -- it's the one OS entry point with no foot-gun of its own.
+        // --- Volume-keys hold (OS-owned; system mode only -- and hard-gated, not just greyed:
+        // for the floating component (TOGGLE class, no button flag) the OS's volume-keys
+        // shortcut TOGGLES THE SERVICE on/off (AMS.java 4296-4306) instead of invoking
+        // dictation, so binding it in that mode would be a foot-gun. On the system component
+        // (INVISIBLE_TOGGLE) the same shortcut fires the a11y-button callback -> dictation, and
+        // can only ever enable the service, never disable it (#156 memo, AMS 4295-4331).
         val volumeKeysRow = settingsRow("Volume-keys hold", "Checking...") {
+            if (InvocationServiceMode.currentMode(this) != InvocationMode.SYSTEM_CONTROLS) {
+                toast("Switch to System controls mode first")
+                return@settingsRow
+            }
             onOsShortcutRowTapped(
                 key = InvocationSecureSettings.KEY_SHORTCUT_TARGET_SERVICE,
                 currentlyBound = InvocationSecureSettings.isVolumeKeysBound(this),
@@ -103,8 +143,9 @@ class InvocationActivity : BaseSettingsActivity() {
         volumeKeysRowSub = volumeKeysRow.findViewWithTag("subtitle")
         root.addView(volumeKeysRow)
 
-        // --- QS tile (app-owned, #127). The OS never tells an app whether its tile is currently
-        // placed in the panel, so this row is an add-affordance, not a status readout.
+        // --- QS tile (app-owned, #127, unchanged by the mode). The OS never tells an app
+        // whether its tile is currently placed in the panel, so this row is an add-affordance,
+        // not a status readout.
         root.addView(settingsRow(
             "Quick Settings tile",
             invocationQsTileSubtitleText(canRequestAdd = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
@@ -134,20 +175,105 @@ class InvocationActivity : BaseSettingsActivity() {
     }
 
     private fun refresh() {
+        val mode = InvocationServiceMode.currentMode(this)
+        val systemMode = mode == InvocationMode.SYSTEM_CONTROLS
         val ringVisible = !IconHiddenState.isHidden(this)
         val direct = InvocationSecureSettings.canWrite(this)
+        floatingModeCardSub.text = invocationFloatingModeSubtitleText(active = !systemMode)
+        systemModeCardSub.text = invocationSystemModeSubtitleText(active = systemMode, directControl = direct)
         ringSwitch.isChecked = ringVisible
         ringRowSub.text = invocationRingSubtitleText(ringVisible)
         systemButtonRowSub.text = invocationSystemButtonSubtitleText(
+            modeActive = systemMode,
             bound = InvocationSecureSettings.isButtonTargetBound(this),
             directControl = direct,
         )
         volumeKeysRowSub.text = invocationVolumeKeysSubtitleText(
+            modeActive = systemMode,
             bound = InvocationSecureSettings.isVolumeKeysBound(this),
             directControl = direct,
         )
         advancedTierRowSub.text = invocationAdvancedTierSubtitleText(granted = direct)
     }
+
+    // --- Mode switching -------------------------------------------------------------------
+
+    /**
+     * A mode card tap: no-op when already active; otherwise confirm with tier-appropriate copy
+     * (the base tier's dialog must set the expectation that dictation stops until the one
+     * enable tap in system Settings), then run [InvocationServiceMode.switchMode] and follow up
+     * per its result.
+     */
+    private fun onModeCardTapped(target: InvocationMode) {
+        if (InvocationServiceMode.currentMode(this) == target) return
+        val direct = InvocationSecureSettings.canWrite(this)
+        val (title, message) = when (target) {
+            InvocationMode.SYSTEM_CONTROLS ->
+                "Switch to System controls?" to (
+                    "Ramblr will switch to a service variant that supports the system " +
+                        "accessibility button, gesture, and volume-keys hold.\n\n" +
+                        (if (direct)
+                            "The switch is automatic \u2014 dictation keeps working throughout."
+                        else
+                            "Dictation will STOP for a moment: Android needs you to re-enable " +
+                            "Ramblr with one tap on the next screen (there will be exactly one " +
+                            "Ramblr entry \u2014 just turn it on).") +
+                        "\n\nThe floating ring will be hidden to avoid two on-screen buttons; " +
+                        "you can turn it back on below.\n\n" +
+                        "\u26a0\ufe0f In this mode, the system couples Ramblr to its shortcuts: " +
+                        "turning off the LAST \u201cRamblr shortcut\u201d in system Settings also " +
+                        "turns Ramblr off. If that happens, Ramblr shows a recovery banner."
+                )
+            InvocationMode.FLOATING_ICON ->
+                "Switch to Floating icon?" to (
+                    "Ramblr will switch back to the default service variant: the floating ring " +
+                        "starts dictation, the system button/gesture and volume-keys shortcuts " +
+                        "go away, and the system Settings switch becomes a simple independent " +
+                        "on/off again.\n\n" +
+                        (if (direct)
+                            "The switch is automatic \u2014 dictation keeps working throughout."
+                        else
+                            "Dictation will STOP for a moment: Android needs you to re-enable " +
+                            "Ramblr with one tap on the next screen (there will be exactly one " +
+                            "Ramblr entry \u2014 just turn it on).")
+                )
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton("Switch") { _, _ -> performModeSwitch(target) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun performModeSwitch(target: InvocationMode) {
+        // No-double-icon default: entering system mode hides the ring (it stays available via
+        // the toggle below -- deliberate default, not a removal). Leaving system mode restores
+        // it, since the ring is the only invocation surface floating-icon mode has.
+        if (target == InvocationMode.SYSTEM_CONTROLS) {
+            IconHiddenState.setHidden(this, true)
+            WhisperAccessibilityService.instance?.applyOverlayVisibility()
+        } else {
+            IconHiddenState.setHidden(this, false)
+            IconVisibilityNotifications.cancel(this)
+            WhisperAccessibilityService.instance?.applyOverlayVisibility()
+        }
+        when (InvocationServiceMode.switchMode(this, target)) {
+            InvocationServiceMode.SwitchResult.SEAMLESS -> {
+                toast("Mode switched")
+                refresh()
+            }
+            InvocationServiceMode.SwitchResult.NEEDS_SETTINGS_TAP -> {
+                // The one guided tap: the old component is already PM-disabled, so system
+                // Settings shows exactly one Ramblr entry -- the target component -- and its
+                // details page has the enable switch front and center.
+                openServiceDetailsSettings()
+            }
+            InvocationServiceMode.SwitchResult.NO_OP -> refresh()
+        }
+    }
+
+    // --- OS shortcut rows (system mode only) ----------------------------------------------
 
     /**
      * OS-owned row tap: with the advanced tier granted, flip the binding in-app via a raw Secure
@@ -170,7 +296,8 @@ class InvocationActivity : BaseSettingsActivity() {
     /**
      * The #156 explainer, shown BEFORE navigating: the trap is that the system page's "Ramblr
      * shortcut" switch doubles as a service kill-switch when it's the last shortcut left, and
-     * nothing on that page says so.
+     * nothing on that page says so. (Only reachable in system-controls mode -- the floating
+     * component isn't subject to the trap, but its rows never lead here.)
      */
     private fun showOsShortcutExplainerThenDeepLink(methodName: String, howTo: String) {
         android.app.AlertDialog.Builder(this)
@@ -179,21 +306,22 @@ class InvocationActivity : BaseSettingsActivity() {
                 "The $methodName is managed on Ramblr's system Accessibility page.\n\n$howTo\n\n" +
                     "\u26a0\ufe0f Important: the \u201cRamblr shortcut\u201d switch controls where the " +
                     "shortcut appears \u2014 but turning off the LAST shortcut also turns off " +
-                    "Ramblr itself (system behavior for always-on accessibility tools). To hide " +
-                    "the system button without turning Ramblr off, enable the floating ring on " +
-                    "this screen first."
+                    "Ramblr itself (system behavior for always-on accessibility tools). To keep " +
+                    "dictation available without any system shortcut, switch back to Floating " +
+                    "icon mode on this screen instead."
             )
             .setPositiveButton("Open system settings") { _, _ -> openServiceDetailsSettings() }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    /** Deep-link to Ramblr's own service page (action string public-in-behavior since API 30 =
-     *  minSdk; see [InvocationSecureSettings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS] for why it's
-     *  a spelled-out string). Falls back to the top-level Accessibility list if an OEM skin
-     *  doesn't resolve the details action. */
+    /** Deep-link to the ACTIVE component's own service page (action string public-in-behavior
+     *  since API 30 = minSdk; see [InvocationSecureSettings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS]
+     *  for why it's a spelled-out string). Falls back to the top-level Accessibility list if an
+     *  OEM skin doesn't resolve the details action -- which is also fine for the mode-switch
+     *  flow, since only one Ramblr entry is visible there. */
     private fun openServiceDetailsSettings() {
-        val component = ComponentName(this, WhisperAccessibilityService::class.java)
+        val component = InvocationServiceMode.activeComponent(this)
         val details = Intent(InvocationSecureSettings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS)
             .putExtra(Intent.EXTRA_COMPONENT_NAME, component.flattenToString())
         try {
@@ -234,15 +362,16 @@ class InvocationActivity : BaseSettingsActivity() {
         val granted = InvocationSecureSettings.canWrite(this)
         val command = wssAdbCommand(packageName)
         val message = TextView(this).apply {
-            text = (if (granted) "\u2705 Active. Shortcut switches on this screen now apply " +
-                "instantly, in-app, and can never trip the system's \u201clast shortcut off turns " +
+            text = (if (granted) "\u2705 Active. Mode switches happen seamlessly (no system " +
+                "Settings visit, dictation keeps working), shortcut switches apply instantly " +
+                "in-app, and none of it can trip the system's \u201clast shortcut off turns " +
                 "the service off\u201d behavior.\n\n"
             else "Android only lets apps change system shortcut bindings with a permission that " +
                 "must be granted once over adb (it survives reboots, but not reinstalls):\n\n") +
                 "$command\n\n" +
-                "With it granted, the rows above switch in-app with no system Settings round-trip, " +
-                "and if the service ever gets turned off by the system switch, Ramblr can turn " +
-                "itself back on with one tap."
+                "With it granted, mode switches complete in-app without the system Settings " +
+                "round-trip, the shortcut rows switch instantly, and if the service ever gets " +
+                "turned off by the system switch, Ramblr can turn itself back on with one tap."
             setTextIsSelectable(true)
             textSize = 14f
             setPadding(dp(24), dp(16), dp(24), 0)
@@ -257,6 +386,7 @@ class InvocationActivity : BaseSettingsActivity() {
     companion object {
         /** MainActivity category-row subtitle (SettingsSubtitles pattern: shared with refresh). */
         fun subtitle(context: android.content.Context): String = invocationMainRowSubtitleText(
+            mode = InvocationServiceMode.currentMode(context),
             ringVisible = !IconHiddenState.isHidden(context),
             systemButtonBound = InvocationSecureSettings.isButtonTargetBound(context),
             volumeKeysBound = InvocationSecureSettings.isVolumeKeysBound(context),
