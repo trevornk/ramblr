@@ -76,44 +76,62 @@ class VocabularyTermsTest {
         }
     }
 
-    // --- inEffect / localOnlyNote (#185) ---
+    // --- inEffect / localOnlyNote (#185, updated for #182 option 2) ---
 
     @Test
     fun inEffectWhenCloudTranscriptionIsActive() {
-        assertTrue(VocabularyTerms.inEffect(cloudTranscriptionActive = true, cloudCleanupActive = false))
+        assertTrue(VocabularyTerms.inEffect(cloudTranscriptionActive = true, cloudCleanupActive = false, localCleanupActive = false))
     }
 
     @Test
     fun inEffectWhenCloudCleanupIsActive() {
-        assertTrue(VocabularyTerms.inEffect(cloudTranscriptionActive = false, cloudCleanupActive = true))
+        assertTrue(VocabularyTerms.inEffect(cloudTranscriptionActive = false, cloudCleanupActive = true, localCleanupActive = false))
     }
 
     @Test
-    fun inEffectWhenBothCloudPathsAreActive() {
-        assertTrue(VocabularyTerms.inEffect(cloudTranscriptionActive = true, cloudCleanupActive = true))
+    fun inEffectWhenLocalCleanupIsActive() {
+        // #182 option 2: local cleanup applies the terms via VocabularyPostCorrector's output
+        // post-pass, so the F-Droid-recommended fully-local configuration (local ASR + local
+        // cleanup) now genuinely uses the vocabulary -- the exact gap #185's note used to admit.
+        assertTrue(VocabularyTerms.inEffect(cloudTranscriptionActive = false, cloudCleanupActive = false, localCleanupActive = true))
     }
 
     @Test
-    fun notInEffectInFullyLocalMode() {
-        // The F-Droid-recommended privacy configuration: local ASR + local cleanup. After #182
-        // (local cleanup no longer receives the terms) and #131 (local ASR hotword biasing not
-        // planned), no path applies the vocabulary here.
-        assertFalse(VocabularyTerms.inEffect(cloudTranscriptionActive = false, cloudCleanupActive = false))
+    fun inEffectWhenEveryPathIsActive() {
+        assertTrue(VocabularyTerms.inEffect(cloudTranscriptionActive = true, cloudCleanupActive = true, localCleanupActive = true))
+    }
+
+    @Test
+    fun notInEffectWithLocalTranscriptionAndNoCleanupAtAll() {
+        // The one remaining inert configuration: local ASR (no hotword biasing, #131) with
+        // cleanup fully off -- no cleanup stage exists to run the #182 post-pass.
+        assertFalse(VocabularyTerms.inEffect(cloudTranscriptionActive = false, cloudCleanupActive = false, localCleanupActive = false))
     }
 
     @Test
     fun localOnlyNoteIsNullWheneverTermsApply() {
-        assertNull(VocabularyTerms.localOnlyNote(cloudTranscriptionActive = true, cloudCleanupActive = false))
-        assertNull(VocabularyTerms.localOnlyNote(cloudTranscriptionActive = false, cloudCleanupActive = true))
-        assertNull(VocabularyTerms.localOnlyNote(cloudTranscriptionActive = true, cloudCleanupActive = true))
+        assertNull(VocabularyTerms.localOnlyNote(cloudTranscriptionActive = true, cloudCleanupActive = false, localCleanupActive = false))
+        assertNull(VocabularyTerms.localOnlyNote(cloudTranscriptionActive = false, cloudCleanupActive = true, localCleanupActive = false))
+        assertNull(VocabularyTerms.localOnlyNote(cloudTranscriptionActive = false, cloudCleanupActive = false, localCleanupActive = true))
+        assertNull(VocabularyTerms.localOnlyNote(cloudTranscriptionActive = true, cloudCleanupActive = true, localCleanupActive = true))
     }
 
     @Test
-    fun localOnlyNoteExplainsTheInertSettingInFullyLocalMode() {
-        val note = VocabularyTerms.localOnlyNote(cloudTranscriptionActive = false, cloudCleanupActive = false)
+    fun localOnlyNoteIsNullInFullyLocalModeWithLocalCleanupActive() {
+        // Regression pin for the #182 semantics change: local ASR + working local cleanup used
+        // to show the "not used" note; the post-pass makes that claim false, so no note.
+        assertNull(VocabularyTerms.localOnlyNote(cloudTranscriptionActive = false, cloudCleanupActive = false, localCleanupActive = true))
+    }
+
+    @Test
+    fun localOnlyNoteExplainsTheInertSettingWhenNoPathApplies() {
+        val note = VocabularyTerms.localOnlyNote(cloudTranscriptionActive = false, cloudCleanupActive = false, localCleanupActive = false)
         assertNotNull(note)
         // The note must say the terms are NOT used -- that's the whole point of #185: the
-        // setting must stop misrepresenting itself in local-only mode.
+        // setting must stop misrepresenting itself when nothing applies it. It must also not
+        // blame local cleanup anymore -- since #182's post-pass, local cleanup DOES support
+        // the vocabulary; only transcription lacks it.
         assertTrue(note!!.contains("not used"))
+        assertFalse(note.contains("local cleanup don't"))
     }
 }
