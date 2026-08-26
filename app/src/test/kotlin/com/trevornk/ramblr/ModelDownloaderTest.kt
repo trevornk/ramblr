@@ -59,7 +59,9 @@ class ModelDownloaderTest {
         // Reduced from 4 to 3 for #98 (Trevor's mislabeled-catalog cleanup follow-up): Moonshine
         // Tiny removed -- verified strictly dominated by Parakeet 110M on every axis (103MB vs.
         // 100MB on disk, ~12.66% WER vs. ~7.5%), so it was never a real choice, just confusion.
-        assertEquals(3, MODEL_CATALOG.size)
+        // Back to 4 for #197: Parakeet Unified 0.6B added as the best-English tier -- unlike
+        // Moonshine it earns its slot with a real, measured quality edge (~5.9% vs ~7.5% WER).
+        assertEquals(4, MODEL_CATALOG.size)
         assertTrue(MODEL_CATALOG.any { it.recommended })
         assertTrue(MODEL_CATALOG.all { it.archive.startsWith("sherpa-onnx-") })
         assertTrue(MODEL_CATALOG.all { it.sizeMb > 0 })
@@ -73,6 +75,9 @@ class ModelDownloaderTest {
         // -- it just never covered MODEL_CATALOG or STREAMING_MODEL_CATALOG, which is exactly how
         // the drift survived. Pin every downloadable catalog, not a subset.
         val realBytes = mapOf(
+            // Verified 2026-08-25 by downloading the exact tar.bz2 from the sherpa-onnx
+            // asr-models GitHub release and hashing/sizing it locally (#197).
+            "sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming" to 501_350_460L,
             "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8" to 487_170_055L,
             "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8" to 104_337_827L,
             "sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8" to 153_692_328L,
