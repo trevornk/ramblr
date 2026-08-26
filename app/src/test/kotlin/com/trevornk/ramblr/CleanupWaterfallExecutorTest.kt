@@ -511,7 +511,7 @@ class LocalLlmWaterfallStepTest {
     @Test fun `a local step succeeds with no credential and no legacy api key configured`() {
         val transport = FakeCleanupHttpTransport(mutableListOf()) // never touched
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned locally")))
-        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
 
         val result = execute(waterfall, transport, engine, localModelPath = { "/data/data/app/files/cleanup_models/model.gguf" })
 
@@ -528,7 +528,7 @@ class LocalLlmWaterfallStepTest {
         // whatever persona prompt the caller passes as [prompt] for cloud steps.
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned locally")))
-        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
 
         execute(
             waterfall, transport, engine,
@@ -543,7 +543,7 @@ class LocalLlmWaterfallStepTest {
     @Test fun `local step defaults to SIMPLE_PROMPT when no localPrompt is supplied`() {
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned locally")))
-        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
 
         execute(waterfall, transport, engine, localModelPath = { "/data/data/app/files/cleanup_models/model.gguf" })
 
@@ -558,7 +558,7 @@ class LocalLlmWaterfallStepTest {
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Cancelled))
         val waterfall = CleanupWaterfall(
             listOf(
-                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive),
                 CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
             )
         )
@@ -581,7 +581,7 @@ class LocalLlmWaterfallStepTest {
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.TimedOut("Local cleanup timed out")))
         val waterfall = CleanupWaterfall(
             listOf(
-                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive),
                 CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
             )
         )
@@ -607,7 +607,7 @@ class LocalLlmWaterfallStepTest {
         // completion by 3ms.
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("ok")))
-        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
 
         val before = System.currentTimeMillis()
         execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
@@ -629,7 +629,7 @@ class LocalLlmWaterfallStepTest {
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("ok")))
         val waterfall = CleanupWaterfall(
             listOf(
-                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive),
                 CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
             )
         )
@@ -654,7 +654,7 @@ class LocalLlmWaterfallStepTest {
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Failure("local model produced an empty response")))
         val waterfall = CleanupWaterfall(
             listOf(
-                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive),
                 CleanupStep(CleanupStepGroup.OMNIROUTE, "claude/claude-sonnet-4-6"),
             )
         )
@@ -672,7 +672,7 @@ class LocalLlmWaterfallStepTest {
     @Test fun `each waterfall run clears a stale cancel from the previous dictation`() {
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned locally")))
-        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
 
         cancelHolder.cancel() // left over from a previous dictation
         val result = execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
@@ -686,7 +686,7 @@ class LocalLlmWaterfallStepTest {
         // whenever the waterfall switched between local and cloud (#84).
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("\n cleaned locally ")))
-        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
 
         val result = execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
 
@@ -698,7 +698,7 @@ class LocalLlmWaterfallStepTest {
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("   \n ")))
         val waterfall = CleanupWaterfall(
             listOf(
-                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive),
                 CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
             )
         )
@@ -718,7 +718,7 @@ class LocalLlmWaterfallStepTest {
         // "local step defaults to SIMPLE_PROMPT" for the actual current contract.
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("cleaned")))
-        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
 
         execute(waterfall, transport, engine, localModelPath = { "/path/to/model.gguf" })
 
@@ -731,7 +731,7 @@ class LocalLlmWaterfallStepTest {
     @Test fun `a local step fails without ever calling the engine when the model isn't downloaded`() {
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf())
-        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
 
         val result = execute(waterfall, transport, engine, localModelPath = { null })
 
@@ -750,7 +750,7 @@ class LocalLlmWaterfallStepTest {
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Failure("context size reached")))
         val waterfall = CleanupWaterfall(
             listOf(
-                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive),
                 CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
             )
         )
@@ -768,7 +768,7 @@ class LocalLlmWaterfallStepTest {
     @Test fun `local step normalizes before inference and accepts punctuation-only phone formatting`() {
         val transport = FakeCleanupHttpTransport(mutableListOf())
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("Call (212) 555-3476.")))
-        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)))
 
         val result = execute(
             waterfall, transport, engine,
@@ -785,7 +785,7 @@ class LocalLlmWaterfallStepTest {
         val engine = FakeLocalInferenceEngine(mutableListOf(LocalInferenceResult.Success("The round was $1,200 dollars.")))
         val waterfall = CleanupWaterfall(
             listOf(
-                CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive),
+                CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive),
                 CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "gpt-4o-mini"),
             ),
         )

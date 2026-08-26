@@ -706,6 +706,60 @@ class ModelDownloaderTest {
         )
     }
 
+    // -- installed-aware active-model resolution (#134) --
+    //
+    // The default flip (LFM2.5 -> mumble-cleanup) is only safe because every caller resolves
+    // through this overload. The scenario that forced it: a device with LFM2.5 installed and the
+    // "local_cleanup_model_name" preference never written (Trevor's Fold). Before centralizing,
+    // the service fell back to a hardcoded LOCAL_CLEANUP_MODEL constant while the Settings picker
+    // fell back to the recommended entry -- both landed on LFM only by coincidence of the old
+    // default. After the flip, a recommended-entry fallback would resolve to a model that isn't
+    // on disk, localCleanupModelFile would return null, and local cleanup would silently die on a
+    // device where it worked the day before.
+
+    @Test fun `an explicit selection wins even when that model is not installed`() {
+        // Pre-existing semantic, preserved: a deliberate pick with the download still pending (or
+        // the file deleted out from under it) must not silently become a different model.
+        val resolved = ModelDownloader.resolveActiveModel(
+            LOCAL_CLEANUP_MODEL_CATALOG, LOCAL_CLEANUP_MODEL.archive
+        ) { false }
+        assertEquals(LOCAL_CLEANUP_MODEL, resolved)
+    }
+
+    @Test fun `no selection resolves to the recommended entry when it is installed`() {
+        val resolved = ModelDownloader.resolveActiveModel(
+            LOCAL_CLEANUP_MODEL_CATALOG, ""
+        ) { it == MUMBLE_CLEANUP_Q4_0_MODEL }
+        assertEquals(MUMBLE_CLEANUP_Q4_0_MODEL, resolved)
+    }
+
+    @Test fun `no selection prefers the one installed model over a not-installed recommended entry`() {
+        // The existing-user case the overload exists for: only LFM2.5 is on disk, pref unset --
+        // the flip must not strand this device on the not-yet-downloaded new default.
+        val resolved = ModelDownloader.resolveActiveModel(
+            LOCAL_CLEANUP_MODEL_CATALOG, ""
+        ) { it == LOCAL_CLEANUP_MODEL }
+        assertEquals(LOCAL_CLEANUP_MODEL, resolved)
+    }
+
+    @Test fun `no selection and nothing installed resolves to the recommended entry`() {
+        // Fresh install: nothing on disk yet, and the recommended entry is what onboarding will
+        // download -- resolving to it is what makes that download the active model afterwards.
+        val resolved = ModelDownloader.resolveActiveModel(
+            LOCAL_CLEANUP_MODEL_CATALOG, ""
+        ) { false }
+        assertEquals(MUMBLE_CLEANUP_Q4_0_MODEL, resolved)
+    }
+
+    @Test fun `a stale selection no longer in the catalog resolves installed-aware, not catalog-blind`() {
+        // A pref naming a removed archive (like the pruned Q4_K_M mumble build) must degrade the
+        // same way "never set" does: keep whatever is actually installed.
+        val resolved = ModelDownloader.resolveActiveModel(
+            LOCAL_CLEANUP_MODEL_CATALOG, "mumble-cleanup-2stage-q4_k_m"
+        ) { it == LOCAL_CLEANUP_MODEL }
+        assertEquals(LOCAL_CLEANUP_MODEL, resolved)
+    }
+
     // -- helpers --
 
     private fun withTempDir(block: (File) -> Unit) {

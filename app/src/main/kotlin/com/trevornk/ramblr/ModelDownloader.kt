@@ -759,6 +759,34 @@ object ModelDownloader {
             ?: catalog.firstOrNull { it.recommended }
             ?: catalog.first()
 
+    /**
+     * Installed-aware [resolveActiveModel] (#134): the resolution every local-cleanup caller
+     * (service, ProcessTextActivity, and CleanupActivity's picker/subtitle) must share, so the UI
+     * and the running service can never disagree about which model is active.
+     *
+     * An explicit selection wins whenever the archive is still in the catalog, even if not
+     * installed -- the pre-existing semantic above, which keeps a deliberate pick (with its
+     * download pending) from silently changing. With NO explicit selection the recommended entry
+     * is only preferred when it is actually installed; otherwise ANY installed catalog entry wins
+     * before falling back to the recommended one (nothing installed -- a fresh install, where
+     * recommended is what onboarding will download).
+     *
+     * This exists because flipping which entry is `recommended` (#134's LFM2.5 -> mumble-cleanup
+     * default change) would otherwise strand existing users: a device with LFM2.5 installed and
+     * the "local_cleanup_model_name" preference never written used to resolve to LFM via two
+     * *different* code paths (LocalCleanupProvider's constant fallback vs. the recommended
+     * fallback above). After the flip those paths diverge, and any path landing on the
+     * not-installed recommended entry makes [localCleanupModelFile] return null -- silently
+     * disabling local cleanup on a device where it worked yesterday. Installed-ness is a lambda
+     * so the selection stays pure and unit-testable without a [Context].
+     */
+    fun resolveActiveModel(catalog: List<Model>, selectedArchive: String, isInstalled: (Model) -> Boolean): Model {
+        catalog.firstOrNull { it.archive == selectedArchive }?.let { return it }
+        val recommended = catalog.firstOrNull { it.recommended } ?: catalog.first()
+        if (isInstalled(recommended)) return recommended
+        return catalog.firstOrNull(isInstalled) ?: recommended
+    }
+
     /** SHA-256 of [file] as lowercase hex. */
     fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
