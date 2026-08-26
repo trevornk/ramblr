@@ -176,7 +176,69 @@ object InvocationServiceMode {
             PackageManager.DONT_KILL_APP,
         )
 
-        return if (seamless) SwitchResult.SEAMLESS else SwitchResult.NEEDS_SETTINGS_TAP
+        return if (seamless && verifySettled(context, target, oldComponent, newComponent)) {
+            SwitchResult.SEAMLESS
+        } else if (seamless) {
+            // Writes landed but the settle-verify loop couldn't hold them (unexpected OEM
+            // behavior): be honest with the caller -- the user gets the guided-tap flow.
+            SwitchResult.NEEDS_SETTINGS_TAP
+        } else {
+            SwitchResult.NEEDS_SETTINGS_TAP
+        }
+    }
+
+    /**
+     * Post-switch settle-verify-repair loop, and the reason the seamless tier actually works:
+     * the PM component flips make AccessibilityManagerService re-persist its IN-MEMORY user
+     * state asynchronously, and that re-persist can land AFTER our Secure writes, clobbering
+     * them (observed on Pixel 10a 2026-08-26: correct write order, entry gone ~1s later; a
+     * manual `settings put` with no concurrent PM change persists fine -- the clobber is
+     * specifically the async AMS re-persist racing our writes).
+     *
+     * So: poll the authoritative settings and REWRITE what the re-persist undid, until the
+     * state holds for one full interval or the budget (~2.4s) runs out. Runs on the calling
+     * (UI) thread by design -- a mode switch is rare, user-initiated, and the worst case is
+     * well under the ANR threshold; blocking keeps the SwitchResult contract synchronous and
+     * truthful.
+     */
+    private fun verifySettled(
+        context: Context,
+        target: InvocationMode,
+        old: ComponentName,
+        new: ComponentName,
+    ): Boolean {
+        var stableReads = 0
+        repeat(12) {
+            android.os.SystemClock.sleep(200)
+            val services = Settings.Secure.getString(
+                context.contentResolver, InvocationSecureSettings.KEY_ENABLED_SERVICES,
+            )
+            val serviceOk = componentListContains(services, new.flattenToString())
+            val bindingOk = when (target) {
+                // Entering system mode the button target must also have survived the re-persist.
+                InvocationMode.SYSTEM_CONTROLS -> InvocationSecureSettings.isButtonTargetBound(context)
+                InvocationMode.FLOATING_ICON -> true
+            }
+            if (serviceOk && bindingOk) {
+                // Require two consecutive good reads so we don't declare victory in the gap
+                // before a late re-persist lands.
+                stableReads++
+                if (stableReads >= 2) return true
+            } else {
+                stableReads = 0
+                Log.w(TAG, "AMS re-persist clobbered switch writes (serviceOk=$serviceOk bindingOk=$bindingOk); repairing")
+                if (!bindingOk) {
+                    InvocationSecureSettings.setBinding(
+                        context, InvocationSecureSettings.KEY_BUTTON_TARGETS, bound = true,
+                    )
+                }
+                if (!serviceOk) swapEnabledServicesEntry(context, old, new)
+            }
+        }
+        val services = Settings.Secure.getString(
+            context.contentResolver, InvocationSecureSettings.KEY_ENABLED_SERVICES,
+        )
+        return componentListContains(services, new.flattenToString())
     }
 
     /**
