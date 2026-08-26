@@ -19,6 +19,8 @@ class InvocationMethodsTest {
 
     private val ramblr = "com.trevornk.ramblr/com.trevornk.ramblr.WhisperAccessibilityService"
     private val ramblrShort = "com.trevornk.ramblr/.WhisperAccessibilityService"
+    private val ramblrSystem = "com.trevornk.ramblr/com.trevornk.ramblr.SystemControlsAccessibilityService"
+    private val ramblrSystemShort = "com.trevornk.ramblr/.SystemControlsAccessibilityService"
     private val tasker = "net.dinglisch.android.taskerm/net.dinglisch.android.taskerm.MyAccessibilityService"
     private val other = "com.example.other/.OtherService"
 
@@ -120,10 +122,117 @@ class InvocationMethodsTest {
         assertEquals(original, componentListRemove(componentListAdd(original, ramblr), ramblr))
     }
 
+    // --- componentListReplace (#156 dual-component mode switch) -----------------------------
+
+    @Test fun `replace swaps old for new in place, preserving other apps' entries verbatim`() {
+        // The exact seamless-switch scenario from the memo baseline: Tasker + Ramblr enabled.
+        assertEquals(
+            "$tasker:$ramblrSystem",
+            componentListReplace("$tasker:$ramblr", ramblr, ramblrSystem),
+        )
+    }
+
+    @Test fun `replace works in the other direction too`() {
+        assertEquals(
+            "$tasker:$ramblr",
+            componentListReplace("$tasker:$ramblrSystem", ramblrSystem, ramblr),
+        )
+    }
+
+    @Test fun `replace keeps position - old entry mid-list stays mid-list`() {
+        assertEquals(
+            "$tasker:$ramblrSystem:$other",
+            componentListReplace("$tasker:$ramblr:$other", ramblr, ramblrSystem),
+        )
+    }
+
+    @Test fun `replace matches the old component in short flatten form`() {
+        assertEquals(
+            "$tasker:$ramblrSystem",
+            componentListReplace("$tasker:$ramblrShort", ramblr, ramblrSystem),
+        )
+        assertEquals(
+            "$tasker:$ramblrSystem",
+            componentListReplace("$tasker:$ramblr", ramblrShort, ramblrSystem),
+        )
+    }
+
+    @Test fun `replace with old absent appends new last and keeps everything else`() {
+        // The old component had already been disabled out from under us -- the switch must
+        // still land the user in a working state.
+        assertEquals(
+            "$tasker:$other:$ramblrSystem",
+            componentListReplace("$tasker:$other", ramblr, ramblrSystem),
+        )
+        assertEquals(ramblrSystem, componentListReplace(null, ramblr, ramblrSystem))
+        assertEquals(ramblrSystem, componentListReplace("", ramblr, ramblrSystem))
+    }
+
+    @Test fun `replace with both present dedupes to a single new entry`() {
+        // A crashed previous switch can leave both components listed; the retry must converge
+        // to exactly one.
+        assertEquals(
+            "$tasker:$ramblrSystem",
+            componentListReplace("$tasker:$ramblr:$ramblrSystem", ramblr, ramblrSystem),
+        )
+        // ...matching the new component's short form too.
+        assertEquals(
+            "$tasker:$ramblrSystemShort",
+            componentListReplace("$tasker:$ramblrSystemShort:$ramblr", ramblr, ramblrSystem),
+        )
+    }
+
+    @Test fun `replace drops duplicate old entries in mixed flatten forms`() {
+        assertEquals(
+            "$ramblrSystem:$tasker",
+            componentListReplace("$ramblr:$tasker:$ramblrShort", ramblr, ramblrSystem),
+        )
+    }
+
+    @Test fun `replace when already switched is idempotent`() {
+        assertEquals(
+            "$tasker:$ramblrSystem",
+            componentListReplace("$tasker:$ramblrSystem", ramblr, ramblrSystem),
+        )
+    }
+
+    @Test fun `replace round-trips back to the original list`() {
+        val original = "$tasker:$ramblr:$other"
+        assertEquals(
+            original,
+            componentListReplace(componentListReplace(original, ramblr, ramblrSystem), ramblrSystem, ramblr),
+        )
+    }
+
+    // --- resolveInvocationMode --------------------------------------------------------------
+
+    @Test fun `system component PM-enabled resolves to system controls mode`() {
+        assertEquals(InvocationMode.SYSTEM_CONTROLS, resolveInvocationMode(systemComponentPmEnabled = true))
+    }
+
+    @Test fun `system component PM-disabled resolves to floating icon mode`() {
+        // The floating component's own PM state is deliberately not an input: mid-switch both
+        // components can briefly be enabled, and "system on" must win for retries to converge.
+        assertEquals(InvocationMode.FLOATING_ICON, resolveInvocationMode(systemComponentPmEnabled = false))
+    }
+
     // --- shouldShowServiceKilledBanner ------------------------------------------------------
 
-    @Test fun `banner fires on the exact invisible-toggle kill state`() {
+    @Test fun `banner fires on the exact invisible-toggle kill state in system controls mode`() {
         assertTrue(shouldShowServiceKilledBanner(
+            systemControlsModeActive = true,
+            serviceWasEnabled = true,
+            serviceEnabledNow = false,
+            anyShortcutBound = false,
+            bannerDismissed = false,
+        ))
+    }
+
+    @Test fun `banner never fires in floating icon mode - that component has no trap`() {
+        // The floating component is TOGGLE-classified: a disabled service there is a user
+        // choice made on an independent Settings switch, not the invisible-toggle kill.
+        assertFalse(shouldShowServiceKilledBanner(
+            systemControlsModeActive = false,
             serviceWasEnabled = true,
             serviceEnabledNow = false,
             anyShortcutBound = false,
@@ -133,6 +242,7 @@ class InvocationMethodsTest {
 
     @Test fun `fresh install that never enabled the service shows nothing`() {
         assertFalse(shouldShowServiceKilledBanner(
+            systemControlsModeActive = true,
             serviceWasEnabled = false,
             serviceEnabledNow = false,
             anyShortcutBound = false,
@@ -142,6 +252,7 @@ class InvocationMethodsTest {
 
     @Test fun `service currently enabled shows nothing`() {
         assertFalse(shouldShowServiceKilledBanner(
+            systemControlsModeActive = true,
             serviceWasEnabled = true,
             serviceEnabledNow = true,
             anyShortcutBound = false,
@@ -154,6 +265,7 @@ class InvocationMethodsTest {
         // service is off for some other reason (and the bound shortcut can self-heal it: the
         // volume-keys path re-enables a button-flag service on use). Don't misdiagnose.
         assertFalse(shouldShowServiceKilledBanner(
+            systemControlsModeActive = true,
             serviceWasEnabled = true,
             serviceEnabledNow = false,
             anyShortcutBound = true,
@@ -163,6 +275,7 @@ class InvocationMethodsTest {
 
     @Test fun `dismissed banner stays quiet until re-armed`() {
         assertFalse(shouldShowServiceKilledBanner(
+            systemControlsModeActive = true,
             serviceWasEnabled = true,
             serviceEnabledNow = false,
             anyShortcutBound = false,
@@ -172,17 +285,52 @@ class InvocationMethodsTest {
 
     // --- subtitle formatters ----------------------------------------------------------------
 
-    @Test fun `main row subtitle lists active methods`() {
+    @Test fun `main row subtitle leads with the mode and lists active methods`() {
         assertEquals(
-            "How to start dictation — Floating ring, Volume keys on",
-            invocationMainRowSubtitleText(ringVisible = true, systemButtonBound = false, volumeKeysBound = true),
+            "System controls mode — ring on, volume keys on",
+            invocationMainRowSubtitleText(
+                mode = InvocationMode.SYSTEM_CONTROLS,
+                ringVisible = true, systemButtonBound = false, volumeKeysBound = true,
+            ),
+        )
+    }
+
+    @Test fun `main row subtitle in floating mode ignores stale system bindings`() {
+        // Leftover accessibility_button_targets entries from a previous system-mode stint must
+        // not be reported as active methods while the floating component is the live one.
+        assertEquals(
+            "Floating icon mode — ring on",
+            invocationMainRowSubtitleText(
+                mode = InvocationMode.FLOATING_ICON,
+                ringVisible = true, systemButtonBound = true, volumeKeysBound = true,
+            ),
         )
     }
 
     @Test fun `main row subtitle with nothing active says so`() {
         assertEquals(
-            "How to start dictation — no method currently active",
-            invocationMainRowSubtitleText(ringVisible = false, systemButtonBound = false, volumeKeysBound = false),
+            "Floating icon mode — no method currently active",
+            invocationMainRowSubtitleText(
+                mode = InvocationMode.FLOATING_ICON,
+                ringVisible = false, systemButtonBound = false, volumeKeysBound = false,
+            ),
+        )
+    }
+
+    @Test fun `floating mode card subtitle reflects active state`() {
+        assertTrue(invocationFloatingModeSubtitleText(active = true).startsWith("Active"))
+        assertFalse(invocationFloatingModeSubtitleText(active = false).startsWith("Active"))
+    }
+
+    @Test fun `system mode card subtitle names the switch cost per tier when inactive`() {
+        assertTrue(invocationSystemModeSubtitleText(active = true, directControl = false).startsWith("Active"))
+        assertTrue(
+            invocationSystemModeSubtitleText(active = false, directControl = true)
+                .contains("switches instantly"),
+        )
+        assertTrue(
+            invocationSystemModeSubtitleText(active = false, directControl = false)
+                .contains("one enable tap in system Settings"),
         )
     }
 
@@ -194,23 +342,38 @@ class InvocationMethodsTest {
     @Test fun `system button subtitle distinguishes deep-link and direct-control tiers`() {
         assertEquals(
             "On — the system button/gesture starts dictation · tap to open system settings",
-            invocationSystemButtonSubtitleText(bound = true, directControl = false),
+            invocationSystemButtonSubtitleText(modeActive = true, bound = true, directControl = false),
         )
         assertEquals(
             "Off · tap to switch in-app",
-            invocationSystemButtonSubtitleText(bound = false, directControl = true),
+            invocationSystemButtonSubtitleText(modeActive = true, bound = false, directControl = true),
+        )
+    }
+
+    @Test fun `system button subtitle in floating mode says the mode is required`() {
+        assertEquals(
+            "Requires System controls mode",
+            invocationSystemButtonSubtitleText(modeActive = false, bound = true, directControl = true),
         )
     }
 
     @Test fun `volume keys subtitle distinguishes deep-link and direct-control tiers`() {
         assertEquals(
             "On — hold both volume keys to start dictation · tap to switch in-app",
-            invocationVolumeKeysSubtitleText(bound = true, directControl = true),
+            invocationVolumeKeysSubtitleText(modeActive = true, bound = true, directControl = true),
         )
         assertEquals(
             "Off · tap to open system settings",
-            invocationVolumeKeysSubtitleText(bound = false, directControl = false),
+            invocationVolumeKeysSubtitleText(modeActive = true, bound = false, directControl = false),
         )
+    }
+
+    @Test fun `volume keys subtitle in floating mode warns about the toggle semantics`() {
+        // In floating-icon (TOGGLE-class) mode the OS volume-keys shortcut toggles the SERVICE
+        // on/off rather than invoking dictation -- the copy must say so, not just grey out.
+        val text = invocationVolumeKeysSubtitleText(modeActive = false, bound = false, directControl = true)
+        assertTrue(text.contains("Requires System controls mode"))
+        assertTrue(text.contains("turn Ramblr itself off and on"))
     }
 
     @Test fun `qs tile subtitle offers one-tap add only where the API exists`() {
