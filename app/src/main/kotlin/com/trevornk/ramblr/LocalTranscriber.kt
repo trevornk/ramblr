@@ -84,7 +84,8 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
             }
 
             val numThreads = LocalTranscriptionThreads.threadsOrDefault(ctx)
-            val config = detectModelConfig(modelDir, numThreads) ?: run {
+            val canaryLanguage = CanaryLanguage.languageOrDefault(ctx)
+            val config = detectModelConfig(modelDir, numThreads, canaryLanguage) ?: run {
                 Log.e(TAG, "Could not detect model type in $modelDir")
                 return null
             }
@@ -103,8 +104,14 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
          *  [LocalTranscriptionThreads.DEFAULT_THREADS] (2, unchanged shipped behavior) so every
          *  existing direct caller -- notably the detectModelConfig-only unit tests, which have no
          *  [Context] to read a setting from -- keeps working without change; [create] passes the
-         *  user-configured value explicitly (#107). */
-        fun detectModelConfig(dir: File, numThreads: Int = LocalTranscriptionThreads.DEFAULT_THREADS): OfflineRecognizerConfig? {
+         *  user-configured value explicitly (#107). [canaryLanguage] follows the same pattern
+         *  (#177): defaults to [CanaryLanguage.DEFAULT] ("en", the previously hardcoded value),
+         *  with [create] passing the user's setting; only the canary branch consumes it. */
+        fun detectModelConfig(
+            dir: File,
+            numThreads: Int = LocalTranscriptionThreads.DEFAULT_THREADS,
+            canaryLanguage: String = CanaryLanguage.DEFAULT,
+        ): OfflineRecognizerConfig? {
             val p = dir.absolutePath
             val tokens = findTokens(p) ?: return null
 
@@ -142,8 +149,13 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
                             canary = OfflineCanaryModelConfig(
                                 encoder = canaryEncoder,
                                 decoder = canaryDecoder,
-                                srcLang = "en",
-                                tgtLang = "en",
+                                // Canary decoding is prompted by a source-language token; the
+                                // wrong one collapses output to garbage (#177: de.wav under
+                                // srcLang="en" -> " E E E E…"), so this comes from the user's
+                                // CanaryLanguage setting. src == tgt means transcription;
+                                // differing values would mean translation, which is out of scope.
+                                srcLang = canaryLanguage,
+                                tgtLang = canaryLanguage,
                                 usePnc = true,
                             ),
                             tokens = tokens,

@@ -46,6 +46,33 @@ class LocalTranscriberDetectModelConfigTest {
         assertTrue(config.modelConfig.canary.decoder.contains("decoder"))
     }
 
+    @Test fun `canary defaults to en source and target language when none is passed`() {
+        val dir = tempModelDir(
+            "sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8",
+            listOf("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"),
+        )
+
+        val config = LocalTranscriber.detectModelConfig(dir)
+
+        assertNotNull(config)
+        assertEquals("en", config!!.modelConfig.canary.srcLang)
+        assertEquals("en", config.modelConfig.canary.tgtLang)
+    }
+
+    @Test fun `a passed canary language sets both srcLang and tgtLang`() {
+        // #177: transcription needs src == tgt -- mismatched values would mean translation.
+        val dir = tempModelDir(
+            "sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8",
+            listOf("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"),
+        )
+
+        val config = LocalTranscriber.detectModelConfig(dir, canaryLanguage = "de")
+
+        assertNotNull(config)
+        assertEquals("de", config!!.modelConfig.canary.srcLang)
+        assertEquals("de", config.modelConfig.canary.tgtLang)
+    }
+
     @Test fun `a whisper-named directory with encoder plus decoder still detects as whisper`() {
         val dir = tempModelDir(
             "sherpa-onnx-whisper-base.en",
