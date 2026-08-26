@@ -15,17 +15,24 @@ import android.content.Context
  * to the `messages` array [PostProcessor.buildRequestBody] sends, just executed locally.
  */
 object LocalCleanupProvider {
-    /** The recommended/default local-cleanup catalog entry (see [LOCAL_CLEANUP_MODEL_CATALOG] in
-     *  ModelDownloader.kt, #50) -- the "Local" simple-choice default when nothing else is selected. */
-    val MODEL: Model = LOCAL_CLEANUP_MODEL
-
     /** The catalog entry the user has actually picked for "Local" cleanup (#50), read from the
-     *  "local_cleanup_model_name" preference -- falling back to [MODEL] when unset or when the
-     *  named archive is no longer in the catalog. See [ModelDownloader.resolveActiveModel]. */
+     *  "local_cleanup_model_name" preference and resolved through the installed-aware
+     *  [ModelDownloader.resolveActiveModel] overload (#134). Every production consumer of "which
+     *  local model is active" (the service, ProcessTextActivity, and CleanupActivity's picker)
+     *  routes through that same overload, so an existing device with only LFM2.5 installed and
+     *  the preference never written keeps resolving to its installed model after the #134
+     *  default flip instead of landing on a not-installed recommended entry (which would make
+     *  [ModelDownloader.localCleanupModelFile] return null and silently disable local cleanup).
+     *
+     *  (The old `MODEL` constant -- a hardcoded [LOCAL_CLEANUP_MODEL] fallback only this
+     *  function consulted -- was removed with the centralization: a second, catalog-order-blind
+     *  default is exactly the divergence #134 had to fix.) */
     fun selectedModel(ctx: Context): Model {
         val prefs = ctx.getSharedPreferences("ramblr", Context.MODE_PRIVATE)
-        val archive = prefs.getString("local_cleanup_model_name", MODEL.archive) ?: MODEL.archive
-        return ModelDownloader.resolveActiveModel(LOCAL_CLEANUP_MODEL_CATALOG, archive)
+        val archive = prefs.getString("local_cleanup_model_name", "") ?: ""
+        return ModelDownloader.resolveActiveModel(LOCAL_CLEANUP_MODEL_CATALOG, archive) {
+            ModelDownloader.isInstalled(ctx, it)
+        }
     }
 
     /**

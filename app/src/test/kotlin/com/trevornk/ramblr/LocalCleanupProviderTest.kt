@@ -9,14 +9,12 @@ import org.junit.Test
  * Coverage for what's left of [LocalCleanupProvider] after #84 removed the dead `run` helper
  * (zero production callers; the executor's LOCAL_LLM branch owns result translation and trimming
  * now -- see CleanupWaterfallExecutorTest's local-step tests). [LocalCleanupProvider.selectedModel]
- * needs a Context and is covered indirectly via [ModelDownloader.resolveActiveModel]'s own tests.
+ * needs a Context; its resolution logic is the installed-aware
+ * [ModelDownloader.resolveActiveModel] overload (#134), covered by ModelDownloaderTest's
+ * resolveActiveModel tests. (The old `MODEL` constant -- a second hardcoded default only
+ * selectedModel consulted -- was removed with that centralization, along with its pin here.)
  */
 class LocalCleanupProviderTest {
-
-    @Test fun `MODEL is the one curated local-cleanup catalog entry`() {
-        assertEquals(LOCAL_CLEANUP_MODEL, LocalCleanupProvider.MODEL)
-        assertTrue(LocalCleanupProvider.MODEL.isLocalCleanup)
-    }
 
     // --- local prompt construction (systemPromptFor) -------------------------------------------
     //

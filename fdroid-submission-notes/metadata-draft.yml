@@ -28,21 +28,25 @@ AutoName: Ramblr
 # NonFreeNet: optional cloud transcription/cleanup via a user-supplied API key,
 # off by default. Already on the live MR.
 #
-# NonFreeAssets: ADDED. The optional on-device cleanup feature's recommended
-# model, LFM2.5-350M, is published under the LFM Open License v1.0, whose §5
-# terminates commercial-use rights for legal entities at/above $10M annual
-# revenue. That is a field-of-endeavor restriction, so it fails DFSG §6 / OSD §6
-# and is non-free -- notwithstanding Liquid AI's "open" branding. It is
-# downloaded from Hugging Face on request, never bundled in the APK.
+# NonFreeAssets: KEPT (but no longer about a *default*). Since trevornk/ramblr#134
+# (2026-08-26) the on-device cleanup default is the Apache-2.0 mumble-cleanup
+# fine-tune; the non-free entries are now both optional, non-default alternatives:
+# LFM2.5-350M (LFM Open License v1.0, whose §5 terminates commercial-use rights
+# for legal entities at/above $10M annual revenue -- a field-of-endeavor
+# restriction failing DFSG §6 / OSD §6, notwithstanding Liquid AI's "open"
+# branding) and the Parakeet Unified 0.6B transcription upgrade (#197, NVIDIA
+# Open Model License). Both are downloaded from upstream on request, never
+# bundled in the APK.
 #
-# This is declared rather than hidden, and the app now also (a) records every
+# This is declared rather than hidden, and the app also (a) records every
 # model's license in machine-readable form, (b) shows "not FOSS" in the model
 # picker, and (c) requires explicit opt-in license consent before the download
 # is even enqueued.
 #
-# Removing this anti-feature entirely is tracked in trevornk/ramblr#134: the
-# Apache-2.0 mumble-cleanup fine-tune is the intended free replacement and just
-# needs hosting before it can become the default.
+# The anti-feature cannot come off entirely while either optional non-free
+# entry remains in the catalog; the #134 end state keeps them as consent-gated
+# alternatives (LFM won the A/B's no-hallucination criterion; Parakeet Unified
+# is the top-quality English ASR option), so this declaration stays.
 #
 # NOT declared: UpstreamNonFree. All transcription, streaming-preview, and VAD
 # models -- everything the core dictation feature actually depends on -- are
@@ -53,10 +57,11 @@ AntiFeatures:
     en-US: Optional cloud transcription/cleanup uses a user-supplied API key.
   NonFreeAssets:
     en-US: >-
-      The optional on-device cleanup feature's default model (LFM2.5-350M) is
-      published under a license restricting commercial use. It is downloaded on
-      request, never bundled, and requires explicit consent. Transcription
-      models and the app itself are free-licensed.
+      Optional non-default models (the LFM2.5-350M cleanup alternative and the
+      Parakeet Unified 0.6B transcription upgrade) are published under licenses
+      restricting commercial use. They are downloaded on request, never
+      bundled, and require explicit consent. The default cleanup and
+      transcription models and the app itself are free-licensed.
 
 RepoType: git
 Repo: https://github.com/trevornk/ramblr.git

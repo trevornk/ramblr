@@ -66,15 +66,14 @@ class ModelLicenseTest {
      * upgrade (Parakeet Unified 0.6B, #197) -- never a core transcription path the user cannot
      * decline.
      *
-     * LFM2.5-350M is the one non-free entry that is still `recommended`. That is not ideal --
-     * the F-Droid-correct end state is a *free* default -- but it is no longer blocked on hosting:
-     * [MUMBLE_CLEANUP_Q4_0_MODEL] (Apache-2.0, measurably faster on-device at ~2.9s, and ahead on
-     * the offline cleanup-quality A/B) is now downloadable from a pinned Hugging Face URL like
-     * every other entry. Flipping which model is `recommended` is a user-visible default change
-     * that needs on-device confirmation of the winner first, so it is deliberately NOT bundled
-     * with the hosting work and remains tracked in #134. Until that flip, the non-free default is
-     * disclosed in the store description, declared as a NonFreeAssets anti-feature, and gated
-     * behind explicit license consent at [ModelDownloadWorker.enqueue].
+     * Since the #134 flip (2026-08-26) no non-free entry is `recommended` anywhere: LFM2.5-350M
+     * was the last one, demoted when the 35-transcript cleanup-quality A/B put the Apache-2.0
+     * [MUMBLE_CLEANUP_Q4_0_MODEL] ahead overall (80.6% vs 66.3% -- per-criterion breakdown in
+     * that entry's kdoc). LFM2.5 stays in the catalog as a consent-gated, non-default
+     * alternative (it won the A/B's no-hallucination criterion, 80.0 vs 68.6), so the
+     * NonFreeAssets anti-feature declaration and the store-description licensing paragraph both
+     * remain -- reworded to describe optional models, not the default. The free-default
+     * acceptance criterion itself is pinned in the dedicated test below.
      */
     @Test fun `the non-free models are exactly the known consent-gated exceptions`() {
         val all = MODEL_CATALOG + STREAMING_MODEL_CATALOG + LOCAL_CLEANUP_MODEL_CATALOG + VAD_MODEL_CATALOG
@@ -88,14 +87,32 @@ class ModelLicenseTest {
             ),
             nonFree.map { it.archive },
         )
-        // Whatever the non-free set is, every member must be consent-gated, and any non-free
-        // ASR entry must additionally be a non-default upgrade (see this test's kdoc).
+        // Whatever the non-free set is, every member must be consent-gated and never the
+        // default of its catalog (see this test's kdoc).
         for (m in nonFree) {
             assertTrue("${m.name} must require license consent", m.requiresLicenseConsent)
-            if (!m.isLocalCleanup) {
-                assertFalse("${m.name}: a non-free ASR entry must never be the default", m.recommended)
-            }
+            assertFalse("${m.name}: a non-free entry must never be a recommended default", m.recommended)
         }
+    }
+
+    /**
+     * The #134 acceptance criterion, pinned so it can't regress: the *default* on-device cleanup
+     * model -- what onboarding downloads and what an unset selection resolves to on a fresh
+     * install -- must be freely licensed. Exactly one entry may carry `recommended`, since that
+     * flag is what [ModelDownloader.resolveActiveModel]'s fallback and MainActivity's onboarding
+     * dialog both key off; two would make "the default" ambiguous, zero would fall through to
+     * list order, which is not a reviewed decision.
+     */
+    @Test fun `the default local-cleanup model is freely licensed`() {
+        assertEquals(1, LOCAL_CLEANUP_MODEL_CATALOG.count { it.recommended })
+        val recommended = LOCAL_CLEANUP_MODEL_CATALOG.first { it.recommended }
+        assertTrue(
+            "the recommended local-cleanup entry must be free-licensed (#134); flipping the " +
+                "default back to a non-free model reintroduces the NonFreeAssets *default* " +
+                "F-Droid objection, not just the anti-feature declaration",
+            recommended.license.isFree,
+        )
+        assertFalse("a free default must not demand license consent", recommended.requiresLicenseConsent)
     }
 
     @Test fun `every catalog entry names a license with a terms url`() {

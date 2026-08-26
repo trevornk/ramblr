@@ -277,7 +277,13 @@ class CleanupActivity : BaseSettingsActivity() {
     // --- Simple Local/Cloud cleanup choice (#38, verbatim from MainActivity) ---
 
     private fun selectedCleanupModel(): Model =
-        ModelDownloader.resolveActiveModel(LOCAL_CLEANUP_MODEL_CATALOG, prefs().getString(KEY_LOCAL_CLEANUP_MODEL_NAME, "") ?: "")
+        // Must match the service's resolution exactly (LocalCleanupProvider.selectedModel routes
+        // through the same installed-aware overload, #134) -- the picker highlighting a model the
+        // service isn't actually using is the divergence that overload exists to prevent.
+        ModelDownloader.resolveActiveModel(
+            LOCAL_CLEANUP_MODEL_CATALOG,
+            prefs().getString(KEY_LOCAL_CLEANUP_MODEL_NAME, "") ?: "",
+        ) { ModelDownloader.isInstalled(this, it) }
 
     private fun buildCleanupModelRow(model: Model): View {
         val radio = MaterialRadioButton(this).apply {
@@ -555,8 +561,11 @@ class CleanupActivity : BaseSettingsActivity() {
             if (!prefs.getBoolean("use_post_processing", false)) return "Off"
             return if (!CloudFeatureToggle.cleanupEnabled(context)) {
                 val archive = prefs.getString(KEY_LOCAL_CLEANUP_MODEL_NAME, "") ?: ""
-                val model = LOCAL_CLEANUP_MODEL_CATALOG.firstOrNull { it.archive == archive }
-                    ?: LOCAL_CLEANUP_MODEL_CATALOG.first()
+                // Same installed-aware resolution as the service (#134) -- this subtitle naming a
+                // model the service wouldn't actually run is the M9 class of bug all over again.
+                val model = ModelDownloader.resolveActiveModel(LOCAL_CLEANUP_MODEL_CATALOG, archive) {
+                    ModelDownloader.isInstalled(context, it)
+                }
                 "Local · ${model.name}"
             } else {
                 // Derive the provider + model from the live chain's first cloud entry, not the

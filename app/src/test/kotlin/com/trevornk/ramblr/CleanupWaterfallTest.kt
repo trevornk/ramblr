@@ -23,7 +23,7 @@ class CleanupStepTest {
     }
 
     @Test fun `local llm step has no credential slot (#37)`() {
-        val step = CleanupStep(CleanupStepGroup.LOCAL_LLM, LocalCleanupProvider.MODEL.archive)
+        val step = CleanupStep(CleanupStepGroup.LOCAL_LLM, LOCAL_CLEANUP_MODEL.archive)
         assertEquals(null, step.credentialSlot())
     }
 }
