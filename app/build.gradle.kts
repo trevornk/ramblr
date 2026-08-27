@@ -267,6 +267,11 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    // DictationRuntime state-transition tests (#143 Phase 1): the runtime holds a real Context
+    // (prefs, cacheDir, main-looper Handler, Toast), so its host-side tests run under
+    // Robolectric -- the first tests in this repo that need it. testOptions already sets
+    // isIncludeAndroidResources = true.
+    testImplementation("org.robolectric:robolectric:4.16")
 
     // On-device ASR decode benchmark only (AsrDecodeBenchmark, #198) -- the androidTest source
     // set has exactly that one class. junit:junit is already the unit-test framework above;
