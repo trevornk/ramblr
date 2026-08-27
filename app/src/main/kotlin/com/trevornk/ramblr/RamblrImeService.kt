@@ -29,6 +29,8 @@ class RamblrImeService : InputMethodService() {
     private var runtime: DictationRuntime? = null
     private var panelController: ImePanelController? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val historyStore by lazy { DictationHistoryStore.forContext(this) }
+    private var editorPolicy = ImeEditorPolicy(allowsDictation = false, allowsRetention = false)
 
     private var statusView: TextView? = null
     private var partialView: TextView? = null
@@ -103,8 +105,12 @@ class RamblrImeService : InputMethodService() {
         root.addView(partialView, LinearLayout.LayoutParams(-1, dp(44)))
         root.addView(micButton, micParams)
         root.addView(actions, LinearLayout.LayoutParams(-1, dp(52)))
-        ensureRuntime()
-        renderState(ImeUiState.IDLE)
+        if (editorPolicy.allowsDictation) {
+            ensureRuntime()
+            renderState(ImeUiState.IDLE)
+        } else {
+            renderState(ImeUiState.SECURE_FIELD)
+        }
         return root
     }
 
@@ -118,21 +124,40 @@ class RamblrImeService : InputMethodService() {
         }
         editorGeneration++
         editorIdentity = identityOf(attribute)
-        destination.editorChanged(editorGeneration, editorIdentity, currentInputConnection)
-        if (!restarting) renderState(ImeUiState.IDLE)
+        editorPolicy = imeEditorPolicy(editorIdentity.inputType, editorIdentity.imeOptions)
+        if (editorPolicy.allowsDictation) {
+            destination.editorChanged(editorGeneration, editorIdentity, currentInputConnection)
+            panelController?.onEditorChanged(editorGeneration, editorIdentity, currentInputConnection)
+            if (!restarting) renderState(ImeUiState.IDLE)
+        } else {
+            loseLifecycle(ImeLifecycleLoss.INPUT_FINISHED)
+            destination.invalidate()
+            renderPartial("")
+            renderState(ImeUiState.SECURE_FIELD)
+        }
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         editorIdentity = identityOf(info)
-        destination.editorChanged(editorGeneration, editorIdentity, currentInputConnection)
-        ensureRuntime()
+        editorPolicy = imeEditorPolicy(editorIdentity.inputType, editorIdentity.imeOptions)
+        if (editorPolicy.allowsDictation) {
+            destination.editorChanged(editorGeneration, editorIdentity, currentInputConnection)
+            ensureRuntime()
+            panelController?.onEditorChanged(editorGeneration, editorIdentity, currentInputConnection)
+        } else {
+            loseLifecycle(ImeLifecycleLoss.INPUT_FINISHED)
+            destination.invalidate()
+            renderPartial("")
+            renderState(ImeUiState.SECURE_FIELD)
+        }
     }
 
     override fun onFinishInput() {
         loseLifecycle(ImeLifecycleLoss.INPUT_FINISHED)
         editorGeneration++
         editorIdentity = ImeEditorIdentity(null, 0, 0)
+        editorPolicy = ImeEditorPolicy(allowsDictation = false, allowsRetention = false)
         destination.invalidate()
         super.onFinishInput()
     }
@@ -144,7 +169,7 @@ class RamblrImeService : InputMethodService() {
 
     override fun onWindowShown() {
         super.onWindowShown()
-        ensureRuntime()
+        if (editorPolicy.allowsDictation) ensureRuntime()
     }
 
     override fun onEvaluateFullscreenMode(): Boolean = false
@@ -161,11 +186,13 @@ class RamblrImeService : InputMethodService() {
     }
 
     private fun ensureRuntime() {
+        if (!editorPolicy.allowsDictation) return
         if (runtime != null) return
         lateinit var createdRuntime: DictationRuntime
         val runtimeControl = object : ImeRuntimeControl {
             override fun onTap() = createdRuntime.onTap()
-            override fun shutdown() = createdRuntime.shutdown()
+            override fun invalidate() = createdRuntime.beginShutdown()
+            override fun teardownAsync() = createdRuntime.finishShutdownAsync()
         }
         val controller = ImePanelController(
             runtime = runtimeControl,
@@ -178,26 +205,23 @@ class RamblrImeService : InputMethodService() {
             },
             renderPartial = ::renderPartial,
             userMessage = ::showMessage,
+            recordHistory = ::recordImeHistory,
         )
         createdRuntime = DictationRuntime(this, controller.listener)
         panelController = controller
         runtime = createdRuntime
-        thread {
-            createdRuntime.cleanupOrphanedRecordings()
-            createdRuntime.initLocalModel()
-        }
+        controller.onEditorChanged(editorGeneration, editorIdentity, currentInputConnection)
+        thread { createdRuntime.initLocalModel() }
         thread { createdRuntime.initStreamingModel() }
     }
 
     private fun loseLifecycle(reason: ImeLifecycleLoss) {
         val controller = panelController ?: return
-        val oldRuntime = runtime
         panelController = null
         runtime = null
         controller.onLifecycleLost(reason)
-        oldRuntime?.releaseTranscribersAsync()
         renderPartial("")
-        renderState(ImeUiState.IDLE)
+        if (editorPolicy.allowsDictation) renderState(ImeUiState.IDLE)
     }
 
     private fun identityOf(info: EditorInfo?): ImeEditorIdentity = ImeEditorIdentity(
@@ -219,6 +243,7 @@ class RamblrImeService : InputMethodService() {
             ImeUiState.TRANSCRIBING -> R.string.ime_status_transcribing
             ImeUiState.CLEANING -> R.string.ime_status_cleaning
             ImeUiState.ERROR -> R.string.ime_status_error
+            ImeUiState.SECURE_FIELD -> R.string.ime_status_secure_field
         })
         micButton?.contentDescription = getString(
             if (state == ImeUiState.RECORDING) R.string.ime_mic_stop else R.string.ime_mic_start
@@ -227,7 +252,17 @@ class RamblrImeService : InputMethodService() {
             if (state == ImeUiState.RECORDING) Color.rgb(190, 45, 45)
             else resolveColor(com.google.android.material.R.attr.colorPrimary, Color.rgb(33, 96, 180))
         )
-        micButton?.isEnabled = state != ImeUiState.TRANSCRIBING && state != ImeUiState.CLEANING
+        micButton?.isEnabled = state != ImeUiState.TRANSCRIBING &&
+            state != ImeUiState.CLEANING && state != ImeUiState.SECURE_FIELD
+    }
+
+    /** Synchronous bounded history write so a failure notice only claims recovery after it exists. */
+    private fun recordImeHistory(entry: DictationHistoryEntry): Boolean {
+        if (!getSharedPreferences("ramblr", MODE_PRIVATE).getBoolean("dictation_history_enabled", true)) return false
+        return runCatching {
+            historyStore.upsert(entry)
+            true
+        }.onFailure { Log.e(TAG, "Failed to record IME dictation history", it) }.getOrDefault(false)
     }
 
     private fun renderPartial(text: String) {

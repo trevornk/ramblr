@@ -583,4 +583,23 @@ class DictationRuntimeTest {
         assertEquals(RecordingStateMachine.State.RECORDING, contender.currentState())
         assertEquals(1, contenderEngines.size)
     }
+
+    @Test
+    fun `shutdown invalidation is immediate while microphone lease waits for reader teardown`() {
+        runtime.onTap()
+        val stalledEngine = engines.single().also { it.teardownCompleted = false }
+
+        runtime.beginShutdown()
+
+        assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
+        val contender = DictationRuntime(app, RecordingListener(), leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine)
+        }
+        contender.onTap()
+        assertEquals(RecordingStateMachine.State.IDLE, contender.currentState())
+
+        stalledEngine.finishAs(null, RecordingEngine.StopReason.USER, superseded = true)
+        contender.onTap()
+        assertEquals(RecordingStateMachine.State.RECORDING, contender.currentState())
+    }
 }

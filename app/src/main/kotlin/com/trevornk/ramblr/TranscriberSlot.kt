@@ -31,4 +31,39 @@ class TranscriberSlot<T>(private val release: (T) -> Unit) {
         }
         previous?.let(release)
     }
+
+    /** Releases a value that was created asynchronously but rejected before publication. */
+    internal fun releaseRejected(value: T) = release(value)
+}
+
+/**
+ * Generation gate around asynchronous native-resource creation. Creation deliberately happens
+ * outside this monitor; [install] is the single publication point. Once shutdown is invalidated
+ * synchronously, a late resource is released directly and can never resurrect a dead runtime.
+ */
+class TranscriberLifecycle<T>(private val slot: TranscriberSlot<T>) {
+    private var generation = 0L
+    private var shutdown = false
+
+    @Synchronized
+    fun beginInitialization(): Long? = if (shutdown) null else ++generation
+
+    fun install(initializationGeneration: Long, resource: T?): Boolean {
+        synchronized(this) {
+            if (!shutdown && initializationGeneration == generation) {
+                slot.replace(resource)
+                return true
+            }
+        }
+        resource?.let(slot::releaseRejected)
+        return false
+    }
+
+    @Synchronized
+    fun beginShutdown() {
+        shutdown = true
+        generation++
+    }
+
+    fun releaseInstalled() = slot.replace(null)
 }

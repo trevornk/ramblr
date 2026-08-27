@@ -20,6 +20,7 @@
     <string name="ime_status_transcribing">Transcribing…</string>
     <string name="ime_status_cleaning">Cleaning up…</string>
     <string name="ime_status_error">Couldn’t complete dictation</string>
+    <string name="ime_status_secure_field">Voice input unavailable in secure fields</string>
     <string name="ime_partial_hint">Your partial transcript appears here</string>
     <string name="ime_mic_start">Start Ramblr dictation</string>
     <string name="ime_mic_stop">Stop recording and transcribe</string>

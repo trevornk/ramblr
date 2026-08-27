@@ -167,14 +167,20 @@ dictation status/partial preview, keyboard switcher, and Settings shortcut, with
 symbol rows. To use it:
 
 1. Complete the normal audio/provider setup above in the Ramblr app.
-2. Open Android **Settings → System → Keyboard → On-screen keyboard → Manage on-screen keyboards**
-   and enable **Ramblr Voice**.
+2. In Ramblr, tap **Enable voice keyboard**. Android opens its input-method settings; enable
+   **Ramblr Voice** there. You can also reach the same screen through **Android Settings → System
+   → Keyboard → On-screen keyboard → Manage on-screen keyboards**.
 3. Focus a text field, use Android's keyboard switch control, and select **Ramblr Voice**.
 4. Tap the mic to start, then tap it again to transcribe and insert into that same field.
 
 Ramblr never auto-enables or auto-selects the input method. If the keyboard is hidden or the
-focused editor changes, active dictation is cancelled and late output is discarded rather than
-redirected into the new field.
+focused editor changes, active dictation is cancelled and late output is never redirected into the
+new field. When local history is allowed and enabled, accepted final text is saved there before the
+single insertion attempt so a stale or rejected destination does not lose it.
+
+Password, PIN, visible-password, and web-password fields disable the Ramblr mic completely. An
+editor that requests Android's **no personalized learning** flag can still use dictation, but that
+IME session is excluded from Ramblr history, quality logging, and suggestion collection.
 
 ## Why does it need Accessibility?
 

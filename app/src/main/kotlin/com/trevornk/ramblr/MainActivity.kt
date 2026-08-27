@@ -144,6 +144,15 @@ class MainActivity : BaseSettingsActivity() {
         invocationRowSub = invocationRow.findViewWithTag("subtitle")
         root.addView(invocationRow)
 
+        // Supported, user-initiated IME activation only. Android owns the enable switch; Ramblr
+        // neither writes Secure settings nor auto-selects itself.
+        root.addView(settingsRow(
+            "Enable voice keyboard",
+            "Enable Ramblr Voice in Android settings, then select it with the keyboard switch",
+        ) {
+            startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+        })
+
         root.addView(settingsRow("Advanced", AdvancedActivity.subtitle(this)) {
             startActivity(Intent(this, AdvancedActivity::class.java))
         })

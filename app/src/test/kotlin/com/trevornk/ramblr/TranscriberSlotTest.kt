@@ -83,4 +83,56 @@ class TranscriberSlotTest {
         assertEquals(0, releaseObservedDuringUse.get()) // not yet released while use() was running
         assertTrue(old.released) // released once use() completed
     }
+
+    @Test fun `initializer completing after shutdown releases resource without installing it`() {
+        val slot = TranscriberSlot<FakeResource> { it.release() }
+        val lifecycle = TranscriberLifecycle(slot)
+        val generation = requireNotNull(lifecycle.beginInitialization())
+        val late = FakeResource()
+
+        lifecycle.beginShutdown()
+        assertFalse(lifecycle.install(generation, late))
+
+        assertTrue(late.released)
+        assertNull(slot.get())
+    }
+
+    @Test fun `local and streaming lifecycles both reject late initialization deterministically`() {
+        val localSlot = TranscriberSlot<FakeResource> { it.release() }
+        val streamingSlot = TranscriberSlot<FakeResource> { it.release() }
+        val local = TranscriberLifecycle(localSlot)
+        val streaming = TranscriberLifecycle(streamingSlot)
+        val localGeneration = requireNotNull(local.beginInitialization())
+        val streamingGeneration = requireNotNull(streaming.beginInitialization())
+        val lateLocal = FakeResource()
+        val lateStreaming = FakeResource()
+
+        local.beginShutdown()
+        streaming.beginShutdown()
+        local.releaseInstalled()
+        streaming.releaseInstalled()
+
+        assertFalse(local.install(localGeneration, lateLocal))
+        assertFalse(streaming.install(streamingGeneration, lateStreaming))
+        assertTrue(lateLocal.released)
+        assertTrue(lateStreaming.released)
+        assertNull(localSlot.get())
+        assertNull(streamingSlot.get())
+    }
+
+    @Test fun `stale reload cannot replace a newer installed generation`() {
+        val slot = TranscriberSlot<FakeResource> { it.release() }
+        val lifecycle = TranscriberLifecycle(slot)
+        val oldGeneration = requireNotNull(lifecycle.beginInitialization())
+        val newGeneration = requireNotNull(lifecycle.beginInitialization())
+        val old = FakeResource()
+        val newest = FakeResource()
+
+        assertTrue(lifecycle.install(newGeneration, newest))
+        assertFalse(lifecycle.install(oldGeneration, old))
+
+        assertTrue(old.released)
+        assertFalse(newest.released)
+        assertEquals(newest, slot.get())
+    }
 }
