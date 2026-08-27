@@ -1,5 +1,6 @@
 package com.trevornk.ramblr
 
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.withLock
 
@@ -32,6 +33,23 @@ class TranscriberSlot<T>(private val release: (T) -> Unit) {
         previous?.let(release)
     }
 
+    /**
+     * Conditionally publishes [next] under this slot's write lock. The predicate and swap are one
+     * linearization point; release stays outside the lock so slow native teardown cannot delay
+     * lifecycle invalidation.
+     */
+    internal fun replaceIf(next: T?, predicate: () -> Boolean): Boolean {
+        var previous: T? = null
+        val replaced = lock.writeLock().withLock {
+            if (!predicate()) return@withLock false
+            previous = current
+            current = next
+            true
+        }
+        if (replaced) previous?.let(release)
+        return replaced
+    }
+
     /** Releases a value that was created asynchronously but rejected before publication. */
     internal fun releaseRejected(value: T) = release(value)
 }
@@ -42,27 +60,30 @@ class TranscriberSlot<T>(private val release: (T) -> Unit) {
  * synchronously, a late resource is released directly and can never resurrect a dead runtime.
  */
 class TranscriberLifecycle<T>(private val slot: TranscriberSlot<T>) {
-    private var generation = 0L
-    private var shutdown = false
-
-    @Synchronized
-    fun beginInitialization(): Long? = if (shutdown) null else ++generation
-
-    fun install(initializationGeneration: Long, resource: T?): Boolean {
-        synchronized(this) {
-            if (!shutdown && initializationGeneration == generation) {
-                slot.replace(resource)
-                return true
-            }
-        }
-        resource?.let(slot::releaseRejected)
-        return false
+    companion object {
+        private const val SHUTDOWN = Long.MIN_VALUE
     }
 
-    @Synchronized
+    /** Positive values are same-slot generations; [SHUTDOWN] permanently closes this lifecycle. */
+    private val state = AtomicLong(0L)
+
+    fun beginInitialization(): Long? {
+        while (true) {
+            val observed = state.get()
+            if (observed == SHUTDOWN) return null
+            val next = observed + 1
+            if (state.compareAndSet(observed, next)) return next
+        }
+    }
+
+    fun install(initializationGeneration: Long, resource: T?): Boolean {
+        val installed = slot.replaceIf(resource) { state.get() == initializationGeneration }
+        if (!installed) resource?.let(slot::releaseRejected)
+        return installed
+    }
+
     fun beginShutdown() {
-        shutdown = true
-        generation++
+        state.set(SHUTDOWN)
     }
 
     fun releaseInstalled() = slot.replace(null)

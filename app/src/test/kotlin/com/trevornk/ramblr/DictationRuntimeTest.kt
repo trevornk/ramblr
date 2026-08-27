@@ -48,6 +48,7 @@ class DictationRuntimeTest {
     private class RecordingListener : RuntimeListener {
         val events = mutableListOf<String>()
         val delivered = mutableListOf<Delivery>()
+        val streamingTeardownLoopers = mutableListOf<Looper?>()
 
         data class Delivery(
             val text: String,
@@ -62,7 +63,10 @@ class DictationRuntimeTest {
         override fun onRecordingStarted() { events += "recordingStarted" }
         override fun onEnterTranscribingUi() { events += "transcribingUi" }
         override fun onIdleUi() { events += "idleUi" }
-        override fun onStreamingTeardown() { events += "streamingTeardown" }
+        override fun onStreamingTeardown() {
+            events += "streamingTeardown"
+            streamingTeardownLoopers += Looper.myLooper()
+        }
         override fun onStreamingPartial(text: String) { events += "partial:$text" }
         override fun deliverText(
             text: String,
@@ -560,6 +564,18 @@ class DictationRuntimeTest {
         }
         nextRuntime.onTap()
         assertEquals(RecordingStateMachine.State.RECORDING, nextRuntime.currentState())
+    }
+
+    @Test
+    fun `asynchronous shutdown posts streaming teardown listener to main`() {
+        runtime.beginShutdown()
+        val worker = Thread { runtime.finishShutdownAndReleaseTranscribers() }
+        worker.start()
+        worker.join(2000)
+        idleMainLooper()
+
+        assertFalse(worker.isAlive)
+        assertEquals(listOf(Looper.getMainLooper()), listener.streamingTeardownLoopers)
     }
 
     @Test

@@ -8,6 +8,7 @@ import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
 import android.net.ConnectivityManager
 import android.net.Network
+import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Gravity
@@ -30,6 +31,7 @@ class RamblrImeService : InputMethodService() {
     private var panelController: ImePanelController? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val historyStore by lazy { DictationHistoryStore.forContext(this) }
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var editorPolicy = ImeEditorPolicy(allowsDictation = false, allowsRetention = false)
 
     private var statusView: TextView? = null
@@ -41,6 +43,7 @@ class RamblrImeService : InputMethodService() {
         CustomPersonaStore.ensureLegacySeeded(this)
         ProviderChainMigration.runIfNeeded(this)
         registerNetworkCallback()
+        thread { ProcessRecordingOrphanCleaner.cleanupOnce(cacheDir) }
         thread { ModelDownloader.pruneOrphanedModelDirs(this) }
     }
 
@@ -192,7 +195,9 @@ class RamblrImeService : InputMethodService() {
         val runtimeControl = object : ImeRuntimeControl {
             override fun onTap() = createdRuntime.onTap()
             override fun invalidate() = createdRuntime.beginShutdown()
-            override fun teardownAsync() = createdRuntime.finishShutdownAsync()
+            override fun teardownAsync() = ProcessImeNativeRuntimeTasks.enqueueTeardown {
+                createdRuntime.finishShutdownAndReleaseTranscribers()
+            }
         }
         val controller = ImePanelController(
             runtime = runtimeControl,
@@ -206,13 +211,17 @@ class RamblrImeService : InputMethodService() {
             renderPartial = ::renderPartial,
             userMessage = ::showMessage,
             recordHistory = ::recordImeHistory,
+            runHistoryWrite = ImeHistoryWriteExecutor::execute,
+            postToMain = { mainHandler.post(it) },
         )
         createdRuntime = DictationRuntime(this, controller.listener)
         panelController = controller
         runtime = createdRuntime
         controller.onEditorChanged(editorGeneration, editorIdentity, currentInputConnection)
-        thread { createdRuntime.initLocalModel() }
-        thread { createdRuntime.initStreamingModel() }
+        ProcessImeNativeRuntimeTasks.enqueueInitialization(
+            local = createdRuntime::initLocalModel,
+            streaming = createdRuntime::initStreamingModel,
+        )
     }
 
     private fun loseLifecycle(reason: ImeLifecycleLoss) {
@@ -256,7 +265,7 @@ class RamblrImeService : InputMethodService() {
             state != ImeUiState.CLEANING && state != ImeUiState.SECURE_FIELD
     }
 
-    /** Synchronous bounded history write so a failure notice only claims recovery after it exists. */
+    /** Durable history write; invoked only by [ImeHistoryWriteExecutor]. */
     private fun recordImeHistory(entry: DictationHistoryEntry): Boolean {
         if (!getSharedPreferences("ramblr", MODE_PRIVATE).getBoolean("dictation_history_enabled", true)) return false
         return runCatching {

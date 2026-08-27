@@ -32,7 +32,7 @@ class RamblrImeTest {
     }
 
     @Test
-    fun `IME contains no conventional key rows runtime cleanup or auto enable path`() {
+    fun `IME contains no conventional key rows or auto enable path and uses shared safe cleanup`() {
         val source = File(
             repoRoot(),
             "app/src/main/kotlin/com/trevornk/ramblr/RamblrImeService.kt",
@@ -40,7 +40,13 @@ class RamblrImeTest {
         assertFalse(source.contains("KEYCODE_"))
         assertFalse(source.contains("Settings.Secure"))
         assertFalse(source.contains("setInputMethod"))
-        assertFalse(source.contains("cleanupOrphanedRecordings"))
+        assertTrue(source.contains("ProcessRecordingOrphanCleaner.cleanupOnce(cacheDir)"))
+
+        val accessibility = File(
+            repoRoot(),
+            "app/src/main/kotlin/com/trevornk/ramblr/WhisperAccessibilityService.kt",
+        ).readText()
+        assertTrue(accessibility.contains("ProcessRecordingOrphanCleaner.cleanupOnce(cacheDir)"))
 
         val main = File(
             repoRoot(),
@@ -199,6 +205,130 @@ class RamblrImeTest {
 
         assertEquals(ImeSwitchResult.PICKER_SHOWN, switchIme({ false }) { pickerCalls++ })
         assertEquals(1, pickerCalls)
+    }
+
+    @Test
+    fun `history persistence runs before main-thread commit without blocking delivery callback`() {
+        val connection = Any()
+        val identity = ImeEditorIdentity("example.app", 42, InputType.TYPE_CLASS_TEXT)
+        val background = ArrayDeque<() -> Unit>()
+        val main = ArrayDeque<() -> Unit>()
+        val events = mutableListOf<String>()
+        val controller = ImePanelController(
+            FakeRuntimeControl(),
+            {},
+            editorSnapshot = { Triple(1L, identity, connection) },
+            commitText = { _, _ -> events += "commit"; true },
+            recordHistory = { events += "history"; true },
+            runHistoryWrite = { background.addLast(it) },
+            postToMain = { main.addLast(it) },
+        )
+        controller.onEditorChanged(1L, identity, connection)
+        controller.listener.onRecordingStartRequested()
+
+        controller.listener.deliverText("hello", null, null, null, 2_000)
+        assertTrue(events.isEmpty())
+        assertEquals(1, background.size)
+
+        background.removeFirst().invoke()
+        assertEquals(listOf("history"), events)
+        assertEquals(1, main.size)
+
+        main.removeFirst().invoke()
+        assertEquals(listOf("history", "commit"), events)
+    }
+
+    @Test
+    fun `editor change during pending history write never commits stale output and saved claim is truthful`() {
+        val origin = Any()
+        val replacement = Any()
+        var generation = 1L
+        var identity = ImeEditorIdentity("one.app", 1, InputType.TYPE_CLASS_TEXT)
+        var connection: Any? = origin
+        val background = ArrayDeque<() -> Unit>()
+        val main = ArrayDeque<() -> Unit>()
+        val commits = mutableListOf<String>()
+        val messages = mutableListOf<String>()
+        val controller = ImePanelController(
+            FakeRuntimeControl(),
+            {},
+            editorSnapshot = { Triple(generation, identity, connection) },
+            commitText = { _, text -> commits += text; true },
+            recordHistory = { true },
+            runHistoryWrite = { background.addLast(it) },
+            postToMain = { main.addLast(it) },
+            userMessage = messages::add,
+        )
+        controller.onEditorChanged(generation, identity, connection)
+        controller.listener.onRecordingStartRequested()
+        controller.listener.deliverText("stale", null, null, null, 2_000)
+
+        generation = 2L
+        identity = ImeEditorIdentity("two.app", 2, InputType.TYPE_CLASS_TEXT)
+        connection = replacement
+        controller.onEditorChanged(generation, identity, connection)
+        background.removeFirst().invoke()
+        main.removeFirst().invoke()
+
+        assertTrue(commits.isEmpty())
+        assertEquals(
+            listOf("Text could not be inserted — dictated text was saved in Ramblr history"),
+            messages,
+        )
+    }
+
+    @Test
+    fun `lifecycle loss during pending history write suppresses stale commit`() {
+        val connection = Any()
+        val identity = ImeEditorIdentity("example.app", 42, InputType.TYPE_CLASS_TEXT)
+        val background = ArrayDeque<() -> Unit>()
+        val main = ArrayDeque<() -> Unit>()
+        val commits = mutableListOf<String>()
+        val controller = ImePanelController(
+            FakeRuntimeControl(),
+            {},
+            editorSnapshot = { Triple(1L, identity, connection) },
+            commitText = { _, text -> commits += text; true },
+            recordHistory = { true },
+            runHistoryWrite = { background.addLast(it) },
+            postToMain = { main.addLast(it) },
+        )
+        controller.onEditorChanged(1L, identity, connection)
+        controller.listener.onRecordingStartRequested()
+        controller.listener.deliverText("late", null, null, null, 2_000)
+
+        controller.onLifecycleLost(ImeLifecycleLoss.HIDDEN)
+        background.removeFirst().invoke()
+        main.removeFirst().invoke()
+
+        assertTrue(commits.isEmpty())
+    }
+
+    @Test
+    fun `failed pending history write never makes a saved recovery claim`() {
+        val connection = Any()
+        val identity = ImeEditorIdentity("example.app", 42, InputType.TYPE_CLASS_TEXT)
+        val background = ArrayDeque<() -> Unit>()
+        val main = ArrayDeque<() -> Unit>()
+        val messages = mutableListOf<String>()
+        val controller = ImePanelController(
+            FakeRuntimeControl(),
+            {},
+            editorSnapshot = { Triple(1L, identity, connection) },
+            commitText = { _, _ -> false },
+            recordHistory = { false },
+            runHistoryWrite = { background.addLast(it) },
+            postToMain = { main.addLast(it) },
+            userMessage = messages::add,
+        )
+        controller.onEditorChanged(1L, identity, connection)
+        controller.listener.onRecordingStartRequested()
+        controller.listener.deliverText("unsaved", null, null, null, 2_000)
+
+        background.removeFirst().invoke()
+        main.removeFirst().invoke()
+
+        assertEquals(listOf("Text could not be inserted"), messages)
     }
 
     @Test

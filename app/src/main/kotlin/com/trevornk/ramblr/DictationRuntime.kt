@@ -289,12 +289,6 @@ class DictationRuntime internal constructor(
         cleanupCursor.reset()
     }
 
-    /** Deletes any temp PCM files left behind by a process death that skipped normal teardown. */
-    internal fun cleanupOrphanedRecordings() {
-        context.cacheDir.listFiles { f -> f.name.startsWith("rec_") && f.name.endsWith(".pcm") }
-            ?.forEach { it.delete() }
-    }
-
     internal fun initLocalModel() {
         val initialization = transcriberLifecycle.beginInitialization() ?: return
         val modelName = prefs().getString("model_name", "") ?: ""
@@ -649,13 +643,15 @@ class DictationRuntime internal constructor(
         }
     }
 
-    /** The runtime half of the pre-extraction `teardownStreamingPreview()`: the host moves its
-     *  injected-node session into the pending-handoff slot (see [RuntimeListener.onStreamingTeardown]),
-     *  then the streaming recognizer's per-recording stream is ended -- same order as before the
-     *  extraction. Called from every path back to IDLE ([resetToIdle]) and from [shutdown]; safe
-     *  to call even when no session is active. */
+    /** The runtime half of streaming teardown. Host/UI cleanup is always delivered on main; native
+     *  stream release stays on the caller so asynchronous shutdown never routes UI callbacks from
+     *  its worker thread. */
     private fun teardownStreamingPreview() {
-        listener.onStreamingTeardown()
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            listener.onStreamingTeardown()
+        } else {
+            handler.post { listener.onStreamingTeardown() }
+        }
         streamingTranscriberSlot.use { it.endSession() }
     }
 
@@ -1520,13 +1516,16 @@ class DictationRuntime internal constructor(
         teardownStreamingPreview()
     }
 
-    /** IME teardown: invalidation has already happened; reader teardown and recognizer release do not block main. */
+    /** Blocking IME teardown stage; callers must serialize it off main before any new model load. */
+    internal fun finishShutdownAndReleaseTranscribers() {
+        finishShutdown()
+        transcriberLifecycle.releaseInstalled()
+        streamingTranscriberLifecycle.releaseInstalled()
+    }
+
+    /** IME teardown compatibility helper for non-serialized hosts. */
     fun finishShutdownAsync() {
-        thread {
-            finishShutdown()
-            transcriberLifecycle.releaseInstalled()
-            streamingTranscriberLifecycle.releaseInstalled()
-        }
+        thread { finishShutdownAndReleaseTranscribers() }
     }
 
     /**

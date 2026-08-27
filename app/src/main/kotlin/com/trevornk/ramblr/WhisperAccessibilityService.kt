@@ -540,7 +540,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         registerAccessibilityButton()
         registerNetworkCallback()
         registerScreenStateReceiver()
-        thread { runtime.cleanupOrphanedRecordings() }
+        thread { ProcessRecordingOrphanCleaner.cleanupOnce(cacheDir) }
         thread { ModelDownloader.pruneOrphanedModelDirs(this) }
         // Try to load local model in background
         thread { runtime.initLocalModel() }
