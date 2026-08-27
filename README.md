@@ -146,19 +146,23 @@ to compare against the running app's own version.
 
 ### First-time setup
 
-1. Open **Ramblr**
-2. Grant the **audio recording** permission
-3. Enable the **Accessibility Service**
-4. Pick a **Dictation mode** (Settings → Cloud), or leave the defaults and adjust later:
+1. Open **Ramblr** and choose how you want to dictate:
+   - **Floating button** — enable Ramblr's Accessibility Service so the overlay can insert text
+     into the focused field.
+   - **Voice keyboard** — enable **Ramblr Voice** in Android's input-method settings. This mode
+     inserts through Android's standard keyboard connection and does **not** require Accessibility.
+2. Grant the **audio recording** permission. Both setup modes need microphone access.
+3. Pick a **Dictation mode** (Settings → Cloud), or leave the defaults and adjust later:
    - **Local** — on-device transcription + on-device cleanup, fully offline
    - **Cloud** — cloud transcription + cloud cleanup
    - **Fastest** — on-device transcription (near-instant) + cloud cleanup (best text quality)
    - Advanced per-feature overrides are available if you want any other combination
-5. If you picked Local/Fastest, download a transcription model in Settings → Transcription
-6. If you picked Cloud/Fastest, add at least one cloud provider and its API key in
+4. If you picked Local/Fastest, download a transcription model in Settings → Transcription
+5. If you picked Cloud/Fastest, add at least one cloud provider and its API key in
    Settings → Cloud
 
-Once setup is done, the floating button is ready.
+Both surfaces require microphone permission and a working transcription configuration. Once setup
+is done, the floating button or Ramblr Voice keyboard you chose is ready.
 
 ### Optional voice keyboard
 
@@ -166,7 +170,8 @@ Ramblr Voice is a narrow voice-only input method, not a conventional keyboard: i
 dictation status/partial preview, keyboard switcher, and Settings shortcut, with no letter or
 symbol rows. To use it:
 
-1. Complete the normal audio/provider setup above in the Ramblr app.
+1. Complete the microphone and transcription/provider setup above in the Ramblr app. Accessibility
+   is required only if you also use the floating button.
 2. In Ramblr, tap **Enable voice keyboard**. Android opens its input-method settings; enable
    **Ramblr Voice** there. You can also reach the same screen through **Android Settings → System
    → Keyboard → On-screen keyboard → Manage on-screen keyboards**.
@@ -313,9 +318,12 @@ export JAVA_HOME=/path/to/jdk-17
 
 ### Architecture at a glance
 
-- **`WhisperAccessibilityService.kt`** — the accessibility service: overlay button, recording
-  state machine, and the code path that resolves transcription/cleanup candidates and injects
-  the result.
+- **`DictationRuntime.kt`** — the shared recording, transcription, and cleanup state machine used by
+  both dictation surfaces.
+- **`WhisperAccessibilityService.kt`** — owns the floating overlay and accessibility-backed focused
+  field insertion.
+- **`RamblrImeService.kt`** — the voice-only input method; commits accepted text to the editor where
+  dictation began through Android's `InputConnection`.
 - **`ProviderChain.kt` / `ProviderChainRuntime.kt` / `ProviderChainStore.kt`** — the unified,
   user-editable ordered list of providers (OpenAI/Anthropic/Gemini/self-hosted/local) each
   feature (transcription, cleanup) walks looking for its first capable, configured entry.

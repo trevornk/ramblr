@@ -3,11 +3,13 @@ package com.trevornk.ramblr
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
 import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.w3c.dom.Element
 
 class RamblrImeTest {
     private fun repoRoot(): File = generateSequence(
@@ -17,13 +19,35 @@ class RamblrImeTest {
 
     @Test
     fun `manifest declares protected exported IME and metadata`() {
-        val manifest = File(repoRoot(), "app/src/main/AndroidManifest.xml").readText()
-        assertTrue(manifest.contains("android:name=\".RamblrImeService\""))
-        assertTrue(manifest.contains("android:permission=\"android.permission.BIND_INPUT_METHOD\""))
-        assertTrue(manifest.contains("android:exported=\"true\""))
-        assertTrue(manifest.contains("android.view.InputMethod"))
-        assertTrue(manifest.contains("android.view.im"))
-        assertTrue(manifest.contains("@xml/method"))
+        val androidNamespace = "http://schemas.android.com/apk/res/android"
+        val manifest = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+        }.newDocumentBuilder().parse(File(repoRoot(), "app/src/main/AndroidManifest.xml"))
+        val services = manifest.getElementsByTagName("service").let { nodes ->
+            (0 until nodes.length)
+                .map { nodes.item(it) as Element }
+                .filter { it.getAttributeNS(androidNamespace, "name") == ".RamblrImeService" }
+        }
+        assertEquals("manifest must declare exactly one RamblrImeService", 1, services.size)
+
+        val imeService = services.single()
+        assertEquals("true", imeService.getAttributeNS(androidNamespace, "exported"))
+        assertEquals(
+            "android.permission.BIND_INPUT_METHOD",
+            imeService.getAttributeNS(androidNamespace, "permission"),
+        )
+
+        val actions = imeService.getElementsByTagName("action")
+        assertTrue((0 until actions.length).any {
+            (actions.item(it) as Element).getAttributeNS(androidNamespace, "name") == "android.view.InputMethod"
+        })
+        val metadata = imeService.getElementsByTagName("meta-data").let { nodes ->
+            (0 until nodes.length)
+                .map { nodes.item(it) as Element }
+                .filter { it.getAttributeNS(androidNamespace, "name") == "android.view.im" }
+        }
+        assertEquals("RamblrImeService must own exactly one input-method metadata entry", 1, metadata.size)
+        assertEquals("@xml/method", metadata.single().getAttributeNS(androidNamespace, "resource"))
 
         val method = File(repoRoot(), "app/src/main/res/xml/method.xml").readText()
         assertTrue(method.contains("input-method"))

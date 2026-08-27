@@ -94,6 +94,39 @@ class OnboardingWizardTest {
         ))
     }
 
+    @Test fun `selected local model must be installed even when another model is available`() {
+        assertFalse(OnboardingWizard.isTranscriptionModelReady(
+            transcriptionLocal = true,
+            selectedModel = "selected-model",
+            knownModels = listOf("selected-model", "different-model"),
+            installedModels = listOf("different-model"),
+        ))
+        assertTrue(OnboardingWizard.isTranscriptionModelReady(
+            transcriptionLocal = true,
+            selectedModel = "selected-model",
+            knownModels = listOf("selected-model", "different-model"),
+            installedModels = listOf("selected-model", "different-model"),
+        ))
+    }
+
+    @Test fun `unknown selected local model is not ready even if a matching directory exists`() {
+        assertFalse(OnboardingWizard.isTranscriptionModelReady(
+            transcriptionLocal = true,
+            selectedModel = "unknown-model",
+            knownModels = listOf("catalog-model"),
+            installedModels = listOf("unknown-model"),
+        ))
+    }
+
+    @Test fun `cloud transcription does not require a local model selection`() {
+        assertTrue(OnboardingWizard.isTranscriptionModelReady(
+            transcriptionLocal = false,
+            selectedModel = "",
+            knownModels = emptyList(),
+            installedModels = emptyList(),
+        ))
+    }
+
     @Test fun `ready with cloud transcription once an API key is set`() {
         assertTrue(OnboardingWizard.isSetupComplete(
             audioGranted = true, accessibilityEnabled = true,

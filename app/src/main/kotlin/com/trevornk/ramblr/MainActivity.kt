@@ -275,7 +275,7 @@ class MainActivity : BaseSettingsActivity() {
         val hasKey = hasConfiguredCloudTranscription(ProviderChainStore.load(this)) {
             ProviderCredentialStore.isConfigured(this, it)
         }
-        val hasModel = LocalTranscriber.availableModels(this).isNotEmpty()
+        val hasModel = transcriptionModelReady()
         val setupMode = onboardingSetupMode()
         val imeEnabled = isVoiceKeyboardEnabled()
 
@@ -983,12 +983,12 @@ class MainActivity : BaseSettingsActivity() {
      * comment on the same issue), which then failed with a confusing "Set API key" error that had
      * nothing to do with the real cause.
      */
-    private fun onboardingTranscriptionModelReady(): Boolean {
-        if (!prefs().getBoolean("use_local", true)) return true // cloud: nothing to download
-        val archive = prefs().getString("model_name", "") ?: ""
-        val model = MODEL_CATALOG.firstOrNull { it.archive == archive } ?: return false
-        return ModelDownloader.isInstalled(this, model)
-    }
+    private fun transcriptionModelReady(): Boolean = OnboardingWizard.isTranscriptionModelReady(
+        transcriptionLocal = prefs().getBoolean("use_local", true),
+        selectedModel = prefs().getString("model_name", "") ?: "",
+        knownModels = MODEL_CATALOG.map { it.archive },
+        installedModels = LocalTranscriber.availableModels(this),
+    )
 
     private fun showOnboardingTryStep() {
         markOnboardingStep(STEP_TRY)
@@ -1001,7 +1001,7 @@ class MainActivity : BaseSettingsActivity() {
             }
             setPadding(dp(24), dp(16), dp(24), dp(16))
         }
-        val modelReady = onboardingTranscriptionModelReady()
+        val modelReady = transcriptionModelReady()
         val invocationInstructions = if (setupMode == OnboardingSetupMode.VOICE_KEYBOARD) {
             "Tap the field below, select Ramblr Voice with Android's keyboard switch, then tap its mic."
         } else {

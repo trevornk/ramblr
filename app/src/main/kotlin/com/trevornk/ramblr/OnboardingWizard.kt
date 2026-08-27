@@ -64,4 +64,15 @@ object OnboardingWizard {
         }
         return audioGranted && invocationReady && transcriptionReady
     }
+
+    /**
+     * Whether the selected transcription path has a usable local model. Checking the selected
+     * archive prevents an unrelated installed model from making Settings claim the app is ready.
+     */
+    fun isTranscriptionModelReady(
+        transcriptionLocal: Boolean,
+        selectedModel: String,
+        knownModels: Collection<String>,
+        installedModels: Collection<String>,
+    ): Boolean = !transcriptionLocal || selectedModel in knownModels && selectedModel in installedModels
 }
