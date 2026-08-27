@@ -17,7 +17,7 @@ import kotlin.concurrent.thread
  * stays flat for the duration of a recording, and a max recording duration auto-stops into
  * TRANSCRIBING with user feedback instead of growing unbounded.
  */
-class RecordingEngine(
+open class RecordingEngine(
     private val cacheDir: File,
     private val stateMachine: RecordingStateMachine
 ) {
@@ -84,7 +84,7 @@ class RecordingEngine(
      * are unaffected. A throwing [onChunk] is caught and logged rather than tearing down the
      * recording, since a bug in an optional preview feature must never break base recording.
      */
-    fun start(
+    open fun start(
         onFinished: (Result) -> Unit,
         onChunk: (ByteArray, Int) -> Unit = { _, _ -> }
     ): Boolean {
@@ -226,7 +226,7 @@ class RecordingEngine(
     }
 
     /** Blocks until the reader thread has stopped/released the recorder, or [timeoutMs] elapses. Safe to call from onDestroy. */
-    fun awaitTeardown(timeoutMs: Long = 2000) {
+    open fun awaitTeardown(timeoutMs: Long = 2000) {
         readerThread?.join(timeoutMs)
     }
 }
