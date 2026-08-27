@@ -14,4 +14,15 @@
     <string name="tile_label">Ramblr</string>
     <string name="tile_subtitle_recording">Recording…</string>
     <string name="tile_subtitle_service_disabled">Tap to enable accessibility service</string>
+    <string name="ime_name">Ramblr Voice</string>
+    <string name="ime_status_idle">Ready to dictate</string>
+    <string name="ime_status_recording">Recording… tap mic to stop</string>
+    <string name="ime_status_transcribing">Transcribing…</string>
+    <string name="ime_status_cleaning">Cleaning up…</string>
+    <string name="ime_status_error">Couldn’t complete dictation</string>
+    <string name="ime_partial_hint">Your partial transcript appears here</string>
+    <string name="ime_mic_start">Start Ramblr dictation</string>
+    <string name="ime_mic_stop">Stop recording and transcribe</string>
+    <string name="ime_switch_keyboard">Switch keyboard</string>
+    <string name="ime_open_settings">Open Ramblr settings</string>
 </resources>

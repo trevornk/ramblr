@@ -30,6 +30,12 @@ import kotlin.concurrent.thread
  * `handleTranscriptionResult`'s background thread before the extraction.
  */
 interface RuntimeListener {
+    /** Host-visible operational message (permission, busy lease, errors, limits). Main thread. */
+    fun onUserMessage(message: String) {}
+
+    /** Cleanup has begun after transcription. Main thread. */
+    fun onCleaningStarted() {}
+
     /** Recording is about to start (permission + warm-ups already done): the host must resolve
      *  any still-pending preview and reset its per-recording streaming/delivery state, exactly
      *  as the pre-extraction `startRecording` prologue did. Main thread. */
@@ -129,6 +135,7 @@ class DictationRuntime internal constructor(
     companion object {
         private const val TAG = "PhoneWhisper"
         private const val SAMPLE_RATE = 16000
+        const val BUSY_MESSAGE = "Ramblr is already dictating from another input surface"
 
         /** Backstop if no transcription/cleanup callback ever fires; covers transcription + cleanup callTimeouts. */
         private const val WATCHDOG_TIMEOUT_MS = 400_000L
@@ -369,7 +376,7 @@ class DictationRuntime internal constructor(
     internal fun startRecording() {
         val lease = leaseRegistry.tryAcquire()
         if (lease == null) {
-            toast("Ramblr is already dictating from another input surface")
+            toast(BUSY_MESSAGE)
             return
         }
         sessionLease = lease
@@ -1315,6 +1322,7 @@ class DictationRuntime internal constructor(
             val prompt = PostProcessor.interpolateVocabulary(rawPrompt, vocabulary)
 
             if (!guard.isCurrent(token)) return
+            handler.post { if (guard.isCurrent(token)) listener.onCleaningStarted() }
             Log.i(TAG, "Cleanup via ProviderChain entries=${providerChain.entries.map { it.kind }} executableSteps=${cleanupWaterfall.steps.map { it.group }}")
             PostProcessor.processProviderChain(
                 text = text,
@@ -1497,5 +1505,10 @@ class DictationRuntime internal constructor(
 
     private fun prefs() = context.getSharedPreferences("ramblr", Context.MODE_PRIVATE)
 
-    private fun toast(msg: String) { handler.post { Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() } }
+    private fun toast(msg: String) {
+        handler.post {
+            listener.onUserMessage(msg)
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
 }

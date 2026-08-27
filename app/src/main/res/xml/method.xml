@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ramblr follows the user's configured transcription language/provider. Declaring a fixed
+     subtype locale would be false, so this intentionally exposes one locale-neutral IME. -->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:supportsSwitchingToNextInputMethod="true" />
