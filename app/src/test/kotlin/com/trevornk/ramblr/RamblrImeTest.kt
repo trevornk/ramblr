@@ -54,6 +54,11 @@ class RamblrImeTest {
         ).readText()
         assertTrue(main.contains("Enable voice keyboard"))
         assertTrue(main.contains("Settings.ACTION_INPUT_METHOD_SETTINGS"))
+        assertTrue(main.contains("OnboardingSetupMode.VOICE_KEYBOARD"))
+        assertTrue(main.contains("KEY_ONBOARDING_SETUP_MODE"))
+        assertTrue(main.contains("showOnboardingVoiceKeyboardStep()"))
+        assertTrue(main.contains("setupMode == OnboardingSetupMode.FLOATING_BUTTON && !accessibilityEnabled"))
+        assertTrue(main.contains("setupMode == OnboardingSetupMode.VOICE_KEYBOARD && !isVoiceKeyboardEnabled()"))
         assertFalse(main.contains("Settings.Secure.putString"))
         assertFalse(main.contains("setInputMethod("))
     }
@@ -236,6 +241,92 @@ class RamblrImeTest {
 
         main.removeFirst().invoke()
         assertEquals(listOf("history", "commit"), events)
+    }
+
+    @Test
+    fun `two dictations pending history each commit once in order to unchanged editor`() {
+        val connection = Any()
+        val identity = ImeEditorIdentity("example.app", 42, InputType.TYPE_CLASS_TEXT)
+        val background = ArrayDeque<() -> Unit>()
+        val main = ArrayDeque<() -> Unit>()
+        val commits = mutableListOf<String>()
+        val controller = ImePanelController(
+            FakeRuntimeControl(), {},
+            editorSnapshot = { Triple(1L, identity, connection) },
+            commitText = { _, text -> commits += text; true },
+            recordHistory = { true },
+            runHistoryWrite = { background.addLast(it) },
+            postToMain = { main.addLast(it) },
+        )
+        controller.onEditorChanged(1L, identity, connection)
+
+        controller.listener.onRecordingStartRequested()
+        controller.listener.deliverText("A", null, null, null, 2_000)
+        controller.listener.onRecordingStartRequested()
+        controller.listener.deliverText("B", null, null, null, 2_000)
+
+        background.removeFirst().invoke()
+        background.removeFirst().invoke()
+        main.removeFirst().invoke()
+        main.removeFirst().invoke()
+
+        assertEquals(listOf("A", "B"), commits)
+    }
+
+    @Test
+    fun `late older completion cannot overwrite newer dictation UI`() {
+        val connection = Any()
+        val identity = ImeEditorIdentity("example.app", 42, InputType.TYPE_CLASS_TEXT)
+        val background = ArrayDeque<() -> Unit>()
+        val main = ArrayDeque<() -> Unit>()
+        val states = mutableListOf<ImeUiState>()
+        val messages = mutableListOf<String>()
+        val controller = ImePanelController(
+            FakeRuntimeControl(), states::add,
+            editorSnapshot = { Triple(1L, identity, connection) },
+            commitText = { _, text -> text != "A" },
+            recordHistory = { true },
+            runHistoryWrite = { background.addLast(it) },
+            postToMain = { main.addLast(it) },
+            userMessage = messages::add,
+        )
+        controller.onEditorChanged(1L, identity, connection)
+        controller.listener.onRecordingStartRequested()
+        controller.listener.deliverText("A", null, null, null, 2_000)
+        controller.listener.onRecordingStartRequested()
+        controller.listener.onRecordingStarted()
+
+        background.removeFirst().invoke()
+        main.removeFirst().invoke()
+
+        assertEquals(listOf(ImeUiState.RECORDING), states)
+        assertTrue(messages.isEmpty())
+    }
+
+    @Test
+    fun `duplicate async completion cannot recommit a consumed ticket`() {
+        val connection = Any()
+        val identity = ImeEditorIdentity("example.app", 42, InputType.TYPE_CLASS_TEXT)
+        val background = ArrayDeque<() -> Unit>()
+        val main = ArrayDeque<() -> Unit>()
+        var commits = 0
+        val controller = ImePanelController(
+            FakeRuntimeControl(), {},
+            editorSnapshot = { Triple(1L, identity, connection) },
+            commitText = { _, _ -> commits++; true },
+            recordHistory = { true },
+            runHistoryWrite = { background.addLast(it) },
+            postToMain = { main.addLast(it); main.addLast(it) },
+        )
+        controller.onEditorChanged(1L, identity, connection)
+        controller.listener.onRecordingStartRequested()
+        controller.listener.deliverText("once", null, null, null, 2_000)
+
+        background.removeFirst().invoke()
+        main.removeFirst().invoke()
+        main.removeFirst().invoke()
+
+        assertEquals(1, commits)
     }
 
     @Test

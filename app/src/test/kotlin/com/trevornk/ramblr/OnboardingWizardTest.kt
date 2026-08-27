@@ -44,6 +44,42 @@ class OnboardingWizardTest {
         ))
     }
 
+    @Test fun `voice keyboard setup does not require accessibility`() {
+        assertTrue(OnboardingWizard.isSetupComplete(
+            audioGranted = true,
+            setupMode = OnboardingSetupMode.VOICE_KEYBOARD,
+            accessibilityEnabled = false,
+            imeEnabled = true,
+            transcriptionLocal = true,
+            hasLocalModel = true,
+            hasApiKey = false,
+        ))
+    }
+
+    @Test fun `voice keyboard setup requires explicit IME enablement`() {
+        assertFalse(OnboardingWizard.isSetupComplete(
+            audioGranted = true,
+            setupMode = OnboardingSetupMode.VOICE_KEYBOARD,
+            accessibilityEnabled = false,
+            imeEnabled = false,
+            transcriptionLocal = true,
+            hasLocalModel = true,
+            hasApiKey = false,
+        ))
+    }
+
+    @Test fun `floating button setup still requires accessibility`() {
+        assertFalse(OnboardingWizard.isSetupComplete(
+            audioGranted = true,
+            setupMode = OnboardingSetupMode.FLOATING_BUTTON,
+            accessibilityEnabled = false,
+            imeEnabled = true,
+            transcriptionLocal = true,
+            hasLocalModel = true,
+            hasApiKey = false,
+        ))
+    }
+
     @Test fun `ready with local transcription once a model is installed`() {
         assertTrue(OnboardingWizard.isSetupComplete(
             audioGranted = true, accessibilityEnabled = true,

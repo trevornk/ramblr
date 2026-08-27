@@ -2,6 +2,7 @@ package com.trevornk.ramblr
 
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Small, Android-free policy layer around the IME host so destination safety is deterministic. */
 internal enum class ImeUiState { IDLE, RECORDING, TRANSCRIBING, CLEANING, ERROR, SECURE_FIELD }
@@ -44,14 +45,17 @@ internal interface ImeRuntimeControl {
     fun teardownAsync()
 }
 
-internal enum class ImeCommitResult { SUCCESS, STALE, REJECTED }
+internal enum class ImeCommitResult { SUCCESS, STALE, REJECTED, DUPLICATE }
 
 internal class ImeDestinationTicket internal constructor(
     internal val id: Long,
     internal val generation: Long,
     internal val identity: ImeEditorIdentity,
     internal val connection: Any,
-)
+) {
+    private val consumed = AtomicBoolean(false)
+    internal fun consume(): Boolean = consumed.compareAndSet(false, true)
+}
 
 /**
  * Binds one dictation to the exact editor generation, editor metadata, and InputConnection object
@@ -62,7 +66,7 @@ internal class ImeDestinationGuard {
     private data class Editor(val generation: Long, val identity: ImeEditorIdentity, val connection: Any)
 
     private var current: Editor? = null
-    private var activeTicket: ImeDestinationTicket? = null
+    private var latestTicket: ImeDestinationTicket? = null
     private var nextTicketId = 0L
 
     fun editorChanged(generation: Long, identity: ImeEditorIdentity, connection: Any?) {
@@ -70,21 +74,18 @@ internal class ImeDestinationGuard {
     }
 
     fun bindDictation(): ImeDestinationTicket? {
-        val editor = current ?: run {
-            activeTicket = null
-            return null
-        }
+        val editor = current ?: return null
         return ImeDestinationTicket(
             id = ++nextTicketId,
             generation = editor.generation,
             identity = editor.identity,
             connection = editor.connection,
-        ).also { activeTicket = it }
+        ).also { latestTicket = it }
     }
 
     fun invalidate() {
         current = null
-        activeTicket = null
+        latestTicket = null
     }
 
     /** One fail-closed delivery attempt. False/throw are terminal and never redirected or retried. */
@@ -94,12 +95,11 @@ internal class ImeDestinationGuard {
         commit: (Any, String) -> Boolean,
     ): ImeCommitResult {
         val bound = ticket ?: return ImeCommitResult.STALE
+        if (!bound.consume()) return ImeCommitResult.DUPLICATE
         val now = current ?: return ImeCommitResult.STALE
-        if (activeTicket !== bound ||
-            now.generation != bound.generation || now.identity != bound.identity ||
+        if (now.generation != bound.generation || now.identity != bound.identity ||
             now.connection !== bound.connection
         ) return ImeCommitResult.STALE
-        activeTicket = null
         return try {
             if (commit(bound.connection, text)) ImeCommitResult.SUCCESS else ImeCommitResult.REJECTED
         } catch (_: Exception) {
@@ -115,11 +115,12 @@ internal class ImeDestinationGuard {
         text: String,
         commit: (String) -> Boolean,
     ): ImeCommitResult {
-        val ticket = activeTicket
+        val ticket = latestTicket
         if (ticket == null || connection == null || ticket.generation != generation ||
             ticket.identity != identity || ticket.connection !== connection
         ) return ImeCommitResult.STALE
-        return commitIfCurrent(ticket, text) { _, value -> commit(value) }
+        val result = commitIfCurrent(ticket, text) { _, value -> commit(value) }
+        return if (result == ImeCommitResult.DUPLICATE) ImeCommitResult.STALE else result
     }
 }
 
@@ -140,6 +141,7 @@ internal class ImePanelController(
     private var active = true
     private var deliveryTerminal = false
     private var deliveryTicket: ImeDestinationTicket? = null
+    private var latestUiTicket: ImeDestinationTicket? = null
     @Volatile private var cachedPackageName: String? = null
     @Volatile private var editorPolicy = ImeEditorPolicy(allowsDictation = true, allowsRetention = true)
     @Volatile private var sessionAllowsRetention = true
@@ -151,6 +153,7 @@ internal class ImePanelController(
                 onEditorChanged(generation, identity, connection)
             }
             deliveryTicket = destination.bindDictation()
+            latestUiTicket = deliveryTicket
             deliveryTerminal = false
             sessionAllowsRetention = editorPolicy.allowsRetention
             renderPartial("")
@@ -217,6 +220,10 @@ internal class ImePanelController(
         } else {
             ImeCommitResult.STALE
         }
+        if (result == ImeCommitResult.DUPLICATE) return
+        val ownsUi = latestUiTicket === ticket
+        if (ownsUi) latestUiTicket = null
+        if (!ownsUi) return
         if (result != ImeCommitResult.SUCCESS) {
             renderState(ImeUiState.ERROR)
             userMessage(
@@ -253,6 +260,7 @@ internal class ImePanelController(
         active = false
         sessionAllowsRetention = false
         deliveryTicket = null
+        latestUiTicket = null
         destination.invalidate()
         runtime.invalidate()
         runtime.teardownAsync()

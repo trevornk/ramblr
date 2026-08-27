@@ -224,6 +224,32 @@ class TranscriberSlotTest {
         assertEquals(1, installed.releaseCount)
     }
 
+    @Test fun `shutdown at check publication seam rejects candidate deterministically`() {
+        val slot = TranscriberSlot<FakeResource> { it.release() }
+        val publicationReached = CountDownLatch(1)
+        val allowPublicationCheck = CountDownLatch(1)
+        val lifecycle = TranscriberLifecycle(slot) {
+            publicationReached.countDown()
+            allowPublicationCheck.await(2, TimeUnit.SECONDS)
+        }
+        val generation = requireNotNull(lifecycle.beginInitialization())
+        val candidate = FakeResource()
+        val result = AtomicInteger(-1)
+        val installThread = Thread {
+            result.set(if (lifecycle.install(generation, candidate)) 1 else 0)
+        }
+
+        installThread.start()
+        assertTrue(publicationReached.await(2, TimeUnit.SECONDS))
+        lifecycle.beginShutdown()
+        allowPublicationCheck.countDown()
+        installThread.join(2000)
+
+        assertEquals(0, result.get())
+        assertNull(slot.get())
+        assertEquals(1, candidate.releaseCount)
+    }
+
     @Test fun `shutdown invalidation does not wait for accepted replacement release`() {
         val releaseStarted = CountDownLatch(1)
         val allowRelease = CountDownLatch(1)

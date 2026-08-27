@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.ScrollView
 import android.widget.TextView
@@ -68,6 +69,9 @@ class MainActivity : BaseSettingsActivity() {
         // transcription/cleanup/streaming steps (#80). Fold-posture change while in system
         // Settings is the *normal* way this happens on a Fold.
         onboardingIntroShown = savedInstanceState?.getBoolean(STATE_ONBOARDING_INTRO_SHOWN) ?: false
+        // The invocation choice is persisted before leaving for mic/system settings. A process
+        // recreation must resume that chosen path rather than asking the user to choose again.
+        if (onboardingSetupModeOrNull() != null) onboardingIntroShown = true
 
         val root = vertical(0, 0)
 
@@ -272,8 +276,19 @@ class MainActivity : BaseSettingsActivity() {
             ProviderCredentialStore.isConfigured(this, it)
         }
         val hasModel = LocalTranscriber.availableModels(this).isNotEmpty()
+        val setupMode = onboardingSetupMode()
+        val imeEnabled = isVoiceKeyboardEnabled()
 
-        setupRowSub.text = SetupActivity.subtitle(hasAudio = audio, hasAccessibility = acc)
+        setupRowSub.text = if (setupMode == OnboardingSetupMode.VOICE_KEYBOARD) {
+            when {
+                audio && imeEnabled -> "Permission and Ramblr Voice enabled"
+                !audio && !imeEnabled -> "Audio permission and Ramblr Voice needed"
+                !audio -> "Audio permission needed"
+                else -> "Ramblr Voice needs enabling"
+            }
+        } else {
+            SetupActivity.subtitle(hasAudio = audio, hasAccessibility = acc)
+        }
         transcriptionRowSub.text = TranscriptionActivity.subtitle(this)
         cleanupRowSub.text = CleanupActivity.subtitle(this)
         livePreviewRowSub.text = LivePreviewActivity.subtitle(this)
@@ -290,13 +305,37 @@ class MainActivity : BaseSettingsActivity() {
             transcriptionLocal = useLocal,
             hasLocalModel = hasModel,
             hasApiKey = hasKey,
+            setupMode = setupMode,
+            imeEnabled = imeEnabled,
         )
 
-        statusSubtitle.text = if (ready) "Ready — tap the overlay dot to dictate" else "Setup required — tap to finish setup"
+        statusSubtitle.text = when {
+            !ready -> "Setup required — tap to finish setup"
+            setupMode == OnboardingSetupMode.VOICE_KEYBOARD -> "Ready — select Ramblr Voice to dictate"
+            else -> "Ready — tap the overlay dot to dictate"
+        }
         statusSubtitle.setTextColor(if (ready) attrColor(com.google.android.material.R.attr.colorPrimary) else attrColor(android.R.attr.textColorSecondary))
     }
 
     private fun hasPerm(p: String) = ContextCompat.checkSelfPermission(this, p) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    private fun onboardingSetupModeOrNull(): OnboardingSetupMode? = prefs()
+        .getString(KEY_ONBOARDING_SETUP_MODE, null)
+        ?.let { stored -> OnboardingSetupMode.entries.firstOrNull { it.name == stored } }
+
+    private fun onboardingSetupMode(): OnboardingSetupMode =
+        onboardingSetupModeOrNull() ?: OnboardingSetupMode.FLOATING_BUTTON
+
+    private fun selectOnboardingSetupMode(mode: OnboardingSetupMode) {
+        prefs().edit().putString(KEY_ONBOARDING_SETUP_MODE, mode.name).apply()
+    }
+
+    private fun isVoiceKeyboardEnabled(): Boolean {
+        val manager = getSystemService(InputMethodManager::class.java) ?: return false
+        return manager.enabledInputMethodList.any {
+            it.packageName == packageName && it.serviceName == RamblrImeService::class.java.name
+        }
+    }
 
     // --- #156 guard rail: "Ramblr was turned off by the system shortcut switch" banner ---
 
@@ -395,6 +434,7 @@ class MainActivity : BaseSettingsActivity() {
     private fun startWalkthrough() {
         walkthroughForced = true
         onboardingIntroShown = false
+        prefs().edit().remove(KEY_ONBOARDING_SETUP_MODE).apply()
         // A deliberate "redo" starts the callback-chained steps over from the mode step rather than
         // resuming at whatever step a prior incomplete run left persisted (#L15).
         markOnboardingStep(STEP_MODE)
@@ -404,16 +444,20 @@ class MainActivity : BaseSettingsActivity() {
     private fun advanceOnboardingStep(force: Boolean) {
         if (onboardingDialog?.isShowing == true) return
         val accessibilityEnabled = WhisperAccessibilityService.instance != null
+        val setupMode = onboardingSetupModeOrNull()
         val complete = prefs().getBoolean(KEY_ONBOARDING_COMPLETE, false)
         if (!OnboardingWizard.shouldAdvance(onboardingIntroShown, force, accessibilityEnabled, complete)) return
 
         when {
-            !onboardingIntroShown -> {
+            !onboardingIntroShown || setupMode == null -> {
                 onboardingIntroShown = true
                 showOnboardingIntro()
             }
             !hasPerm(Manifest.permission.RECORD_AUDIO) -> showOnboardingMicStep()
-            !accessibilityEnabled -> showOnboardingAccessibilityStep()
+            setupMode == OnboardingSetupMode.FLOATING_BUTTON && !accessibilityEnabled ->
+                showOnboardingAccessibilityStep()
+            setupMode == OnboardingSetupMode.VOICE_KEYBOARD && !isVoiceKeyboardEnabled() ->
+                showOnboardingVoiceKeyboardStep()
             // Resume the callback-chained steps 4/5 at the furthest one reached, so process death
             // mid-onboarding doesn't drop the user back to the mode step (#L15).
             else -> when (prefs().getString(KEY_ONBOARDING_STEP, STEP_MODE)) {
@@ -441,6 +485,8 @@ class MainActivity : BaseSettingsActivity() {
             hasApiKey = hasConfiguredCloudTranscription(ProviderChainStore.load(this)) {
                 ProviderCredentialStore.isConfigured(this, it)
             },
+            setupMode = onboardingSetupMode(),
+            imeEnabled = isVoiceKeyboardEnabled(),
         )
         if (!ready) startWalkthrough()
     }
@@ -470,17 +516,25 @@ class MainActivity : BaseSettingsActivity() {
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Welcome to Ramblr")
             .setMessage(
-                "Ramblr lets you dictate into any text field: tap the floating button, " +
-                    "speak, tap again, and your words are inserted where you were typing.\n\n" +
-                    "It needs two things to do that:\n" +
-                    "• Microphone — to record what you say\n" +
-                    "• Accessibility service — to insert the text into the focused field across apps. " +
-                    "It doesn't read your screen or run background automation; it only acts after you " +
-                    "tap the overlay button."
+                "Choose how you want to dictate:\n\n" +
+                    "• Floating button — dictate over any app. This path uses Android Accessibility " +
+                    "only to insert text after you tap Ramblr's overlay.\n\n" +
+                    "• Voice keyboard — explicitly enable Ramblr Voice as an Android input method " +
+                    "and dictate from its compact keyboard panel. This path does not require Accessibility.\n\n" +
+                    "Both paths need microphone access and use the same transcription settings."
             )
             .setCancelable(false)
-            .setPositiveButton("Get started") { _, _ -> dismissOnboarding(); advanceOnboarding() }
-            .setNegativeButton("Not now") { _, _ -> abandonWalkthrough() }
+            .setPositiveButton("Floating button") { _, _ ->
+                selectOnboardingSetupMode(OnboardingSetupMode.FLOATING_BUTTON)
+                dismissOnboarding()
+                advanceOnboarding()
+            }
+            .setNegativeButton("Voice keyboard") { _, _ ->
+                selectOnboardingSetupMode(OnboardingSetupMode.VOICE_KEYBOARD)
+                dismissOnboarding()
+                advanceOnboarding()
+            }
+            .setNeutralButton("Not now") { _, _ -> abandonWalkthrough() }
             .show()
     }
 
@@ -579,6 +633,23 @@ class MainActivity : BaseSettingsActivity() {
                 } else {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 }
+            }
+            .setNegativeButton("Not now") { _, _ -> abandonWalkthrough() }
+            .show()
+    }
+
+    private fun showOnboardingVoiceKeyboardStep() {
+        onboardingDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Step 2 of 5: Enable Ramblr Voice")
+            .setMessage(
+                "Android controls which keyboards are enabled. On the next screen, enable " +
+                    "Ramblr Voice, then return here. Ramblr will not enable or select itself.\n\n" +
+                    "When you want to dictate, select Ramblr Voice using Android's keyboard switch."
+            )
+            .setCancelable(false)
+            .setPositiveButton("Open Keyboard Settings") { _, _ ->
+                dismissOnboarding()
+                startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
             }
             .setNegativeButton("Not now") { _, _ -> abandonWalkthrough() }
             .show()
@@ -921,19 +992,27 @@ class MainActivity : BaseSettingsActivity() {
 
     private fun showOnboardingTryStep() {
         markOnboardingStep(STEP_TRY)
+        val setupMode = onboardingSetupMode()
         val testField = EditText(this).apply {
-            hint = "Tap here, then use the floating button to dictate a test phrase"
+            hint = if (setupMode == OnboardingSetupMode.VOICE_KEYBOARD) {
+                "Select Ramblr Voice, then tap its mic to dictate a test phrase"
+            } else {
+                "Tap here, then use the floating button to dictate a test phrase"
+            }
             setPadding(dp(24), dp(16), dp(24), dp(16))
         }
         val modelReady = onboardingTranscriptionModelReady()
+        val invocationInstructions = if (setupMode == OnboardingSetupMode.VOICE_KEYBOARD) {
+            "Tap the field below, select Ramblr Voice with Android's keyboard switch, then tap its mic."
+        } else {
+            "If the floating button is visible, tap it, speak a test phrase, and tap it again."
+        }
         val message = if (modelReady) {
-            "Setup is done. If the floating button is visible, tap it, speak a test phrase, and " +
-                "tap it again to confirm the text lands in the field below."
+            "Setup is done. $invocationInstructions Confirm the text lands in the field below."
         } else {
             "Setup is done, but your on-device model is still downloading in the background — " +
-                "dictation won't work until that finishes. Feel free to close this now; the " +
-                "floating button will start working as soon as the download completes, no need " +
-                "to wait here."
+                "dictation won't work until that finishes. Feel free to close this now; it will " +
+                "start working as soon as the download completes, with no need to wait here."
         }
         // #103: without this, the overlay stays hidden the whole time this dialog is up -- #35's
         // "don't cover Settings switches while MainActivity is foregrounded" logic can't tell the
@@ -943,7 +1022,9 @@ class MainActivity : BaseSettingsActivity() {
         // (Finish setup, and the dialog's own onDismiss as a catch-all for back-press/outside-tap,
         // even though setCancelable(false) below blocks the common ones) so the override never
         // outlives this one step.
-        WhisperAccessibilityService.setOverlayForceVisibleOverride(true)
+        if (setupMode == OnboardingSetupMode.FLOATING_BUTTON) {
+            WhisperAccessibilityService.setOverlayForceVisibleOverride(true)
+        }
         onboardingDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Try it out (optional)")
             .setMessage(message)
@@ -963,6 +1044,7 @@ class MainActivity : BaseSettingsActivity() {
         private const val TAG = "MainActivity"
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
         private const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
+        private const val KEY_ONBOARDING_SETUP_MODE = "onboarding_setup_mode"
         /** Instance-state key: whether the wizard already started this session (#80). */
         private const val STATE_ONBOARDING_INTRO_SHOWN = "state_onboarding_intro_shown"
         private const val KEY_STREAMING_PREVIEW = "streaming_preview_enabled"

@@ -192,10 +192,11 @@ class RamblrImeService : InputMethodService() {
         if (!editorPolicy.allowsDictation) return
         if (runtime != null) return
         lateinit var createdRuntime: DictationRuntime
+        lateinit var nativeInitialization: ImeNativeRuntimeTaskQueue.Initialization
         val runtimeControl = object : ImeRuntimeControl {
             override fun onTap() = createdRuntime.onTap()
             override fun invalidate() = createdRuntime.beginShutdown()
-            override fun teardownAsync() = ProcessImeNativeRuntimeTasks.enqueueTeardown {
+            override fun teardownAsync() = ProcessImeNativeRuntimeTasks.enqueueTeardown(nativeInitialization) {
                 createdRuntime.finishShutdownAndReleaseTranscribers()
             }
         }
@@ -218,7 +219,7 @@ class RamblrImeService : InputMethodService() {
         panelController = controller
         runtime = createdRuntime
         controller.onEditorChanged(editorGeneration, editorIdentity, currentInputConnection)
-        ProcessImeNativeRuntimeTasks.enqueueInitialization(
+        nativeInitialization = ProcessImeNativeRuntimeTasks.enqueueInitialization(
             local = createdRuntime::initLocalModel,
             streaming = createdRuntime::initStreamingModel,
         )

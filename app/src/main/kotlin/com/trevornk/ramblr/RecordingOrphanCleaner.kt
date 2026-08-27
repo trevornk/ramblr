@@ -6,6 +6,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Conservative process-start cleanup shared by accessibility and IME hosts. */
 internal class RecordingOrphanCleaner(
     private val leaseRegistry: DictationSessionLeaseRegistry,
+    private val listFiles: (File, (File) -> Boolean) -> Array<File>? = { directory, filter ->
+        directory.listFiles(filter)
+    },
 ) {
     private val completed = AtomicBoolean(false)
 
@@ -21,10 +24,11 @@ internal class RecordingOrphanCleaner(
                 cleaned = true
                 return@runIfIdle
             }
-            cleaned = cacheDir.listFiles { file ->
+            val files = listFiles(cacheDir) { file ->
                 file.name.startsWith("rec_") &&
                     (file.name.endsWith(".pcm") || file.name.endsWith(".m4a"))
-            }?.all { !it.exists() || it.delete() } != false
+            }
+            cleaned = files?.all { !it.exists() || it.delete() } ?: false
             if (cleaned) completed.set(true)
         }
         return idle && cleaned

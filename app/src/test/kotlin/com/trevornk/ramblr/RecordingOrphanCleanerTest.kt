@@ -7,6 +7,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecordingOrphanCleanerTest {
+    @Test fun `null directory listing fails without completing and retries successfully`() {
+        val cacheDir = createTempDirectory("ramblr-orphans-listing").toFile()
+        try {
+            val pcm = File(cacheDir, "rec_retry.pcm").apply { writeText("pcm") }
+            var listings = 0
+            val cleaner = RecordingOrphanCleaner(InMemoryDictationSessionLeaseRegistry()) { dir, filter ->
+                listings++
+                if (listings == 1) null else dir.listFiles(filter)
+            }
+
+            assertFalse(cleaner.cleanupOnce(cacheDir))
+            assertTrue(pcm.exists())
+            assertTrue(cleaner.cleanupOnce(cacheDir))
+            assertFalse(pcm.exists())
+        } finally {
+            cacheDir.deleteRecursively()
+        }
+    }
+
     @Test fun `accessibility startup cannot delete IME recording artifacts while lease is active`() {
         val cacheDir = createTempDirectory("ramblr-orphans-active").toFile()
         try {
