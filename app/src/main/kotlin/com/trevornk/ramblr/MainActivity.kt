@@ -481,7 +481,7 @@ class MainActivity : BaseSettingsActivity() {
             audioGranted = hasPerm(Manifest.permission.RECORD_AUDIO),
             accessibilityEnabled = WhisperAccessibilityService.instance != null,
             transcriptionLocal = prefs().getBoolean("use_local", true),
-            hasLocalModel = LocalTranscriber.availableModels(this).isNotEmpty(),
+            hasLocalModel = transcriptionModelReady(),
             hasApiKey = hasConfiguredCloudTranscription(ProviderChainStore.load(this)) {
                 ProviderCredentialStore.isConfigured(this, it)
             },
@@ -694,10 +694,9 @@ class MainActivity : BaseSettingsActivity() {
             .setPositiveButton("Use on-device (recommended)") { _, _ ->
                 dismissOnboarding()
                 prefs().edit().putBoolean("use_local", true).apply()
+                selectOnboardingModel(recommended.archive)
                 prefetchVadModel()
-                if (ModelDownloader.isInstalled(this, recommended)) {
-                    selectOnboardingModel(recommended.archive)
-                } else {
+                if (!ModelDownloader.isInstalled(this, recommended)) {
                     ModelDownloadWorker.enqueue(this, recommended)
                     toast("Downloading ${recommended.name}...")
                 }
