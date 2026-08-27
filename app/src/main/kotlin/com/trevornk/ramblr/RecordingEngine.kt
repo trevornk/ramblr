@@ -225,8 +225,16 @@ open class RecordingEngine(
         return true
     }
 
-    /** Blocks until the reader thread has stopped/released the recorder, or [timeoutMs] elapses. Safe to call from onDestroy. */
-    open fun awaitTeardown(timeoutMs: Long = 2000) {
+    /**
+     * Blocks until the reader thread has stopped/released the recorder, or [timeoutMs] elapses.
+     * Returns true only when teardown is confirmed, so lifecycle owners do not hand microphone
+     * ownership to a replacement host while a timed-out reader is still alive.
+     */
+    open fun awaitTeardown(timeoutMs: Long = 2000): Boolean {
         readerThread?.join(timeoutMs)
+        return readerThread?.isAlive != true
     }
+
+    /** Non-blocking teardown probe used by terminal reset paths before releasing a session lease. */
+    open fun isReaderTeardownPending(): Boolean = readerThread?.isAlive == true
 }

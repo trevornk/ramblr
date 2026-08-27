@@ -116,9 +116,10 @@ interface RuntimeListener {
  * [context] is whatever Context the host is (the service passes itself); the runtime only uses
  * Context-level APIs (prefs, cacheDir, system services, Toast), never service-only ones.
  */
-class DictationRuntime(
+class DictationRuntime internal constructor(
     private val context: Context,
     private val listener: RuntimeListener,
+    private val leaseRegistry: DictationSessionLeaseRegistry = ProcessDictationSessionLeaseRegistry,
     /** Test seam: lets host-side unit tests substitute a fake engine at the capture boundary.
      *  The default is exactly the pre-extraction construction. */
     private val engineFactory: (File, RecordingStateMachine) -> RecordingEngine =
@@ -136,6 +137,19 @@ class DictationRuntime(
     private val stateMachine = RecordingStateMachine()
 
     @Volatile private var recordingEngine: RecordingEngine? = null
+    @Volatile private var sessionLease: DictationSessionLease? = null
+    @Volatile private var shuttingDown = false
+    @Volatile private var shutdownLeaseAwaitingReader: DictationSessionLease? = null
+
+    /** Releases only the exact session captured by the caller; stale callbacks are harmless. */
+    private fun releaseSessionLease(lease: DictationSessionLease?) {
+        if (lease == null) return
+        synchronized(this) {
+            if (sessionLease !== lease) return
+            sessionLease = null
+        }
+        leaseRegistry.release(lease)
+    }
 
     /** Non-null only while a recording with silence-based auto-stop (#108, mode 1) active is in
      *  progress -- see [startRecording]/[onRecordingFinished]. Zero-cost when the feature is off
@@ -353,28 +367,36 @@ class DictationRuntime(
     }
 
     internal fun startRecording() {
-        if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
-            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            toast("Grant audio permission in Ramblr app"); return
+        val lease = leaseRegistry.tryAcquire()
+        if (lease == null) {
+            toast("Ramblr is already dictating from another input surface")
+            return
         }
+        sessionLease = lease
+        var recordingStarted = false
+        try {
+            if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                toast("Grant audio permission in Ramblr app"); return
+            }
 
-        warmUpLocalCleanupModelIfNeeded()
-        warmUpTranscribersIfTrimmed()
-        warmUpCloudConnectionsIfNeeded()
+            warmUpLocalCleanupModelIfNeeded()
+            warmUpTranscribersIfTrimmed()
+            warmUpCloudConnectionsIfNeeded()
 
         // Host-owned pre-recording teardown: resolve a still-pending preview (#40), end the
         // previous streaming session, flush the pending handoff, and reset the live-preview
         // bubble throttle -- verbatim the pre-extraction startRecording prologue, now behind the
         // listener seam because every one of those pieces is host delivery state.
-        listener.onRecordingStartRequested()
-        val streamingActive = streamingTranscriberSlot.get() != null
-        if (streamingActive) streamingTranscriberSlot.use { it.beginSession() }
+            listener.onRecordingStartRequested()
+            val streamingActive = streamingTranscriberSlot.get() != null
+            if (streamingActive) streamingTranscriberSlot.use { it.beginSession() }
 
         // Silence-based auto-stop (#108, mode 1): additive and opt-in -- a session (and the
         // native Vad it owns) is only ever created when the toggle is on AND the model is
         // actually installed. Either condition being false means zero VAD instantiation and
         // byte-for-byte identical recording behavior to before this feature existed.
-        val autoStopSession = if (SilenceAutoStopToggle.isEnabled(context)) {
+            val autoStopSession = if (SilenceAutoStopToggle.isEnabled(context)) {
             ModelDownloader.vadModelFile(context, SILERO_VAD_MODEL)?.let { modelFile ->
                 try {
                     SilenceAutoStopSession(
@@ -388,14 +410,14 @@ class DictationRuntime(
                 }
             }
         } else null
-        silenceAutoStopSession = autoStopSession
+            silenceAutoStopSession = autoStopSession
 
         // Compressed-upload AAC encoding (#109): additive and opt-in -- a session (and the
         // MediaCodec/MediaMuxer it owns) is only ever created when CompressedUploadToggle is on.
         // Unlike #108's VAD, no model download or extra precondition is needed: AAC-LC is a
         // built-in platform codec. Toggle off means zero AacEncoderSession instantiation and
         // byte-for-byte identical recording behavior to before this feature existed.
-        val aacSession = if (CompressedUploadToggle.isEnabled(context)) {
+            val aacSession = if (CompressedUploadToggle.isEnabled(context)) {
             try {
                 AacEncoderSession(context.cacheDir)
             } catch (e: Exception) {
@@ -403,9 +425,9 @@ class DictationRuntime(
                 null
             }
         } else null
-        aacEncoderSession = aacSession
+            aacEncoderSession = aacSession
 
-        val onChunk: (ByteArray, Int) -> Unit = when {
+            val onChunk: (ByteArray, Int) -> Unit = when {
             streamingActive && autoStopSession != null && aacSession != null -> { buf, len ->
                 handleStreamingChunk(buf, len)
                 autoStopSession.onChunk(buf, len)
@@ -429,8 +451,8 @@ class DictationRuntime(
             else -> { _, _ -> }
         }
 
-        val engine = engineFactory(context.cacheDir, stateMachine)
-        val started = engine.start(
+            val engine = engineFactory(context.cacheDir, stateMachine)
+            val started = engine.start(
             onFinished = { result ->
                 // H1 (#193): release the per-recording LOCALS captured by this closure, never the
                 // fields. A reader stalled in AudioRecord.read() can outlive a rapid
@@ -445,11 +467,11 @@ class DictationRuntime(
                 aacSession?.release()
                 if (aacEncoderSession === aacSession) aacEncoderSession = null
                 val finalResult = if (compressedFile != null) result.copy(compressedFile = compressedFile) else result
-                onRecordingFinished(engine, finalResult)
+                onRecordingFinished(engine, finalResult, lease)
             },
             onChunk = onChunk
         )
-        if (!started) {
+            if (!started) {
             // End the streaming session so a failed recorder start doesn't leak the OnlineStream
             // opened by beginSession() above until the next recording (L11).
             if (streamingActive) listener.onRecordingStartFailed()
@@ -458,23 +480,28 @@ class DictationRuntime(
             aacSession?.release()
             aacEncoderSession = null
             toast("Couldn't start recording — mic busy?")
-            return
-        }
+                return
+            }
 
-        recordingEngine = engine
+            recordingStarted = true
+            recordingEngine = engine
         // M6: recording is genuinely live -- open the bounded wakelock window that spans
-        // recording + transcription; resetToIdle() (the terminal-state funnel) closes it.
+        // recording + transcription; resetToIdle (the terminal-state funnel) closes it.
         // Placed after the `started` check so a failed recorder start never acquires.
-        acquireTranscriptionWakeLock()
-        listener.onRecordingStarted()
+            acquireTranscriptionWakeLock()
+            listener.onRecordingStarted()
+        } finally {
+            if (!recordingStarted) releaseSessionLease(lease)
+        }
     }
 
     /** Flips shared state; the reader thread notices, drains, tears down and hands off via [onRecordingFinished]. */
     internal fun stopAndTranscribe() {
+        val lease = sessionLease ?: return
         if (!stateMachine.tryStartTranscribing()) return
         activeToken = guard.start()
         pipelineTiming.start(PipelineTiming(stopTapAtMs = System.currentTimeMillis(), correlationId = correlationIdFor(activeToken)))
-        armWatchdog(activeToken)
+        armWatchdog(activeToken, lease)
         listener.onEnterTranscribingUi()
     }
 
@@ -539,16 +566,17 @@ class DictationRuntime(
     /** Long-press while TRANSCRIBING (see the host's overlay touch listener): abort the in-flight call and return to idle. */
     fun cancelTranscription() {
         if (stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING) return
+        val lease = sessionLease ?: return
         inFlightCall.cancel()
         // H2 (#192): this dictation will never reach finishInjection, so drop its timeline now --
         // otherwise the next unrelated injection would consume it as its own.
         pipelineTiming.abandon()
-        resetToIdle()
+        resetToIdle(lease)
         toast("Transcription cancelled")
     }
 
     /** Backstop for a callback that never arrives (stalled socket, hung local model, etc). See #20. */
-    private fun armWatchdog(token: Int) {
+    private fun armWatchdog(token: Int, lease: DictationSessionLease) {
         // Remove any previously-armed watchdog so a fresh arm (e.g. the transcribe->cleanup handoff
         // arms a second one) doesn't leave the first runnable sitting in the handler queue for its
         // full 400s (L14). The runnable is held so resetToIdle/shutdown can remove it on normal
@@ -561,7 +589,7 @@ class DictationRuntime(
                 // H2 (#192): a timed-out dictation never reaches finishInjection; drop its
                 // timeline so a later unrelated injection can't consume it.
                 pipelineTiming.abandon()
-                resetToIdle()
+                resetToIdle(lease)
                 toast("Transcription timed out")
             }
         }
@@ -575,25 +603,34 @@ class DictationRuntime(
     }
 
     /** Common teardown for every path back to IDLE: normal completion, cancel, or watchdog. */
-    internal fun resetToIdle() {
-        cancelWatchdog()
-        guard.cancel()
-        activeToken = 0
-        // M6: the pipeline is terminal here -- injection finished, cancel, watchdog, or error
-        // (reset(msg) funnels here too) -- so the recording+transcription wakelock window ends.
-        // isHeld-guarded and non-reference-counted, so the paths where no dictation was running
-        // (e.g. preview-before-inject's early resetToIdle) are harmless no-ops or early releases
-        // that the next startRecording() re-acquires.
-        releaseTranscriptionWakeLock()
-        // #115: deliberately NOT abandoned here. resetToIdle() runs immediately after beginPreview()
-        // too (preview-before-inject, #40) -- well before the real injectText() call that resolves
-        // the preview, possibly seconds later on a timeout. Abandoning here would silently drop
-        // pipeline timing for every previewed dictation. Instead each non-happy-path exit
-        // (cancel, watchdog, no-speech, reset(msg)) calls pipelineTiming.abandon() itself (H2,
-        // #192), and the happy path consumes exactly once in the host's finishInjection().
-        stateMachine.reset()
-        listener.onIdleUi()
-        teardownStreamingPreview()
+    internal fun resetToIdle(expectedLease: DictationSessionLease) {
+        if (sessionLease !== expectedLease) return
+        try {
+            cancelWatchdog()
+            guard.cancel()
+            activeToken = 0
+            // M6: the pipeline is terminal here -- injection finished, cancel, watchdog, or error
+            // (reset(msg) funnels here too) -- so the recording+transcription wakelock window ends.
+            // isHeld-guarded and non-reference-counted, so the paths where no dictation was running
+            // (e.g. preview-before-inject's early resetToIdle) are harmless no-ops or early releases
+            // that the next startRecording() re-acquires.
+            releaseTranscriptionWakeLock()
+            // #115: deliberately NOT abandoned here. resetToIdle runs immediately after beginPreview()
+            // too (preview-before-inject, #40) -- well before the real injectText() call that resolves
+            // the preview, possibly seconds later on a timeout. Abandoning here would silently drop
+            // pipeline timing for every previewed dictation. Instead each non-happy-path exit
+            // (cancel, watchdog, no-speech, reset(msg)) calls pipelineTiming.abandon() itself (H2,
+            // #192), and the happy path consumes exactly once in the host's finishInjection().
+            stateMachine.reset()
+            listener.onIdleUi()
+            teardownStreamingPreview()
+        } finally {
+            // Cancellation can reach IDLE while AudioRecord's reader is still draining. Its exact
+            // lease stays held until onRecordingFinished confirms the microphone is released.
+            if (recordingEngine?.isReaderTeardownPending() != true) {
+                releaseSessionLease(expectedLease)
+            }
+        }
     }
 
     /** The runtime half of the pre-extraction `teardownStreamingPreview()`: the host moves its
@@ -607,12 +644,26 @@ class DictationRuntime(
     }
 
     /** Called on the reader thread once the AudioRecord has been drained and released. */
-    private fun onRecordingFinished(engine: RecordingEngine, result: RecordingEngine.Result) {
+    private fun onRecordingFinished(
+        engine: RecordingEngine,
+        result: RecordingEngine.Result,
+        lease: DictationSessionLease,
+    ) {
         // Clear the reference only if it still points at THIS engine (H2): a late old-session
         // handoff must not null out the *new* engine's reference, or shutdown would skip its
         // teardown and leave the new reader keeping the mic hot after the service appears off.
         if (recordingEngine === engine) recordingEngine = null
-        if (result.discarded) return // service destroyed / recording forced off — nothing to transcribe
+        if (result.discarded) {
+            // During shutdown the host deliberately keeps ownership until reader teardown AND
+            // cancellation finish below. Every other discarded handoff can release immediately.
+            if (!shuttingDown) {
+                releaseSessionLease(lease)
+            } else if (shutdownLeaseAwaitingReader === lease) {
+                shutdownLeaseAwaitingReader = null
+                releaseSessionLease(lease)
+            }
+            return // service destroyed / recording forced off — nothing to transcribe
+        }
 
         // #115: mark stop-tap -> reader-drain/PCM-handoff the instant it actually happens, on
         // this reader thread, rather than waiting for the main-thread token resolution below --
@@ -623,7 +674,7 @@ class DictationRuntime(
         val token = when {
             activeToken != 0 && guard.isCurrent(activeToken) -> activeToken
             result.stopReason == RecordingEngine.StopReason.MAX_DURATION -> {
-                startMaxDurationTranscription(result)
+                startMaxDurationTranscription(result, lease)
                 return
             }
             else -> {
@@ -632,22 +683,26 @@ class DictationRuntime(
                 // CAS this reader thread reacted to, so deciding to discard here could silently
                 // drop a real dictation. Resolve on the main thread instead, where token/state
                 // are authoritative — mirroring startMaxDurationTranscription's pattern.
-                handler.post { resolveLateRecordingOnMain(result) }
+                handler.post { resolveLateRecordingOnMain(result, lease) }
                 return
             }
         }
-        continueTranscription(result, token)
+        continueTranscription(result, token, lease)
     }
 
     /** Main-thread resolution for a recording that finished without a token (#66/#90) — see
      *  [resolveLateRecording] for the decision table. */
-    private fun resolveLateRecordingOnMain(result: RecordingEngine.Result) {
+    private fun resolveLateRecordingOnMain(
+        result: RecordingEngine.Result,
+        lease: DictationSessionLease,
+    ) {
         val token = activeToken
         when (resolveLateRecording(token, guard.isCurrent(token), stateMachine.current())) {
-            LateRecordingResolution.CONTINUE_TRANSCRIPTION -> thread { continueTranscription(result, token) }
+            LateRecordingResolution.CONTINUE_TRANSCRIPTION -> thread { continueTranscription(result, token, lease) }
             LateRecordingResolution.DISCARD -> {
                 result.pcmFile?.delete()
                 result.compressedFile?.delete()
+                releaseSessionLease(lease)
             }
             LateRecordingResolution.DISCARD_AND_RESET -> {
                 // Mic error mid-recording (#90): the reader thread self-claimed TRANSCRIBING but
@@ -655,7 +710,10 @@ class DictationRuntime(
                 // overlay stays stuck in TRANSCRIBING with taps as no-ops forever.
                 result.pcmFile?.delete()
                 result.compressedFile?.delete()
-                reset(result.errorMessage?.let { "Recording error: $it" } ?: "Recording stopped unexpectedly")
+                resetRecordingError(
+                    result.errorMessage?.let { "Recording error: $it" } ?: "Recording stopped unexpectedly",
+                    lease,
+                )
             }
         }
     }
@@ -665,11 +723,15 @@ class DictationRuntime(
      * that token on the main thread with a fresh state check; if the user/service already reset to
      * IDLE, discard the temp file instead of resurrecting a cancelled transcription.
      */
-    private fun startMaxDurationTranscription(result: RecordingEngine.Result) {
+    private fun startMaxDurationTranscription(
+        result: RecordingEngine.Result,
+        lease: DictationSessionLease,
+    ) {
         handler.post {
             if (stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING || activeToken != 0) {
                 result.pcmFile?.delete()
                 result.compressedFile?.delete()
+                releaseSessionLease(lease)
                 return@post
             }
             val token = guard.start()
@@ -681,16 +743,20 @@ class DictationRuntime(
             // any pipelineTiming existed to record it against.
             val nowMs = System.currentTimeMillis()
             pipelineTiming.start(PipelineTiming(stopTapAtMs = nowMs, correlationId = correlationIdFor(token), drainAtMs = nowMs))
-            armWatchdog(token)
+            armWatchdog(token, lease)
             listener.onEnterTranscribingUi()
             toast("Recording limit reached (10 min) — transcribing…")
-            thread { continueTranscription(result, token) }
+            thread { continueTranscription(result, token, lease) }
         }
     }
 
-    private fun continueTranscription(result: RecordingEngine.Result, token: Int) {
+    private fun continueTranscription(
+        result: RecordingEngine.Result,
+        token: Int,
+        lease: DictationSessionLease,
+    ) {
         val file = result.pcmFile
-        if (file == null) { reset("No audio captured"); return }
+        if (file == null) { reset("No audio captured", token, lease); return }
         if (result.errorMessage != null) Log.e(TAG, "Recording ended with error: ${result.errorMessage}")
 
         // M3a (#192): a recording under the minimum duration floor (~300ms of PCM) cannot contain
@@ -700,7 +766,7 @@ class DictationRuntime(
             Log.i(TAG, "Recording below ${MIN_RECORDING_DURATION_MS}ms floor (${file.length()} bytes); discarding")
             file.delete()
             result.compressedFile?.delete()
-            reset("No speech detected")
+            reset("No speech detected", token, lease)
             return
         }
 
@@ -714,7 +780,7 @@ class DictationRuntime(
         when {
             useLocal && transcriberSlot.get() != null -> {
                 compressedFile?.delete()
-                transcribeLocal(file, token)
+                transcribeLocal(file, token, lease)
             }
             // #98 UX follow-up: previously this fell straight through to transcribeApi() whenever
             // the local model wasn't loaded yet, regardless of *why* -- including the real-world
@@ -727,13 +793,13 @@ class DictationRuntime(
             // configured -- unless #100's "fall back to cloud if on-device fails" toggle is on,
             // in which case a not-yet-downloaded local model is exactly the case that toggle
             // exists for.
-            useLocal && allowCloudFallback -> transcribeApi(file, token, compressedFile)
+            useLocal && allowCloudFallback -> transcribeApi(file, token, compressedFile, lease)
             useLocal -> {
                 compressedFile?.delete()
                 file.delete()
-                reset("Local model still downloading — try again once it finishes")
+                reset("Local model still downloading — try again once it finishes", token, lease)
             }
-            else -> transcribeApi(file, token, compressedFile)
+            else -> transcribeApi(file, token, compressedFile, lease)
         }
     }
 
@@ -781,7 +847,12 @@ class DictationRuntime(
      * still transcribe it, and [transcribeApi]'s `advanceOrGiveUp` deletes it once the chain is
      * exhausted -- the [TranscriptionChain.shouldDeletePcm] contract.
      */
-    private fun transcribeLocal(file: File, token: Int, onChainFailure: ((String) -> Unit)? = null) {
+    private fun transcribeLocal(
+        file: File,
+        token: Int,
+        lease: DictationSessionLease,
+        onChainFailure: ((String) -> Unit)? = null,
+    ) {
         thread {
             // Benchmark-log timing starts before the read/decode too, so a failure there (rare,
             // but possible on a corrupt/truncated PCM file) still gets an honest latency instead
@@ -847,7 +918,7 @@ class DictationRuntime(
                     rawText = text,
                 )
 
-                handleTranscriptionResult(text, token)
+                handleTranscriptionResult(text, token, lease)
             } catch (e: Exception) {
                 Log.e(TAG, "Local transcription failed", e)
                 BenchmarkLogger.log(
@@ -887,7 +958,7 @@ class DictationRuntime(
                     handler.post {
                         if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                         toast("Local error: ${e.message}")
-                        resetToIdle()
+                        resetToIdle(lease)
                     }
                 }
             }
@@ -907,14 +978,19 @@ class DictationRuntime(
     private fun vocabularyTerms(): List<String> =
         VocabularyTerms.parse(prefs().getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED))
 
-    private fun transcribeApi(file: File, token: Int, compressedFile: File? = null) {
+    private fun transcribeApi(
+        file: File,
+        token: Int,
+        compressedFile: File? = null,
+        lease: DictationSessionLease,
+    ) {
         val chain = ProviderChainStore.load(context)
         val allowLocalFallback = DictationModeToggle.allowLocalFallback(context)
         val candidates = ProviderChainRuntime.transcriptionCandidates(chain, allowLocalFallback)
         if (candidates.isEmpty()) {
             file.delete()
             compressedFile?.delete()
-            reset("No transcription provider configured")
+            reset("No transcription provider configured", token, lease)
             return
         }
 
@@ -930,7 +1006,7 @@ class DictationRuntime(
             if (index >= candidates.size) {
                 file.delete()
                 remainingCompressedFile?.delete()
-                reset("Set API key in Ramblr app")
+                reset("Set API key in Ramblr app", token, lease)
                 return
             }
             val entry = candidates[index]
@@ -967,7 +1043,7 @@ class DictationRuntime(
                     } else {
                         file.delete()
                         remainingCompressedFile?.delete()
-                        reset("Error: ${error ?: "transcription failed"}")
+                        reset("Error: ${error ?: "transcription failed"}", token, lease)
                     }
                 }
             }
@@ -1051,7 +1127,7 @@ class DictationRuntime(
                         if (success) {
                             file.delete()
                             uploadCompressedFile?.delete()
-                            handleTranscriptionResult(result.text, token)
+                            handleTranscriptionResult(result.text, token, lease)
                         } else {
                             advanceOrGiveUp(result.error ?: "empty transcript")
                         }
@@ -1069,7 +1145,7 @@ class DictationRuntime(
                     // deletes it at chain exhaustion) instead of transcribeLocal's direct-path
                     // delete-and-reset. See transcribeLocal's PCM-lifetime kdoc and
                     // TranscriptionChain.shouldDeletePcm.
-                    transcribeLocal(file, token, onChainFailure = { error -> advanceOrGiveUp(error) })
+                    transcribeLocal(file, token, lease, onChainFailure = { error -> advanceOrGiveUp(error) })
                 }
                 ProviderKind.GEMINI -> {
                     val apiKey = ProviderCredentialStore.get(context, ProviderKind.GEMINI)
@@ -1123,7 +1199,7 @@ class DictationRuntime(
                             if (success) {
                                 file.delete()
                                 uploadCompressedFile?.delete()
-                                handleTranscriptionResult(result.text, token)
+                                handleTranscriptionResult(result.text, token, lease)
                             } else {
                                 advanceOrGiveUp(result.error ?: "empty transcript")
                             }
@@ -1137,7 +1213,18 @@ class DictationRuntime(
         attempt(0)
     }
 
+    /** Test seam retaining the existing token-only API; stale tokens never borrow a newer lease. */
     internal fun handleTranscriptionResult(text: String?, token: Int) {
+        val lease = sessionLease ?: return
+        if (activeToken != token || !guard.isCurrent(token)) return
+        handleTranscriptionResult(text, token, lease)
+    }
+
+    private fun handleTranscriptionResult(
+        text: String?,
+        token: Int,
+        lease: DictationSessionLease,
+    ) {
         if (text.isNullOrBlank()) {
             // H2 (#192): a no-speech dictation never reaches finishInjection -- abandon its
             // timing so a later unrelated injection (e.g. feedback-bubble raw-text retry) can't
@@ -1146,7 +1233,7 @@ class DictationRuntime(
             handler.post {
                 if (!guard.isCurrent(token)) return@post
                 toast("No speech detected")
-                resetToIdle()
+                resetToIdle(lease)
             }
             return
         }
@@ -1159,7 +1246,7 @@ class DictationRuntime(
             handler.post {
                 if (!guard.isCurrent(token)) return@post
                 listener.deliverText(text, rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
-                resetToIdle()
+                resetToIdle(lease)
             }
             return
         }
@@ -1193,7 +1280,7 @@ class DictationRuntime(
                 handler.post {
                     if (!guard.isCurrent(token)) return@post
                     listener.deliverText(text, rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
-                    resetToIdle()
+                    resetToIdle(lease)
                 }
                 return
             }
@@ -1210,7 +1297,7 @@ class DictationRuntime(
                     if (!guard.isCurrent(token)) return@post
                     toast("Post-processing needs API key. Using raw text.")
                     listener.deliverText(text, rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
-                    resetToIdle()
+                    resetToIdle(lease)
                 }
                 return
             }
@@ -1266,14 +1353,14 @@ class DictationRuntime(
                         // overlay.
                         listener.deliverText(text, rawText = null, paidFallbackGroup = null, cleanupError = reason, feedbackDurationMs = 4000)
                     }
-                    resetToIdle()
+                    resetToIdle(lease)
                 }
             }
         } else {
             handler.post {
                 if (!guard.isCurrent(token)) return@post
                 listener.deliverText(text, rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
-                resetToIdle()
+                resetToIdle(lease)
             }
         }
     }
@@ -1295,17 +1382,29 @@ class DictationRuntime(
         return step.group
     }
 
-    /** Safe to call from any thread: [resetToIdle] mutates main-thread-only state
-     *  (the host's streamingSession/pendingStreamingHandoff, node recycling, the guard), and this
-     *  is the one entry point reachable from the RecordingEngine reader thread (fast tap-tap with
-     *  zero bytes captured, or missing API key) -- so it hops (#72). */
-    private fun reset(msg: String) {
+    /** Safe to call from any thread; both token and lease bind the reset to its originating session. */
+    private fun reset(msg: String, token: Int, expectedLease: DictationSessionLease) {
+        if (!guard.isCurrent(token) || sessionLease !== expectedLease) return
         toast(msg)
         // H2 (#192): every reset(msg) call site is a terminal error/give-up exit (no audio, chain
         // exhausted, recording error, ...) after which no finishInjection will run for this
         // dictation -- abandon its timing so it can't be misattributed to a later injection.
         pipelineTiming.abandon()
-        handler.post { resetToIdle() }
+        handler.post {
+            if (!guard.isCurrent(token) || sessionLease !== expectedLease) return@post
+            resetToIdle(expectedLease)
+        }
+    }
+
+    /** Tokenless recorder-error reset, still compare-bound to the exact recording lease. */
+    private fun resetRecordingError(msg: String, expectedLease: DictationSessionLease) {
+        if (sessionLease !== expectedLease) return
+        toast(msg)
+        pipelineTiming.abandon()
+        handler.post {
+            if (sessionLease !== expectedLease) return@post
+            resetToIdle(expectedLease)
+        }
     }
 
     // --- Streaming preview (#29) ---
@@ -1331,31 +1430,47 @@ class DictationRuntime(
      * host interleaves its own pieces around this call -- see the service's onDestroy).
      */
     fun shutdown() {
-        // If a recording is in progress, force the reader thread off RECORDING/TRANSCRIBING so
-        // it tears down the AudioRecord and discards buffered PCM instead of leaking the mic or
-        // silently continuing to record after the service appears off. reset() runs
-        // unconditionally (H2): even if recordingEngine reads null here, a late old-session
-        // handoff could have raced our read of it while a reader is still live, so we must always
-        // walk the shared state machine out of RECORDING/TRANSCRIBING.
-        stateMachine.reset()
-        recordingEngine?.awaitTeardown()
-        recordingEngine = null
-        // Belt-and-suspenders alongside the release already wired into startRecording's onFinished
-        // (#108): awaitTeardown above blocks until the reader thread's onFinished has run, so this
-        // is normally already null, but a stray VAD session must never survive service teardown.
-        silenceAutoStopSession?.release()
-        silenceAutoStopSession = null
-        // Belt-and-suspenders alongside the release already wired into startRecording's onFinished
-        // (#109): awaitTeardown above blocks until the reader thread's onFinished has run, so this
-        // is normally already null, but a stray encoder session must never survive service teardown
-        // and leave a partial .m4a temp file behind.
-        aacEncoderSession?.release()
-        aacEncoderSession = null
-        cancelWatchdog()
-        guard.cancel()
+        shuttingDown = true
+        val lease = sessionLease
+        val engine = recordingEngine
+        if (engine != null) shutdownLeaseAwaitingReader = lease
+        // Cancel transcription work before waiting for capture teardown. If the reader times out,
+        // its eventual callback can now release ownership knowing both terminal conditions hold.
         inFlightCall.cancel()
+        var readerTeardownCompleted = engine == null
+        try {
+            // If a recording is in progress, force the reader thread off RECORDING/TRANSCRIBING so
+            // it tears down the AudioRecord and discards buffered PCM instead of leaking the mic or
+            // silently continuing to record after the service appears off. reset() runs
+            // unconditionally (H2): even if recordingEngine reads null here, a late old-session
+            // handoff could have raced our read of it while a reader is still live, so we must always
+            // walk the shared state machine out of RECORDING/TRANSCRIBING.
+            stateMachine.reset()
+            readerTeardownCompleted = engine?.awaitTeardown() ?: true
+            recordingEngine = null
+            // Belt-and-suspenders alongside the release already wired into startRecording's onFinished
+            // (#108): awaitTeardown above blocks until the reader thread's onFinished has run, so this
+            // is normally already null, but a stray VAD session must never survive service teardown.
+            silenceAutoStopSession?.release()
+            silenceAutoStopSession = null
+            // Belt-and-suspenders alongside the release already wired into startRecording's onFinished
+            // (#109): awaitTeardown above blocks until the reader thread's onFinished has run, so this
+            // is normally already null, but a stray encoder session must never survive service teardown
+            // and leave a partial .m4a temp file behind.
+            aacEncoderSession?.release()
+            aacEncoderSession = null
+            cancelWatchdog()
+            guard.cancel()
+        } finally {
+            // A timed-out reader keeps the lease until its onFinished callback confirms AudioRecord
+            // teardown. Otherwise release now; active capture never migrates to another destination.
+            if (readerTeardownCompleted) {
+                if (shutdownLeaseAwaitingReader === lease) shutdownLeaseAwaitingReader = null
+                releaseSessionLease(lease)
+            }
+        }
         // M6 belt-and-suspenders: service teardown is terminal for any in-flight dictation, and
-        // resetToIdle() may never run for it. isHeld-guarded, so a no-dictation destroy is a no-op.
+        // resetToIdle may never run for it. isHeld-guarded, so a no-dictation destroy is a no-op.
         releaseTranscriptionWakeLock()
         // The cancel above makes any in-flight local completion abort at its next piece check
         // (#83), so the holder's daemon thread can close the cached ~1 GB cleanup model promptly

@@ -7,6 +7,7 @@ import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -15,6 +16,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowToast
 
 /**
  * Host-side state-transition tests for [DictationRuntime] (#143 Phase 1) -- the pipeline logic
@@ -39,6 +41,7 @@ class DictationRuntimeTest {
     private lateinit var app: Application
     private lateinit var listener: RecordingListener
     private lateinit var engines: MutableList<FakeRecordingEngine>
+    private lateinit var leaseRegistry: InMemoryDictationSessionLeaseRegistry
     private lateinit var runtime: DictationRuntime
 
     /** Records every listener callback in arrival order, so ordering assertions are direct. */
@@ -88,6 +91,7 @@ class DictationRuntimeTest {
         var onFinished: ((Result) -> Unit)? = null
         var onChunk: ((ByteArray, Int) -> Unit)? = null
         var startResult = true
+        var teardownCompleted = true
 
         override fun start(onFinished: (Result) -> Unit, onChunk: (ByteArray, Int) -> Unit): Boolean {
             if (!startResult) return false
@@ -97,7 +101,9 @@ class DictationRuntimeTest {
             return true
         }
 
-        override fun awaitTeardown(timeoutMs: Long) {}
+        override fun awaitTeardown(timeoutMs: Long): Boolean = teardownCompleted
+
+        override fun isReaderTeardownPending(): Boolean = !teardownCompleted
 
         /** Mirrors the real reader thread's end-of-loop handoff: claim TRANSCRIBING if nobody
          *  else has (max-duration/error paths), then report discarded from the current state. */
@@ -121,7 +127,8 @@ class DictationRuntimeTest {
         shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
         listener = RecordingListener()
         engines = mutableListOf()
-        runtime = DictationRuntime(app, listener) { cacheDir, stateMachine ->
+        leaseRegistry = InMemoryDictationSessionLeaseRegistry()
+        runtime = DictationRuntime(app, listener, leaseRegistry) { cacheDir, stateMachine ->
             FakeRecordingEngine(cacheDir, stateMachine).also { engines += it }
         }
     }
@@ -145,6 +152,45 @@ class DictationRuntimeTest {
         runtime.onTap()
         assertEquals(RecordingStateMachine.State.RECORDING, runtime.currentState())
         assertEquals(listOf("startRequested", "recordingStarted"), listener.events)
+    }
+
+    @Test
+    fun `second runtime is rejected before host or recorder setup while first owns dictation`() {
+        runtime.onTap()
+        val secondListener = RecordingListener()
+        val secondEngines = mutableListOf<FakeRecordingEngine>()
+        val secondRuntime = DictationRuntime(app, secondListener, leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine).also { secondEngines += it }
+        }
+
+        secondRuntime.onTap()
+        idleMainLooper()
+
+        assertEquals(RecordingStateMachine.State.IDLE, secondRuntime.currentState())
+        assertTrue(secondListener.events.isEmpty())
+        assertTrue(secondEngines.isEmpty())
+        assertEquals(
+            "Ramblr is already dictating from another input surface",
+            ShadowToast.getTextOfLatestToast(),
+        )
+    }
+
+    @Test
+    fun `normal completion releases lease for another runtime`() {
+        runtime.onTap()
+        runtime.onTap()
+        runtime.handleTranscriptionResult("first dictation", token = 1)
+        idleMainLooper()
+
+        val secondListener = RecordingListener()
+        val secondEngines = mutableListOf<FakeRecordingEngine>()
+        val secondRuntime = DictationRuntime(app, secondListener, leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine).also { secondEngines += it }
+        }
+        secondRuntime.onTap()
+
+        assertEquals(RecordingStateMachine.State.RECORDING, secondRuntime.currentState())
+        assertEquals(1, secondEngines.size)
     }
 
     @Test
@@ -276,6 +322,46 @@ class DictationRuntimeTest {
     }
 
     @Test
+    fun `cancel releases lease for another runtime`() {
+        runtime.onTap()
+        runtime.onTap()
+        runtime.cancelTranscription()
+        idleMainLooper()
+
+        val secondListener = RecordingListener()
+        val secondEngines = mutableListOf<FakeRecordingEngine>()
+        val secondRuntime = DictationRuntime(app, secondListener, leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine).also { secondEngines += it }
+        }
+        secondRuntime.onTap()
+
+        assertEquals(RecordingStateMachine.State.RECORDING, secondRuntime.currentState())
+        assertEquals(1, secondEngines.size)
+    }
+
+    @Test
+    fun `cancel with delayed reader teardown blocks another runtime until old reader finishes`() {
+        runtime.onTap()
+        val stalledEngine = engines.single().also { it.teardownCompleted = false }
+        runtime.onTap()
+        runtime.cancelTranscription()
+
+        val contenderListener = RecordingListener()
+        val contenderEngines = mutableListOf<FakeRecordingEngine>()
+        val contender = DictationRuntime(app, contenderListener, leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine).also { contenderEngines += it }
+        }
+        contender.onTap()
+        assertEquals(RecordingStateMachine.State.IDLE, contender.currentState())
+        assertTrue(contenderEngines.isEmpty())
+
+        stalledEngine.finishAs(null, RecordingEngine.StopReason.USER, superseded = true)
+        contender.onTap()
+        assertEquals(RecordingStateMachine.State.RECORDING, contender.currentState())
+        assertEquals(1, contenderEngines.size)
+    }
+
+    @Test
     fun `cancel while idle or recording is a no-op`() {
         runtime.cancelTranscription()
         assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
@@ -307,6 +393,29 @@ class DictationRuntimeTest {
     }
 
     @Test
+    fun `stale async callback after cancel and same-runtime restart cannot release new lease`() {
+        runtime.onTap()
+        runtime.onTap()
+        runtime.cancelTranscription()
+        runtime.onTap()
+
+        runtime.handleTranscriptionResult("stale old result", token = 1)
+        idleMainLooper()
+
+        val contenderListener = RecordingListener()
+        val contenderEngines = mutableListOf<FakeRecordingEngine>()
+        val contender = DictationRuntime(app, contenderListener, leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine).also { contenderEngines += it }
+        }
+        contender.onTap()
+
+        assertEquals(RecordingStateMachine.State.RECORDING, runtime.currentState())
+        assertEquals(RecordingStateMachine.State.IDLE, contender.currentState())
+        assertTrue(contenderEngines.isEmpty())
+        assertTrue(contenderListener.events.isEmpty())
+    }
+
+    @Test
     fun `late finish from a superseded recording is discarded and does not disturb the new session`() {
         runtime.onTap()
         val firstEngine = engines.single()
@@ -327,6 +436,36 @@ class DictationRuntimeTest {
         assertEquals(RecordingStateMachine.State.RECORDING, runtime.currentState())
         assertTrue("no listener transitions from the stale finish", listener.events.isEmpty())
         assertTrue(listener.delivered.isEmpty())
+    }
+
+    @Test
+    fun `late finish from old runtime cannot release newer runtime lease`() {
+        runtime.onTap()
+        val oldEngine = engines.single()
+        runtime.onTap()
+        runtime.cancelTranscription()
+        idleMainLooper()
+
+        val newerListener = RecordingListener()
+        val newerRuntime = DictationRuntime(app, newerListener, leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine)
+        }
+        newerRuntime.onTap()
+
+        oldEngine.finishAs(realSizedPcm(), RecordingEngine.StopReason.USER, superseded = true)
+        idleMainLooper()
+
+        val contenderListener = RecordingListener()
+        val contenderEngines = mutableListOf<FakeRecordingEngine>()
+        val contender = DictationRuntime(app, contenderListener, leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine).also { contenderEngines += it }
+        }
+        contender.onTap()
+
+        assertEquals(RecordingStateMachine.State.RECORDING, newerRuntime.currentState())
+        assertEquals(RecordingStateMachine.State.IDLE, contender.currentState())
+        assertTrue(contenderListener.events.isEmpty())
+        assertTrue(contenderEngines.isEmpty())
     }
 
     @Test
@@ -374,8 +513,23 @@ class DictationRuntimeTest {
     // --- failed recorder start ---
 
     @Test
+    fun `exception during start setup releases lease`() {
+        runtime = DictationRuntime(app, listener, leaseRegistry) { _, _ ->
+            throw IllegalStateException("setup failed")
+        }
+
+        assertThrows(IllegalStateException::class.java) { runtime.onTap() }
+
+        val nextRuntime = DictationRuntime(app, RecordingListener(), leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine)
+        }
+        nextRuntime.onTap()
+        assertEquals(RecordingStateMachine.State.RECORDING, nextRuntime.currentState())
+    }
+
+    @Test
     fun `failed engine start leaves runtime idle and fires no recording callbacks`() {
-        runtime = DictationRuntime(app, listener) { cacheDir, stateMachine ->
+        runtime = DictationRuntime(app, listener, leaseRegistry) { cacheDir, stateMachine ->
             FakeRecordingEngine(cacheDir, stateMachine).also { it.startResult = false; engines += it }
         }
         runtime.onTap()
@@ -383,6 +537,12 @@ class DictationRuntimeTest {
         assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
         assertEquals(listOf("startRequested"), listener.events)
         assertFalse(listener.events.contains("recordingStarted"))
+
+        val nextRuntime = DictationRuntime(app, RecordingListener(), leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine)
+        }
+        nextRuntime.onTap()
+        assertEquals(RecordingStateMachine.State.RECORDING, nextRuntime.currentState())
     }
 
     // --- shutdown ---
@@ -394,5 +554,33 @@ class DictationRuntimeTest {
         runtime.shutdown()
         assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
         assertTrue("shutdown runs the streaming teardown half", listener.events.contains("streamingTeardown"))
+
+        val nextRuntime = DictationRuntime(app, RecordingListener(), leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine)
+        }
+        nextRuntime.onTap()
+        assertEquals(RecordingStateMachine.State.RECORDING, nextRuntime.currentState())
+    }
+
+    @Test
+    fun `shutdown timeout retains lease until reader finish confirms microphone teardown`() {
+        runtime.onTap()
+        val stalledEngine = engines.single().also { it.teardownCompleted = false }
+
+        runtime.shutdown()
+
+        val contenderListener = RecordingListener()
+        val contenderEngines = mutableListOf<FakeRecordingEngine>()
+        val contender = DictationRuntime(app, contenderListener, leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine).also { contenderEngines += it }
+        }
+        contender.onTap()
+        assertEquals(RecordingStateMachine.State.IDLE, contender.currentState())
+        assertTrue(contenderEngines.isEmpty())
+
+        stalledEngine.finishAs(null, RecordingEngine.StopReason.USER, superseded = true)
+        contender.onTap()
+        assertEquals(RecordingStateMachine.State.RECORDING, contender.currentState())
+        assertEquals(1, contenderEngines.size)
     }
 }
