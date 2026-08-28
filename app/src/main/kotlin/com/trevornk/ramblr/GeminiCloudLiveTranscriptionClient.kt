@@ -295,8 +295,19 @@ class GeminiCloudLiveTranscriptionClient(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) = onText(text)
+
+            /**
+             * Gemini Live delivers its JSON events as binary frames as well as text
+             * ones; the frame opcode is not part of the protocol contract. Decode and
+             * parse them identically instead of treating binary as fatal. Malformed
+             * bytes still fail closed via [onText]'s JSON parse.
+             */
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                fail(CloudLiveFailureReason.PROTOCOL_ERROR, "Unexpected binary live transcription event")
+                if (bytes.size > MAX_INBOUND_BYTES) {
+                    fail(CloudLiveFailureReason.PROTOCOL_ERROR, "Live transcription message too large")
+                    return
+                }
+                onText(bytes.utf8())
             }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 fail(CloudLiveFailureReason.NETWORK_ERROR, t.message ?: "Live transcription network failure")

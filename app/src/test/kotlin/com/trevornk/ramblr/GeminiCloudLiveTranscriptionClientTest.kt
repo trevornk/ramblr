@@ -10,6 +10,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okio.ByteString
+import okio.ByteString.Companion.encodeUtf8
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -326,8 +327,52 @@ class GeminiCloudLiveTranscriptionClientTest {
         allowTestEndpoint = true,
     )
 
-    private fun scriptedSocket(vararg events: String, delayMs: Long = 0): ServerScript {
-        val script = ServerScript(events.toList(), delayMs)
+    /**
+     * Regression: Gemini Live delivers its JSON events as binary frames. Treating
+     * binary as a protocol violation killed every real session before
+     * setupComplete, so live transcription always fell back to batch. Every other
+     * test in this class drives the String overload, which is why the field defect
+     * survived a green suite.
+     */
+    @Test fun `binary json frames parse identically to text frames`() {
+        val listener = RecordingListener()
+        val socket = scriptedSocket(
+            "{\"setupComplete\":{}}",
+            "{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"hel\"}}}",
+            "{\"serverContent\":{\"inputTranscription\":{\"text\":\"hello\"}}}",
+            binary = true,
+        )
+        val session = factory().create(listener)
+        session.connect(); session.startActivity(); session.endActivity()
+
+        assertTrue(listener.done.await(5, TimeUnit.SECONDS))
+        Thread.sleep(50)
+        assertEquals(listOf("hel"), listener.interims)
+        val success = listener.result as CloudLiveTerminal.Success
+        assertEquals("hello", success.text)
+        assertEquals(1, listener.terminals)
+        assertTrue(success.timing.setupCompletedAtMs != null)
+        socket.awaitMessages()
+    }
+
+    @Test fun `oversized binary frame fails closed without decoding`() {
+        val listener = RecordingListener()
+        scriptedSocket(
+            "{\"setupComplete\":{}}",
+            "{\"pad\":\"" + "x".repeat(GeminiCloudLiveTranscriptionClient.MAX_INBOUND_BYTES + 1) + "\"}",
+            binary = true,
+        )
+        val session = factory().create(listener)
+        session.connect(); session.startActivity(); session.endActivity()
+
+        assertTrue(listener.done.await(5, TimeUnit.SECONDS))
+        val failure = listener.result as CloudLiveTerminal.Failure
+        assertEquals(CloudLiveFailureReason.PROTOCOL_ERROR, failure.reason)
+        assertEquals(1, listener.terminals)
+    }
+
+    private fun scriptedSocket(vararg events: String, delayMs: Long = 0, binary: Boolean = false): ServerScript {
+        val script = ServerScript(events.toList(), delayMs, binary)
         server.enqueue(MockResponse().withWebSocketUpgrade(script))
         return script
     }
@@ -338,12 +383,18 @@ class GeminiCloudLiveTranscriptionClientTest {
         }
     }
 
-    private class ServerScript(private val events: List<String>, private val delayMs: Long) : ClosingWebSocketListener() {
+    private class ServerScript(
+        private val events: List<String>,
+        private val delayMs: Long,
+        private val binary: Boolean = false,
+    ) : ClosingWebSocketListener() {
         private val received = CountDownLatch(1)
         override fun onOpen(webSocket: WebSocket, response: Response) {
             Thread {
                 if (delayMs > 0) Thread.sleep(delayMs)
-                events.forEach { webSocket.send(it) }
+                events.forEach { event ->
+                    if (binary) webSocket.send(event.encodeUtf8()) else webSocket.send(event)
+                }
             }.start()
         }
         override fun onMessage(webSocket: WebSocket, text: String) { received.countDown() }
