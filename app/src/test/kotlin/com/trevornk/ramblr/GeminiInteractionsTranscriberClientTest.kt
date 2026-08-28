@@ -144,8 +144,33 @@ class GeminiInteractionsTranscriberClientTest {
         server.takeRequest()
         val config = JSONObject(server.takeRequest().body.readUtf8())
             .getJSONObject("generation_config").getJSONObject("transcription_config")
-        assertEquals("smart", config.getString("mode"))
-        assertFalse(config.opt("mode") is JSONObject)
+        assertEquals("smart", config.getJSONObject("mode").getString("type"))
+    }
+
+    /**
+     * Both modes use the same `{"type": ...}` object shape. The live API accepts a bare string too
+     * (`mode: "smart"`), but only the object form is documented, and encoding the two modes
+     * differently invites a reader into thinking one of them is special. Verified against the live
+     * endpoint 2026-08-28: a bad enum is rejected with "Supported values: 'verbatim', 'smart'"
+     * under both shapes, so neither is a silently-ignored no-op.
+     */
+    @Test fun `both transcription modes use the documented object wire shape`() {
+        for (mode in GeminiInteractionsTranscriberClient.Mode.entries) {
+            enqueueSuccessfulUpload()
+            server.enqueue(MockResponse().setBody("""{"steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}]}"""))
+            server.enqueue(MockResponse().setBody("{}"))
+
+            awaitResult(mode = mode)
+
+            server.takeRequest()
+            server.takeRequest()
+            val config = JSONObject(server.takeRequest().body.readUtf8())
+                .getJSONObject("generation_config").getJSONObject("transcription_config")
+            val encoded = config.opt("mode")
+            assertTrue("mode for $mode must be an object, was ${encoded?.javaClass}", encoded is JSONObject)
+            assertEquals(mode.wireValue, (encoded as JSONObject).getString("type"))
+            server.takeRequest()
+        }
     }
 
     @Test fun `successful callback does not wait for uploaded file deletion`() {
