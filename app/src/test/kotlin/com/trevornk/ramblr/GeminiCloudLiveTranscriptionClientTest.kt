@@ -371,6 +371,46 @@ class GeminiCloudLiveTranscriptionClientTest {
         assertEquals(1, listener.terminals)
     }
 
+    /**
+     * The real mid-stream drop: setup succeeded, interims were flowing, then the
+     * server closes the socket without ever sending a final. This is the
+     * FALLBACK_NO_TERMINAL case, and the one path where a stale interim could
+     * leak out as if it were an authoritative final.
+     *
+     * The server-initiated close arrives as onClosing, and OkHttp's default
+     * onClosing does not echo the close frame, so onClosed never follows
+     * (measured: 6s yields onClosing(1011) alone). Handling only onClosed left
+     * this with no terminal at all until the final timeout expired. Must fail
+     * closed: NETWORK_ERROR, exactly one terminal, no interim promoted.
+     */
+    @Test fun `mid stream server close fails closed without promoting an interim`() {
+        val listener = RecordingListener()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                Thread {
+                    webSocket.send("{\"setupComplete\":{}}")
+                    webSocket.send("{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"partial words\"}}}")
+                    Thread.sleep(50)
+                    webSocket.close(1011, "server gone")
+                }.start()
+            }
+        }))
+        // Long final timeout: if the timeout were what rescued this, the test
+        // would take 30s. It must terminate from the close itself, in well under that.
+        val session = factory(finalTimeoutMs = 30_000).create(listener)
+        val started = System.currentTimeMillis()
+        session.connect(); session.startActivity()
+
+        assertTrue(listener.done.await(10, TimeUnit.SECONDS))
+        val elapsed = System.currentTimeMillis() - started
+        assertTrue("terminal came from the close, not the final timeout (took ${elapsed}ms)", elapsed < 10_000)
+        Thread.sleep(50)
+        val failure = listener.result as CloudLiveTerminal.Failure
+        assertEquals(CloudLiveFailureReason.NETWORK_ERROR, failure.reason)
+        assertEquals(1, listener.terminals)
+        assertEquals("an interim must never be promoted to a final", listOf("partial words"), listener.interims)
+    }
+
     private fun scriptedSocket(vararg events: String, delayMs: Long = 0, binary: Boolean = false): ServerScript {
         val script = ServerScript(events.toList(), delayMs, binary)
         server.enqueue(MockResponse().withWebSocketUpgrade(script))

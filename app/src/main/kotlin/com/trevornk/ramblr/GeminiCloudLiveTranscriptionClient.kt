@@ -312,6 +312,18 @@ class GeminiCloudLiveTranscriptionClient(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 fail(CloudLiveFailureReason.NETWORK_ERROR, t.message ?: "Live transcription network failure")
             }
+            /**
+             * OkHttp's default onClosing does not echo the close frame, so a
+             * server-initiated close never advances to onClosed -- verified: a
+             * 6s wait yields onClosing(1011) and nothing else. Handling only
+             * onClosed left a mid-stream server close with no terminal at all,
+             * stalling the session until the final timeout expired. Treat the
+             * close frame itself as the terminal.
+             */
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (!terminal.get()) fail(CloudLiveFailureReason.NETWORK_ERROR, "Live transcription connection closed")
+            }
+
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (!terminal.get()) fail(CloudLiveFailureReason.NETWORK_ERROR, "Live transcription connection closed")
             }
