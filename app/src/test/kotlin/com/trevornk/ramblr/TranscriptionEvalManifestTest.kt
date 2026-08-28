@@ -358,6 +358,12 @@ class TranscriptionEvalManifestTest {
         assertTrue(resolveError(BenchmarkArgs(true, null, "0", temp.root.path)).contains("at least 1"))
     }
 
+    @Test fun `resolveConfig rejects invalid benchmark pacing delay`() {
+        writeManifest("""{"version":1,"fixtures":[]}""")
+        assertTrue(resolveError(BenchmarkArgs(true, null, null, temp.root.path, delayMsRaw = "nope")).contains("DELAY_MS"))
+        assertTrue(resolveError(BenchmarkArgs(true, null, null, temp.root.path, delayMsRaw = "-1")).contains("non-negative"))
+    }
+
     @Test fun `resolveConfig rejects a missing manifest file`() {
         val message = resolveError(BenchmarkArgs(true, null, null, File(temp.root, "nowhere").path))
         assertTrue(message, message.contains("Manifest not found"))

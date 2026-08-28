@@ -396,9 +396,10 @@ To add a new prompt variant to the comparison, add it to the `PROMPT_REGISTRY` m
 ### Transcription benchmark (audio → text)
 
 The prompt eval harness above measures the *cleanup* stage. A separate manual benchmark measures
-the *transcription* stage — how accurately Gemini turns recorded audio into text — by calling the
-real shipped `GeminiTranscriberClient.transcribe` (same request shape, headers, OkHttp client, and
-async callback as production) and scoring the transcripts against ground truth.
+the *transcription* stage — how accurately Gemini turns recorded audio into text. It can call the
+existing `GeminiTranscriberClient.transcribe` generateContent path, the dedicated Gemini 3.5
+Transcribe Files/Interactions client, or both in one run, then scores each path independently
+against ground truth.
 
 - `app/src/test/kotlin/com/trevornk/ramblr/tools/GeminiTranscriptionBenchmark.kt` — the runner, a
   standalone `main()`, **not** a JUnit test. Compiled by `make test` but never discovered or run
@@ -409,10 +410,10 @@ async callback as production) and scoring the transcripts against ground truth.
   manifest is a zero-entry placeholder and no audio is checked in. Read that directory's
   `README.md` before adding fixtures.
 
-⚠️ **Cost:** this calls the real Gemini API and spends real credits, once per fixture × model ×
-repetition. Cost is *not* reported: `GeminiTranscriberClient.Result` discards the response's
-`usageMetadata`, so token counts aren't observable from the production path, and the report
-deliberately does not estimate them.
+⚠️ **Cost:** this calls the real Gemini API and spends real credits, once per fixture × target ×
+repetition. Selecting both paths uploads and transcribes every clip twice. Cost is *not* reported:
+the client result contracts do not expose usage metadata, so the report deliberately does not
+invent an estimate.
 
 ⚠️ **Privacy:** this **uploads audio to Google**. Recorded human speech is biometric data — never
 commit it to this repo, and never benchmark a recording you don't have consent to use. Prefer
@@ -420,12 +421,39 @@ synthetic TTS fixtures. See `app/src/test/resources/transcription_eval/README.md
 
 ```bash
 export GEMINI_API_KEY=AIza...                                     # never committed; no .env is read
-./gradlew runGeminiTranscriptionBenchmark                          # defaults to the catalog's Gemini models
+./gradlew runGeminiTranscriptionBenchmark                          # old generateContent-only behavior
+GEMINI_TRANSCRIPTION_ENGINES=generateContent,interactions ./gradlew runGeminiTranscriptionBenchmark
 GEMINI_TRANSCRIPTION_MODELS=gemini-3.5-flash ./gradlew runGeminiTranscriptionBenchmark
+GEMINI_TRANSCRIBE_MODEL=gemini-3.5-transcribe ./gradlew runGeminiTranscriptionBenchmark
+GEMINI_TRANSCRIBE_MODES=verbatim ./gradlew runGeminiTranscriptionBenchmark
+GEMINI_TRANSCRIPTION_DELAY_MS=7500 ./gradlew runGeminiTranscriptionBenchmark  # pace quota-limited matrices
 GEMINI_TRANSCRIPTION_REPETITIONS=3 ./gradlew runGeminiTranscriptionBenchmark   # expose run-to-run variance
 GEMINI_TRANSCRIPTION_VOCABULARY= ./gradlew runGeminiTranscriptionBenchmark     # measure without vocab biasing
 TRANSCRIPTION_EVAL_DIR=/path/to/private/corpus ./gradlew runGeminiTranscriptionBenchmark
 ```
+
+`GEMINI_TRANSCRIPTION_ENGINES` accepts exactly `generateContent`, `interactions`, or both as a
+comma-separated list. When unset, the runner preserves its original generateContent-only behavior.
+`GEMINI_TRANSCRIPTION_MODELS` controls only that legacy path; `GEMINI_TRANSCRIBE_MODEL` controls the
+dedicated path and defaults to `gemini-3.5-transcribe`. `GEMINI_TRANSCRIBE_MODES` accepts
+`verbatim` and `smart` (comma-separated). Use **verbatim** for raw-transcription A/B results: smart
+removes fillers, resolves self-corrections, and formats prose, so it is reported as a separate,
+explicit axis and must not be compared as though it were raw ASR. The fixture's manifest language
+code and the exact `GEMINI_TRANSCRIPTION_VOCABULARY` terms are sent through the dedicated API's
+structured `language_codes` and `custom_vocabulary` fields.
+
+`GEMINI_TRANSCRIPTION_DELAY_MS` is an optional non-negative delay between real API calls (default
+`0`, preserving old behavior). It is applied by the benchmark runner before each call after the
+first and is excluded from measured request latency. For example, use `7500` for a conservative
+matrix under a 10-requests-per-model-per-minute quota. This is benchmark pacing only: the
+production clients do not add hidden delays or retries.
+
+The dedicated path resumably uploads each WAV through Google's Files API, creates a stateless
+Interaction (`store:false`), and issues a best-effort Files API delete on every terminal path after
+an artifact name is known — success, API error, parse failure, timeout, or cancellation. A deletion
+failure never overwrites the primary transcription result. This client-side deletion is not a
+promise about Google's infrastructure-level processing or retention; review Google's current data
+terms before uploading sensitive audio.
 
 **Production fidelity.** The benchmark sends the same *prompt* a real dictation sends, not just the
 same transport. Production interpolates the user's personal vocabulary into the transcription
@@ -444,7 +472,7 @@ compressed-upload path (#109) sends `audio/aac` from a `MediaCodec` encode rathe
 `audio/wav`, and cost is not reported at all (see above).
 
 Each run writes a Markdown and a JSON report to the gitignored `eval-reports/`, recording the
-commit SHA, UTC timestamp, exact model ids, repetition count, call timeout, manifest checksum,
+commit SHA, UTC timestamp, exact engine/path/model/mode targets, repetition count, call timeout, manifest checksum,
 every raw transcript/error/latency, and aggregated micro-WER/CER, exact-match rates, success rate,
 failure categories, and p50/p95/mean latency. The run refuses to start — rather than quietly
 substituting a default — if the API key is missing, the model list is empty, or any fixture fails

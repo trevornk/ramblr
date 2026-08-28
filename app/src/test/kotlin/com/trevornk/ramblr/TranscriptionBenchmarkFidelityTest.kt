@@ -2,6 +2,7 @@ package com.trevornk.ramblr
 
 import com.trevornk.ramblr.tools.BenchmarkArgs
 import com.trevornk.ramblr.tools.BenchmarkReport
+import com.trevornk.ramblr.tools.BenchmarkTarget
 import com.trevornk.ramblr.tools.CallOutcome
 import com.trevornk.ramblr.tools.categorizeFailure
 import com.trevornk.ramblr.tools.inlineAudioRejection
@@ -205,5 +206,79 @@ class TranscriptionBenchmarkFidelityTest {
         assertEquals(JSONObject.NULL, call.get("transcript"))
         assertFalse("a failed call must carry no accuracy score", call.has("wer"))
         assertEquals(1, root.getJSONObject("failureCategories").getInt("network"))
+    }
+
+    @Test fun `one config can compare generateContent with dedicated verbatim interactions`() {
+        val config = resolveConfig(
+            BenchmarkArgs(
+                apiKeyPresent = true,
+                modelsRaw = "gemini-3.1-flash-lite",
+                repetitionsRaw = "2",
+                evalDirRaw = writeCorpus().path,
+                enginesRaw = "generateContent,interactions",
+                transcribeModelRaw = "gemini-3.5-transcribe",
+                transcribeModesRaw = "verbatim",
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                BenchmarkTarget("Gemini", "generateContent", "gemini-3.1-flash-lite", "prompted-verbatim"),
+                BenchmarkTarget("Gemini", "interactions/files", "gemini-3.5-transcribe", "verbatim"),
+            ),
+            config.targets,
+        )
+        assertEquals(4, config.totalCalls)
+    }
+
+    @Test fun `smart is an explicit secondary target and is never mixed with verbatim`() {
+        val config = resolveConfig(
+            BenchmarkArgs(
+                true, "gemini-3.1-flash-lite", null, writeCorpus().path,
+                enginesRaw = "interactions",
+                transcribeModesRaw = "verbatim,smart",
+            ),
+        )
+        assertEquals(listOf("verbatim", "smart"), config.targets.map { it.mode })
+        assertTrue(config.targets.all { it.path == "interactions/files" })
+    }
+
+    @Test fun `reports keep path and mode axes separate even when model ids match`() {
+        val base = resolveConfig(BenchmarkArgs(true, "gemini-3.5-transcribe", null, writeCorpus().path))
+        val targets = listOf(
+            BenchmarkTarget("Gemini", "generateContent", "gemini-3.5-transcribe", "prompted-verbatim"),
+            BenchmarkTarget("Gemini", "interactions/files", "gemini-3.5-transcribe", "verbatim"),
+        )
+        val config = base.copy(targets = targets)
+        val report = BenchmarkReport(
+            "abc123", "2026-01-01T00:00:00Z", config,
+            listOf(
+                CallOutcome("f1", "gemini-3.5-transcribe", 1, "hello world", null, 100,
+                    engine = "Gemini", path = "generateContent", mode = "prompted-verbatim"),
+                CallOutcome("f1", "gemini-3.5-transcribe", 1, "wrong words", null, 200,
+                    engine = "Gemini", path = "interactions/files", mode = "verbatim"),
+            ),
+        )
+
+        val root = JSONObject(renderJson(report))
+        val summaries = root.getJSONArray("perTarget")
+        assertEquals(2, summaries.length())
+        assertEquals("generateContent", summaries.getJSONObject(0).getString("path"))
+        assertEquals(0.0, summaries.getJSONObject(0).getDouble("microWer"), 1e-9)
+        assertEquals("interactions/files", summaries.getJSONObject(1).getString("path"))
+        assertTrue(summaries.getJSONObject(1).getDouble("microWer") > 0.0)
+        val markdown = renderMarkdown(report)
+        assertTrue(markdown.contains("| Engine | Path | Model | Mode |"))
+        assertTrue(markdown.contains("`interactions/files`"))
+    }
+
+    @Test fun `config resolves and reports explicit benchmark-only inter-call pacing`() {
+        val config = resolveConfig(
+            BenchmarkArgs(true, "gemini-3.1-flash-lite", null, writeCorpus().path, delayMsRaw = "7500"),
+        )
+        assertEquals(7500L, config.interCallDelayMs)
+        val report = BenchmarkReport("abc", "2026-01-01T00:00:00Z", config, emptyList())
+        assertTrue(renderMarkdown(report).contains("Inter-call delay: 7500 ms"))
+        assertEquals(7500L, JSONObject(renderJson(report)).getLong("interCallDelayMs"))
     }
 }
