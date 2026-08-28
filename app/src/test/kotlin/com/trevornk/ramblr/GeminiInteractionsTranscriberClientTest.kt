@@ -144,7 +144,22 @@ class GeminiInteractionsTranscriberClientTest {
         server.takeRequest()
         val config = JSONObject(server.takeRequest().body.readUtf8())
             .getJSONObject("generation_config").getJSONObject("transcription_config")
-        assertEquals("smart", config.getJSONObject("mode").getString("type"))
+        assertEquals("smart", config.getString("mode"))
+        assertFalse(config.opt("mode") is JSONObject)
+    }
+
+    @Test fun `successful callback does not wait for uploaded file deletion`() {
+        enqueueSuccessfulUpload()
+        server.enqueue(MockResponse().setBody("""{"steps":[{"type":"model_output","content":[{"type":"text","text":"ready"}]}]}"""))
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+
+        val (result, callbacks) = awaitResult()
+
+        assertEquals("ready", result.text)
+        assertNull(result.error)
+        assertEquals(1, callbacks)
+        repeat(3) { server.takeRequest() }
+        assertEquals("DELETE", server.takeRequest(5, TimeUnit.SECONDS)?.method)
     }
 
     @Test fun `parser joins only text content from model output steps`() {

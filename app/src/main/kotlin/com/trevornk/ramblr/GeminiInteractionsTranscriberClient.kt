@@ -138,7 +138,8 @@ class GeminiInteractionsTranscriberClient(
                 if (uploaded == null) {
                     val primary = Result(null, "Files API upload response contained no valid file resource")
                     val fileName = parseUploadedFileName(body)
-                    if (fileName != null) cleanup(fileName, apiKey, primary, complete) else complete(primary)
+                    if (fileName != null) cleanup(fileName, apiKey)
+                    complete(primary)
                     return@enqueueTracked
                 }
                 createInteraction(
@@ -163,7 +164,10 @@ class GeminiInteractionsTranscriberClient(
         val transcriptionConfig = JSONObject()
             .put("custom_vocabulary", JSONArray(customVocabulary))
             .put("language_codes", JSONArray(languageCodes))
-            .put("mode", JSONObject().put("type", mode.wireValue))
+            .put("mode", when (mode) {
+                Mode.VERBATIM -> JSONObject().put("type", mode.wireValue)
+                Mode.SMART -> mode.wireValue
+            })
         val body = JSONObject()
             .put("model", model)
             .put("store", false)
@@ -182,24 +186,23 @@ class GeminiInteractionsTranscriberClient(
 
         enqueueTracked(request, cancelHolder,
             onFailure = { error ->
-                cleanup(uploaded.name, apiKey, Result(null, failureMessage(error)), complete)
+                cleanup(uploaded.name, apiKey)
+                complete(Result(null, failureMessage(error)))
             },
             onResponse = { response, responseBody ->
                 val result = if (response.isSuccessful) parseResponse(responseBody)
                 else parseError(responseBody, "Interactions API failed (HTTP ${response.code})")
-                cleanup(uploaded.name, apiKey, result, complete)
+                cleanup(uploaded.name, apiKey)
+                complete(result)
             },
         )
     }
 
     /** Cleanup is deliberately untracked: a user's cancellation must abort inference, not the
      * best-effort deletion of the already-uploaded artifact. */
-    private fun cleanup(fileName: String, apiKey: String, primary: Result, complete: (Result) -> Unit) {
+    private fun cleanup(fileName: String, apiKey: String) {
         val id = FILE_NAME.matchEntire(fileName)?.groupValues?.get(1)
-        if (id == null) {
-            complete(primary)
-            return
-        }
+        if (id == null) return
         val deleteUrl = filesEndpoint.newBuilder().addPathSegment(id).build()
         val request = Request.Builder()
             .url(deleteUrl)
@@ -207,10 +210,9 @@ class GeminiInteractionsTranscriberClient(
             .delete()
             .build()
         httpClient.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) = complete(primary)
+            override fun onFailure(call: Call, e: IOException) = Unit
             override fun onResponse(call: Call, response: Response) {
                 response.close()
-                complete(primary)
             }
         })
     }
