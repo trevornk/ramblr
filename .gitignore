@@ -14,3 +14,12 @@ eval-reports/
 *.p12
 keystore.properties
 google-services.json
+
+# Local-only working data. `.artifacts/` holds the private transcription-eval
+# corpus: recorded human speech is biometric data and must never be committed
+# (see app/src/test/resources/transcription_eval/README.md). `.hermes/` holds
+# local agent plans/config. Both were previously untracked but NOT ignored, so
+# a stray `git add -A` could have committed them.
+.artifacts/
+.hermes/
+.DS_Store
