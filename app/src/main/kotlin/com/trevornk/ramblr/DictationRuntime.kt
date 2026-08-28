@@ -168,6 +168,11 @@ class DictationRuntime internal constructor(
         var token: Int = 0
         var claimed = false
         var finalWait: Runnable? = null
+        /** Newest [CloudLiveTiming] seen from any callback (#233 item 10). Main-thread only, same
+         *  as every other field here. Kept so a fallback that happens because NO terminal ever
+         *  arrived can still report that setup landed and interims flowed -- otherwise the most
+         *  interesting failure on a real device (mid-stream drop) would log nothing but nulls. */
+        var lastTiming: CloudLiveTiming? = null
     }
 
     @Volatile private var cloudLiveAttempt: CloudLiveAttempt? = null
@@ -544,7 +549,12 @@ class DictationRuntime internal constructor(
             attempt.session = factory.create(object : CloudLiveTranscriptionListener {
                 override fun onInterim(text: String, timing: CloudLiveTiming) {
                     handler.post {
-                        if (cloudLiveAttempt === attempt && sessionLease === lease &&
+                        if (cloudLiveAttempt !== attempt) return@post
+                        // #233 item 10: record the marks even when this interim isn't shown (a
+                        // claimed/stopped attempt still produced real setup + first-interim
+                        // timing, and that is exactly what the device trial needs to read back).
+                        attempt.lastTiming = timing
+                        if (sessionLease === lease &&
                             stateMachine.current() == RecordingStateMachine.State.RECORDING && !attempt.claimed) {
                             listener.onCloudLiveInterim(text)
                         }
@@ -555,6 +565,7 @@ class DictationRuntime internal constructor(
                     handler.post {
                         if (cloudLiveAttempt !== attempt || sessionLease !== lease || attempt.claimed) return@post
                         attempt.terminal = result
+                        attempt.lastTiming = result.timing
                         resolveCloudLiveAttempt(attempt)
                     }
                 }
@@ -881,7 +892,17 @@ class DictationRuntime internal constructor(
             if (!attempt.claimed && attempt.finalWait == null) {
                 val timeout = Runnable {
                     attempt.finalWait = null
-                    if (cloudLiveAttempt === attempt && !attempt.claimed) startCloudLiveBatchFallback(attempt)
+                    // No terminal ever arrived within the bounded wait -- the mid-stream drop /
+                    // wedged-socket case, which reports no CloudLiveFailureReason of its own
+                    // (#233 item 10). Distinguished from FALLBACK_FAILED so a device trial can
+                    // tell "the session told us it broke" from "the session went silent".
+                    if (cloudLiveAttempt === attempt && !attempt.claimed) {
+                        startCloudLiveBatchFallback(
+                            attempt,
+                            if (attempt.terminal == null) CloudLiveOutcome.FALLBACK_NO_TERMINAL
+                            else CloudLiveOutcome.FALLBACK_FAILED,
+                        )
+                    }
                 }
                 attempt.finalWait = timeout
                 handler.postDelayed(timeout, CLOUD_LIVE_FINAL_WAIT_MS)
@@ -899,7 +920,7 @@ class DictationRuntime internal constructor(
             is CloudLiveTerminal.Success -> {
                 if (terminal.text.isBlank() || result.pcmFile == null ||
                     isBelowMinimumDuration(result.pcmFile.length(), SAMPLE_RATE)) {
-                    startCloudLiveBatchFallback(attempt)
+                    startCloudLiveBatchFallback(attempt, CloudLiveOutcome.FALLBACK_UNUSABLE_FINAL)
                     return
                 }
                 attempt.claimed = true
@@ -909,13 +930,44 @@ class DictationRuntime internal constructor(
                 runCatching { attempt.session?.close() }
                 result.pcmFile.delete()
                 result.compressedFile?.delete()
+                logCloudLiveAttempt(attempt, CloudLiveOutcome.LIVE_DELIVERED)
                 thread { handleTranscriptionResult(terminal.text, attempt.token, attempt.lease) }
             }
-            is CloudLiveTerminal.Failure -> startCloudLiveBatchFallback(attempt)
+            is CloudLiveTerminal.Failure -> startCloudLiveBatchFallback(attempt, CloudLiveOutcome.FALLBACK_FAILED)
         }
     }
 
-    private fun startCloudLiveBatchFallback(attempt: CloudLiveAttempt) {
+    /**
+     * Writes this attempt's timing + outcome to the existing per-dictation [BenchmarkLogger] line
+     * (#233 Phase 1 item 10).
+     *
+     * The reason this exists at all: the live->batch fallback is lossless, so on a real device a
+     * live failure and a live success look identical from the outside -- the same text is
+     * delivered the same way either way. Without a durable record, nobody can tell whether live
+     * ever ran, which makes the device acceptance gate unfalsifiable.
+     *
+     * Correlated by [correlationIdFor] on the attempt's own token, i.e. the exact id the
+     * transcription/cleanup/pipeline lines for this same dictation already use -- no second id
+     * scheme. Emitted as its own JSONL line (not folded into another call site's line) because
+     * live resolution happens strictly before the batch/cleanup lines are written and a line is
+     * self-contained by design; a reader groups on correlationId, which is what that key is for.
+     *
+     * Length-only, like the rest of this log: durations, enum names and booleans, never the
+     * interim or final text. Failure-isolated -- [BenchmarkLogger.log] already wraps its I/O in
+     * runCatching on a daemon executor, and the extra runCatching here means even a malformed
+     * derivation can't take the delivery path down with it.
+     */
+    private fun logCloudLiveAttempt(attempt: CloudLiveAttempt, outcome: CloudLiveOutcome) {
+        runCatching {
+            BenchmarkLogger.log(
+                context = context,
+                correlationId = correlationIdFor(attempt.token),
+                cloudLive = cloudLiveBenchmarkStage(outcome, attempt.terminal, attempt.lastTiming),
+            )
+        }.onFailure { Log.w(TAG, "Couldn't record cloud-live benchmark timing", it) }
+    }
+
+    private fun startCloudLiveBatchFallback(attempt: CloudLiveAttempt, outcome: CloudLiveOutcome) {
         val result = attempt.recordingResult ?: return
         if (attempt.claimed || cloudLiveAttempt !== attempt || sessionLease !== attempt.lease) return
         attempt.claimed = true
@@ -923,6 +975,7 @@ class DictationRuntime internal constructor(
         attempt.finalWait = null
         cloudLiveAttempt = null
         runCatching { attempt.session?.close() }
+        logCloudLiveAttempt(attempt, outcome)
         onCloudLiveBatchFallback()
         thread { continueTranscription(result, attempt.token, attempt.lease) }
     }

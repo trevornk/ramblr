@@ -107,6 +107,55 @@ data class PipelineStage(
 )
 
 /**
+ * One cloud-live transcription attempt's timing + outcome (#233 Phase 1 item 10).
+ *
+ * Exists because the live->batch fallback is deliberately LOSSLESS: when a live attempt fails,
+ * the preserved local recording runs the ordinary batch chain and the user gets the same text
+ * delivered the same way. Correct product behavior, but it makes a live failure *invisible* --
+ * on a real device there is otherwise no way to tell whether live actually served a dictation or
+ * whether it silently fell back on every single utterance. Without this block the whole device
+ * acceptance gate ("prove post-stop latency, setup timing, interim behavior, mid-stream
+ * network-drop fallback") is unfalsifiable, because no evidence survives the session.
+ *
+ * Every field is a derived DURATION or an enum name, never a wall-clock absolute: the raw
+ * [CloudLiveTiming] marks are only useful after a reader subtracts them, and the same
+ * "directly comparable elapsed ms" convention [PipelineStage] established is what makes a live
+ * line readable next to a batch one.
+ *
+ * Deliberately carries no transcript content of any kind -- not the interim text, not the final
+ * text, not a text sample. See [BenchmarkLogger]'s privacy note; raw/cleaned pairs live in
+ * [QualityLogger] behind its own off-by-default toggle.
+ *
+ * Durations are NOT clamped to zero. A negative value means the device's wall clock moved
+ * backwards mid-attempt, which is real signal a reader should see rather than have hidden.
+ */
+data class CloudLiveStage(
+    /** [CloudLiveOutcome]'s enum name -- how this attempt actually ended. Stored as a plain
+     *  string so this schema never takes a hard dependency on the enum living in this module,
+     *  mirroring [PipelineStage.injectMethod]. */
+    val outcome: String,
+    /** True when the preserved recording went to the unchanged batch pipeline instead of live
+     *  text being delivered. The single field that answers "did live actually serve this?". */
+    val fellBackToBatch: Boolean,
+    /** [CloudLiveFailureReason]'s enum name when the live session reported a terminal failure,
+     *  else null -- so `NETWORK_ERROR` is distinguishable from `SETUP_TIMEOUT` from a live
+     *  success whose final was simply unusable. */
+    val failureReason: String? = null,
+    /** Connection setup: `connectStartedAtMs` -> `setupCompletedAtMs`. Null when setup never
+     *  completed (e.g. SETUP_TIMEOUT), which is itself the answer. */
+    val setupMs: Long? = null,
+    /** Time to first interim: `connectStartedAtMs` -> `firstInterimAtMs`. Null when the session
+     *  never emitted an interim. */
+    val firstInterimMs: Long? = null,
+    /** End of audio to final: `activityEndedAtMs` -> `finalAtMs`. The headline number the whole
+     *  live feature exists to reduce -- how long after the user stops talking the text lands. */
+    val endOfAudioToFinalMs: Long? = null,
+    /** The live session's own failure message, always routed through [sanitizeError] first
+     *  (same bounded-exposure tradeoff [BenchmarkStage.error] documents). Null on success. */
+    val error: String? = null,
+)
+
+/**
  * Durable, append-only JSONL benchmark log for A/B testing transcription/cleanup provider+model
  * combinations across real-world dictation usage (#100). One line per completed dictation, each
  * line a self-contained JSON object -- deliberately NOT a JSON array, so a crash or a concurrent
@@ -182,6 +231,7 @@ object BenchmarkLogger {
         rawTextLength: Int? = null,
         cleanedTextLength: Int? = null,
         pipeline: PipelineStage? = null,
+        cloudLive: CloudLiveStage? = null,
     ) {
         runCatching {
             val line = buildLine(
@@ -192,6 +242,7 @@ object BenchmarkLogger {
                 rawTextLength = rawTextLength,
                 cleanedTextLength = cleanedTextLength,
                 pipeline = pipeline,
+                cloudLive = cloudLive,
             )
             val file = logFile(context)
             ioExecutor.execute {
@@ -216,6 +267,7 @@ object BenchmarkLogger {
         rawTextLength: Int?,
         cleanedTextLength: Int?,
         pipeline: PipelineStage? = null,
+        cloudLive: CloudLiveStage? = null,
     ): String {
         val root = JSONObject()
         root.put("timestamp", timestamp)
@@ -228,6 +280,9 @@ object BenchmarkLogger {
         // JSONObject.NULL (not an omitted key) mirrors transcription/cleanup's existing
         // null-vs-missing convention above so every line has a stable, predictable key set.
         root.put("pipeline", pipeline?.toJson() ?: JSONObject.NULL)
+        // Additive (#233 item 10), same convention again: a live attempt is rare (opt-in, and
+        // only on the IME host), so the overwhelming majority of lines carry a null here.
+        root.put("cloudLive", cloudLive?.toJson() ?: JSONObject.NULL)
         return root.toString()
     }
 
@@ -246,6 +301,15 @@ object BenchmarkLogger {
         .put("injectionAttemptMs", injectionAttemptMs ?: JSONObject.NULL)
         .put("injectMethod", injectMethod ?: JSONObject.NULL)
         .put("totalMs", totalMs ?: JSONObject.NULL)
+
+    private fun CloudLiveStage.toJson(): JSONObject = JSONObject()
+        .put("outcome", outcome)
+        .put("fellBackToBatch", fellBackToBatch)
+        .put("failureReason", failureReason ?: JSONObject.NULL)
+        .put("setupMs", setupMs ?: JSONObject.NULL)
+        .put("firstInterimMs", firstInterimMs ?: JSONObject.NULL)
+        .put("endOfAudioToFinalMs", endOfAudioToFinalMs ?: JSONObject.NULL)
+        .put("error", error ?: JSONObject.NULL)
 
     /** If [file] is at/over [ROTATE_AT_BYTES], truncates it down to its newest
      *  [KEEP_BYTES_AFTER_ROTATION] bytes, dropping any partial first line left over from the

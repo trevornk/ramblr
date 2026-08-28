@@ -60,6 +60,61 @@ sealed class CloudLiveTerminal {
 }
 
 /**
+ * How one cloud-live attempt actually ended, from the runtime's arbitration point of view
+ * (#233 Phase 1 item 10). Deliberately finer-grained than [CloudLiveTerminal]'s two cases,
+ * because the two ways a *successful* live session still loses the recording to batch are
+ * exactly the ones a device trial has to be able to tell apart afterwards.
+ */
+enum class CloudLiveOutcome {
+    /** Live text was authoritative and went down the normal delivery path. */
+    LIVE_DELIVERED,
+    /** The session reported [CloudLiveTerminal.Success], but the final was unusable (blank, or
+     *  the preserved recording was below the minimum-duration floor), so batch served it. */
+    FALLBACK_UNUSABLE_FINAL,
+    /** The session reported [CloudLiveTerminal.Failure]; see [CloudLiveStage.failureReason]. */
+    FALLBACK_FAILED,
+    /** No terminal callback arrived at all before the runtime's bounded final wait expired --
+     *  the mid-stream-drop / wedged-socket case, which produces no [CloudLiveFailureReason]
+     *  because the session never got far enough to report one. */
+    FALLBACK_NO_TERMINAL,
+}
+
+/**
+ * Derives the benchmark record for one live attempt: durations only, no transcript content.
+ *
+ * Pure and free of Android/[android.content.Context] so the whole "what does a device trial
+ * actually see" question is unit-testable without a device. [timing] is the best marks known to
+ * the runtime -- a terminal's own timing when there is one, otherwise the last interim's, which
+ * is what makes [CloudLiveOutcome.FALLBACK_NO_TERMINAL] still able to report that setup landed
+ * and interims flowed before the session went quiet.
+ *
+ * Durations are simple subtractions of the marks the session already recorded; a mark that was
+ * never set yields null rather than a fabricated zero, because "never happened" and "happened
+ * instantly" are different findings.
+ */
+fun cloudLiveBenchmarkStage(
+    outcome: CloudLiveOutcome,
+    terminal: CloudLiveTerminal?,
+    timing: CloudLiveTiming?,
+): CloudLiveStage {
+    val marks = terminal?.timing ?: timing
+    val failure = terminal as? CloudLiveTerminal.Failure
+    // One rule for all three durations: both ends must exist, or the answer is "didn't happen".
+    fun elapsed(from: Long?, to: Long?): Long? = if (from != null && to != null) to - from else null
+    return CloudLiveStage(
+        outcome = outcome.name,
+        fellBackToBatch = outcome != CloudLiveOutcome.LIVE_DELIVERED,
+        failureReason = failure?.reason?.name,
+        setupMs = elapsed(marks?.connectStartedAtMs, marks?.setupCompletedAtMs),
+        firstInterimMs = elapsed(marks?.connectStartedAtMs, marks?.firstInterimAtMs),
+        endOfAudioToFinalMs = elapsed(marks?.activityEndedAtMs, marks?.finalAtMs),
+        // Provider prose can echo request content and can carry a URL; sanitizeError bounds it
+        // and the client has already redacted the API key out of the message before this point.
+        error = sanitizeError(failure?.message),
+    )
+}
+
+/**
  * Serializes callbacks even when the supplied executor is a pool.
  *
  * One instance is shared factory-wide by every session, so a single throwing listener callback
