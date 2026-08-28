@@ -1,5 +1,7 @@
 package com.trevornk.ramblr
 
+enum class OnboardingSetupMode { FLOATING_BUTTON, VOICE_KEYBOARD }
+
 /**
  * Decision logic for the first-run wizard from #6. Gated on two independent signals so a
  * completed setup never nags a returning user even if they later flip Accessibility off
@@ -52,8 +54,25 @@ object OnboardingWizard {
         transcriptionLocal: Boolean,
         hasLocalModel: Boolean,
         hasApiKey: Boolean,
+        setupMode: OnboardingSetupMode = OnboardingSetupMode.FLOATING_BUTTON,
+        imeEnabled: Boolean = false,
     ): Boolean {
         val transcriptionReady = if (transcriptionLocal) hasLocalModel else hasApiKey
-        return audioGranted && accessibilityEnabled && transcriptionReady
+        val invocationReady = when (setupMode) {
+            OnboardingSetupMode.FLOATING_BUTTON -> accessibilityEnabled
+            OnboardingSetupMode.VOICE_KEYBOARD -> imeEnabled
+        }
+        return audioGranted && invocationReady && transcriptionReady
     }
+
+    /**
+     * Whether the selected transcription path has a usable local model. Checking the selected
+     * archive prevents an unrelated installed model from making Settings claim the app is ready.
+     */
+    fun isTranscriptionModelReady(
+        transcriptionLocal: Boolean,
+        selectedModel: String,
+        knownModels: Collection<String>,
+        installedModels: Collection<String>,
+    ): Boolean = !transcriptionLocal || selectedModel in knownModels && selectedModel in installedModels
 }

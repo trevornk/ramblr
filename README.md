@@ -6,9 +6,9 @@
 
 **Speak it. Tap once, ramble, tap again — clean text lands wherever your cursor is.**
 
-No keyboard swap, no separate app to paste out of. Ramblr floats a single button over
-whatever you're already doing — Slack, Discord, a code editor, an email — and inserts your
-words directly into the focused field the moment you're done talking.
+Use Ramblr's floating button without changing keyboards, or enable the optional **Ramblr Voice**
+keyboard for apps where accessibility services are unavailable. Both surfaces run the same
+configured local/cloud dictation pipeline and insert into the field where dictation began.
 
 - **Tap, ramble, tap.** One button, everywhere. No mode switching, no separate transcript to
   copy-paste.
@@ -146,27 +146,56 @@ to compare against the running app's own version.
 
 ### First-time setup
 
-1. Open **Ramblr**
-2. Grant the **audio recording** permission
-3. Enable the **Accessibility Service**
-4. Pick a **Dictation mode** (Settings → Cloud), or leave the defaults and adjust later:
+1. Open **Ramblr** and choose how you want to dictate:
+   - **Floating button** — enable Ramblr's Accessibility Service so the overlay can insert text
+     into the focused field.
+   - **Voice keyboard** — enable **Ramblr Voice** in Android's input-method settings. This mode
+     inserts through Android's standard keyboard connection and does **not** require Accessibility.
+2. Grant the **audio recording** permission. Both setup modes need microphone access.
+3. Pick a **Dictation mode** (Settings → Cloud), or leave the defaults and adjust later:
    - **Local** — on-device transcription + on-device cleanup, fully offline
    - **Cloud** — cloud transcription + cloud cleanup
    - **Fastest** — on-device transcription (near-instant) + cloud cleanup (best text quality)
    - Advanced per-feature overrides are available if you want any other combination
-5. If you picked Local/Fastest, download a transcription model in Settings → Transcription
-6. If you picked Cloud/Fastest, add at least one cloud provider and its API key in
+4. If you picked Local/Fastest, download a transcription model in Settings → Transcription
+5. If you picked Cloud/Fastest, add at least one cloud provider and its API key in
    Settings → Cloud
 
-Once setup is done, the floating button is ready.
+Both surfaces require microphone permission and a working transcription configuration. Once setup
+is done, the floating button or Ramblr Voice keyboard you chose is ready.
+
+### Optional voice keyboard
+
+Ramblr Voice is a narrow voice-only input method, not a conventional keyboard: it has a mic,
+dictation status/partial preview, keyboard switcher, and Settings shortcut, with no letter or
+symbol rows. To use it:
+
+1. Complete the microphone and transcription/provider setup above in the Ramblr app. Accessibility
+   is required only if you also use the floating button.
+2. In Ramblr, tap **Enable voice keyboard**. Android opens its input-method settings; enable
+   **Ramblr Voice** there. You can also reach the same screen through **Android Settings → System
+   → Keyboard → On-screen keyboard → Manage on-screen keyboards**.
+3. Focus a text field, use Android's keyboard switch control, and select **Ramblr Voice**.
+4. Tap the mic to start, then tap it again to transcribe and insert into that same field.
+
+Ramblr never auto-enables or auto-selects the input method. If the keyboard is hidden or the
+focused editor changes, active dictation is cancelled and late output is never redirected into the
+new field. When local history is allowed and enabled, accepted final text is saved there before the
+single insertion attempt so a stale or rejected destination does not lose it.
+
+Password, PIN, visible-password, and web-password fields disable the Ramblr mic completely. An
+editor that requests Android's **no personalized learning** flag can still use dictation, but that
+IME session is excluded from Ramblr history, quality logging, and suggestion collection.
 
 ## Why does it need Accessibility?
 
-Ramblr uses Android's Accessibility Service for one narrow reason: to insert dictated text into
-the currently focused text field across apps.
+Ramblr's floating-button mode uses Android's Accessibility Service for one narrow reason: to
+insert dictated text into the currently focused text field across apps. The optional Ramblr Voice
+keyboard instead uses Android's standard `InputConnection.commitText()` path and does not require
+the accessibility service.
 
-It does **not** replace your keyboard. It does **not** run background automation. It only acts
-after you explicitly tap the overlay button.
+The floating mode does **not** replace your keyboard or run background automation. Both surfaces
+act only after you explicitly tap their mic control.
 
 ## Privacy
 
@@ -289,9 +318,12 @@ export JAVA_HOME=/path/to/jdk-17
 
 ### Architecture at a glance
 
-- **`WhisperAccessibilityService.kt`** — the accessibility service: overlay button, recording
-  state machine, and the code path that resolves transcription/cleanup candidates and injects
-  the result.
+- **`DictationRuntime.kt`** — the shared recording, transcription, and cleanup state machine used by
+  both dictation surfaces.
+- **`WhisperAccessibilityService.kt`** — owns the floating overlay and accessibility-backed focused
+  field insertion.
+- **`RamblrImeService.kt`** — the voice-only input method; commits accepted text to the editor where
+  dictation began through Android's `InputConnection`.
 - **`ProviderChain.kt` / `ProviderChainRuntime.kt` / `ProviderChainStore.kt`** — the unified,
   user-editable ordered list of providers (OpenAI/Anthropic/Gemini/self-hosted/local) each
   feature (transcription, cleanup) walks looking for its first capable, configured entry.
@@ -447,9 +479,9 @@ exercising each app on a real device and recording which strategy succeeds, whic
 done — see [#5](https://github.com/trevornk/ramblr/issues/5) for that as tracked follow-up work.
 Don't treat the absence of an app from this doc as either "supported" or "unsupported."
 
-Ramblr intentionally does not implement a full IME (replacement keyboard). It only acts once,
-after an explicit tap on the overlay button, and never intercepts normal typing — becoming a
-keyboard is a different, much larger feature and is out of scope.
+Ramblr Voice intentionally is not a full replacement keyboard: it has no letter/number/symbol
+rows, swipe typing, autocorrect, suggestions, clipboard UI, or emoji UI. Switch back to your normal
+keyboard for typing.
 
 ### Termux
 
@@ -467,7 +499,8 @@ Once text is inserted into the native input box, Termux sends it to the terminal
 
 ## Current limitations
 
-- Accessibility permission is required for cross-app insertion
+- The floating-button surface requires Accessibility permission; the optional Ramblr Voice IME
+  inserts through Android's InputConnection and works with the accessibility service disabled
 - Some apps may block paste or text injection
 - Some apps use custom input surfaces instead of standard Android text fields
 - Local transcription/cleanup models are sizable downloads (100–465 MB)

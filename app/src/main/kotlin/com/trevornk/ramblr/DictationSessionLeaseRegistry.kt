@@ -1,7 +1,6 @@
 package com.trevornk.ramblr
 
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 
 /** Opaque identity for one process-local dictation session. It never retains a host or Context. */
 internal class DictationSessionLease internal constructor(internal val generation: Long)
@@ -10,23 +9,46 @@ internal class DictationSessionLease internal constructor(internal val generatio
 internal interface DictationSessionLeaseRegistry {
     fun tryAcquire(): DictationSessionLease?
     fun release(lease: DictationSessionLease): Boolean
+
+    /** Runs process-start hygiene only when no session is owned, excluding acquisition until done. */
+    fun runIfIdle(action: () -> Unit): Boolean
 }
 
 /**
- * Lock-free lease registry. [release] is compare-and-release against the exact immutable lease,
- * so a late callback carrying an older generation cannot clear a newer session's ownership.
+ * Process-local lease registry. Ownership transitions share one short monitor; [runIfIdle] marks a
+ * hygiene reservation then performs file I/O outside it, so recording acquisition fails fast
+ * instead of blocking the main thread. [release] still compares the exact immutable lease.
  */
 internal class InMemoryDictationSessionLeaseRegistry : DictationSessionLeaseRegistry {
     private val nextGeneration = AtomicLong(0)
-    private val active = AtomicReference<DictationSessionLease?>(null)
+    private var active: DictationSessionLease? = null
+    private var hygieneRunning = false
 
+    @Synchronized
     override fun tryAcquire(): DictationSessionLease? {
-        val lease = DictationSessionLease(nextGeneration.incrementAndGet())
-        return if (active.compareAndSet(null, lease)) lease else null
+        if (active != null || hygieneRunning) return null
+        return DictationSessionLease(nextGeneration.incrementAndGet()).also { active = it }
     }
 
-    override fun release(lease: DictationSessionLease): Boolean =
-        active.compareAndSet(lease, null)
+    @Synchronized
+    override fun release(lease: DictationSessionLease): Boolean {
+        if (active !== lease) return false
+        active = null
+        return true
+    }
+
+    override fun runIfIdle(action: () -> Unit): Boolean {
+        synchronized(this) {
+            if (active != null || hygieneRunning) return false
+            hygieneRunning = true
+        }
+        try {
+            action()
+        } finally {
+            synchronized(this) { hygieneRunning = false }
+        }
+        return true
+    }
 }
 
 /** The one registry shared by every production [DictationRuntime] in this app process. */

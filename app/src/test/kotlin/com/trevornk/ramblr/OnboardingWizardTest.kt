@@ -44,6 +44,42 @@ class OnboardingWizardTest {
         ))
     }
 
+    @Test fun `voice keyboard setup does not require accessibility`() {
+        assertTrue(OnboardingWizard.isSetupComplete(
+            audioGranted = true,
+            setupMode = OnboardingSetupMode.VOICE_KEYBOARD,
+            accessibilityEnabled = false,
+            imeEnabled = true,
+            transcriptionLocal = true,
+            hasLocalModel = true,
+            hasApiKey = false,
+        ))
+    }
+
+    @Test fun `voice keyboard setup requires explicit IME enablement`() {
+        assertFalse(OnboardingWizard.isSetupComplete(
+            audioGranted = true,
+            setupMode = OnboardingSetupMode.VOICE_KEYBOARD,
+            accessibilityEnabled = false,
+            imeEnabled = false,
+            transcriptionLocal = true,
+            hasLocalModel = true,
+            hasApiKey = false,
+        ))
+    }
+
+    @Test fun `floating button setup still requires accessibility`() {
+        assertFalse(OnboardingWizard.isSetupComplete(
+            audioGranted = true,
+            setupMode = OnboardingSetupMode.FLOATING_BUTTON,
+            accessibilityEnabled = false,
+            imeEnabled = true,
+            transcriptionLocal = true,
+            hasLocalModel = true,
+            hasApiKey = false,
+        ))
+    }
+
     @Test fun `ready with local transcription once a model is installed`() {
         assertTrue(OnboardingWizard.isSetupComplete(
             audioGranted = true, accessibilityEnabled = true,
@@ -55,6 +91,39 @@ class OnboardingWizardTest {
         assertFalse(OnboardingWizard.isSetupComplete(
             audioGranted = true, accessibilityEnabled = true,
             transcriptionLocal = true, hasLocalModel = false, hasApiKey = false,
+        ))
+    }
+
+    @Test fun `selected local model must be installed even when another model is available`() {
+        assertFalse(OnboardingWizard.isTranscriptionModelReady(
+            transcriptionLocal = true,
+            selectedModel = "selected-model",
+            knownModels = listOf("selected-model", "different-model"),
+            installedModels = listOf("different-model"),
+        ))
+        assertTrue(OnboardingWizard.isTranscriptionModelReady(
+            transcriptionLocal = true,
+            selectedModel = "selected-model",
+            knownModels = listOf("selected-model", "different-model"),
+            installedModels = listOf("selected-model", "different-model"),
+        ))
+    }
+
+    @Test fun `unknown selected local model is not ready even if a matching directory exists`() {
+        assertFalse(OnboardingWizard.isTranscriptionModelReady(
+            transcriptionLocal = true,
+            selectedModel = "unknown-model",
+            knownModels = listOf("catalog-model"),
+            installedModels = listOf("unknown-model"),
+        ))
+    }
+
+    @Test fun `cloud transcription does not require a local model selection`() {
+        assertTrue(OnboardingWizard.isTranscriptionModelReady(
+            transcriptionLocal = false,
+            selectedModel = "",
+            knownModels = emptyList(),
+            installedModels = emptyList(),
         ))
     }
 

@@ -48,6 +48,7 @@ class DictationRuntimeTest {
     private class RecordingListener : RuntimeListener {
         val events = mutableListOf<String>()
         val delivered = mutableListOf<Delivery>()
+        val streamingTeardownLoopers = mutableListOf<Looper?>()
 
         data class Delivery(
             val text: String,
@@ -62,7 +63,10 @@ class DictationRuntimeTest {
         override fun onRecordingStarted() { events += "recordingStarted" }
         override fun onEnterTranscribingUi() { events += "transcribingUi" }
         override fun onIdleUi() { events += "idleUi" }
-        override fun onStreamingTeardown() { events += "streamingTeardown" }
+        override fun onStreamingTeardown() {
+            events += "streamingTeardown"
+            streamingTeardownLoopers += Looper.myLooper()
+        }
         override fun onStreamingPartial(text: String) { events += "partial:$text" }
         override fun deliverText(
             text: String,
@@ -563,6 +567,18 @@ class DictationRuntimeTest {
     }
 
     @Test
+    fun `asynchronous shutdown posts streaming teardown listener to main`() {
+        runtime.beginShutdown()
+        val worker = Thread { runtime.finishShutdownAndReleaseTranscribers() }
+        worker.start()
+        worker.join(2000)
+        idleMainLooper()
+
+        assertFalse(worker.isAlive)
+        assertEquals(listOf(Looper.getMainLooper()), listener.streamingTeardownLoopers)
+    }
+
+    @Test
     fun `shutdown timeout retains lease until reader finish confirms microphone teardown`() {
         runtime.onTap()
         val stalledEngine = engines.single().also { it.teardownCompleted = false }
@@ -582,5 +598,24 @@ class DictationRuntimeTest {
         contender.onTap()
         assertEquals(RecordingStateMachine.State.RECORDING, contender.currentState())
         assertEquals(1, contenderEngines.size)
+    }
+
+    @Test
+    fun `shutdown invalidation is immediate while microphone lease waits for reader teardown`() {
+        runtime.onTap()
+        val stalledEngine = engines.single().also { it.teardownCompleted = false }
+
+        runtime.beginShutdown()
+
+        assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
+        val contender = DictationRuntime(app, RecordingListener(), leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine)
+        }
+        contender.onTap()
+        assertEquals(RecordingStateMachine.State.IDLE, contender.currentState())
+
+        stalledEngine.finishAs(null, RecordingEngine.StopReason.USER, superseded = true)
+        contender.onTap()
+        assertEquals(RecordingStateMachine.State.RECORDING, contender.currentState())
     }
 }

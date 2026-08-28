@@ -59,6 +59,13 @@ on-device, in the app's private storage, and is excluded from Android backups an
 device-to-device transfer. It is never uploaded anywhere. You can turn history off in Settings, and
 you can delete recorded entries from the history screen.
 
+The optional **Ramblr Voice** keyboard records the final accepted output in this same local
+history before attempting its one-shot insertion, when history and editor retention are allowed.
+This makes text recoverable after a stale editor, a rejected `InputConnection.commitText()` call,
+or a dead connection without retrying into a different field. A failed insertion is never reported
+as saved unless the history write succeeded. History remains subject to the user's history toggle,
+and is always suppressed for editors that request no personalized learning.
+
 ## Quality log (off by default)
 
 Ramblr has an optional diagnostic "quality log" for comparing transcription/cleanup providers. When
@@ -93,6 +100,31 @@ The exact rules are readable in the repository at `app/src/main/res/xml/backup_r
 Ramblr uses Android Accessibility Service only to identify the currently focused text field and insert dictated text after you explicitly interact with the floating overlay button.
 
 Ramblr is not designed to monitor browsing, collect screen content for analytics, or perform background automation.
+
+## Optional Ramblr Voice keyboard
+
+Ramblr Voice is an opt-in Android input method. Ramblr only opens Android's supported input-method
+settings screen after you tap **Enable voice keyboard**; it cannot and does not auto-enable or
+auto-select itself. After you enable it, you select it with Android's keyboard switch control.
+
+The keyboard shows streaming partial text locally in its own panel and inserts the final result
+through the exact `InputConnection` and editor identity that were present when dictation began.
+There is one insertion attempt only: output is never redirected or retried into a replacement
+field. Hiding the keyboard, finishing/restarting input, changing the destination, or destroying the
+service invalidates delivery immediately and cancels the runtime; audio-reader/native teardown then
+finishes off the main thread while microphone ownership remains held until reader teardown.
+
+Ramblr Voice uses the same local/cloud transcription and cleanup providers you configured for the
+floating-button mode. Local processing stays on device; cloud routing sends audio/text directly to
+the same configured provider destinations described above. The keyboard adds no separate provider,
+account, relay, or hidden routing path.
+
+Password, PIN, visible-password, and web-password editor variations are blocked before runtime or
+capture starts: the mic is disabled and no audio or text is processed. Android's
+`IME_FLAG_NO_PERSONALIZED_LEARNING` is different: dictation and insertion remain available, but the
+IME session suppresses dictation history, transcript-bearing quality diagnostics, and vocabulary
+suggestion collection. This policy affects only the IME session and does not change the existing
+accessibility-host behavior.
 
 ## Text-selection menu ("Clean up with Ramblr")
 

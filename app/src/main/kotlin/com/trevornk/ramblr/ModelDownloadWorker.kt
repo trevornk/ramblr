@@ -116,23 +116,21 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
     private fun errorData(message: String) = Data.Builder().putString(KEY_ERROR, message).build()
 
     /**
-     * Tell the running accessibility service (if any) to load a model that just finished
-     * downloading (#H5). Before this, the only things that reloaded a model into the live service
-     * were service-connect, an explicit settings-screen reload, and a memory-trim warm-up -- so a
-     * model whose download completed while nothing was observing WorkManager (most importantly an
-     * onboarding download after the wizard was closed) never activated, and a fresh local-mode user
-     * got "Local model still downloading" until they happened to reopen a settings screen. The
-     * service re-reads its own selected-model prefs on reload, so this changes no user selection.
-     * A LOCAL_CLEANUP model needs no reload -- it's loaded on demand by file path at cleanup time.
-     * No-op when the service isn't running (the next service connect loads it anyway).
+     * Tell each currently running dictation surface to load a model that just finished downloading
+     * (#H5, #143). Both hosts re-read selected-model prefs, so this changes no user selection.
+     * The IME bridge submits into its generation-gated native queue and is a no-op when no IME is
+     * active. LOCAL_CLEANUP and VAD remain on-demand and therefore need no native reload.
      */
     private fun notifyServiceModelReady(archive: String) {
-        val service = WhisperAccessibilityService.instance ?: return
-        when (reloadKindFor(archive)) {
-            ModelReloadKind.TRANSCRIPTION -> service.reloadModel()
-            ModelReloadKind.STREAMING -> service.reloadStreamingModel()
-            ModelReloadKind.LOCAL_CLEANUP, ModelReloadKind.VAD, null -> {}
+        val reloadKind = reloadKindFor(archive) ?: return
+        WhisperAccessibilityService.instance?.let { service ->
+            when (reloadKind) {
+                ModelReloadKind.TRANSCRIPTION -> service.reloadModel()
+                ModelReloadKind.STREAMING -> service.reloadStreamingModel()
+                ModelReloadKind.LOCAL_CLEANUP, ModelReloadKind.VAD -> {}
+            }
         }
+        ProcessActiveImeModelReadyReload.notifyModelReady(reloadKind)
     }
 
     /** Which running-service reload a freshly-downloaded model needs, keyed by which catalog it's

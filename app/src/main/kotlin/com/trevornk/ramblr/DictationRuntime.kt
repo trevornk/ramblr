@@ -30,6 +30,12 @@ import kotlin.concurrent.thread
  * `handleTranscriptionResult`'s background thread before the extraction.
  */
 interface RuntimeListener {
+    /** Host-visible operational message (permission, busy lease, errors, limits). Main thread. */
+    fun onUserMessage(message: String) {}
+
+    /** Cleanup has begun after transcription. Main thread. */
+    fun onCleaningStarted() {}
+
     /** Recording is about to start (permission + warm-ups already done): the host must resolve
      *  any still-pending preview and reset its per-recording streaming/delivery state, exactly
      *  as the pre-extraction `startRecording` prologue did. Main thread. */
@@ -82,6 +88,9 @@ interface RuntimeListener {
     /** Best-effort package name of the foreground app, for per-app persona resolution (#103).
      *  May be called from background threads. An IME host may return null. */
     fun foregroundPackageName(): String?
+
+    /** Whether this host/session permits retention of transcript-bearing diagnostics. */
+    fun allowsTranscriptRetention(): Boolean = true
 }
 
 /**
@@ -129,6 +138,7 @@ class DictationRuntime internal constructor(
     companion object {
         private const val TAG = "PhoneWhisper"
         private const val SAMPLE_RATE = 16000
+        const val BUSY_MESSAGE = "Ramblr is already dictating from another input surface"
 
         /** Backstop if no transcription/cleanup callback ever fires; covers transcription + cleanup callTimeouts. */
         private const val WATCHDOG_TIMEOUT_MS = 400_000L
@@ -254,12 +264,14 @@ class DictationRuntime internal constructor(
 
     // Local transcription engine (loaded lazily)
     private val transcriberSlot = TranscriberSlot<LocalTranscriber> { it.release() }
+    private val transcriberLifecycle = TranscriberLifecycle(transcriberSlot)
 
     // Streaming live-preview engine (#29) — only loaded when the opt-in setting is on and the
     // streaming model is installed (see initStreamingModel/shouldUseStreamingPreview). Kept loaded
     // across recordings like transcriberSlot; only its per-recording OnlineStream is torn down
     // between dictations (see StreamingTranscriber.beginSession/endSession).
     private val streamingTranscriberSlot = TranscriberSlot<StreamingTranscriber> { it.release() }
+    private val streamingTranscriberLifecycle = TranscriberLifecycle(streamingTranscriberSlot)
 
     // Set by onTrimMemory (#98) when the transcriber slots were released under memory pressure;
     // cleared once warmUpTranscribersIfTrimmed reloads them. Avoids reloading on every single
@@ -277,13 +289,8 @@ class DictationRuntime internal constructor(
         cleanupCursor.reset()
     }
 
-    /** Deletes any temp PCM files left behind by a process death that skipped normal teardown. */
-    internal fun cleanupOrphanedRecordings() {
-        context.cacheDir.listFiles { f -> f.name.startsWith("rec_") && f.name.endsWith(".pcm") }
-            ?.forEach { it.delete() }
-    }
-
     internal fun initLocalModel() {
+        val initialization = transcriberLifecycle.beginInitialization() ?: return
         val modelName = prefs().getString("model_name", "") ?: ""
         val newTranscriber = if (modelName.isBlank()) {
             // Auto-detect first available model
@@ -297,10 +304,10 @@ class DictationRuntime internal constructor(
         }
         // Swap in the new transcriber, then release the old one — waiting for any transcription
         // still in flight on it — so switching models never holds more than one native recognizer.
-        transcriberSlot.replace(newTranscriber)
-        if (newTranscriber != null) {
+        val installed = transcriberLifecycle.install(initialization, newTranscriber)
+        if (installed && newTranscriber != null) {
             Log.i(TAG, "Local transcription ready")
-        } else {
+        } else if (installed) {
             Log.i(TAG, "No local model found, will use API")
         }
     }
@@ -314,6 +321,7 @@ class DictationRuntime internal constructor(
      * when either changes, mirroring [reloadModel]'s pattern for the offline model.
      */
     internal fun initStreamingModel() {
+        val initialization = streamingTranscriberLifecycle.beginInitialization() ?: return
         val archive = prefs().getString("streaming_model_name", STREAMING_MODEL.archive) ?: STREAMING_MODEL.archive
         val model = ModelDownloader.resolveActiveModel(STREAMING_MODEL_CATALOG, archive)
         val enabled = shouldUseStreamingPreview(
@@ -321,8 +329,10 @@ class DictationRuntime internal constructor(
             streamingModelInstalled = StreamingTranscriber.isAvailable(context, model)
         )
         val newTranscriber = if (enabled) StreamingTranscriber.create(context, model) else null
-        streamingTranscriberSlot.replace(newTranscriber)
-        Log.i(TAG, if (newTranscriber != null) "Streaming preview ready" else "Streaming preview unavailable")
+        val installed = streamingTranscriberLifecycle.install(initialization, newTranscriber)
+        if (installed) {
+            Log.i(TAG, if (newTranscriber != null) "Streaming preview ready" else "Streaming preview unavailable")
+        }
     }
 
     /** Reload the streaming preview model (called from MainActivity when the toggle or the
@@ -369,7 +379,7 @@ class DictationRuntime internal constructor(
     internal fun startRecording() {
         val lease = leaseRegistry.tryAcquire()
         if (lease == null) {
-            toast("Ramblr is already dictating from another input surface")
+            toast(BUSY_MESSAGE)
             return
         }
         sessionLease = lease
@@ -633,13 +643,15 @@ class DictationRuntime internal constructor(
         }
     }
 
-    /** The runtime half of the pre-extraction `teardownStreamingPreview()`: the host moves its
-     *  injected-node session into the pending-handoff slot (see [RuntimeListener.onStreamingTeardown]),
-     *  then the streaming recognizer's per-recording stream is ended -- same order as before the
-     *  extraction. Called from every path back to IDLE ([resetToIdle]) and from [shutdown]; safe
-     *  to call even when no session is active. */
+    /** The runtime half of streaming teardown. Host/UI cleanup is always delivered on main; native
+     *  stream release stays on the caller so asynchronous shutdown never routes UI callbacks from
+     *  its worker thread. */
     private fun teardownStreamingPreview() {
-        listener.onStreamingTeardown()
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            listener.onStreamingTeardown()
+        } else {
+            handler.post { listener.onStreamingTeardown() }
+        }
         streamingTranscriberSlot.use { it.endSession() }
     }
 
@@ -908,7 +920,7 @@ class DictationRuntime internal constructor(
                     ),
                     rawTextLength = text.length,
                 )
-                QualityLogger.log(
+                if (listener.allowsTranscriptRetention()) QualityLogger.log(
                     context = context,
                     correlationId = correlationIdFor(token),
                     transcription = QualityStage(
@@ -934,7 +946,7 @@ class DictationRuntime internal constructor(
                         error = sanitizeError(e.toString()),
                     ),
                 )
-                QualityLogger.log(
+                if (listener.allowsTranscriptRetention()) QualityLogger.log(
                     context = context,
                     correlationId = correlationIdFor(token),
                     transcription = QualityStage(
@@ -1115,7 +1127,7 @@ class DictationRuntime internal constructor(
                             ),
                             rawTextLength = result.text?.length,
                         )
-                        QualityLogger.log(
+                        if (listener.allowsTranscriptRetention()) QualityLogger.log(
                             context = context,
                             correlationId = correlationIdFor(token),
                             transcription = QualityStage(
@@ -1187,7 +1199,7 @@ class DictationRuntime internal constructor(
                                 ),
                                 rawTextLength = result.text?.length,
                             )
-                            QualityLogger.log(
+                            if (listener.allowsTranscriptRetention()) QualityLogger.log(
                                 context = context,
                                 correlationId = correlationIdFor(token),
                                 transcription = QualityStage(
@@ -1315,6 +1327,7 @@ class DictationRuntime internal constructor(
             val prompt = PostProcessor.interpolateVocabulary(rawPrompt, vocabulary)
 
             if (!guard.isCurrent(token)) return
+            handler.post { if (guard.isCurrent(token)) listener.onCleaningStarted() }
             Log.i(TAG, "Cleanup via ProviderChain entries=${providerChain.entries.map { it.kind }} executableSteps=${cleanupWaterfall.steps.map { it.group }}")
             PostProcessor.processProviderChain(
                 text = text,
@@ -1328,7 +1341,7 @@ class DictationRuntime internal constructor(
                 // #182 option 2: local cleanup applies the same terms as a deterministic
                 // post-pass over its output instead of in its prompt (which broke LFM2.5).
                 localVocabulary = vocabulary,
-                benchmarkContext = context,
+                benchmarkContext = context.takeIf { listener.allowsTranscriptRetention() },
                 benchmarkCorrelationId = correlationIdFor(token),
             ) { result ->
                 handler.post {
@@ -1429,8 +1442,32 @@ class DictationRuntime internal constructor(
      * pre-extraction `WhisperAccessibilityService.onDestroy` in their exact original order (the
      * host interleaves its own pieces around this call -- see the service's onDestroy).
      */
+    /** Synchronous invalidation phase: no waits, and every late callback fails closed immediately. */
+    fun beginShutdown() {
+        synchronized(this) {
+            if (shuttingDown) return
+            shuttingDown = true
+            transcriberLifecycle.beginShutdown()
+            streamingTranscriberLifecycle.beginShutdown()
+        }
+        val lease = sessionLease
+        if (recordingEngine != null) shutdownLeaseAwaitingReader = lease
+        inFlightCall.cancel()
+        stateMachine.reset()
+        cancelWatchdog()
+        guard.cancel()
+        activeToken = 0
+        pipelineTiming.abandon()
+    }
+
+    /** Compatibility path for the accessibility host; IME uses the split async path below. */
     fun shutdown() {
-        shuttingDown = true
+        beginShutdown()
+        finishShutdown()
+    }
+
+    /** Blocking audio/native teardown phase. Never invoke this directly from an IME callback. */
+    private fun finishShutdown() {
         val lease = sessionLease
         val engine = recordingEngine
         if (engine != null) shutdownLeaseAwaitingReader = lease
@@ -1479,6 +1516,18 @@ class DictationRuntime internal constructor(
         teardownStreamingPreview()
     }
 
+    /** Blocking IME teardown stage; callers must serialize it off main before any new model load. */
+    internal fun finishShutdownAndReleaseTranscribers() {
+        finishShutdown()
+        transcriberLifecycle.releaseInstalled()
+        streamingTranscriberLifecycle.releaseInstalled()
+    }
+
+    /** IME teardown compatibility helper for non-serialized hosts. */
+    fun finishShutdownAsync() {
+        thread { finishShutdownAndReleaseTranscribers() }
+    }
+
     /**
      * Releases the native transcriber recognizers (M7) at host teardown: like onTrimMemory,
      * replace(null) can block on an in-flight transcription, so it runs off the main thread.
@@ -1489,13 +1538,20 @@ class DictationRuntime internal constructor(
      * the pre-extraction onDestroy.
      */
     fun releaseTranscribersAsync() {
+        transcriberLifecycle.beginShutdown()
+        streamingTranscriberLifecycle.beginShutdown()
         thread {
-            transcriberSlot.replace(null)
-            streamingTranscriberSlot.replace(null)
+            transcriberLifecycle.releaseInstalled()
+            streamingTranscriberLifecycle.releaseInstalled()
         }
     }
 
     private fun prefs() = context.getSharedPreferences("ramblr", Context.MODE_PRIVATE)
 
-    private fun toast(msg: String) { handler.post { Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() } }
+    private fun toast(msg: String) {
+        handler.post {
+            listener.onUserMessage(msg)
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
 }

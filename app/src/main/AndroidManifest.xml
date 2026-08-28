@@ -219,6 +219,22 @@
             </intent-filter>
         </service>
 
+        <!-- Voice-only keyboard (#143 Phase 3). Exported is required for the system IME manager
+             to bind it; BIND_INPUT_METHOD is a signature permission, so arbitrary apps cannot.
+             It is user-enabled/selected only through Android's supported input-method UI. -->
+        <service
+            android:name=".RamblrImeService"
+            android:exported="true"
+            android:label="@string/ime_name"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+
         <!-- ModelDownloadWorker promotes itself to a foreground service while a model download is
              in progress, so it needs a declared type (required on API 34+, #56). Overrides
              WorkManager's own manifest entry for this service. -->
