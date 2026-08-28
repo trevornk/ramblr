@@ -66,6 +66,7 @@ class GeminiCloudLiveTranscriptionClient(
         private var socket: WebSocket? = null
         private var connected = false
         private var setupComplete = false
+        private var draining = false
         private var startRequested = false
         private var endRequested = false
         private var setupTimeout: ScheduledFuture<*>? = null
@@ -123,32 +124,83 @@ class GeminiCloudLiveTranscriptionClient(
             return enqueue(message)
         }
 
+        /**
+         * Appends [message] to [pending] -- the single ordering authority -- then drains the queue
+         * if no other thread already owns the drain.
+         *
+         * Nothing is ever handed straight to the socket, even after the handshake lands. A direct
+         * send would let a message enqueued *later* reach the wire ahead of one still sitting in
+         * the queue: the recorder thread's next PCM chunk used to overtake the not-yet-flushed
+         * `activityStart` while [onSetupComplete] was mid-flush, and with
+         * `automaticActivityDetection.disabled = true` the server drops audio that arrives before
+         * activityStart. Routing every message through the queue makes append order == wire order
+         * by construction, which is exactly what [CloudLiveTranscriptionSession] promises.
+         *
+         * The monitor is never held across a send: OkHttp's [WebSocket.send] enqueues onto its own
+         * writer rather than blocking on the network, but keeping it outside the lock also means a
+         * slow writer can never stall the recorder thread's next `sendPcm`.
+         */
         private fun enqueue(message: String): Boolean {
-            var sendNow: WebSocket? = null
-            synchronized(lock) {
+            val buffered = synchronized(lock) {
                 if (terminal.get()) return false
-                if (setupComplete) {
-                    sendNow = socket
+                val bytes = message.toByteArray(Charsets.UTF_8).size.toLong()
+                if (pendingBytes + bytes > MAX_PENDING_BYTES) {
+                    false // Failure is completed outside this monitor.
                 } else {
-                    val bytes = message.toByteArray(Charsets.UTF_8).size.toLong()
-                    if (pendingBytes + bytes > MAX_PENDING_BYTES) {
-                        // Failure is completed outside this monitor.
-                    } else {
-                        pending.addLast(message)
-                        pendingBytes += bytes
-                        return true
-                    }
+                    pending.addLast(message)
+                    pendingBytes += bytes
+                    true
                 }
             }
-            if (sendNow == null) {
+            if (!buffered) {
                 fail(CloudLiveFailureReason.BUFFER_LIMIT, "Live transcription outbound buffer limit reached")
                 return false
             }
-            if (sendNow!!.queueSize() > MAX_WEBSOCKET_QUEUE_BYTES || !sendNow!!.send(message)) {
-                fail(CloudLiveFailureReason.SEND_FAILED, "Live transcription send failed")
-                return false
-            }
+            drainPending()
             return true
+        }
+
+        /**
+         * Sends every queued message in FIFO order. At most one thread drains at a time; whoever
+         * loses the race simply returns, because the winner is guaranteed to pick up its message
+         * (the emptiness check that ends a drain and the `draining = false` that reopens it happen
+         * in the same critical section, so no enqueue can be stranded).
+         */
+        private fun drainPending() {
+            val owned = synchronized(lock) {
+                if (terminal.get() || !setupComplete || draining) return
+                draining = true
+                true
+            }
+            if (!owned) return
+            var failure: String? = null
+            while (true) {
+                val message = takeNextPendingOrEndDrain() ?: break
+                // A missing socket after setup is a released/never-opened connection, not a full
+                // outbound buffer -- report what actually happened.
+                val ws = synchronized(lock) { socket }
+                if (ws == null) { failure = "Live transcription socket unavailable"; break }
+                if (ws.queueSize() > MAX_WEBSOCKET_QUEUE_BYTES || !ws.send(message)) {
+                    failure = "Live transcription send failed"
+                    break
+                }
+            }
+            if (failure != null) {
+                synchronized(lock) { draining = false }
+                fail(CloudLiveFailureReason.SEND_FAILED, failure)
+            }
+        }
+
+        /** Pops the next queued message, or ends this drain (in the same critical section as the
+         *  emptiness check) and returns null. */
+        private fun takeNextPendingOrEndDrain(): String? = synchronized(lock) {
+            if (terminal.get() || pending.isEmpty()) {
+                draining = false
+                return null
+            }
+            val next = pending.removeFirst()
+            pendingBytes -= next.toByteArray(Charsets.UTF_8).size.toLong()
+            next
         }
 
         override fun cancel() = fail(CloudLiveFailureReason.CANCELLED, "Live transcription cancelled")
@@ -159,25 +211,14 @@ class GeminiCloudLiveTranscriptionClient(
         }
 
         private fun onSetupComplete() {
-            val messages: List<String>
-            val ws: WebSocket
             synchronized(lock) {
                 if (terminal.get() || setupComplete) return
                 setupComplete = true
                 timing = timing.copy(setupCompletedAtMs = nowMs())
                 setupTimeout?.cancel(false)
                 setupTimeout = null
-                ws = socket ?: return
-                messages = pending.toList()
-                pending.clear()
-                pendingBytes = 0
             }
-            for (message in messages) {
-                if (ws.queueSize() > MAX_WEBSOCKET_QUEUE_BYTES || !ws.send(message)) {
-                    fail(CloudLiveFailureReason.SEND_FAILED, "Live transcription send failed")
-                    return
-                }
-            }
+            drainPending()
             synchronized(lock) { if (endRequested && !terminal.get()) armFinalTimeoutLocked() }
         }
 
