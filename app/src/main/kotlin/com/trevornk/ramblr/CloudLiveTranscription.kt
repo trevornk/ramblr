@@ -59,7 +59,21 @@ sealed class CloudLiveTerminal {
     ) : CloudLiveTerminal()
 }
 
-/** Serializes callbacks even when the supplied executor is a pool. */
+/**
+ * Serializes callbacks even when the supplied executor is a pool.
+ *
+ * One instance is shared factory-wide by every session, so a single throwing listener callback
+ * must never be able to take the executor down with it. [drain] therefore keeps its bookkeeping
+ * consistent no matter what a task does: it always leaves via [nextTaskOrFinish], which clears
+ * `running` in the same critical section as the emptiness check, so a later [execute] is
+ * guaranteed either to be picked up by the in-flight drain or to start a fresh one. Before this,
+ * a throwing task unwound `drain` with `running == true` and a non-empty queue, permanently
+ * wedging cloud-live for the whole process.
+ *
+ * Failures are not swallowed: they are rethrown from [drain] once the queue is empty, on the
+ * delegate's own thread, so its uncaught-exception handler still reports them. Additional
+ * failures in the same drain ride along as suppressed exceptions.
+ */
 internal class SerialCallbackExecutor(private val delegate: Executor) : Executor {
     private val tasks = ArrayDeque<Runnable>()
     private var running = false
@@ -73,12 +87,26 @@ internal class SerialCallbackExecutor(private val delegate: Executor) : Executor
     }
 
     private fun drain() {
+        var failure: Throwable? = null
         while (true) {
-            val task = synchronized(tasks) {
-                if (tasks.isEmpty()) { running = false; return }
-                tasks.removeFirst()
+            val task = nextTaskOrFinish() ?: break
+            try {
+                task.run()
+            } catch (t: Throwable) {
+                if (failure == null) failure = t else failure.addSuppressed(t)
             }
-            task.run()
+        }
+        failure?.let { throw it }
+    }
+
+    /** The next queued task, or null after marking this drain finished. Clearing `running` shares
+     *  the emptiness check's critical section so no [execute] can be stranded un-drained. */
+    private fun nextTaskOrFinish(): Runnable? = synchronized(tasks) {
+        if (tasks.isEmpty()) {
+            running = false
+            null
+        } else {
+            tasks.removeFirst()
         }
     }
 }
