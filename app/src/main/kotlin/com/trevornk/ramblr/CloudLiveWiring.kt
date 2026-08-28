@@ -50,11 +50,15 @@ object CloudLiveWiring {
      */
     fun factoryOrNull(context: Context): CloudLiveTranscriptionSessionFactory? {
         val prefs = context.getSharedPreferences("ramblr", Context.MODE_PRIVATE)
-        if (!CloudLiveToggle.isEnabled(prefs)) return null
+        // Cheap gate first: opting out must not pay for SecurePrefsFactory's keystore-backed
+        // credential read, which the vast majority of installs would otherwise do on every
+        // IME onCreate to learn they were never opted in.
+        val enabled = CloudLiveToggle.isEnabled(prefs)
+        if (!enabled) return null
         // Read the existing cloud-vs-local gate exactly as DictationRuntime does; no new pref.
         val useLocal = prefs.getBoolean("use_local", true)
         val apiKey = ProviderCredentialStore.get(context, ProviderKind.GEMINI)
-        if (!isLiveAllowed(CloudLiveToggle.isEnabled(prefs), useLocal, apiKey)) return null
+        if (!isLiveAllowed(enabled, useLocal, apiKey)) return null
 
         // Same terms the batch transcription path biases on (#26/#114), read from the same key.
         // Truncated to the client's documented ceiling so an oversized personal list downgrades
