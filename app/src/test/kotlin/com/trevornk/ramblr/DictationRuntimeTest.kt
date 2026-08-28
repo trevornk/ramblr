@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.Application
 import android.os.Looper
 import java.io.File
+import java.util.concurrent.TimeUnit
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -68,6 +70,7 @@ class DictationRuntimeTest {
             streamingTeardownLoopers += Looper.myLooper()
         }
         override fun onStreamingPartial(text: String) { events += "partial:$text" }
+        override fun onCloudLiveInterim(text: String) { events += "cloud:$text" }
         override fun deliverText(
             text: String,
             rawText: String?,
@@ -617,5 +620,156 @@ class DictationRuntimeTest {
         stalledEngine.finishAs(null, RecordingEngine.StopReason.USER, superseded = true)
         contender.onTap()
         assertEquals(RecordingStateMachine.State.RECORDING, contender.currentState())
+    }
+
+    @Test
+    fun `authoritative live final uses existing delivery path and suppresses batch exactly once`() {
+        val liveFactory = FakeCloudLiveFactory()
+        var fallbacks = 0
+        runtime = DictationRuntime(
+            app, listener, leaseRegistry,
+            cloudLiveFactory = liveFactory,
+            onCloudLiveBatchFallback = { fallbacks++ },
+        ) { cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it } }
+        val pcm = realSizedPcm()
+
+        runtime.onTap()
+        val session = liveFactory.sessions.single()
+        assertEquals(1, session.connects)
+        assertEquals(1, session.starts)
+        val reused = byteArrayOf(1, 2, 3, 4)
+        engines.single().onChunk!!(reused, 3)
+        reused.fill(9)
+        assertArrayEquals(byteArrayOf(1, 2, 3), session.pcm.single())
+        session.interim("hel")
+        idleMainLooper()
+        assertTrue(listener.events.contains("cloud:hel"))
+
+        runtime.onTap()
+        assertEquals(1, session.ends)
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        session.complete(CloudLiveTerminal.Success("hello live", CloudLiveTiming(1, finalAtMs = 2)))
+        idleMainLooper()
+        val deliveryDeadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deliveryDeadline && listener.delivered.isEmpty()) {
+            idleMainLooper(); Thread.sleep(10)
+        }
+
+        assertEquals(listOf("hello live"), listener.delivered.map { it.text })
+        assertEquals(0, fallbacks)
+        assertFalse(pcm.exists())
+        assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
+        session.complete(CloudLiveTerminal.Failure(CloudLiveFailureReason.NETWORK_ERROR, "late", CloudLiveTiming(1)))
+        idleMainLooper()
+        assertEquals(1, listener.delivered.size)
+        assertEquals(0, fallbacks)
+    }
+
+    @Test
+    fun `live failure keeps preserved pcm and starts existing batch fallback exactly once`() {
+        val liveFactory = FakeCloudLiveFactory()
+        var fallbacks = 0
+        runtime = DictationRuntime(
+            app, listener, leaseRegistry,
+            cloudLiveFactory = liveFactory,
+            onCloudLiveBatchFallback = { fallbacks++ },
+        ) { cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it } }
+        val pcm = realSizedPcm()
+
+        runtime.onTap(); runtime.onTap()
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        val session = liveFactory.sessions.single()
+        session.complete(CloudLiveTerminal.Failure(CloudLiveFailureReason.NETWORK_ERROR, "drop", CloudLiveTiming(1)))
+
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline && runtime.currentState() != RecordingStateMachine.State.IDLE) {
+            idleMainLooper(); Thread.sleep(10)
+        }
+        assertEquals(1, fallbacks)
+        assertFalse(pcm.exists())
+        assertTrue(listener.delivered.isEmpty())
+        session.complete(CloudLiveTerminal.Success("late", CloudLiveTiming(1, finalAtMs = 2)))
+        idleMainLooper()
+        assertEquals(1, fallbacks)
+        assertTrue(listener.delivered.isEmpty())
+    }
+
+    @Test
+    fun `live send failure without callback reaches bounded preserved pcm fallback once`() {
+        val liveFactory = FakeCloudLiveFactory().apply { acceptPcm = false }
+        var fallbacks = 0
+        runtime = DictationRuntime(
+            app, listener, leaseRegistry,
+            cloudLiveFactory = liveFactory,
+            onCloudLiveBatchFallback = { fallbacks++ },
+        ) { cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it } }
+        val pcm = realSizedPcm()
+
+        runtime.onTap()
+        engines.single().onChunk!!(byteArrayOf(1, 2), 2)
+        assertFalse(liveFactory.sessions.single().lastSendAccepted)
+        runtime.onTap()
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        idleMainLooper()
+        shadowOf(Looper.getMainLooper()).idleFor(2_501, TimeUnit.MILLISECONDS)
+
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline && runtime.currentState() != RecordingStateMachine.State.IDLE) {
+            idleMainLooper(); Thread.sleep(10)
+        }
+        assertEquals(1, fallbacks)
+        assertFalse(pcm.exists())
+        liveFactory.sessions.single().complete(CloudLiveTerminal.Success("late", CloudLiveTiming(1, finalAtMs = 2)))
+        idleMainLooper()
+        assertEquals(1, fallbacks)
+        assertTrue(listener.delivered.isEmpty())
+    }
+
+    @Test
+    fun `shutdown cancels cloud live session before late callbacks`() {
+        val liveFactory = FakeCloudLiveFactory()
+        runtime = DictationRuntime(app, listener, leaseRegistry, cloudLiveFactory = liveFactory) {
+            cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it }
+        }
+        runtime.onTap()
+        val session = liveFactory.sessions.single()
+        runtime.beginShutdown()
+        assertEquals(1, session.cancels)
+        session.interim("late")
+        session.complete(CloudLiveTerminal.Success("late", CloudLiveTiming(1, finalAtMs = 2)))
+        idleMainLooper()
+        assertFalse(listener.events.contains("cloud:late"))
+        assertTrue(listener.delivered.isEmpty())
+    }
+
+    private class FakeCloudLiveFactory : CloudLiveTranscriptionSessionFactory {
+        val sessions = mutableListOf<FakeCloudLiveSession>()
+        var acceptPcm = true
+        override fun create(listener: CloudLiveTranscriptionListener): CloudLiveTranscriptionSession =
+            FakeCloudLiveSession(listener, acceptPcm).also(sessions::add)
+    }
+
+    private class FakeCloudLiveSession(
+        private val listener: CloudLiveTranscriptionListener,
+        private val acceptPcm: Boolean,
+    ) : CloudLiveTranscriptionSession {
+        var connects = 0
+        var starts = 0
+        var ends = 0
+        var cancels = 0
+        var lastSendAccepted = true
+        val pcm = mutableListOf<ByteArray>()
+        override fun connect() { connects++ }
+        override fun startActivity(): Boolean { starts++; return true }
+        override fun sendPcm(buffer: ByteArray, length: Int): Boolean {
+            pcm += buffer.copyOf(length)
+            lastSendAccepted = acceptPcm
+            return acceptPcm
+        }
+        override fun endActivity(): Boolean { ends++; return true }
+        override fun cancel() { cancels++ }
+        override fun close() = Unit
+        fun interim(text: String) = listener.onInterim(text, CloudLiveTiming(1, firstInterimAtMs = 2))
+        fun complete(result: CloudLiveTerminal) = listener.onTerminal(result)
     }
 }
