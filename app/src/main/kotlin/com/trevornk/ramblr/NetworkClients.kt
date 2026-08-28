@@ -22,4 +22,22 @@ object NetworkClients {
             .callTimeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .build()
     }
+
+    /**
+     * [shared], but refusing to follow redirects -- for calls that carry a credential header or an
+     * audio body to a host validated up front.
+     *
+     * OkHttp follows redirects by default and only strips `Authorization` on a host change; a
+     * custom credential header like `x-goog-api-key` is carried across hosts untouched. Validating
+     * a URL's origin before the call is therefore not sufficient on its own: a 3xx from the
+     * validated host can still redirect the request, its credential header, and its body to an
+     * arbitrary third-party host. Callers using this client see the 3xx as a plain unsuccessful
+     * response and fail the operation instead.
+     */
+    val noRedirects: OkHttpClient by lazy {
+        shared.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+    }
 }

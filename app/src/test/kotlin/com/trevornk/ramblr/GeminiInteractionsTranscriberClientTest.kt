@@ -8,6 +8,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -30,7 +31,8 @@ class GeminiInteractionsTranscriberClientTest {
         server = MockWebServer()
         server.start()
         client = GeminiInteractionsTranscriberClient(
-            httpClient = OkHttpClient(),
+            // The production client, so redirect-following behavior under test is the real one.
+            httpClient = NetworkClients.noRedirects,
             uploadEndpoint = server.url("/upload/v1beta/files"),
             interactionsEndpoint = server.url("/v1beta/interactions"),
             filesEndpoint = server.url("/v1beta/files/"),
@@ -144,8 +146,96 @@ class GeminiInteractionsTranscriberClientTest {
         server.takeRequest()
         val config = JSONObject(server.takeRequest().body.readUtf8())
             .getJSONObject("generation_config").getJSONObject("transcription_config")
-        assertEquals("smart", config.getString("mode"))
-        assertFalse(config.opt("mode") is JSONObject)
+        assertEquals("smart", config.getJSONObject("mode").getString("type"))
+    }
+
+    /**
+     * Both modes use the same `{"type": ...}` object shape. The live API accepts a bare string too
+     * (`mode: "smart"`), but only the object form is documented, and encoding the two modes
+     * differently invites a reader into thinking one of them is special. Verified against the live
+     * endpoint 2026-08-28: a bad enum is rejected with "Supported values: 'verbatim', 'smart'"
+     * under both shapes, so neither is a silently-ignored no-op.
+     */
+    @Test fun `both transcription modes use the documented object wire shape`() {
+        for (mode in GeminiInteractionsTranscriberClient.Mode.entries) {
+            enqueueSuccessfulUpload()
+            server.enqueue(MockResponse().setBody("""{"steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}]}"""))
+            server.enqueue(MockResponse().setBody("{}"))
+
+            awaitResult(mode = mode)
+
+            server.takeRequest()
+            server.takeRequest()
+            val config = JSONObject(server.takeRequest().body.readUtf8())
+                .getJSONObject("generation_config").getJSONObject("transcription_config")
+            val encoded = config.opt("mode")
+            assertTrue("mode for $mode must be an object, was ${encoded?.javaClass}", encoded is JSONObject)
+            assertEquals(mode.wireValue, (encoded as JSONObject).getString("type"))
+            server.takeRequest()
+        }
+    }
+
+    /**
+     * A validated same-origin upload URL must not become a cross-host request via a redirect.
+     * OkHttp follows redirects by default and only strips `Authorization` when the host changes --
+     * `x-goog-api-key` is not stripped, so a followed 302 would hand both the audio body and the
+     * API key to whatever host the redirect names. The client must refuse to follow instead.
+     */
+    @Test fun `upload does not follow a redirect to another host`() {
+        val attacker = MockWebServer()
+        attacker.start()
+        try {
+            attacker.enqueue(MockResponse().setBody("""{"file":{"name":"files/pwned","uri":"https://files.example/pwned","mimeType":"audio/wav","state":"ACTIVE"}}"""))
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("X-Goog-Upload-URL", server.url("/resumable/session-1").toString()),
+            )
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(302)
+                    .setHeader("Location", attacker.url("/steal").toString()),
+            )
+
+            val (result, callbacks) = awaitResult()
+
+            assertEquals(1, callbacks)
+            assertNull(result.text)
+            assertNotNull(result.error)
+            assertEquals("attacker host must receive no request", 0, attacker.requestCount)
+        } finally {
+            attacker.shutdown()
+        }
+    }
+
+    /**
+     * Same guarantee on the key-bearing start call, which carries `x-goog-api-key` from the very
+     * first request.
+     */
+    @Test fun `upload start does not follow a redirect to another host`() {
+        val attacker = MockWebServer()
+        attacker.start()
+        try {
+            attacker.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("X-Goog-Upload-URL", attacker.url("/resumable/evil").toString()),
+            )
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(302)
+                    .setHeader("Location", attacker.url("/start").toString()),
+            )
+
+            val (result, callbacks) = awaitResult()
+
+            assertEquals(1, callbacks)
+            assertNull(result.text)
+            assertNotNull(result.error)
+            assertEquals("attacker host must receive no request", 0, attacker.requestCount)
+        } finally {
+            attacker.shutdown()
+        }
     }
 
     @Test fun `successful callback does not wait for uploaded file deletion`() {
