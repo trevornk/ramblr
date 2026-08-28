@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * cleanup failures never replace the transcription result that caused cleanup.
  */
 class GeminiInteractionsTranscriberClient(
-    private val httpClient: OkHttpClient = NetworkClients.shared,
+    private val httpClient: OkHttpClient = NetworkClients.noRedirects,
     private val uploadEndpoint: HttpUrl = DEFAULT_UPLOAD_ENDPOINT.toHttpUrl(),
     private val interactionsEndpoint: HttpUrl = DEFAULT_INTERACTIONS_ENDPOINT.toHttpUrl(),
     private val filesEndpoint: HttpUrl = DEFAULT_FILES_ENDPOINT.toHttpUrl(),
