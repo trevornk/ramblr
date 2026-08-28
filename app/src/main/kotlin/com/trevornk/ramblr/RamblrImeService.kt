@@ -29,6 +29,7 @@ class RamblrImeService : InputMethodService() {
     private var editorIdentity = ImeEditorIdentity(null, 0, 0)
     private var runtime: DictationRuntime? = null
     private var panelController: ImePanelController? = null
+    private var modelReadyReload: ImeModelReadyReload? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val historyStore by lazy { DictationHistoryStore.forContext(this) }
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -223,10 +224,21 @@ class RamblrImeService : InputMethodService() {
             local = createdRuntime::initLocalModel,
             streaming = createdRuntime::initStreamingModel,
         )
+        val modelReadyReload = ProcessImeNativeRuntimeTasks.newModelReadyReload(
+            initialization = nativeInitialization,
+            reloadLocal = createdRuntime::initLocalModel,
+            reloadStreaming = createdRuntime::initStreamingModel,
+        )
+        this.modelReadyReload = modelReadyReload
+        ProcessActiveImeModelReadyReload.register(modelReadyReload)
     }
 
     private fun loseLifecycle(reason: ImeLifecycleLoss) {
         val controller = panelController ?: return
+        modelReadyReload?.let { modelReadyReload ->
+            this.modelReadyReload = null
+            ProcessActiveImeModelReadyReload.unregister(modelReadyReload)
+        }
         panelController = null
         runtime = null
         controller.onLifecycleLost(reason)

@@ -6,10 +6,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * Process-serial native-runtime queue. Local and streaming siblings initialize concurrently, but a
- * retired runtime's initialization and teardown fully finish before the next runtime can load.
- * Pending initialization is generation-gated so a runtime retired before its task starts does no
- * native work at all.
+ * Process-serial native-runtime queue. Local and streaming siblings initialize concurrently, while
+ * model reloads and retired-runtime teardown stay serialized behind them. A retired runtime's
+ * initialization/reload/teardown fully finish before the next runtime can load. Pending native work
+ * is generation-gated so a runtime retired before its task starts does no native work at all.
  */
 internal class ImeNativeRuntimeTaskQueue(
     private val reportFailure: (String, Throwable) -> Unit = { _, _ -> },
@@ -46,6 +46,22 @@ internal class ImeNativeRuntimeTaskQueue(
             }
             initialization
         }
+
+    fun enqueueReload(initialization: Initialization, action: () -> Unit) {
+        synchronized(schedulingLock) {
+            serial.execute {
+                val mayStart = synchronized(schedulingLock) {
+                    !initialization.retired && latest === initialization
+                }
+                if (!mayStart) return@execute
+                try {
+                    action()
+                } catch (failure: Throwable) {
+                    reportFailure("runtime model reload", failure)
+                }
+            }
+        }
+    }
 
     fun enqueueTeardown(initialization: Initialization, action: () -> Unit) {
         synchronized(schedulingLock) {
@@ -104,6 +120,12 @@ internal object ProcessImeNativeRuntimeTasks {
 
     fun enqueueInitialization(local: () -> Unit, streaming: () -> Unit) =
         queue.enqueueInitialization(local, streaming)
+
+    fun newModelReadyReload(
+        initialization: ImeNativeRuntimeTaskQueue.Initialization,
+        reloadLocal: () -> Unit,
+        reloadStreaming: () -> Unit,
+    ) = ImeModelReadyReload(queue, initialization, reloadLocal, reloadStreaming)
 
     fun enqueueTeardown(
         initialization: ImeNativeRuntimeTaskQueue.Initialization,

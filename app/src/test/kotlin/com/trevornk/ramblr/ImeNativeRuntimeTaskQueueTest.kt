@@ -42,6 +42,63 @@ class ImeNativeRuntimeTaskQueueTest {
         }
     }
 
+    @Test fun `download completion reloads an already active runtime without overlapping initialization`() {
+        val queue = ImeNativeRuntimeTaskQueue()
+        val events = Collections.synchronizedList(mutableListOf<String>())
+        val initialLocalStarted = CountDownLatch(1)
+        val allowInitialLocal = CountDownLatch(1)
+        try {
+            val active = queue.enqueueInitialization(
+                local = {
+                    events += "initial-local-start"
+                    initialLocalStarted.countDown()
+                    allowInitialLocal.await(2, TimeUnit.SECONDS)
+                    events += "initial-local-end"
+                },
+                streaming = { events += "initial-streaming" },
+            )
+            assertTrue(initialLocalStarted.await(2, TimeUnit.SECONDS))
+
+            queue.enqueueReload(active) { events += "download-reload" }
+            assertFalse(events.contains("download-reload"))
+
+            allowInitialLocal.countDown()
+            assertTrue(queue.awaitIdle(2, TimeUnit.SECONDS))
+            assertTrue(events.indexOf("download-reload") > events.indexOf("initial-local-end"))
+        } finally {
+            allowInitialLocal.countDown()
+            queue.close()
+        }
+    }
+
+    @Test fun `download reload queued for runtime lost before execution is rejected`() {
+        val queue = ImeNativeRuntimeTaskQueue()
+        val events = Collections.synchronizedList(mutableListOf<String>())
+        val initializationStarted = CountDownLatch(1)
+        val allowInitialization = CountDownLatch(1)
+        try {
+            val stale = queue.enqueueInitialization(
+                local = {
+                    initializationStarted.countDown()
+                    allowInitialization.await(2, TimeUnit.SECONDS)
+                },
+                streaming = { allowInitialization.await(2, TimeUnit.SECONDS) },
+            )
+            assertTrue(initializationStarted.await(2, TimeUnit.SECONDS))
+
+            queue.enqueueReload(stale) { events += "stale-download-reload" }
+            queue.enqueueTeardown(stale) { events += "teardown" }
+            allowInitialization.countDown()
+            assertTrue(queue.awaitIdle(2, TimeUnit.SECONDS))
+
+            assertFalse(events.contains("stale-download-reload"))
+            assertEquals(listOf("teardown"), events)
+        } finally {
+            allowInitialization.countDown()
+            queue.close()
+        }
+    }
+
     @Test fun `task failures are reported`() {
         val failures = Collections.synchronizedList(mutableListOf<String>())
         val queue = ImeNativeRuntimeTaskQueue { task, _ -> failures += task }

@@ -88,6 +88,22 @@ class RamblrImeTest {
     }
 
     @Test
+    fun `model download completion is wired to the active IME runtime lifecycle`() {
+        val imeSource = File(
+            repoRoot(),
+            "app/src/main/kotlin/com/trevornk/ramblr/RamblrImeService.kt",
+        ).readText()
+        val workerSource = File(
+            repoRoot(),
+            "app/src/main/kotlin/com/trevornk/ramblr/ModelDownloadWorker.kt",
+        ).readText()
+
+        assertTrue(imeSource.contains("ProcessActiveImeModelReadyReload.register(modelReadyReload)"))
+        assertTrue(imeSource.contains("ProcessActiveImeModelReadyReload.unregister(modelReadyReload)"))
+        assertTrue(workerSource.contains("ProcessActiveImeModelReadyReload.notifyModelReady(reloadKind)"))
+    }
+
+    @Test
     fun `mic taps start and stop through runtime while listener reflects states`() {
         val runtime = FakeRuntimeControl()
         val states = mutableListOf<ImeUiState>()
