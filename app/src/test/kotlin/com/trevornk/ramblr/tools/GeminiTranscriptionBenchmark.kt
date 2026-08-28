@@ -1,5 +1,6 @@
 package com.trevornk.ramblr.tools
 
+import com.trevornk.ramblr.GeminiInteractionsTranscriberClient
 import com.trevornk.ramblr.GeminiTranscriberClient
 import com.trevornk.ramblr.InFlightCall
 import com.trevornk.ramblr.VocabularyTerms
@@ -63,6 +64,10 @@ private const val EVAL_DIR_ENV = "TRANSCRIPTION_EVAL_DIR"
  * Both are explicit and both are recorded in the report header; neither is a silent substitution.
  */
 private const val VOCABULARY_ENV = "GEMINI_TRANSCRIPTION_VOCABULARY"
+private const val ENGINES_ENV = "GEMINI_TRANSCRIPTION_ENGINES"
+private const val TRANSCRIBE_MODEL_ENV = "GEMINI_TRANSCRIBE_MODEL"
+private const val TRANSCRIBE_MODES_ENV = "GEMINI_TRANSCRIBE_MODES"
+private const val DELAY_MS_ENV = "GEMINI_TRANSCRIPTION_DELAY_MS"
 
 private const val DEFAULT_EVAL_DIR = "app/src/test/resources/transcription_eval"
 
@@ -77,6 +82,13 @@ private val DEFAULT_MODELS = listOf("gemini-3.1-flash-lite", "gemini-3.5-flash")
  *  guarantees the benchmark can never wedge forever waiting on a callback that never fires. */
 private const val CALL_TIMEOUT_SECONDS = 180L
 
+data class BenchmarkTarget(
+    val engine: String,
+    val path: String,
+    val modelId: String,
+    val mode: String,
+)
+
 // ---------------------------------------------------------------------- pure configuration
 
 /** A fully validated, ready-to-execute benchmark configuration. Contains no secret. */
@@ -90,8 +102,12 @@ data class BenchmarkConfig(
     val callTimeoutSeconds: Long,
     /** Vocabulary terms interpolated into the production transcription prompt (see [VOCABULARY_ENV]). */
     val vocabularyTerms: List<String> = emptyList(),
+    val interCallDelayMs: Long = 0,
+    val targets: List<BenchmarkTarget> = modelIds.map {
+        BenchmarkTarget("Gemini", "generateContent", it, "prompted-verbatim")
+    },
 ) {
-    val totalCalls: Int get() = fixtures.size * modelIds.size * repetitions
+    val totalCalls: Int get() = fixtures.size * targets.size * repetitions
 }
 
 /**
@@ -105,6 +121,10 @@ data class BenchmarkArgs(
     val repetitionsRaw: String?,
     val evalDirRaw: String?,
     val vocabularyRaw: String? = null,
+    val enginesRaw: String? = null,
+    val transcribeModelRaw: String? = null,
+    val transcribeModesRaw: String? = null,
+    val delayMsRaw: String? = null,
 )
 
 /**
@@ -126,6 +146,13 @@ fun resolveConfig(args: BenchmarkArgs): BenchmarkConfig {
             else if (it < 1) problems.add("$REPETITIONS_ENV must be at least 1, got $it")
         } ?: 1
     }
+    val interCallDelayMs = when (val raw = args.delayMsRaw?.trim()?.takeIf { it.isNotEmpty() }) {
+        null -> 0L
+        else -> raw.toLongOrNull().also {
+            if (it == null) problems.add("$DELAY_MS_ENV must be an integer, got '$raw'")
+            else if (it < 0) problems.add("$DELAY_MS_ENV must be non-negative, got $it")
+        } ?: 0L
+    }
 
     // An explicitly-set-but-empty override is an error, not a cue to fall back to the defaults:
     // "GEMINI_TRANSCRIPTION_MODELS=" almost certainly means a broken shell expansion, and
@@ -136,6 +163,39 @@ fun resolveConfig(args: BenchmarkArgs): BenchmarkConfig {
         else -> raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
     }
     problems.addAll(TranscriptionEvalManifest.validateModelIds(modelIds))
+
+    // Unset preserves the original generateContent-only benchmark. Operators opt into a true A/B
+    // by naming both paths; smart is likewise an explicit secondary axis, never silently mixed.
+    val engines = args.enginesRaw?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+        ?: listOf("generateContent")
+    if (engines.isEmpty()) problems.add("$ENGINES_ENV must not be empty")
+    engines.filterNot { it == "generateContent" || it == "interactions" }
+        .forEach { problems.add("Unknown benchmark engine '$it'") }
+    if (engines.distinct().size != engines.size) problems.add("$ENGINES_ENV contains duplicate paths")
+
+    val transcribeModel = args.transcribeModelRaw?.trim()?.takeIf { it.isNotEmpty() }
+        ?: GeminiInteractionsTranscriberClient.DEFAULT_MODEL
+    if (!Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}").matches(transcribeModel)) {
+        problems.add("$TRANSCRIBE_MODEL_ENV contains an invalid model id")
+    }
+    val transcribeModes = args.transcribeModesRaw?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+        ?: listOf("verbatim")
+    if (transcribeModes.isEmpty()) problems.add("$TRANSCRIBE_MODES_ENV must not be empty")
+    transcribeModes.filterNot { it == "verbatim" || it == "smart" }
+        .forEach { problems.add("Unknown Gemini Transcribe mode '$it'") }
+    if (transcribeModes.distinct().size != transcribeModes.size) {
+        problems.add("$TRANSCRIBE_MODES_ENV contains duplicate modes")
+    }
+    val targets = buildList {
+        if ("generateContent" in engines) {
+            modelIds.forEach { add(BenchmarkTarget("Gemini", "generateContent", it, "prompted-verbatim")) }
+        }
+        if ("interactions" in engines) {
+            transcribeModes.forEach {
+                add(BenchmarkTarget("Gemini", "interactions/files", transcribeModel, it))
+            }
+        }
+    }
 
     // Production always sends the user's personal vocabulary in the transcription prompt when
     // prefs hold any terms, and prefs are seeded with VocabularyTerms.DEFAULTS on first run. An
@@ -188,6 +248,8 @@ fun resolveConfig(args: BenchmarkArgs): BenchmarkConfig {
         repetitions = repetitions,
         callTimeoutSeconds = CALL_TIMEOUT_SECONDS,
         vocabularyTerms = vocabularyTerms,
+        interCallDelayMs = interCallDelayMs,
+        targets = targets,
     )
 }
 
@@ -201,8 +263,13 @@ data class CallOutcome(
     val transcript: String?,
     val error: String?,
     val latencyMs: Long,
+    val engine: String = "Gemini",
+    val path: String = "generateContent",
+    val mode: String = "prompted-verbatim",
 ) {
     val succeeded: Boolean get() = transcript != null
+    fun matches(target: BenchmarkTarget): Boolean =
+        engine == target.engine && path == target.path && modelId == target.modelId && mode == target.mode
 }
 
 /** Coarse failure buckets for the report's failure-category table. Pattern-matched on the error
@@ -280,6 +347,83 @@ private fun transcribeBlocking(
     return settled to latencyMs
 }
 
+/** Narrow benchmark seam: another provider can be added later without teaching scoring/reporting
+ * about its transport. This PR intentionally adds only the two Gemini paths needed by #226. */
+private interface BenchmarkAdapter {
+    fun transcribe(
+        wavFile: File,
+        pcmFile: File,
+        apiKey: String,
+        target: BenchmarkTarget,
+        timeoutSeconds: Long,
+        vocabularyTerms: List<String>,
+        languageCode: String,
+    ): Triple<String?, String?, Long>
+}
+
+private object GenerateContentAdapter : BenchmarkAdapter {
+    override fun transcribe(
+        wavFile: File,
+        pcmFile: File,
+        apiKey: String,
+        target: BenchmarkTarget,
+        timeoutSeconds: Long,
+        vocabularyTerms: List<String>,
+        languageCode: String,
+    ): Triple<String?, String?, Long> {
+        val (result, latency) = transcribeBlocking(
+            pcmFile, apiKey, target.modelId, timeoutSeconds, vocabularyTerms,
+        )
+        return Triple(result.text, result.error, latency)
+    }
+}
+
+private object InteractionsFilesAdapter : BenchmarkAdapter {
+    override fun transcribe(
+        wavFile: File,
+        pcmFile: File,
+        apiKey: String,
+        target: BenchmarkTarget,
+        timeoutSeconds: Long,
+        vocabularyTerms: List<String>,
+        languageCode: String,
+    ): Triple<String?, String?, Long> {
+        val latch = CountDownLatch(1)
+        val result = java.util.concurrent.atomic.AtomicReference<GeminiInteractionsTranscriberClient.Result?>(null)
+        val holder = InFlightCall()
+        val start = System.nanoTime()
+        GeminiInteractionsTranscriberClient().transcribe(
+            audioFile = wavFile,
+            mimeType = "audio/wav",
+            apiKey = apiKey,
+            model = target.modelId,
+            customVocabulary = vocabularyTerms,
+            languageCodes = listOf(languageCode),
+            mode = if (target.mode == "smart") GeminiInteractionsTranscriberClient.Mode.SMART
+                else GeminiInteractionsTranscriberClient.Mode.VERBATIM,
+            cancelHolder = holder,
+        ) {
+            result.set(it)
+            latch.countDown()
+        }
+        val completed = latch.await(timeoutSeconds, TimeUnit.SECONDS)
+        val latency = (System.nanoTime() - start) / 1_000_000
+        if (!completed) {
+            holder.cancel()
+            return Triple(null, "Timed out after ${timeoutSeconds}s waiting for the transcription callback", latency)
+        }
+        val settled = result.get()
+            ?: GeminiInteractionsTranscriberClient.Result(null, "Callback fired without producing a Result")
+        return Triple(settled.text, settled.error, latency)
+    }
+}
+
+private fun adapterFor(target: BenchmarkTarget): BenchmarkAdapter = when (target.path) {
+    "generateContent" -> GenerateContentAdapter
+    "interactions/files" -> InteractionsFilesAdapter
+    else -> error("No adapter for benchmark path ${target.path}")
+}
+
 // ---------------------------------------------------------------------- reporting
 
 /** Everything needed to render a report, computed offline from [CallOutcome]s. */
@@ -300,11 +444,11 @@ private fun currentCommitSha(): String = try {
 
 /** Scores a model's successful calls against the fixture references. */
 private fun scoresFor(
-    model: String,
+    target: BenchmarkTarget,
     outcomes: List<CallOutcome>,
     fixturesById: Map<String, TranscriptionEvalManifest.Fixture>,
 ): List<TranscriptionMetrics.ClipScore> =
-    outcomes.filter { it.modelId == model && it.succeeded }.mapNotNull { outcome ->
+    outcomes.filter { it.matches(target) && it.succeeded }.mapNotNull { outcome ->
         fixturesById[outcome.fixtureId]?.let { fixture ->
             TranscriptionMetrics.score(fixture.referenceText, outcome.transcript!!)
         }
@@ -318,9 +462,10 @@ fun renderMarkdown(report: BenchmarkReport): String {
     sb.append("# Gemini transcription benchmark (#129)\n\n")
     sb.append("- Commit: `${report.commitSha}`\n")
     sb.append("- Run at (UTC): `${report.timestampUtc}`\n")
-    sb.append("- Models: ${cfg.modelIds.joinToString(", ") { "`$it`" }}\n")
-    sb.append("- Repetitions per fixture/model: ${cfg.repetitions}\n")
+    sb.append("- Targets: ${cfg.targets.joinToString(", ") { "`${it.path}/${it.modelId}/${it.mode}`" }}\n")
+    sb.append("- Repetitions per fixture/target: ${cfg.repetitions}\n")
     sb.append("- Per-call timeout: ${cfg.callTimeoutSeconds}s (plus the production OkHttp client's own timeouts)\n")
+    sb.append("- Inter-call delay: ${cfg.interCallDelayMs} ms (benchmark pacing only; excluded from request latency)\n")
     sb.append("- Manifest: `${cfg.manifestFile.path}` (sha256 `${cfg.manifestChecksum}`)\n")
     sb.append("- Fixtures: ${cfg.fixtures.size}, total calls: ${cfg.totalCalls}\n")
     sb.append(
@@ -335,17 +480,17 @@ fun renderMarkdown(report: BenchmarkReport): String {
             "figures are estimated here — that would be fabrication.\n\n"
     )
 
-    sb.append("## Summary by model\n\n")
-    sb.append("| Model | Calls | Success | micro-WER | micro-CER | macro-WER | Strict exact | Norm exact | p50 ms | p95 ms | mean ms |\n")
-    sb.append("|---|---|---|---|---|---|---|---|---|---|---|\n")
-    for (model in cfg.modelIds) {
-        val modelOutcomes = report.outcomes.filter { it.modelId == model }
-        val agg = TranscriptionMetrics.aggregate(scoresFor(model, report.outcomes, fixturesById))
-        val latency = TranscriptionMetrics.latencyStats(modelOutcomes.filter { it.succeeded }.map { it.latencyMs })
-        val successRate = if (modelOutcomes.isEmpty()) 0.0
-        else modelOutcomes.count { it.succeeded }.toDouble() / modelOutcomes.size
+    sb.append("## Summary by target\n\n")
+    sb.append("| Engine | Path | Model | Mode | Calls | Success | micro-WER | micro-CER | macro-WER | Strict exact | Norm exact | p50 ms | p95 ms | mean ms |\n")
+    sb.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+    for (target in cfg.targets) {
+        val targetOutcomes = report.outcomes.filter { it.matches(target) }
+        val agg = TranscriptionMetrics.aggregate(scoresFor(target, report.outcomes, fixturesById))
+        val latency = TranscriptionMetrics.latencyStats(targetOutcomes.filter { it.succeeded }.map { it.latencyMs })
+        val successRate = if (targetOutcomes.isEmpty()) 0.0
+        else targetOutcomes.count { it.succeeded }.toDouble() / targetOutcomes.size
         sb.append(
-            "| `$model` | ${modelOutcomes.size} | ${"%.1f%%".format(successRate * 100)} | " +
+            "| ${target.engine} | `${target.path}` | `${target.modelId}` | `${target.mode}` | ${targetOutcomes.size} | ${"%.1f%%".format(successRate * 100)} | " +
                 "${"%.4f".format(agg.microWer)} | ${"%.4f".format(agg.microCer)} | ${"%.4f".format(agg.macroWer)} | " +
                 "${"%.1f%%".format(agg.strictExactMatchRate * 100)} | ${"%.1f%%".format(agg.normalizedExactMatchRate * 100)} | " +
                 "${latency.p50Ms ?: "-"} | ${latency.p95Ms ?: "-"} | ${latency.meanMs?.let { "%.0f".format(it) } ?: "-"} |\n"
@@ -354,11 +499,11 @@ fun renderMarkdown(report: BenchmarkReport): String {
     sb.append("\nmicro-WER is the headline figure (summed edits / summed reference words). macro-WER ")
     sb.append("(the unweighted mean of per-clip rates) is shown only so corpus skew is visible.\n\n")
 
-    sb.append("## Edit breakdown by model\n\n")
-    sb.append("| Model | Substitutions | Deletions | Insertions | Ref words | Ref chars |\n|---|---|---|---|---|---|\n")
-    for (model in cfg.modelIds) {
-        val agg = TranscriptionMetrics.aggregate(scoresFor(model, report.outcomes, fixturesById))
-        sb.append("| `$model` | ${agg.totalSubstitutions} | ${agg.totalDeletions} | ${agg.totalInsertions} | ${agg.totalReferenceWords} | ${agg.totalReferenceChars} |\n")
+    sb.append("## Edit breakdown by target\n\n")
+    sb.append("| Path / model / mode | Substitutions | Deletions | Insertions | Ref words | Ref chars |\n|---|---|---|---|---|---|\n")
+    for (target in cfg.targets) {
+        val agg = TranscriptionMetrics.aggregate(scoresFor(target, report.outcomes, fixturesById))
+        sb.append("| `${target.path} / ${target.modelId} / ${target.mode}` | ${agg.totalSubstitutions} | ${agg.totalDeletions} | ${agg.totalInsertions} | ${agg.totalReferenceWords} | ${agg.totalReferenceChars} |\n")
     }
     sb.append("\n")
 
@@ -379,7 +524,7 @@ fun renderMarkdown(report: BenchmarkReport): String {
         sb.append("### `${fixture.id}` — ${fixture.scenarios.joinToString(", ")} (${fixture.durationMs} ms, ${fixture.language})\n\n")
         sb.append("**Reference:**\n\n```\n${fixture.referenceText}\n```\n\n")
         report.outcomes.filter { it.fixtureId == fixture.id }.forEach { outcome ->
-            sb.append("**`${outcome.modelId}` rep ${outcome.repetition}** — ${outcome.latencyMs} ms\n\n")
+            sb.append("**`${outcome.path} / ${outcome.modelId} / ${outcome.mode}` rep ${outcome.repetition}** — ${outcome.latencyMs} ms\n\n")
             if (outcome.transcript != null) {
                 val score = TranscriptionMetrics.score(fixture.referenceText, outcome.transcript)
                 sb.append("```\n${outcome.transcript}\n```\n\n")
@@ -403,8 +548,13 @@ fun renderJson(report: BenchmarkReport): String {
     root.put("commitSha", report.commitSha)
     root.put("timestampUtc", report.timestampUtc)
     root.put("models", JSONArray(cfg.modelIds))
+    root.put("targets", JSONArray(cfg.targets.map { target ->
+        JSONObject().put("engine", target.engine).put("path", target.path)
+            .put("model", target.modelId).put("mode", target.mode)
+    }))
     root.put("repetitions", cfg.repetitions)
     root.put("callTimeoutSeconds", cfg.callTimeoutSeconds)
+    root.put("interCallDelayMs", cfg.interCallDelayMs)
     root.put("manifestPath", cfg.manifestFile.path)
     root.put("manifestSha256", cfg.manifestChecksum)
     root.put("fixtureCount", cfg.fixtures.size)
@@ -413,17 +563,20 @@ fun renderJson(report: BenchmarkReport): String {
     root.put("inlineAudioLimitBytes", GeminiTranscriberClient.MAX_INLINE_PCM_BYTES)
     root.put("costAccounting", "unavailable: GeminiTranscriberClient.Result discards usageMetadata")
 
-    val perModel = JSONArray()
-    for (model in cfg.modelIds) {
-        val modelOutcomes = report.outcomes.filter { it.modelId == model }
-        val agg = TranscriptionMetrics.aggregate(scoresFor(model, report.outcomes, fixturesById))
-        val latency = TranscriptionMetrics.latencyStats(modelOutcomes.filter { it.succeeded }.map { it.latencyMs })
-        perModel.put(
+    val perTarget = JSONArray()
+    for (target in cfg.targets) {
+        val targetOutcomes = report.outcomes.filter { it.matches(target) }
+        val agg = TranscriptionMetrics.aggregate(scoresFor(target, report.outcomes, fixturesById))
+        val latency = TranscriptionMetrics.latencyStats(targetOutcomes.filter { it.succeeded }.map { it.latencyMs })
+        perTarget.put(
             JSONObject()
-                .put("model", model)
-                .put("calls", modelOutcomes.size)
-                .put("successes", modelOutcomes.count { it.succeeded })
-                .put("successRate", if (modelOutcomes.isEmpty()) 0.0 else modelOutcomes.count { it.succeeded }.toDouble() / modelOutcomes.size)
+                .put("engine", target.engine)
+                .put("path", target.path)
+                .put("model", target.modelId)
+                .put("mode", target.mode)
+                .put("calls", targetOutcomes.size)
+                .put("successes", targetOutcomes.count { it.succeeded })
+                .put("successRate", if (targetOutcomes.isEmpty()) 0.0 else targetOutcomes.count { it.succeeded }.toDouble() / targetOutcomes.size)
                 .put("microWer", agg.microWer)
                 .put("microCer", agg.microCer)
                 .put("macroWer", agg.macroWer)
@@ -442,7 +595,9 @@ fun renderJson(report: BenchmarkReport): String {
                 .put("latencyMaxMs", latency.maxMs ?: JSONObject.NULL)
         )
     }
-    root.put("perModel", perModel)
+    root.put("perTarget", perTarget)
+    // Backward-compatible alias for existing report consumers. Entries now carry path/mode too.
+    root.put("perModel", perTarget)
 
     val failureCategories = JSONObject()
     report.outcomes.filter { !it.succeeded }.groupingBy { categorizeFailure(it.error) }.eachCount()
@@ -453,7 +608,10 @@ fun renderJson(report: BenchmarkReport): String {
     report.outcomes.forEach { outcome ->
         val obj = JSONObject()
             .put("fixtureId", outcome.fixtureId)
+            .put("engine", outcome.engine)
+            .put("path", outcome.path)
             .put("model", outcome.modelId)
+            .put("mode", outcome.mode)
             .put("repetition", outcome.repetition)
             .put("latencyMs", outcome.latencyMs)
             .put("transcript", outcome.transcript ?: JSONObject.NULL)
@@ -493,6 +651,10 @@ fun main() {
                 repetitionsRaw = System.getenv(REPETITIONS_ENV),
                 evalDirRaw = System.getenv(EVAL_DIR_ENV),
                 vocabularyRaw = System.getenv(VOCABULARY_ENV),
+                enginesRaw = System.getenv(ENGINES_ENV),
+                transcribeModelRaw = System.getenv(TRANSCRIBE_MODEL_ENV),
+                transcribeModesRaw = System.getenv(TRANSCRIBE_MODES_ENV),
+                delayMsRaw = System.getenv(DELAY_MS_ENV),
             )
         )
     } catch (e: TranscriptionEvalManifest.ManifestException) {
@@ -503,7 +665,7 @@ fun main() {
     val key = apiKey!!
 
     println(
-        "Running ${config.fixtures.size} fixture(s) x ${config.modelIds.size} model(s) x " +
+        "Running ${config.fixtures.size} fixture(s) x ${config.targets.size} target(s) x " +
             "${config.repetitions} repetition(s) = ${config.totalCalls} call(s) against the real " +
             "Gemini API. This uploads audio to Google and spends real credits."
     )
@@ -514,38 +676,44 @@ fun main() {
     )
 
     val outcomes = mutableListOf<CallOutcome>()
+    var madeApiCall = false
     for (fixture in config.fixtures) {
         val wavFile = File(config.evalDir, fixture.audioPath)
         val pcmFile = try {
             WavPcm.extractPcmToTempFile(wavFile)
         } catch (e: WavPcm.UnsupportedWavException) {
             System.err.println("Skipping fixture '${fixture.id}': ${e.message}")
-            config.modelIds.forEach { model ->
+            config.targets.forEach { target ->
                 for (rep in 1..config.repetitions) {
-                    outcomes.add(CallOutcome(fixture.id, model, rep, null, "WAV decode failed: ${e.message}", 0))
+                    outcomes.add(CallOutcome(fixture.id, target.modelId, rep, null, "WAV decode failed: ${e.message}", 0,
+                        target.engine, target.path, target.mode))
                 }
             }
             continue
         }
         try {
-            // Production's size gate runs on the raw PCM, before any Gemini call is made.
-            val rejection = inlineAudioRejection(pcmFile.length())
-            if (rejection != null) {
-                System.err.println("Skipping fixture '${fixture.id}': $rejection")
-                config.modelIds.forEach { model ->
-                    for (rep in 1..config.repetitions) {
-                        outcomes.add(CallOutcome(fixture.id, model, rep, null, rejection, 0))
-                    }
-                }
-                continue
-            }
-            for (model in config.modelIds) {
+            for (target in config.targets) {
                 for (rep in 1..config.repetitions) {
-                    print("  ${fixture.id} x $model rep $rep ... ")
-                    val (result, latencyMs) =
-                        transcribeBlocking(pcmFile, key, model, config.callTimeoutSeconds, config.vocabularyTerms)
-                    println(if (result.error == null) "ok (${latencyMs}ms)" else "error: ${result.error} (${latencyMs}ms)")
-                    outcomes.add(CallOutcome(fixture.id, model, rep, result.text, result.error, latencyMs))
+                    // Only the legacy inline generateContent path has the production PCM size
+                    // gate. The Files API path exists specifically to avoid conflating that limit.
+                    val rejection = if (target.path == "generateContent") inlineAudioRejection(pcmFile.length()) else null
+                    if (rejection != null) {
+                        outcomes.add(CallOutcome(fixture.id, target.modelId, rep, null, rejection, 0,
+                            target.engine, target.path, target.mode))
+                        continue
+                    }
+                    // Pacing is outside the adapter's measured interval, so latency remains pure
+                    // request time. No production retry or delay behavior is changed by this tool.
+                    if (madeApiCall && config.interCallDelayMs > 0) Thread.sleep(config.interCallDelayMs)
+                    print("  ${fixture.id} x ${target.path}/${target.modelId}/${target.mode} rep $rep ... ")
+                    val (text, error, latencyMs) = adapterFor(target).transcribe(
+                        wavFile, pcmFile, key, target, config.callTimeoutSeconds,
+                        config.vocabularyTerms, fixture.language,
+                    )
+                    println(if (error == null) "ok (${latencyMs}ms)" else "error: $error (${latencyMs}ms)")
+                    madeApiCall = true
+                    outcomes.add(CallOutcome(fixture.id, target.modelId, rep, text, error, latencyMs,
+                        target.engine, target.path, target.mode))
                 }
             }
         } finally {

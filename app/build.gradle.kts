@@ -267,6 +267,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     // DictationRuntime state-transition tests (#143 Phase 1): the runtime holds a real Context
     // (prefs, cacheDir, main-looper Handler, Toast), so its host-side tests run under
     // Robolectric -- the first tests in this repo that need it. testOptions already sets
@@ -393,8 +394,8 @@ tasks.register<JavaExec>("runEvalHarness") {
 // Usage: GEMINI_API_KEY=... ./gradlew runGeminiTranscriptionBenchmark
 tasks.register<JavaExec>("runGeminiTranscriptionBenchmark") {
     group = "verification"
-    description = "Manual dev tool: benchmarks GeminiTranscriberClient against the local audio " +
-        "fixture corpus and writes a WER/CER report. Uploads audio to Google and costs real " +
+    description = "Manual dev tool: compares Gemini generateContent and dedicated Transcribe " +
+        "paths against the local audio corpus and writes a WER/CER report. Uploads audio and costs real " +
         "API credits; not part of build/test/check."
     dependsOn("compileGithubDebugUnitTestKotlin")
     mainClass.set("com.trevornk.ramblr.tools.GeminiTranscriptionBenchmarkKt")
