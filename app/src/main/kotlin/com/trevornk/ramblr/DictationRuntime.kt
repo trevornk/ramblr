@@ -66,6 +66,10 @@ interface RuntimeListener {
      *  surface it (live field partial or feedback bubble). Main thread (posted). */
     fun onStreamingPartial(text: String)
 
+    /** Provider-neutral cloud-live interim. IME may render it generation-safely; accessibility
+     * deliberately inherits this no-op and remains final-only. Main thread. */
+    fun onCloudLiveInterim(text: String) {}
+
     /**
      * A finished dictation result is ready to deliver. The host owns delivery: the a11y host
      * routes this through its candidate-scan injection (or preview-before-inject when [rawText]
@@ -129,6 +133,11 @@ class DictationRuntime internal constructor(
     private val context: Context,
     private val listener: RuntimeListener,
     private val leaseRegistry: DictationSessionLeaseRegistry = ProcessDictationSessionLeaseRegistry,
+    /** Explicit internal seam: null in every shipped host, so this slice changes no default or
+     * provider catalog. A later opt-in wires a configured provider factory here. */
+    private val cloudLiveFactory: CloudLiveTranscriptionSessionFactory? = null,
+    /** Test-only observation seam proving the preserved-PCM batch path is claimed once. */
+    private val onCloudLiveBatchFallback: () -> Unit = {},
     /** Test seam: lets host-side unit tests substitute a fake engine at the capture boundary.
      *  The default is exactly the pre-extraction construction. */
     private val engineFactory: (File, RecordingStateMachine) -> RecordingEngine =
@@ -142,6 +151,7 @@ class DictationRuntime internal constructor(
 
         /** Backstop if no transcription/cleanup callback ever fires; covers transcription + cleanup callTimeouts. */
         private const val WATCHDOG_TIMEOUT_MS = 400_000L
+        private const val CLOUD_LIVE_FINAL_WAIT_MS = 2_500L
     }
 
     private val stateMachine = RecordingStateMachine()
@@ -150,6 +160,17 @@ class DictationRuntime internal constructor(
     @Volatile private var sessionLease: DictationSessionLease? = null
     @Volatile private var shuttingDown = false
     @Volatile private var shutdownLeaseAwaitingReader: DictationSessionLease? = null
+
+    private class CloudLiveAttempt(val lease: DictationSessionLease) {
+        var session: CloudLiveTranscriptionSession? = null
+        var terminal: CloudLiveTerminal? = null
+        var recordingResult: RecordingEngine.Result? = null
+        var token: Int = 0
+        var claimed = false
+        var finalWait: Runnable? = null
+    }
+
+    @Volatile private var cloudLiveAttempt: CloudLiveAttempt? = null
 
     /** Releases only the exact session captured by the caller; stale callbacks are harmless. */
     private fun releaseSessionLease(lease: DictationSessionLease?) {
@@ -384,6 +405,7 @@ class DictationRuntime internal constructor(
         }
         sessionLease = lease
         var recordingStarted = false
+        var liveAttempt: CloudLiveAttempt? = null
         try {
             if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                 != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -399,6 +421,7 @@ class DictationRuntime internal constructor(
         // bubble throttle -- verbatim the pre-extraction startRecording prologue, now behind the
         // listener seam because every one of those pieces is host delivery state.
             listener.onRecordingStartRequested()
+            liveAttempt = beginCloudLiveAttempt(lease)
             val streamingActive = streamingTranscriberSlot.get() != null
             if (streamingActive) streamingTranscriberSlot.use { it.beginSession() }
 
@@ -437,7 +460,7 @@ class DictationRuntime internal constructor(
         } else null
             aacEncoderSession = aacSession
 
-            val onChunk: (ByteArray, Int) -> Unit = when {
+            val existingOnChunk: (ByteArray, Int) -> Unit = when {
             streamingActive && autoStopSession != null && aacSession != null -> { buf, len ->
                 handleStreamingChunk(buf, len)
                 autoStopSession.onChunk(buf, len)
@@ -460,6 +483,12 @@ class DictationRuntime internal constructor(
             aacSession != null -> aacSession::onChunk
             else -> { _, _ -> }
         }
+            val onChunk: (ByteArray, Int) -> Unit = if (liveAttempt == null) existingOnChunk else { buf, len ->
+                existingOnChunk(buf, len)
+                // Cloud live is an optional tee. Its contract copies before returning; failure is
+                // terminal to only that attempt and never interrupts the PCM file write.
+                runCatching { liveAttempt.session?.sendPcm(buf, len) }
+            }
 
             val engine = engineFactory(context.cacheDir, stateMachine)
             val started = engine.start(
@@ -501,7 +530,54 @@ class DictationRuntime internal constructor(
             acquireTranscriptionWakeLock()
             listener.onRecordingStarted()
         } finally {
-            if (!recordingStarted) releaseSessionLease(lease)
+            if (!recordingStarted) {
+                cancelCloudLiveAttempt(liveAttempt)
+                releaseSessionLease(lease)
+            }
+        }
+    }
+
+    private fun beginCloudLiveAttempt(lease: DictationSessionLease): CloudLiveAttempt? {
+        val factory = cloudLiveFactory ?: return null
+        val attempt = CloudLiveAttempt(lease)
+        return try {
+            attempt.session = factory.create(object : CloudLiveTranscriptionListener {
+                override fun onInterim(text: String, timing: CloudLiveTiming) {
+                    handler.post {
+                        if (cloudLiveAttempt === attempt && sessionLease === lease &&
+                            stateMachine.current() == RecordingStateMachine.State.RECORDING && !attempt.claimed) {
+                            listener.onCloudLiveInterim(text)
+                        }
+                    }
+                }
+
+                override fun onTerminal(result: CloudLiveTerminal) {
+                    handler.post {
+                        if (cloudLiveAttempt !== attempt || sessionLease !== lease || attempt.claimed) return@post
+                        attempt.terminal = result
+                        resolveCloudLiveAttempt(attempt)
+                    }
+                }
+            })
+            // Overwriting the field is the LAST reference anyone holds to an incumbent, so it must
+            // be cancelled first -- otherwise a rapid abandon->restart leaves an authenticated,
+            // still-open microphone socket with no owner and no armed timeout (its catch block
+            // below already got this right).
+            cancelCloudLiveAttempt()
+            cloudLiveAttempt = attempt
+            val session = requireNotNull(attempt.session)
+            session.connect()
+            if (!session.startActivity()) throw IllegalStateException("Cloud-live start rejected")
+            attempt
+        } catch (e: Exception) {
+            // Never fails the dictation -- cloud-live is an optional tee -- but a silent catch here
+            // meant a misconfigured endpoint, bad model id or blank key (all init `require`s)
+            // disabled the feature with zero diagnostics. Control flow is unchanged; this only
+            // makes the cause visible.
+            Log.w(TAG, "Cloud-live attempt could not start; continuing with the batch pipeline", e)
+            if (cloudLiveAttempt === attempt) cloudLiveAttempt = null
+            attempt.session?.let { session -> runCatching { session.cancel(); session.close() } }
+            null
         }
     }
 
@@ -510,6 +586,9 @@ class DictationRuntime internal constructor(
         val lease = sessionLease ?: return
         if (!stateMachine.tryStartTranscribing()) return
         activeToken = guard.start()
+        cloudLiveAttempt?.takeIf { it.lease === lease }?.let { attempt ->
+            runCatching { attempt.session?.endActivity() }
+        }
         pipelineTiming.start(PipelineTiming(stopTapAtMs = System.currentTimeMillis(), correlationId = correlationIdFor(activeToken)))
         armWatchdog(activeToken, lease)
         listener.onEnterTranscribingUi()
@@ -616,6 +695,7 @@ class DictationRuntime internal constructor(
     internal fun resetToIdle(expectedLease: DictationSessionLease) {
         if (sessionLease !== expectedLease) return
         try {
+            cancelCloudLiveAttempt()
             cancelWatchdog()
             guard.cancel()
             activeToken = 0
@@ -666,6 +746,11 @@ class DictationRuntime internal constructor(
         // teardown and leave the new reader keeping the mic hot after the service appears off.
         if (recordingEngine === engine) recordingEngine = null
         if (result.discarded) {
+            // The attempt is abandoned with it: nothing downstream will ever claim or time it out
+            // (setupTimeout is cancelled once setup lands, finalTimeout is only armed by
+            // endActivity, and stopAndTranscribe never ran), so without this the authenticated
+            // microphone socket stays open with no reference held anywhere.
+            cancelCloudLiveAttemptForLeaseOnMain(lease)
             // During shutdown the host deliberately keeps ownership until reader teardown AND
             // cancellation finish below. Every other discarded handoff can release immediately.
             if (!shuttingDown) {
@@ -699,7 +784,7 @@ class DictationRuntime internal constructor(
                 return
             }
         }
-        continueTranscription(result, token, lease)
+        continueWithCloudLiveOrBatch(result, token, lease)
     }
 
     /** Main-thread resolution for a recording that finished without a token (#66/#90) — see
@@ -710,8 +795,11 @@ class DictationRuntime internal constructor(
     ) {
         val token = activeToken
         when (resolveLateRecording(token, guard.isCurrent(token), stateMachine.current())) {
-            LateRecordingResolution.CONTINUE_TRANSCRIPTION -> thread { continueTranscription(result, token, lease) }
+            LateRecordingResolution.CONTINUE_TRANSCRIPTION -> thread { continueWithCloudLiveOrBatch(result, token, lease) }
             LateRecordingResolution.DISCARD -> {
+                // Abandoned without reaching resetToIdle: the attempt would otherwise keep an
+                // authenticated, un-timed-out microphone socket open with no owner.
+                cloudLiveAttempt?.takeIf { it.lease === lease }?.let(::cancelCloudLiveAttempt)
                 result.pcmFile?.delete()
                 result.compressedFile?.delete()
                 releaseSessionLease(lease)
@@ -741,6 +829,8 @@ class DictationRuntime internal constructor(
     ) {
         handler.post {
             if (stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING || activeToken != 0) {
+                // Same abandon-without-resetToIdle shape as the other discard paths.
+                cloudLiveAttempt?.takeIf { it.lease === lease }?.let(::cancelCloudLiveAttempt)
                 result.pcmFile?.delete()
                 result.compressedFile?.delete()
                 releaseSessionLease(lease)
@@ -748,6 +838,9 @@ class DictationRuntime internal constructor(
             }
             val token = guard.start()
             activeToken = token
+            cloudLiveAttempt?.takeIf { it.lease === lease }?.let { attempt ->
+                runCatching { attempt.session?.endActivity() }
+            }
             // #115: max-duration auto-stop has no real user "stop tap" -- the cap itself is the
             // trigger -- so anchor the timeline here instead, at the moment this app-side decided
             // the dictation is over. drainAtMs is set to the same instant since the drain already
@@ -758,8 +851,104 @@ class DictationRuntime internal constructor(
             armWatchdog(token, lease)
             listener.onEnterTranscribingUi()
             toast("Recording limit reached (10 min) — transcribing…")
-            thread { continueTranscription(result, token, lease) }
+            thread { continueWithCloudLiveOrBatch(result, token, lease) }
         }
+    }
+
+    private fun continueWithCloudLiveOrBatch(
+        result: RecordingEngine.Result,
+        token: Int,
+        lease: DictationSessionLease,
+    ) {
+        val attempt = cloudLiveAttempt
+        if (attempt == null || attempt.lease !== lease) {
+            continueTranscription(result, token, lease)
+            return
+        }
+        handler.post {
+            if (cloudLiveAttempt !== attempt || sessionLease !== lease || !guard.isCurrent(token)) {
+                // This attempt can never be claimed now (recordingResult was never set and no
+                // finalWait was armed, so resolveCloudLiveAttempt would bail forever) -- cancel it
+                // rather than leaving an inert, still-open authenticated socket behind.
+                cancelCloudLiveAttempt(attempt)
+                result.pcmFile?.delete()
+                result.compressedFile?.delete()
+                return@post
+            }
+            attempt.recordingResult = result
+            attempt.token = token
+            resolveCloudLiveAttempt(attempt)
+            if (!attempt.claimed && attempt.finalWait == null) {
+                val timeout = Runnable {
+                    attempt.finalWait = null
+                    if (cloudLiveAttempt === attempt && !attempt.claimed) startCloudLiveBatchFallback(attempt)
+                }
+                attempt.finalWait = timeout
+                handler.postDelayed(timeout, CLOUD_LIVE_FINAL_WAIT_MS)
+            }
+        }
+    }
+
+    /** Main-thread arbitration point: preserved PCM is owned by exactly one of live success or the
+     * unchanged batch pipeline. A terminal event alone cannot claim it until reader handoff. */
+    private fun resolveCloudLiveAttempt(attempt: CloudLiveAttempt) {
+        val result = attempt.recordingResult ?: return
+        val terminal = attempt.terminal ?: return
+        if (attempt.claimed || cloudLiveAttempt !== attempt || sessionLease !== attempt.lease) return
+        when (terminal) {
+            is CloudLiveTerminal.Success -> {
+                if (terminal.text.isBlank() || result.pcmFile == null ||
+                    isBelowMinimumDuration(result.pcmFile.length(), SAMPLE_RATE)) {
+                    startCloudLiveBatchFallback(attempt)
+                    return
+                }
+                attempt.claimed = true
+                attempt.finalWait?.let(handler::removeCallbacks)
+                attempt.finalWait = null
+                cloudLiveAttempt = null
+                runCatching { attempt.session?.close() }
+                result.pcmFile.delete()
+                result.compressedFile?.delete()
+                thread { handleTranscriptionResult(terminal.text, attempt.token, attempt.lease) }
+            }
+            is CloudLiveTerminal.Failure -> startCloudLiveBatchFallback(attempt)
+        }
+    }
+
+    private fun startCloudLiveBatchFallback(attempt: CloudLiveAttempt) {
+        val result = attempt.recordingResult ?: return
+        if (attempt.claimed || cloudLiveAttempt !== attempt || sessionLease !== attempt.lease) return
+        attempt.claimed = true
+        attempt.finalWait?.let(handler::removeCallbacks)
+        attempt.finalWait = null
+        cloudLiveAttempt = null
+        runCatching { attempt.session?.close() }
+        onCloudLiveBatchFallback()
+        thread { continueTranscription(result, attempt.token, attempt.lease) }
+    }
+
+    private fun cancelCloudLiveAttempt(attempt: CloudLiveAttempt? = cloudLiveAttempt) {
+        if (attempt == null) return
+        if (cloudLiveAttempt === attempt) cloudLiveAttempt = null
+        attempt.claimed = true
+        attempt.finalWait?.let(handler::removeCallbacks)
+        attempt.finalWait = null
+        attempt.session?.let { session -> runCatching { session.cancel(); session.close() } }
+    }
+
+    /**
+     * Cancels the live attempt belonging to [lease] from a path that abandons its recording
+     * without reaching [resetToIdle] -- the reader thread's `discarded` handoff, and the
+     * main-thread late/max-duration resolutions that discard.
+     *
+     * Lease-compared (never the bare field) so a stalled old reader's late handoff can't tear down
+     * the attempt of the *new* dictation the user has already started -- the same identity guard
+     * `recordingEngine === engine` uses. Hops to main because [cancelCloudLiveAttempt] touches
+     * handler callbacks and the field the main-looper arbitration owns; already-on-main callers
+     * just see a queued no-op after the field is cleared.
+     */
+    private fun cancelCloudLiveAttemptForLeaseOnMain(lease: DictationSessionLease) {
+        handler.post { cloudLiveAttempt?.takeIf { it.lease === lease }?.let(::cancelCloudLiveAttempt) }
     }
 
     private fun continueTranscription(
@@ -1452,6 +1641,7 @@ class DictationRuntime internal constructor(
         }
         val lease = sessionLease
         if (recordingEngine != null) shutdownLeaseAwaitingReader = lease
+        cancelCloudLiveAttempt()
         inFlightCall.cancel()
         stateMachine.reset()
         cancelWatchdog()

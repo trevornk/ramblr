@@ -166,6 +166,9 @@ internal class ImePanelController(
         override fun onIdleUi() { if (active) renderState(ImeUiState.IDLE) }
         override fun onStreamingTeardown() = Unit
         override fun onStreamingPartial(text: String) { if (active) renderPartial(text) }
+        override fun onCloudLiveInterim(text: String) {
+            if (active && deliveryTicket != null && latestUiTicket === deliveryTicket) renderPartial(text)
+        }
         override fun onUserMessage(message: String) {
             if (!active) return
             renderState(ImeUiState.ERROR)
