@@ -99,16 +99,15 @@ fun cloudLiveBenchmarkStage(
 ): CloudLiveStage {
     val marks = terminal?.timing ?: timing
     val failure = terminal as? CloudLiveTerminal.Failure
+    // One rule for all three durations: both ends must exist, or the answer is "didn't happen".
+    fun elapsed(from: Long?, to: Long?): Long? = if (from != null && to != null) to - from else null
     return CloudLiveStage(
         outcome = outcome.name,
         fellBackToBatch = outcome != CloudLiveOutcome.LIVE_DELIVERED,
         failureReason = failure?.reason?.name,
-        setupMs = marks?.let { m -> m.setupCompletedAtMs?.minus(m.connectStartedAtMs) },
-        firstInterimMs = marks?.let { m -> m.firstInterimAtMs?.minus(m.connectStartedAtMs) },
-        endOfAudioToFinalMs = marks?.let { m ->
-            val ended = m.activityEndedAtMs ?: return@let null
-            m.finalAtMs?.minus(ended)
-        },
+        setupMs = elapsed(marks?.connectStartedAtMs, marks?.setupCompletedAtMs),
+        firstInterimMs = elapsed(marks?.connectStartedAtMs, marks?.firstInterimAtMs),
+        endOfAudioToFinalMs = elapsed(marks?.activityEndedAtMs, marks?.finalAtMs),
         // Provider prose can echo request content and can carry a URL; sanitizeError bounds it
         // and the client has already redacted the API key out of the message before this point.
         error = sanitizeError(failure?.message),
