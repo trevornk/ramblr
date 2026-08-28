@@ -62,6 +62,28 @@ fun vocabularyMainRowSubtitleText(termCount: Int): String {
 }
 
 /**
+ * The Cloud screen's experimental "Live cloud transcription" row subtitle (#233 Phase 1).
+ *
+ * Mirrors [CloudLiveWiring.isLiveAllowed]'s three conditions so the row can never claim the
+ * feature is running when the wiring would in fact hand back null. When the switch is on but a
+ * precondition is missing, the subtitle names the specific missing piece rather than a generic
+ * "not configured" -- the toggle looks satisfied at that point, so the row is the only place the
+ * user can find out why nothing changed.
+ *
+ * Pure (no Context) so the on/blocked/off wording is unit-testable, like the rest of this file.
+ */
+fun cloudLiveSubtitleText(
+    enabled: Boolean,
+    useLocalTranscription: Boolean,
+    hasGeminiKey: Boolean,
+): String = when {
+    !enabled -> "Off — cloud transcription returns your text once you stop speaking"
+    useLocalTranscription -> "On, but transcription is set to on-device — needs cloud transcription above"
+    !hasGeminiKey -> "On, but no Gemini key is set — add a Gemini provider above"
+    else -> "On — the keyboard streams to Gemini as you speak. Experimental, costs more than batch"
+}
+
+/**
  * The Behavior screen's "Personal vocabulary" row subtitle: the term list itself, prefixed with
  * the #185 inert-setting warning when nothing in the current configuration applies the terms.
  * Extracted from BehaviorActivity's private `vocabularySummary` (#217) so it's unit-testable and

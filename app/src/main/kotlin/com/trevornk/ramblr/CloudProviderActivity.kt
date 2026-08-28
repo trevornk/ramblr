@@ -48,6 +48,8 @@ class CloudProviderActivity : BaseSettingsActivity() {
     private lateinit var localFallbackRowSub: TextView
     private lateinit var cloudFallbackSwitch: MaterialSwitch
     private lateinit var cloudFallbackRowSub: TextView
+    private lateinit var cloudLiveSwitch: MaterialSwitch
+    private lateinit var cloudLiveRowSub: TextView
 
     /** Provider kinds a user can manually add here. LOCAL is the implicit floor (never a
      *  manually-added row). OMNIROUTE only appears once a base URL has been supplied via
@@ -186,6 +188,26 @@ class CloudProviderActivity : BaseSettingsActivity() {
             alpha = 0.6f
         })
 
+        root.addView(sectionHeader("Experimental"))
+
+        cloudLiveSwitch = MaterialSwitch(this).apply { isClickable = false }
+        val cloudLiveRow = settingsRow(
+            "Live cloud transcription", cloudLiveSubtitle(), cloudLiveSwitch
+        ) { onToggleCloudLive(!cloudLiveSwitch.isChecked) }
+        cloudLiveRowSub = cloudLiveRow.findViewWithTag("subtitle")
+        root.addView(cloudLiveRow)
+        root.addView(TextView(this).apply {
+            text = "Streams audio to Gemini while you speak, so text appears as you talk instead " +
+                "of after you stop. Ramblr keyboard only. Requires cloud transcription and a " +
+                "Gemini key — it does not change which provider transcribes you, or the order of " +
+                "the chain above. Unproven on real devices and roughly 1.8x the cost of the " +
+                "normal upload, so it is off until you turn it on. If a stream fails, the " +
+                "recording still finishes over the normal path."
+            textSize = 13f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(dp(24), 0, dp(24), dp(12))
+        })
+
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
             addView(root)
@@ -220,6 +242,9 @@ class CloudProviderActivity : BaseSettingsActivity() {
         localFallbackRowSub.text = localFallbackSubtitle()
         cloudFallbackSwitch.isChecked = DictationModeToggle.allowCloudFallback(this)
         cloudFallbackRowSub.text = cloudFallbackSubtitle()
+
+        cloudLiveSwitch.isChecked = CloudLiveToggle.isEnabled(this)
+        cloudLiveRowSub.text = cloudLiveSubtitle()
 
         refreshModeSelection()
     }
@@ -752,6 +777,24 @@ class CloudProviderActivity : BaseSettingsActivity() {
 
     private fun onToggleCloudFallback(enabled: Boolean) {
         DictationModeToggle.setAllowCloudFallback(this, enabled)
+        refresh()
+    }
+
+    // --- Experimental: live cloud transcription (#233 Phase 1) ---
+
+    /** Delegates to the pure [cloudLiveSubtitleText], reading the same three inputs
+     *  [CloudLiveWiring.factoryOrNull] gates on so the row and the wiring cannot disagree. */
+    private fun cloudLiveSubtitle(): String = cloudLiveSubtitleText(
+        enabled = CloudLiveToggle.isEnabled(this),
+        useLocalTranscription = prefs().getBoolean("use_local", true),
+        hasGeminiKey = ProviderCredentialStore.isConfigured(this, ProviderKind.GEMINI),
+    )
+
+    /** Persists intent only. The switch never edits `use_local`, the chain, or any credential --
+     *  turning it on while transcription is on-device leaves the row honestly saying so instead
+     *  of silently reconfiguring the user's providers behind the toggle. */
+    private fun onToggleCloudLive(enabled: Boolean) {
+        CloudLiveToggle.setEnabled(this, enabled)
         refresh()
     }
 
