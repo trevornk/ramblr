@@ -5,6 +5,10 @@ import android.app.Application
 import android.os.Looper
 import java.io.File
 import java.util.concurrent.TimeUnit
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import org.json.JSONObject
+import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -45,6 +49,7 @@ class DictationRuntimeTest {
     private lateinit var engines: MutableList<FakeRecordingEngine>
     private lateinit var leaseRegistry: InMemoryDictationSessionLeaseRegistry
     private lateinit var runtime: DictationRuntime
+    private lateinit var batchServer: MockWebServer
 
     /** Records every listener callback in arrival order, so ordering assertions are direct. */
     private class RecordingListener : RuntimeListener {
@@ -135,9 +140,15 @@ class DictationRuntimeTest {
         listener = RecordingListener()
         engines = mutableListOf()
         leaseRegistry = InMemoryDictationSessionLeaseRegistry()
+        batchServer = MockWebServer().apply { start() }
         runtime = DictationRuntime(app, listener, leaseRegistry) { cacheDir, stateMachine ->
             FakeRecordingEngine(cacheDir, stateMachine).also { engines += it }
         }
+    }
+
+    @After
+    fun tearDown() {
+        batchServer.shutdown()
     }
 
     private fun idleMainLooper() = shadowOf(Looper.getMainLooper()).idle()
@@ -658,40 +669,12 @@ class DictationRuntimeTest {
         assertEquals(listOf("hello live"), listener.delivered.map { it.text })
         assertEquals(0, fallbacks)
         assertFalse(pcm.exists())
+        assertTrue("a claimed live success must release the socket", session.closes >= 1)
         assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
         session.complete(CloudLiveTerminal.Failure(CloudLiveFailureReason.NETWORK_ERROR, "late", CloudLiveTiming(1)))
         idleMainLooper()
         assertEquals(1, listener.delivered.size)
         assertEquals(0, fallbacks)
-    }
-
-    @Test
-    fun `live failure keeps preserved pcm and starts existing batch fallback exactly once`() {
-        val liveFactory = FakeCloudLiveFactory()
-        var fallbacks = 0
-        runtime = DictationRuntime(
-            app, listener, leaseRegistry,
-            cloudLiveFactory = liveFactory,
-            onCloudLiveBatchFallback = { fallbacks++ },
-        ) { cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it } }
-        val pcm = realSizedPcm()
-
-        runtime.onTap(); runtime.onTap()
-        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
-        val session = liveFactory.sessions.single()
-        session.complete(CloudLiveTerminal.Failure(CloudLiveFailureReason.NETWORK_ERROR, "drop", CloudLiveTiming(1)))
-
-        val deadline = System.currentTimeMillis() + 5_000
-        while (System.currentTimeMillis() < deadline && runtime.currentState() != RecordingStateMachine.State.IDLE) {
-            idleMainLooper(); Thread.sleep(10)
-        }
-        assertEquals(1, fallbacks)
-        assertFalse(pcm.exists())
-        assertTrue(listener.delivered.isEmpty())
-        session.complete(CloudLiveTerminal.Success("late", CloudLiveTiming(1, finalAtMs = 2)))
-        idleMainLooper()
-        assertEquals(1, fallbacks)
-        assertTrue(listener.delivered.isEmpty())
     }
 
     @Test
@@ -742,6 +725,255 @@ class DictationRuntimeTest {
         assertTrue(listener.delivered.isEmpty())
     }
 
+    // --- cloud-live attempt lifetime: no exit path may orphan an authenticated socket ---
+
+    /**
+     * Every path that abandons a recording without going through [DictationRuntime.resetToIdle]
+     * used to leave `cloudLiveAttempt` untouched. That is not a benign leak: `setupTimeout` is
+     * cancelled once setup lands and `finalTimeout` is only armed by `endActivity()`, so an
+     * abandoned attempt has NEITHER timeout armed and nothing ever calls `close()`/`cancel()` --
+     * an authenticated WSS carrying the user's microphone audio stays open with no reference
+     * held anywhere, one per cycle.
+     */
+    private fun cloudLiveRuntime(liveFactory: FakeCloudLiveFactory, onFallback: () -> Unit = {}) {
+        runtime = DictationRuntime(
+            app, listener, leaseRegistry,
+            cloudLiveFactory = liveFactory,
+            onCloudLiveBatchFallback = onFallback,
+        ) { cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it } }
+    }
+
+    @Test
+    fun `discarded reader handoff cancels the cloud live session instead of orphaning it`() {
+        val liveFactory = FakeCloudLiveFactory()
+        cloudLiveRuntime(liveFactory)
+
+        runtime.onTap()
+        val session = liveFactory.sessions.single()
+        // A superseded reader drain takes onRecordingFinished's `result.discarded` early return:
+        // the lease is released and the method returns without ever touching the attempt.
+        engines.single().finishAs(realSizedPcm(), RecordingEngine.StopReason.USER, superseded = true)
+        idleMainLooper()
+
+        assertEquals("the abandoned live session must be cancelled", 1, session.cancels)
+        assertTrue("and its socket closed", session.closes >= 1)
+    }
+
+    @Test
+    fun `late recording resolved as discard cancels the cloud live session`() {
+        val liveFactory = FakeCloudLiveFactory()
+        cloudLiveRuntime(liveFactory)
+        val pcm = realSizedPcm()
+
+        runtime.onTap()
+        val session = liveFactory.sessions.single()
+        // Reader drains with no token yet (#66), so resolution is posted to main...
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        // ...and before it runs, a non-serialized host teardown resets the state machine and the
+        // guard without going through resetToIdle, so the resolution lands on DISCARD.
+        runtime.finishShutdownAndReleaseTranscribers()
+        idleMainLooper()
+
+        assertFalse("discarded audio is still deleted", pcm.exists())
+        assertEquals("the abandoned live session must be cancelled", 1, session.cancels)
+    }
+
+    @Test
+    fun `cloud live handoff that arrives too late to be claimed cancels its session`() {
+        val liveFactory = FakeCloudLiveFactory()
+        cloudLiveRuntime(liveFactory)
+        val pcm = realSizedPcm()
+
+        runtime.onTap(); runtime.onTap() // TRANSCRIBING, token 1
+        val session = liveFactory.sessions.single()
+        // Reader handoff posts continueWithCloudLiveOrBatch's main-thread arbitration...
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        // ...and the lease/guard go stale underneath it, so it takes the discard branch with
+        // cloudLiveAttempt still pointing at this attempt and no finalWait ever armed.
+        runtime.finishShutdownAndReleaseTranscribers()
+        idleMainLooper()
+
+        assertFalse(pcm.exists())
+        assertEquals("the permanently-inert attempt must be cancelled", 1, session.cancels)
+    }
+
+    @Test
+    fun `max duration auto stop that cannot mint a token cancels the cloud live session`() {
+        val liveFactory = FakeCloudLiveFactory()
+        cloudLiveRuntime(liveFactory)
+        val pcm = realSizedPcm()
+
+        runtime.onTap()
+        val session = liveFactory.sessions.single()
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.MAX_DURATION)
+        runtime.finishShutdownAndReleaseTranscribers()
+        idleMainLooper()
+
+        assertFalse(pcm.exists())
+        assertEquals("the abandoned live session must be cancelled", 1, session.cancels)
+    }
+
+    @Test
+    fun `max duration auto stop with cloud live active ends activity and delivers the live final`() {
+        val liveFactory = FakeCloudLiveFactory()
+        var fallbacks = 0
+        cloudLiveRuntime(liveFactory) { fallbacks++ }
+        val pcm = realSizedPcm()
+
+        runtime.onTap() // RECORDING; no stop tap -- the duration cap is the trigger
+        val session = liveFactory.sessions.single()
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.MAX_DURATION)
+        idleMainLooper() // main-thread token mint + endActivity + transcribing UI
+
+        assertTrue(listener.events.contains("transcribingUi"))
+        assertEquals("the cap must end the live activity, exactly as a stop tap does", 1, session.ends)
+
+        session.complete(CloudLiveTerminal.Success("capped live", CloudLiveTiming(1, finalAtMs = 2)))
+        awaitDelivery()
+
+        assertEquals(listOf("capped live"), listener.delivered.map { it.text })
+        assertEquals(0, fallbacks)
+        assertFalse(pcm.exists())
+        assertTrue("a claimed live success must release the socket", session.closes >= 1)
+        assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
+    }
+
+    @Test
+    fun `a restart after an abandoned recording never leaves the incumbent attempt uncancelled`() {
+        val liveFactory = FakeCloudLiveFactory()
+        cloudLiveRuntime(liveFactory)
+
+        runtime.onTap()
+        val first = liveFactory.sessions.single()
+        // Abandon this recording down a path that does NOT funnel through resetToIdle: the reader
+        // drains tokenless, the machine is already back at IDLE, so resolution lands on DISCARD
+        // and the lease is released with the attempt untouched.
+        engines.single().finishAs(realSizedPcm(), RecordingEngine.StopReason.USER)
+        runtime.finishShutdownAndReleaseTranscribers()
+        idleMainLooper()
+
+        // The next dictation overwrites `cloudLiveAttempt`; whatever the incumbent was, it must
+        // already have been cancelled rather than having its last reference silently dropped.
+        runtime.onTap()
+        idleMainLooper()
+        assertEquals(2, liveFactory.sessions.size)
+        val second = liveFactory.sessions.last()
+
+        assertEquals("the superseded attempt must never outlive the restart", 1, first.cancels)
+        assertEquals("and the new one must still be live", 0, second.cancels)
+    }
+
+    private fun awaitDelivery() {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline && listener.delivered.isEmpty()) {
+            idleMainLooper(); Thread.sleep(10)
+        }
+    }
+
+    @Test
+    fun `live failure keeps preserved pcm and the batch fallback actually delivers its transcript`() {
+        // The point of the fallback is that the preserved PCM reaches a real batch call -- a
+        // fallback counter alone would pass just as happily if the handover had passed a deleted
+        // file, a stale lease or a superseded token. Stub a provider and assert the transcript.
+        stubBatchProvider("batch rescue")
+        val liveFactory = FakeCloudLiveFactory()
+        var fallbacks = 0
+        cloudLiveRuntime(liveFactory) { fallbacks++ }
+        val pcm = realSizedPcm()
+
+        runtime.onTap(); runtime.onTap()
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        val session = liveFactory.sessions.single()
+        session.complete(CloudLiveTerminal.Failure(CloudLiveFailureReason.NETWORK_ERROR, "drop", CloudLiveTiming(1)))
+        awaitDelivery()
+
+        assertEquals(1, fallbacks)
+        assertEquals(listOf("batch rescue"), listener.delivered.map { it.text })
+        assertFalse("the batch call consumed and deleted the preserved PCM", pcm.exists())
+        assertTrue("the abandoned live socket must be released", session.closes >= 1)
+        awaitIdle()
+
+        // A late live success cannot resurrect a second delivery.
+        session.complete(CloudLiveTerminal.Success("late", CloudLiveTiming(1, finalAtMs = 2)))
+        idleMainLooper()
+        assertEquals(1, fallbacks)
+        assertEquals(1, listener.delivered.size)
+    }
+
+    @Test
+    fun `a live terminal arriving before the reader handoff is resolved by the handoff itself`() {
+        // Both existing tests call finishAs before complete(), so resolveCloudLiveAttempt is only
+        // ever re-entered from onTerminal. This is the other ordering: the terminal lands first
+        // and parks, and continueWithCloudLiveOrBatch's own resolve call is what claims it.
+        val liveFactory = FakeCloudLiveFactory()
+        var fallbacks = 0
+        cloudLiveRuntime(liveFactory) { fallbacks++ }
+        val pcm = realSizedPcm()
+
+        runtime.onTap(); runtime.onTap()
+        val session = liveFactory.sessions.single()
+        session.complete(CloudLiveTerminal.Success("early final", CloudLiveTiming(1, finalAtMs = 2)))
+        idleMainLooper()
+        assertTrue("a terminal alone cannot claim before reader handoff", listener.delivered.isEmpty())
+
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        awaitDelivery()
+
+        assertEquals(listOf("early final"), listener.delivered.map { it.text })
+        assertEquals(0, fallbacks)
+        assertFalse(pcm.exists())
+        assertTrue(session.closes >= 1)
+        awaitIdle()
+    }
+
+    @Test
+    fun `a terminal landing as the final wait expires still yields exactly one delivery`() {
+        stubBatchProvider("batch rescue")
+        val liveFactory = FakeCloudLiveFactory()
+        var fallbacks = 0
+        cloudLiveRuntime(liveFactory) { fallbacks++ }
+        val pcm = realSizedPcm()
+
+        runtime.onTap(); runtime.onTap()
+        val session = liveFactory.sessions.single()
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        idleMainLooper() // arms the bounded final wait
+
+        // The wait expires and the live final lands in the same main-looper turn: whichever wins,
+        // exactly one of them may claim the preserved PCM.
+        shadowOf(Looper.getMainLooper()).idleFor(2_501, TimeUnit.MILLISECONDS)
+        session.complete(CloudLiveTerminal.Success("racing final", CloudLiveTiming(1, finalAtMs = 2)))
+        awaitDelivery()
+        awaitIdle()
+
+        assertEquals("the timeout claimed it; the live final must not double-deliver", 1, fallbacks)
+        assertEquals(listOf("batch rescue"), listener.delivered.map { it.text })
+        assertFalse(pcm.exists())
+    }
+
+    /** Points the batch pipeline at a MockWebServer returning [transcript], so the fallback's
+     *  handover is proven by a real delivery instead of an empty-delivery tautology. */
+    private fun stubBatchProvider(transcript: String) {
+        batchServer.enqueue(MockResponse().setBody(JSONObject().put("text", transcript).toString()))
+        val base = batchServer.url("/v1").toString().trimEnd('/')
+        ProviderChainStore.save(
+            app,
+            ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-mini", baseUrlOverride = base, transcriptionModel = "gpt-transcribe"))),
+        )
+        ProviderCredentialStore.set(app, ProviderKind.OPENAI, "test-batch-key")
+        app.getSharedPreferences("ramblr", android.content.Context.MODE_PRIVATE).edit()
+            .putBoolean("use_local", false).apply()
+        PostProcessingToggle.setEnabled(app, false)
+    }
+
+    private fun awaitIdle() {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline && runtime.currentState() != RecordingStateMachine.State.IDLE) {
+            idleMainLooper(); Thread.sleep(10)
+        }
+        assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
+    }
+
     private class FakeCloudLiveFactory : CloudLiveTranscriptionSessionFactory {
         val sessions = mutableListOf<FakeCloudLiveSession>()
         var acceptPcm = true
@@ -757,6 +989,7 @@ class DictationRuntimeTest {
         var starts = 0
         var ends = 0
         var cancels = 0
+        var closes = 0
         var lastSendAccepted = true
         val pcm = mutableListOf<ByteArray>()
         override fun connect() { connects++ }
@@ -768,7 +1001,7 @@ class DictationRuntimeTest {
         }
         override fun endActivity(): Boolean { ends++; return true }
         override fun cancel() { cancels++ }
-        override fun close() = Unit
+        override fun close() { closes++ }
         fun interim(text: String) = listener.onInterim(text, CloudLiveTiming(1, firstInterimAtMs = 2))
         fun complete(result: CloudLiveTerminal) = listener.onTerminal(result)
     }

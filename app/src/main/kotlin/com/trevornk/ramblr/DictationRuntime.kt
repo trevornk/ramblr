@@ -559,12 +559,22 @@ class DictationRuntime internal constructor(
                     }
                 }
             })
+            // Overwriting the field is the LAST reference anyone holds to an incumbent, so it must
+            // be cancelled first -- otherwise a rapid abandon->restart leaves an authenticated,
+            // still-open microphone socket with no owner and no armed timeout (its catch block
+            // below already got this right).
+            cancelCloudLiveAttempt()
             cloudLiveAttempt = attempt
             val session = requireNotNull(attempt.session)
             session.connect()
             if (!session.startActivity()) throw IllegalStateException("Cloud-live start rejected")
             attempt
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // Never fails the dictation -- cloud-live is an optional tee -- but a silent catch here
+            // meant a misconfigured endpoint, bad model id or blank key (all init `require`s)
+            // disabled the feature with zero diagnostics. Control flow is unchanged; this only
+            // makes the cause visible.
+            Log.w(TAG, "Cloud-live attempt could not start; continuing with the batch pipeline", e)
             if (cloudLiveAttempt === attempt) cloudLiveAttempt = null
             attempt.session?.let { session -> runCatching { session.cancel(); session.close() } }
             null
@@ -736,6 +746,11 @@ class DictationRuntime internal constructor(
         // teardown and leave the new reader keeping the mic hot after the service appears off.
         if (recordingEngine === engine) recordingEngine = null
         if (result.discarded) {
+            // The attempt is abandoned with it: nothing downstream will ever claim or time it out
+            // (setupTimeout is cancelled once setup lands, finalTimeout is only armed by
+            // endActivity, and stopAndTranscribe never ran), so without this the authenticated
+            // microphone socket stays open with no reference held anywhere.
+            cancelCloudLiveAttemptForLeaseOnMain(lease)
             // During shutdown the host deliberately keeps ownership until reader teardown AND
             // cancellation finish below. Every other discarded handoff can release immediately.
             if (!shuttingDown) {
@@ -782,6 +797,9 @@ class DictationRuntime internal constructor(
         when (resolveLateRecording(token, guard.isCurrent(token), stateMachine.current())) {
             LateRecordingResolution.CONTINUE_TRANSCRIPTION -> thread { continueWithCloudLiveOrBatch(result, token, lease) }
             LateRecordingResolution.DISCARD -> {
+                // Abandoned without reaching resetToIdle: the attempt would otherwise keep an
+                // authenticated, un-timed-out microphone socket open with no owner.
+                cloudLiveAttempt?.takeIf { it.lease === lease }?.let(::cancelCloudLiveAttempt)
                 result.pcmFile?.delete()
                 result.compressedFile?.delete()
                 releaseSessionLease(lease)
@@ -811,6 +829,8 @@ class DictationRuntime internal constructor(
     ) {
         handler.post {
             if (stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING || activeToken != 0) {
+                // Same abandon-without-resetToIdle shape as the other discard paths.
+                cloudLiveAttempt?.takeIf { it.lease === lease }?.let(::cancelCloudLiveAttempt)
                 result.pcmFile?.delete()
                 result.compressedFile?.delete()
                 releaseSessionLease(lease)
@@ -847,6 +867,10 @@ class DictationRuntime internal constructor(
         }
         handler.post {
             if (cloudLiveAttempt !== attempt || sessionLease !== lease || !guard.isCurrent(token)) {
+                // This attempt can never be claimed now (recordingResult was never set and no
+                // finalWait was armed, so resolveCloudLiveAttempt would bail forever) -- cancel it
+                // rather than leaving an inert, still-open authenticated socket behind.
+                cancelCloudLiveAttempt(attempt)
                 result.pcmFile?.delete()
                 result.compressedFile?.delete()
                 return@post
@@ -910,6 +934,21 @@ class DictationRuntime internal constructor(
         attempt.finalWait?.let(handler::removeCallbacks)
         attempt.finalWait = null
         attempt.session?.let { session -> runCatching { session.cancel(); session.close() } }
+    }
+
+    /**
+     * Cancels the live attempt belonging to [lease] from a path that abandons its recording
+     * without reaching [resetToIdle] -- the reader thread's `discarded` handoff, and the
+     * main-thread late/max-duration resolutions that discard.
+     *
+     * Lease-compared (never the bare field) so a stalled old reader's late handoff can't tear down
+     * the attempt of the *new* dictation the user has already started -- the same identity guard
+     * `recordingEngine === engine` uses. Hops to main because [cancelCloudLiveAttempt] touches
+     * handler callbacks and the field the main-looper arbitration owns; already-on-main callers
+     * just see a queued no-op after the field is cleared.
+     */
+    private fun cancelCloudLiveAttemptForLeaseOnMain(lease: DictationSessionLease) {
+        handler.post { cloudLiveAttempt?.takeIf { it.lease === lease }?.let(::cancelCloudLiveAttempt) }
     }
 
     private fun continueTranscription(
