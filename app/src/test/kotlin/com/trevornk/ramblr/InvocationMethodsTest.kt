@@ -381,6 +381,87 @@ class InvocationMethodsTest {
         assertTrue(invocationQsTileSubtitleText(canRequestAdd = false).contains("tap for setup steps"))
     }
 
+    // --- #238 voice-keyboard status ---------------------------------------------------------
+
+    @Test fun `voice keyboard status distinguishes disabled, enabled, and default`() {
+        assertEquals(
+            VoiceKeyboardStatus.DISABLED,
+            resolveVoiceKeyboardStatus(isEnabled = false, isDefault = false),
+        )
+        assertEquals(
+            VoiceKeyboardStatus.ENABLED_NOT_DEFAULT,
+            resolveVoiceKeyboardStatus(isEnabled = true, isDefault = false),
+        )
+        assertEquals(
+            VoiceKeyboardStatus.DEFAULT,
+            resolveVoiceKeyboardStatus(isEnabled = true, isDefault = true),
+        )
+    }
+
+    /**
+     * A device claiming "default" while the IME is not enabled is incoherent -- the OS would not
+     * show it. Enablement wins so the UI never tells the user a keyboard is in use that the
+     * system will not present.
+     */
+    @Test fun `voice keyboard status refuses to report default when not enabled`() {
+        assertEquals(
+            VoiceKeyboardStatus.DISABLED,
+            resolveVoiceKeyboardStatus(isEnabled = false, isDefault = true),
+        )
+    }
+
+    @Test fun `voice keyboard subtitle names the next action for each state`() {
+        assertTrue(
+            invocationVoiceKeyboardSubtitleText(VoiceKeyboardStatus.DISABLED)
+                .contains("tap to turn the Ramblr keyboard on"),
+        )
+        // The enabled-not-default case is the one users cannot otherwise diagnose: the keyboard
+        // is on but nothing appears to happen, because another IME is still the default.
+        val enabled = invocationVoiceKeyboardSubtitleText(VoiceKeyboardStatus.ENABLED_NOT_DEFAULT)
+        assertTrue(enabled.contains("not your default keyboard"))
+        assertTrue(enabled.contains("keyboard switcher"))
+        assertTrue(
+            invocationVoiceKeyboardSubtitleText(VoiceKeyboardStatus.DEFAULT)
+                .contains("opens automatically"),
+        )
+    }
+
+    /**
+     * The section sits under two mutually exclusive mode cards, so its subtitle must state the
+     * coexistence in every state or it reads as a third option in that set.
+     */
+    @Test fun `voice keyboard section subtitle always states independence from the mode cards`() {
+        VoiceKeyboardStatus.entries.forEach { status ->
+            val text = invocationVoiceKeyboardSectionSubtitleText(status)
+            assertTrue(
+                "status $status must not read as a third mode option",
+                text.contains("Independent of the mode above") || text.contains("Works alongside the mode above"),
+            )
+        }
+    }
+
+    /**
+     * DEFAULT_INPUT_METHOD is a component string whose flatten form is the OS's choice, and a
+     * real device stores the SHORT form: a Pixel 10a reports
+     * "com.trevornk.ramblr/.RamblrImeService" while ComponentName.flattenToString() produces the
+     * long form. A plain string compare would report "not default" on the very device where the
+     * keyboard IS the default, so the comparison must normalize -- this pins the real value.
+     */
+    @Test fun `default ime comparison matches the short flatten form a real device stores`() {
+        val stored = "com.trevornk.ramblr/.RamblrImeService"
+        val flattened = "com.trevornk.ramblr/com.trevornk.ramblr.RamblrImeService"
+        assertTrue(componentEquals(stored, flattened))
+        assertEquals(
+            VoiceKeyboardStatus.DEFAULT,
+            resolveVoiceKeyboardStatus(isEnabled = true, isDefault = componentEquals(stored, flattened)),
+        )
+        // A different IME being default must not read as ours.
+        assertFalse(componentEquals(
+            "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME",
+            flattened,
+        ))
+    }
+
     @Test fun `advanced tier subtitle reflects the feature-detected grant`() {
         assertTrue(invocationAdvancedTierSubtitleText(granted = true).startsWith("Active"))
         assertTrue(invocationAdvancedTierSubtitleText(granted = false).contains("adb"))

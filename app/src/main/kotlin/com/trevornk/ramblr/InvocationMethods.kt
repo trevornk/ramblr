@@ -271,6 +271,69 @@ fun invocationQsTileSubtitleText(canRequestAdd: Boolean): String =
     if (canRequestAdd) "Dictate from the Quick Settings panel — tap to add the tile"
     else "Dictate from the Quick Settings panel — tap for setup steps"
 
+// --- #238 voice-keyboard status -------------------------------------------------------------
+
+/**
+ * The voice keyboard's OS state, which is NOT part of [InvocationMode].
+ *
+ * [InvocationMode] is a strict either/or over a single bit -- which of the two accessibility
+ * *components* is PM-enabled -- because `flagRequestAccessibilityButton` is static-XML-only and
+ * decides the OS's TOGGLE vs INVISIBLE_TOGGLE classification. The IME is a wholly separate OS
+ * registration in `enabled_input_methods` and coexists with either accessibility mode (verified
+ * on device: the Ramblr a11y service and the Ramblr IME run simultaneously). Modelling the
+ * keyboard as a third [InvocationMode] would encode a mutual exclusivity that does not exist.
+ *
+ * All three states are read live from the OS. Nothing here is persisted, so this cannot drift
+ * out of sync with system settings the way a stored setup-mode string can.
+ */
+enum class VoiceKeyboardStatus {
+    /** Not in `enabled_input_methods`: the OS will never show it in the keyboard switcher. */
+    DISABLED,
+
+    /** Enabled and selectable, but another IME is the default -- reachable via the switcher. */
+    ENABLED_NOT_DEFAULT,
+
+    /** Enabled and the current default: it opens automatically in editable fields. */
+    DEFAULT,
+}
+
+/**
+ * Resolve the keyboard's state from the two OS facts that define it. [isDefault] implies
+ * [isEnabled] on a well-behaved system, but the two settings are separate rows and a device in
+ * a strange state must not be reported as DEFAULT while the OS would refuse to show it -- so
+ * enablement is checked first and wins.
+ */
+fun resolveVoiceKeyboardStatus(isEnabled: Boolean, isDefault: Boolean): VoiceKeyboardStatus = when {
+    !isEnabled -> VoiceKeyboardStatus.DISABLED
+    isDefault -> VoiceKeyboardStatus.DEFAULT
+    else -> VoiceKeyboardStatus.ENABLED_NOT_DEFAULT
+}
+
+/**
+ * The "Voice keyboard" row subtitle. Each state names the concrete next action, because the
+ * enable and default steps live on two different system screens and the distinction is exactly
+ * what a user cannot otherwise see.
+ */
+fun invocationVoiceKeyboardSubtitleText(status: VoiceKeyboardStatus): String = when (status) {
+    VoiceKeyboardStatus.DISABLED ->
+        "Off — tap to turn the Ramblr keyboard on in system settings"
+    VoiceKeyboardStatus.ENABLED_NOT_DEFAULT ->
+        "On, but not your default keyboard — switch to it from the keyboard switcher, " +
+            "or tap to make it the default"
+    VoiceKeyboardStatus.DEFAULT ->
+        "On — your default keyboard, opens automatically in text fields"
+}
+
+/**
+ * Section-header text spelling out the coexistence, since the keyboard sits directly below two
+ * cards that ARE mutually exclusive and would otherwise read as a third option in that set.
+ */
+fun invocationVoiceKeyboardSectionSubtitleText(status: VoiceKeyboardStatus): String =
+    if (status == VoiceKeyboardStatus.DISABLED)
+        "A dictation keyboard you can switch to in any text field. Independent of the mode above."
+    else
+        "A dictation keyboard you can switch to in any text field. Works alongside the mode above."
+
 /** The advanced tier's row subtitle: granted state is feature-detected, never assumed. */
 fun invocationAdvancedTierSubtitleText(granted: Boolean): String =
     if (granted) "Active — shortcut changes apply in-app, without the system Settings round-trip"

@@ -47,6 +47,19 @@ object OnboardingWizard {
      * fully-configured Cleanup (previously `postReady = !usePostProcessing || hasApiKey` in
      * MainActivity.refresh(), which also mis-scored a fully-working on-device Cleanup choice as
      * "not ready" just because no cloud key was ever entered).
+     *
+     * Invocation readiness asks whether ANY invocation route is live, not whether the one picked
+     * during setup is (#238). [setupMode] is a stored string written once at first run, while
+     * [accessibilityEnabled] and [imeEnabled] are read live from the OS every refresh, so gating
+     * on the stored value lets them drift apart: disable the IME after a keyboard setup and the
+     * app reports "not ready" while a working accessibility service sits right there. The two
+     * routes are independent OS registrations -- an accessibility component in
+     * `enabled_accessibility_services` and an IME in `enabled_input_methods` -- and coexist, so
+     * either one being live means the user can actually dictate. This is the same class of bug
+     * as the Cleanup mis-scoring above: a stored preference standing in for observable state.
+     *
+     * [setupMode] is retained for the wizard's own step sequencing; it is deliberately not an
+     * input here.
      */
     fun isSetupComplete(
         audioGranted: Boolean,
@@ -58,10 +71,7 @@ object OnboardingWizard {
         imeEnabled: Boolean = false,
     ): Boolean {
         val transcriptionReady = if (transcriptionLocal) hasLocalModel else hasApiKey
-        val invocationReady = when (setupMode) {
-            OnboardingSetupMode.FLOATING_BUTTON -> accessibilityEnabled
-            OnboardingSetupMode.VOICE_KEYBOARD -> imeEnabled
-        }
+        val invocationReady = accessibilityEnabled || imeEnabled
         return audioGranted && invocationReady && transcriptionReady
     }
 
