@@ -76,8 +76,12 @@ class RamblrImeTest {
             repoRoot(),
             "app/src/main/kotlin/com/trevornk/ramblr/MainActivity.kt",
         ).readText()
-        assertTrue(main.contains("Enable voice keyboard"))
-        assertTrue(main.contains("Settings.ACTION_INPUT_METHOD_SETTINGS"))
+        // #238: the row's title changed from "Enable voice keyboard" to "Voice keyboard" and its
+        // subtitle is now derived from live OS state instead of a hardcoded instruction that
+        // told users to enable a keyboard already enabled. The load-bearing part of this guard
+        // is the assertFalse pair below -- Ramblr must never enable or select itself as the IME.
+        assertTrue(main.contains("\"Voice keyboard\""))
+        assertTrue(main.contains("invocationVoiceKeyboardSubtitleText(voiceKeyboardStatus())"))
         assertTrue(main.contains("OnboardingSetupMode.VOICE_KEYBOARD"))
         assertTrue(main.contains("KEY_ONBOARDING_SETUP_MODE"))
         assertTrue(main.contains("showOnboardingVoiceKeyboardStep()"))

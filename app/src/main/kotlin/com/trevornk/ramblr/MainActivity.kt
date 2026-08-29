@@ -1,6 +1,7 @@
 package com.trevornk.ramblr
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -37,6 +38,7 @@ class MainActivity : BaseSettingsActivity() {
     private lateinit var cloudRowSub: TextView
     private lateinit var vocabularyRowSub: TextView
     private lateinit var invocationRowSub: TextView
+    private lateinit var voiceKeyboardRowSub: TextView
     private lateinit var serviceKilledBanner: View
 
     // First-run wizard state (#6). Tracked in-memory so a dialog already on screen is never
@@ -149,13 +151,17 @@ class MainActivity : BaseSettingsActivity() {
         root.addView(invocationRow)
 
         // Supported, user-initiated IME activation only. Android owns the enable switch; Ramblr
-        // neither writes Secure settings nor auto-selects itself.
-        root.addView(settingsRow(
-            "Enable voice keyboard",
-            "Enable Ramblr Voice in Android settings, then select it with the keyboard switch",
-        ) {
-            startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
-        })
+        // neither writes Secure settings nor auto-selects itself. The subtitle was previously
+        // hardcoded to the "not set up yet" instruction, so on a device where the keyboard was
+        // already enabled and default it still read "Enable Ramblr Voice ... then select it" --
+        // telling the user to do something already done (#238). It now reports live state, and
+        // the row routes into Invocation settings where the keyboard has its own section rather
+        // than duplicating that surface here.
+        val voiceKeyboardRow = settingsRow("Voice keyboard", "Checking...") {
+            startActivity(Intent(this, InvocationActivity::class.java))
+        }
+        voiceKeyboardRowSub = voiceKeyboardRow.findViewWithTag("subtitle")
+        root.addView(voiceKeyboardRow)
 
         root.addView(settingsRow("Advanced", AdvancedActivity.subtitle(this)) {
             startActivity(Intent(this, AdvancedActivity::class.java))
@@ -295,6 +301,7 @@ class MainActivity : BaseSettingsActivity() {
         cloudRowSub.text = CloudProviderActivity.subtitle(this)
         vocabularyRowSub.text = vocabularyMainRowSubtitleText(VocabularyEditor.terms(this).size)
         invocationRowSub.text = InvocationActivity.subtitle(this)
+        voiceKeyboardRowSub.text = invocationVoiceKeyboardSubtitleText(voiceKeyboardStatus())
         serviceKilledBanner.visibility =
             if (InvocationGuardRail.shouldShowBanner(this)) View.VISIBLE else View.GONE
 
@@ -335,6 +342,21 @@ class MainActivity : BaseSettingsActivity() {
         return manager.enabledInputMethodList.any {
             it.packageName == packageName && it.serviceName == RamblrImeService::class.java.name
         }
+    }
+
+    /**
+     * The keyboard's live OS state (#238). Default-ness is compared with [componentEquals], not
+     * string equality: the OS stores DEFAULT_INPUT_METHOD in whichever flatten form it likes and
+     * a real device uses the short one, so a plain compare reports "not default" on the very
+     * device where it is.
+     */
+    private fun voiceKeyboardStatus(): VoiceKeyboardStatus {
+        val default = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+        val isDefault = default != null && componentEquals(
+            default,
+            ComponentName(this, RamblrImeService::class.java).flattenToString(),
+        )
+        return resolveVoiceKeyboardStatus(isEnabled = isVoiceKeyboardEnabled(), isDefault = isDefault)
     }
 
     // --- #156 guard rail: "Ramblr was turned off by the system shortcut switch" banner ---

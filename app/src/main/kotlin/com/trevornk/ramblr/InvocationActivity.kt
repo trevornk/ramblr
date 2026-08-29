@@ -7,6 +7,7 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.inputmethod.InputMethodManager
 import android.widget.ScrollView
 import android.widget.TextView
 import com.google.android.material.materialswitch.MaterialSwitch
@@ -49,6 +50,8 @@ class InvocationActivity : BaseSettingsActivity() {
     private lateinit var systemButtonRowSub: TextView
     private lateinit var volumeKeysRowSub: TextView
     private lateinit var advancedTierRowSub: TextView
+    private lateinit var voiceKeyboardSectionSub: TextView
+    private lateinit var voiceKeyboardRowSub: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -75,6 +78,28 @@ class InvocationActivity : BaseSettingsActivity() {
         }
         systemModeCardSub = systemCard.findViewWithTag("subtitle")
         root.addView(systemCard)
+
+        // --- Voice keyboard (#238): deliberately its OWN section, not a third mode card.
+        // The two cards above are mutually exclusive because they select which accessibility
+        // *component* is PM-enabled (flagRequestAccessibilityButton is static-XML-only, so the
+        // OS classification TOGGLE vs INVISIBLE_TOGGLE is fixed per component). The IME is a
+        // separate OS registration in enabled_input_methods and coexists with either -- both
+        // run simultaneously on a real device. Putting it in the exclusive selector would
+        // encode a mutual exclusivity that does not exist.
+        root.addView(sectionHeader("Voice keyboard"))
+        voiceKeyboardSectionSub = TextView(this).apply {
+            textSize = 13f
+            alpha = 0.7f
+            setPadding(dp(24), 0, dp(24), dp(8))
+            text = "Checking..."
+        }
+        root.addView(voiceKeyboardSectionSub)
+
+        val voiceKeyboardRow = settingsRow("Ramblr keyboard", "Checking...") {
+            onVoiceKeyboardRowTapped()
+        }
+        voiceKeyboardRowSub = voiceKeyboardRow.findViewWithTag("subtitle")
+        root.addView(voiceKeyboardRow)
 
         root.addView(sectionHeader("How to start dictation"))
 
@@ -194,6 +219,82 @@ class InvocationActivity : BaseSettingsActivity() {
             directControl = direct,
         )
         advancedTierRowSub.text = invocationAdvancedTierSubtitleText(granted = direct)
+
+        // Read live from the OS every refresh -- nothing about the keyboard is persisted by
+        // Ramblr, so onResume after a trip to system settings always reflects reality.
+        val keyboardStatus = voiceKeyboardStatus()
+        voiceKeyboardSectionSub.text = invocationVoiceKeyboardSectionSubtitleText(keyboardStatus)
+        voiceKeyboardRowSub.text = invocationVoiceKeyboardSubtitleText(keyboardStatus)
+    }
+
+    // --- #238 voice keyboard --------------------------------------------------------------
+
+    /**
+     * The keyboard's live OS state. Enablement comes from the InputMethodManager's enabled list
+     * and default-ness from Settings.Secure.DEFAULT_INPUT_METHOD, which is a component string
+     * that must be parsed rather than string-compared -- the OS may store either flatten form.
+     */
+    private fun voiceKeyboardStatus(): VoiceKeyboardStatus {
+        val manager = getSystemService(InputMethodManager::class.java)
+        val enabled = manager?.enabledInputMethodList?.any {
+            it.packageName == packageName && it.serviceName == RamblrImeService::class.java.name
+        } == true
+        val default = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+        val isDefault = default != null && componentEquals(
+            default,
+            ComponentName(this, RamblrImeService::class.java).flattenToString(),
+        )
+        return resolveVoiceKeyboardStatus(isEnabled = enabled, isDefault = isDefault)
+    }
+
+    /**
+     * Enabling an IME and choosing it as the default live on two different system screens, and
+     * neither is something an app may do for the user -- so this routes to the correct one for
+     * the current state rather than pretending there is one action.
+     */
+    private fun onVoiceKeyboardRowTapped() {
+        val (title, message, positive) = when (voiceKeyboardStatus()) {
+            VoiceKeyboardStatus.DISABLED -> Triple(
+                "Turn on the Ramblr keyboard?",
+                "Android needs you to enable it yourself.\n\n" +
+                    "On the next screen, find \u201cRamblr Voice\u201d in the on-screen keyboard " +
+                    "list and turn it on. Keep your usual keyboard enabled too \u2014 you can " +
+                    "switch between them any time.\n\n" +
+                    "The keyboard works alongside your invocation mode; turning it on does " +
+                    "not change anything above.",
+                "Open keyboard settings",
+            )
+            VoiceKeyboardStatus.ENABLED_NOT_DEFAULT -> Triple(
+                "Switch to the Ramblr keyboard?",
+                "The Ramblr keyboard is on, but another keyboard is still your default, " +
+                    "so it won't open on its own.\n\n" +
+                    "Pick \u201cRamblr Voice\u201d in the switcher to use it now. Your other " +
+                    "keyboard stays enabled.",
+                "Show keyboard switcher",
+            )
+            VoiceKeyboardStatus.DEFAULT -> Triple(
+                "Ramblr keyboard is your default",
+                "It opens automatically in text fields.\n\n" +
+                    "To go back to another keyboard, use the keyboard switcher or Android's " +
+                    "on-screen keyboard settings.",
+                "Open keyboard settings",
+            )
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton(positive) { _, _ ->
+                // showInputMethodPicker is the OS-sanctioned way to change the active IME; an
+                // app cannot set DEFAULT_INPUT_METHOD itself (WRITE_SECURE_SETTINGS, and even
+                // then it is the user's choice to make).
+                if (voiceKeyboardStatus() == VoiceKeyboardStatus.ENABLED_NOT_DEFAULT) {
+                    getSystemService(InputMethodManager::class.java)?.showInputMethodPicker()
+                } else {
+                    startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     // --- Mode switching -------------------------------------------------------------------

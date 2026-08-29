@@ -68,12 +68,74 @@ class OnboardingWizardTest {
         ))
     }
 
-    @Test fun `floating button setup still requires accessibility`() {
-        assertFalse(OnboardingWizard.isSetupComplete(
+    /**
+     * #238 drift: setupMode is a stored string, but the invocation surfaces it gates are live OS
+     * state. A user who set up via the keyboard and later disabled the IME -- or enabled the
+     * accessibility service instead -- still has a stored mode of VOICE_KEYBOARD. Gating
+     * readiness on the stale string alone reports "not ready" while a working invocation route
+     * is active. Readiness must follow what the OS actually reports, not what was chosen once.
+     */
+    @Test fun `ready when accessibility works even though setup chose the keyboard`() {
+        assertTrue(OnboardingWizard.isSetupComplete(
+            audioGranted = true,
+            setupMode = OnboardingSetupMode.VOICE_KEYBOARD,
+            accessibilityEnabled = true,
+            imeEnabled = false,
+            transcriptionLocal = true,
+            hasLocalModel = true,
+            hasApiKey = false,
+        ))
+    }
+
+    /** The mirror image: set up via the floating button, later enabled the keyboard instead. */
+    @Test fun `ready when the keyboard works even though setup chose the floating button`() {
+        assertTrue(OnboardingWizard.isSetupComplete(
             audioGranted = true,
             setupMode = OnboardingSetupMode.FLOATING_BUTTON,
             accessibilityEnabled = false,
             imeEnabled = true,
+            transcriptionLocal = true,
+            hasLocalModel = true,
+            hasApiKey = false,
+        ))
+    }
+
+    /** Neither route available is still not ready, whatever the stored mode says. */
+    @Test fun `not ready when no invocation route is available in either mode`() {
+        assertFalse(OnboardingWizard.isSetupComplete(
+            audioGranted = true,
+            setupMode = OnboardingSetupMode.VOICE_KEYBOARD,
+            accessibilityEnabled = false,
+            imeEnabled = false,
+            transcriptionLocal = true,
+            hasLocalModel = true,
+            hasApiKey = false,
+        ))
+        assertFalse(OnboardingWizard.isSetupComplete(
+            audioGranted = true,
+            setupMode = OnboardingSetupMode.FLOATING_BUTTON,
+            accessibilityEnabled = false,
+            imeEnabled = false,
+            transcriptionLocal = true,
+            hasLocalModel = true,
+            hasApiKey = false,
+        ))
+    }
+
+    /**
+     * Superseded by #238. This previously asserted that floating-button setup with the IME
+     * enabled and accessibility off was "not ready" -- the stored-mode-is-truth model. But that
+     * describes a user whose Ramblr keyboard is on and working: they can dictate, so reporting
+     * "not ready" was the drift bug itself. Readiness now follows live OS state, and the real
+     * intent of this case -- that the floating button genuinely needs the accessibility service
+     * -- is preserved by checking it with NO other route available.
+     */
+    @Test fun `floating button setup still requires accessibility when no other route is live`() {
+        assertFalse(OnboardingWizard.isSetupComplete(
+            audioGranted = true,
+            setupMode = OnboardingSetupMode.FLOATING_BUTTON,
+            accessibilityEnabled = false,
+            imeEnabled = false,
             transcriptionLocal = true,
             hasLocalModel = true,
             hasApiKey = false,
