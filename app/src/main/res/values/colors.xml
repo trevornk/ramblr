@@ -4,6 +4,14 @@
     <color name="primary_container">#D2E3FC</color>
     <color name="on_primary_container">#174EA6</color>
 
+    <!-- IME mic states. Only the recording/disabled fills are literal colours: they carry a
+         specific meaning (danger, blocked) rather than a theme role, so they are not taken from
+         colorPrimary and friends. These light values are the exact greys/reds the panel has always
+         shipped, kept byte-identical so the #240 blocked-mic appearance is unchanged; the
+         values-night variants exist so they stay legible on a dark surface. -->
+    <color name="ime_mic_recording">#BE2D2D</color>
+    <color name="ime_mic_disabled">#B0B4BA</color>
+
     <!-- Launcher icon colors only, intentionally separate from the app's Material theme colors
          above (primary/primary_container), which stay untouched. Dark background, neon magenta
          mic glyph, matching the overlay's default border color. -->

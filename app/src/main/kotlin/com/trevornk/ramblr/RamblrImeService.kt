@@ -2,6 +2,7 @@ package com.trevornk.ramblr
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -19,6 +20,7 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.annotation.VisibleForTesting
+import androidx.appcompat.view.ContextThemeWrapper
 import kotlin.concurrent.thread
 
 /** Voice-only IME shell. It deliberately contains no conventional key rows or typing features. */
@@ -40,6 +42,19 @@ class RamblrImeService : InputMethodService() {
     private var partialView: TextView? = null
     private var micButton: ImageButton? = null
     private var lastRenderedState: ImeUiState? = null
+    /** Theme-wrapped context the current input view was inflated with; see [panelContext]. */
+    private var inflationContext: Context? = null
+
+    /**
+     * A [InputMethodService] is a Service, and a Service's theme is the bare platform default --
+     * always light, and without any of the Material3 attributes this panel paints itself with. So
+     * every colour lookup here silently fell through to its light fallback and the keyboard stayed
+     * white in dark mode while the rest of the app followed the system. Wrapping the app's DayNight
+     * theme around the inflation context is what makes colorSurface and friends both exist and
+     * track night mode. It is rebuilt per input view so a day/night flip picks up fresh resources.
+     */
+    private fun panelContext(): Context =
+        inflationContext ?: ContextThemeWrapper(this, R.style.Theme_PhoneWhisper).also { inflationContext = it }
 
     @VisibleForTesting
     internal fun panelControllerForTest(): ImePanelController? = panelController
@@ -60,7 +75,11 @@ class RamblrImeService : InputMethodService() {
     }
 
     override fun onCreateInputView(): View {
-        val root = LinearLayout(this).apply {
+        // Discard any previous wrapper: on a uiMode change Android recreates the input view, and a
+        // cached wrapper would still hold the old night-mode resources.
+        inflationContext = null
+        val context = panelContext()
+        val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(16), dp(10), dp(16), dp(10))
@@ -69,7 +88,7 @@ class RamblrImeService : InputMethodService() {
             }
         }
 
-        statusView = TextView(this).apply {
+        statusView = TextView(context).apply {
             text = getString(R.string.ime_status_idle)
             textSize = 16f
             setTypeface(typeface, Typeface.BOLD)
@@ -77,7 +96,7 @@ class RamblrImeService : InputMethodService() {
             setTextColor(resolveColor(com.google.android.material.R.attr.colorOnSurface, Color.DKGRAY))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
-        partialView = TextView(this).apply {
+        partialView = TextView(context).apply {
             text = getString(R.string.ime_partial_hint)
             textSize = 14f
             gravity = Gravity.CENTER
@@ -86,7 +105,7 @@ class RamblrImeService : InputMethodService() {
             setTextColor(resolveColor(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
-        micButton = ImageButton(this).apply {
+        micButton = ImageButton(context).apply {
             setImageResource(R.drawable.ic_mic)
             contentDescription = getString(R.string.ime_mic_start)
             setColorFilter(Color.WHITE)
@@ -98,7 +117,7 @@ class RamblrImeService : InputMethodService() {
             bottomMargin = dp(8)
         }
 
-        val actions = LinearLayout(this).apply {
+        val actions = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
@@ -195,6 +214,26 @@ class RamblrImeService : InputMethodService() {
     }
 
     override fun onEvaluateFullscreenMode(): Boolean = false
+
+    /**
+     * Night mode can flip underneath a visible keyboard (the user's schedule crosses sunset while a
+     * field is focused). An InputMethodService is not recreated for that, so the cached theme
+     * wrapper and the already-painted views would keep the old palette until the panel next
+     * reopened. Dropping the wrapper and asking for a fresh input view repaints it in place.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        val wasNight = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK)
+        super.onConfigurationChanged(newConfig)
+        val isNight = (newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK)
+        if (wasNight != isNight) {
+            inflationContext = null
+            // Preserve whatever the panel is currently showing; this is a repaint, not a reset, and
+            // must not disturb an in-flight dictation or its bound destination.
+            val current = lastRenderedState
+            setInputView(onCreateInputView())
+            current?.let { renderState(it) }
+        }
+    }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
@@ -298,8 +337,8 @@ class RamblrImeService : InputMethodService() {
         // A custom oval drawable ignores isEnabled, so a blocked mic must be painted explicitly or
         // it still reads as tappable (#240).
         micButton?.background = ovalBackground(when (imeMicAppearance(state)) {
-            ImeMicAppearance.RECORDING -> Color.rgb(190, 45, 45)
-            ImeMicAppearance.DISABLED -> Color.rgb(176, 180, 186)
+            ImeMicAppearance.RECORDING -> themedColor(R.color.ime_mic_recording)
+            ImeMicAppearance.DISABLED -> themedColor(R.color.ime_mic_disabled)
             ImeMicAppearance.READY ->
                 resolveColor(com.google.android.material.R.attr.colorPrimary, Color.rgb(33, 96, 180))
         })
@@ -346,7 +385,7 @@ class RamblrImeService : InputMethodService() {
     }
 
     private fun actionButton(icon: Int, description: Int, action: () -> Unit): ImageButton =
-        ImageButton(this).apply {
+        ImageButton(panelContext()).apply {
             setImageResource(icon)
             contentDescription = getString(description)
             setColorFilter(resolveColor(com.google.android.material.R.attr.colorOnSurface, Color.DKGRAY))
@@ -357,17 +396,33 @@ class RamblrImeService : InputMethodService() {
             layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
         }
 
-    private fun space(width: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(width, 1) }
+    private fun space(width: Int) =
+        View(panelContext()).apply { layoutParams = LinearLayout.LayoutParams(width, 1) }
 
     private fun ovalBackground(color: Int) = GradientDrawable().apply {
         shape = GradientDrawable.OVAL
         setColor(color)
     }
 
+    /**
+     * Resolves against the panel's wrapped DayNight theme rather than the Service's bare platform
+     * theme. Material3 colour attributes resolve to a colour *reference* rather than a literal, so
+     * TypedValue.data is only the raw int for the inline TYPE_INT_COLOR_* case; a reference has to
+     * be loaded through the themed resources or the panel paints with a resource id as a colour.
+     */
     private fun resolveColor(attribute: Int, fallback: Int): Int {
+        val context = panelContext()
         val value = android.util.TypedValue()
-        return if (theme.resolveAttribute(attribute, value, true)) value.data else fallback
+        if (!context.theme.resolveAttribute(attribute, value, true)) return fallback
+        return if (value.type in android.util.TypedValue.TYPE_FIRST_COLOR_INT..android.util.TypedValue.TYPE_LAST_COLOR_INT) {
+            value.data
+        } else {
+            runCatching { context.getColor(value.resourceId) }.getOrDefault(fallback)
+        }
     }
+
+    /** Night-aware lookup for the literal mic-state colours, which are resources, not theme roles. */
+    private fun themedColor(colorRes: Int): Int = panelContext().getColor(colorRes)
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }
