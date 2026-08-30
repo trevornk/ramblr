@@ -18,6 +18,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.annotation.VisibleForTesting
 import kotlin.concurrent.thread
 
 /** Voice-only IME shell. It deliberately contains no conventional key rows or typing features. */
@@ -38,6 +39,16 @@ class RamblrImeService : InputMethodService() {
     private var statusView: TextView? = null
     private var partialView: TextView? = null
     private var micButton: ImageButton? = null
+    private var lastRenderedState: ImeUiState? = null
+
+    @VisibleForTesting
+    internal fun panelControllerForTest(): ImePanelController? = panelController
+
+    @VisibleForTesting
+    internal fun editorPolicyForTest(): ImeEditorPolicy = editorPolicy
+
+    @VisibleForTesting
+    internal fun lastRenderedStateForTest(): ImeUiState? = lastRenderedState
 
     override fun onCreate() {
         super.onCreate()
@@ -129,10 +140,17 @@ class RamblrImeService : InputMethodService() {
         editorGeneration++
         editorIdentity = identityOf(attribute)
         editorPolicy = imeEditorPolicy(editorIdentity.inputType, editorIdentity.imeOptions)
-        if (editorPolicy.allowsDictation) {
+        // Android restarts input for a new editor without necessarily re-showing the input view, so
+        // a secure-field teardown has to be undone here or the panel stays dead (#241).
+        val transition = imeEditorTransition(editorPolicy.allowsDictation, panelController != null)
+        if (!transition.blockSecure) {
             destination.editorChanged(editorGeneration, editorIdentity, currentInputConnection)
+            if (transition.rearmRuntime) ensureRuntime()
             panelController?.onEditorChanged(editorGeneration, editorIdentity, currentInputConnection)
-            if (!restarting) renderState(ImeUiState.IDLE)
+            if (!restarting || transition.rearmRuntime) {
+                renderPartial("")
+                renderState(ImeUiState.IDLE)
+            }
         } else {
             loseLifecycle(ImeLifecycleLoss.INPUT_FINISHED)
             destination.invalidate()
@@ -263,6 +281,7 @@ class RamblrImeService : InputMethodService() {
             statusView?.post { renderState(state) }
             return
         }
+        lastRenderedState = state
         statusView?.text = getString(when (state) {
             ImeUiState.IDLE -> R.string.ime_status_idle
             ImeUiState.RECORDING -> R.string.ime_status_recording
@@ -271,15 +290,21 @@ class RamblrImeService : InputMethodService() {
             ImeUiState.ERROR -> R.string.ime_status_error
             ImeUiState.SECURE_FIELD -> R.string.ime_status_secure_field
         })
-        micButton?.contentDescription = getString(
-            if (state == ImeUiState.RECORDING) R.string.ime_mic_stop else R.string.ime_mic_start
-        )
-        micButton?.background = ovalBackground(
-            if (state == ImeUiState.RECORDING) Color.rgb(190, 45, 45)
-            else resolveColor(com.google.android.material.R.attr.colorPrimary, Color.rgb(33, 96, 180))
-        )
-        micButton?.isEnabled = state != ImeUiState.TRANSCRIBING &&
-            state != ImeUiState.CLEANING && state != ImeUiState.SECURE_FIELD
+        micButton?.contentDescription = getString(when (state) {
+            ImeUiState.RECORDING -> R.string.ime_mic_stop
+            ImeUiState.SECURE_FIELD -> R.string.ime_status_secure_field
+            else -> R.string.ime_mic_start
+        })
+        // A custom oval drawable ignores isEnabled, so a blocked mic must be painted explicitly or
+        // it still reads as tappable (#240).
+        micButton?.background = ovalBackground(when (imeMicAppearance(state)) {
+            ImeMicAppearance.RECORDING -> Color.rgb(190, 45, 45)
+            ImeMicAppearance.DISABLED -> Color.rgb(176, 180, 186)
+            ImeMicAppearance.READY ->
+                resolveColor(com.google.android.material.R.attr.colorPrimary, Color.rgb(33, 96, 180))
+        })
+        micButton?.isEnabled = imeMicEnabled(state)
+        micButton?.alpha = if (imeMicEnabled(state)) 1f else 0.6f
     }
 
     /** Durable history write; invoked only by [ImeHistoryWriteExecutor]. */

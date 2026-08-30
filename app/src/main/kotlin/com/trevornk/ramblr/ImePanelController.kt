@@ -272,6 +272,47 @@ internal class ImePanelController(
 
 internal enum class ImeSwitchResult { SWITCHED, PICKER_SHOWN }
 
+/**
+ * #240: the mic is disabled in several states, but a custom oval GradientDrawable does not react to
+ * View.isEnabled, so the affordance has to be chosen explicitly or a blocked mic still looks live.
+ */
+internal enum class ImeMicAppearance { READY, RECORDING, DISABLED }
+
+internal fun imeMicEnabled(state: ImeUiState): Boolean = when (state) {
+    ImeUiState.TRANSCRIBING, ImeUiState.CLEANING, ImeUiState.SECURE_FIELD -> false
+    ImeUiState.IDLE, ImeUiState.RECORDING, ImeUiState.ERROR -> true
+}
+
+internal fun imeMicAppearance(state: ImeUiState): ImeMicAppearance = when {
+    state == ImeUiState.RECORDING -> ImeMicAppearance.RECORDING
+    !imeMicEnabled(state) -> ImeMicAppearance.DISABLED
+    else -> ImeMicAppearance.READY
+}
+
+/**
+ * #241: a secure editor tears the panel down via loseLifecycle. Android restarts input for a new
+ * editor without always re-showing the input view (a WebView field switch calls onStartInput with
+ * restarting=true and no onStartInputView), so the dictation branch must re-arm the runtime itself
+ * and re-render, or the panel stays torn down with a stale secure-field status and a dead mic.
+ *
+ * Recovery is keyed on the panel actually being absent rather than on isInputViewShown, which is
+ * false in exactly this restart path even though the view is on screen.
+ */
+internal data class ImeEditorTransition(
+    val rearmRuntime: Boolean,
+    val renderReady: Boolean,
+    val blockSecure: Boolean,
+)
+
+internal fun imeEditorTransition(
+    allowsDictation: Boolean,
+    panelPresent: Boolean,
+): ImeEditorTransition = if (!allowsDictation) {
+    ImeEditorTransition(rearmRuntime = false, renderReady = false, blockSecure = true)
+} else {
+    ImeEditorTransition(rearmRuntime = !panelPresent, renderReady = true, blockSecure = false)
+}
+
 internal fun switchIme(tryPrevious: () -> Boolean, showPicker: () -> Unit): ImeSwitchResult {
     if (tryPrevious()) return ImeSwitchResult.SWITCHED
     showPicker()
