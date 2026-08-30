@@ -374,7 +374,7 @@ class GeminiCloudLiveTranscriptionClientTest {
     /**
      * The real mid-stream drop: setup succeeded, interims were flowing, then the
      * server closes the socket without ever sending a final. This is the
-     * FALLBACK_NO_TERMINAL case, and the one path where a stale interim could
+     * BATCH_SERVED_NO_TERMINAL case, and the one path where a stale interim could
      * leak out as if it were an authoritative final.
      *
      * The server-initiated close arrives as onClosing, and OkHttp's default
