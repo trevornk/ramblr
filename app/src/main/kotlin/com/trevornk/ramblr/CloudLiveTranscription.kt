@@ -64,19 +64,49 @@ sealed class CloudLiveTerminal {
  * (#233 Phase 1 item 10). Deliberately finer-grained than [CloudLiveTerminal]'s two cases,
  * because the two ways a *successful* live session still loses the recording to batch are
  * exactly the ones a device trial has to be able to tell apart afterwards.
+ *
+ * Every non-[LIVE_DELIVERED] constant is named `BATCH_SERVED_*` on purpose: in all of them the
+ * user still received their full text, because the lossless recording is preserved for batch
+ * precisely so a live failure is never a lost dictation. Only the *live leg* failed. The earlier
+ * names (`FALLBACK_FAILED` and friends) read like the fallback itself broke, which is the
+ * opposite of what they record, and that is a bad way to label the one line in the telemetry a
+ * reader most needs to interpret correctly during an incident.
  */
 enum class CloudLiveOutcome {
     /** Live text was authoritative and went down the normal delivery path. */
     LIVE_DELIVERED,
     /** The session reported [CloudLiveTerminal.Success], but the final was unusable (blank, or
      *  the preserved recording was below the minimum-duration floor), so batch served it. */
-    FALLBACK_UNUSABLE_FINAL,
-    /** The session reported [CloudLiveTerminal.Failure]; see [CloudLiveStage.failureReason]. */
-    FALLBACK_FAILED,
+    BATCH_SERVED_UNUSABLE_FINAL,
+    /** The live session reported [CloudLiveTerminal.Failure] and batch served the text instead;
+     *  see [CloudLiveStage.failureReason] for why live died. */
+    BATCH_SERVED_LIVE_FAILED,
     /** No terminal callback arrived at all before the runtime's bounded final wait expired --
      *  the mid-stream-drop / wedged-socket case, which produces no [CloudLiveFailureReason]
-     *  because the session never got far enough to report one. */
-    FALLBACK_NO_TERMINAL,
+     *  because the session never got far enough to report one. Batch served the text. */
+    BATCH_SERVED_NO_TERMINAL,
+    ;
+
+    /**
+     * The pre-rename spelling of this constant, or null when the name never changed.
+     *
+     * Kept because device trials already on disk (the Fold #233 trial among them) recorded the
+     * old names, and telemetry you cannot read historically is telemetry you cannot trust. The
+     * reader maps old to new through this rather than hardcoding a second copy of the mapping.
+     */
+    val legacyName: String?
+        get() = when (this) {
+            LIVE_DELIVERED -> null
+            BATCH_SERVED_UNUSABLE_FINAL -> "FALLBACK_UNUSABLE_FINAL"
+            BATCH_SERVED_LIVE_FAILED -> "FALLBACK_FAILED"
+            BATCH_SERVED_NO_TERMINAL -> "FALLBACK_NO_TERMINAL"
+        }
+
+    companion object {
+        /** Resolves either the current or the pre-rename spelling, so old logs still parse. */
+        fun fromLogName(name: String): CloudLiveOutcome? =
+            entries.firstOrNull { it.name == name || it.legacyName == name }
+    }
 }
 
 /**
@@ -85,7 +115,7 @@ enum class CloudLiveOutcome {
  * Pure and free of Android/[android.content.Context] so the whole "what does a device trial
  * actually see" question is unit-testable without a device. [timing] is the best marks known to
  * the runtime -- a terminal's own timing when there is one, otherwise the last interim's, which
- * is what makes [CloudLiveOutcome.FALLBACK_NO_TERMINAL] still able to report that setup landed
+ * is what makes [CloudLiveOutcome.BATCH_SERVED_NO_TERMINAL] still able to report that setup landed
  * and interims flowed before the session went quiet.
  *
  * Durations are simple subtractions of the marks the session already recorded; a mark that was

@@ -894,13 +894,13 @@ class DictationRuntime internal constructor(
                     attempt.finalWait = null
                     // No terminal ever arrived within the bounded wait -- the mid-stream drop /
                     // wedged-socket case, which reports no CloudLiveFailureReason of its own
-                    // (#233 item 10). Distinguished from FALLBACK_FAILED so a device trial can
-                    // tell "the session told us it broke" from "the session went silent".
+                    // (#233 item 10). Distinguished from BATCH_SERVED_LIVE_FAILED so a device
+                    // trial can tell "the session told us it broke" from "it went silent".
                     if (cloudLiveAttempt === attempt && !attempt.claimed) {
                         startCloudLiveBatchFallback(
                             attempt,
-                            if (attempt.terminal == null) CloudLiveOutcome.FALLBACK_NO_TERMINAL
-                            else CloudLiveOutcome.FALLBACK_FAILED,
+                            if (attempt.terminal == null) CloudLiveOutcome.BATCH_SERVED_NO_TERMINAL
+                            else CloudLiveOutcome.BATCH_SERVED_LIVE_FAILED,
                         )
                     }
                 }
@@ -920,7 +920,7 @@ class DictationRuntime internal constructor(
             is CloudLiveTerminal.Success -> {
                 if (terminal.text.isBlank() || result.pcmFile == null ||
                     isBelowMinimumDuration(result.pcmFile.length(), SAMPLE_RATE)) {
-                    startCloudLiveBatchFallback(attempt, CloudLiveOutcome.FALLBACK_UNUSABLE_FINAL)
+                    startCloudLiveBatchFallback(attempt, CloudLiveOutcome.BATCH_SERVED_UNUSABLE_FINAL)
                     return
                 }
                 attempt.claimed = true
@@ -933,7 +933,7 @@ class DictationRuntime internal constructor(
                 logCloudLiveAttempt(attempt, CloudLiveOutcome.LIVE_DELIVERED)
                 thread { handleTranscriptionResult(terminal.text, attempt.token, attempt.lease) }
             }
-            is CloudLiveTerminal.Failure -> startCloudLiveBatchFallback(attempt, CloudLiveOutcome.FALLBACK_FAILED)
+            is CloudLiveTerminal.Failure -> startCloudLiveBatchFallback(attempt, CloudLiveOutcome.BATCH_SERVED_LIVE_FAILED)
         }
     }
 

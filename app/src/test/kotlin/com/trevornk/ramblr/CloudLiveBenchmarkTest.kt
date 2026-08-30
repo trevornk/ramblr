@@ -203,7 +203,7 @@ class CloudLiveBenchmarkTest {
 
         val line = awaitCloudLiveLine()
         val live = line.getJSONObject("cloudLive")
-        assertEquals("FALLBACK_FAILED", live.getString("outcome"))
+        assertEquals("BATCH_SERVED_LIVE_FAILED", live.getString("outcome"))
         assertTrue("the reader must be able to see batch delivered this text", live.getBoolean("fellBackToBatch"))
         assertEquals("NETWORK_ERROR", live.getString("failureReason"))
         assertEquals(90L, live.getLong("setupMs"))
@@ -231,7 +231,7 @@ class CloudLiveBenchmarkTest {
         shadowOf(Looper.getMainLooper()).idleFor(2_501, TimeUnit.MILLISECONDS)
 
         val live = awaitCloudLiveLine().getJSONObject("cloudLive")
-        assertEquals("FALLBACK_NO_TERMINAL", live.getString("outcome"))
+        assertEquals("BATCH_SERVED_NO_TERMINAL", live.getString("outcome"))
         assertTrue(live.getBoolean("fellBackToBatch"))
         assertTrue("a silent session names no reason", live.isNull("failureReason"))
         assertEquals("but the marks it did emit still survive", 120L, live.getLong("setupMs"))
@@ -253,7 +253,7 @@ class CloudLiveBenchmarkTest {
         idleMainLooper()
 
         val live = awaitCloudLiveLine().getJSONObject("cloudLive")
-        assertEquals("FALLBACK_UNUSABLE_FINAL", live.getString("outcome"))
+        assertEquals("BATCH_SERVED_UNUSABLE_FINAL", live.getString("outcome"))
         assertTrue(live.getBoolean("fellBackToBatch"))
         assertTrue("a blank final is not a session failure", live.isNull("failureReason"))
         assertEquals(32L, live.getLong("endOfAudioToFinalMs"))
@@ -297,7 +297,7 @@ class CloudLiveBenchmarkTest {
         // so an embedded newline would split one record into two unparseable fragments) and
         // capped at MAX_ERROR_DETAIL_CHARS.
         val stage = cloudLiveBenchmarkStage(
-            outcome = CloudLiveOutcome.FALLBACK_FAILED,
+            outcome = CloudLiveOutcome.BATCH_SERVED_LIVE_FAILED,
             terminal = CloudLiveTerminal.Failure(
                 CloudLiveFailureReason.PROTOCOL_ERROR,
                 "rejected\n" + "x".repeat(MAX_ERROR_DETAIL_CHARS * 3),
@@ -428,7 +428,7 @@ class CloudLiveBenchmarkTest {
     @Test
     fun `derivation reports a mark that never happened as null rather than a fabricated zero`() {
         val stage = cloudLiveBenchmarkStage(
-            outcome = CloudLiveOutcome.FALLBACK_FAILED,
+            outcome = CloudLiveOutcome.BATCH_SERVED_LIVE_FAILED,
             terminal = CloudLiveTerminal.Failure(
                 CloudLiveFailureReason.SETUP_TIMEOUT,
                 "setup timed out",
@@ -446,7 +446,7 @@ class CloudLiveBenchmarkTest {
     @Test
     fun `derivation falls back to the last seen interim timing when no terminal ever arrived`() {
         val stage = cloudLiveBenchmarkStage(
-            outcome = CloudLiveOutcome.FALLBACK_NO_TERMINAL,
+            outcome = CloudLiveOutcome.BATCH_SERVED_NO_TERMINAL,
             terminal = null,
             timing = CloudLiveTiming(connectStartedAtMs = 100, setupCompletedAtMs = 260, firstInterimAtMs = 700),
         )
@@ -459,12 +459,53 @@ class CloudLiveBenchmarkTest {
 
     @Test
     fun `derivation degrades to outcome only when there are no marks at all`() {
-        val stage = cloudLiveBenchmarkStage(CloudLiveOutcome.FALLBACK_NO_TERMINAL, terminal = null, timing = null)
-        assertEquals("FALLBACK_NO_TERMINAL", stage.outcome)
+        val stage = cloudLiveBenchmarkStage(CloudLiveOutcome.BATCH_SERVED_NO_TERMINAL, terminal = null, timing = null)
+        assertEquals("BATCH_SERVED_NO_TERMINAL", stage.outcome)
         assertTrue(stage.fellBackToBatch)
         assertNull(stage.setupMs)
         assertNull(stage.firstInterimMs)
         assertNull(stage.endOfAudioToFinalMs)
+    }
+
+    @Test
+    fun `pre-rename outcome names still resolve so historical trial logs stay readable`() {
+        // Device trials that ran before the FALLBACK_* -> BATCH_SERVED_* rename wrote the old
+        // spellings into benchmark_log.jsonl. Those logs are the only record of what the
+        // hardware actually did, so the mapping is load-bearing, not cosmetic.
+        assertEquals(
+            CloudLiveOutcome.BATCH_SERVED_LIVE_FAILED,
+            CloudLiveOutcome.fromLogName("FALLBACK_FAILED"),
+        )
+        assertEquals(
+            CloudLiveOutcome.BATCH_SERVED_NO_TERMINAL,
+            CloudLiveOutcome.fromLogName("FALLBACK_NO_TERMINAL"),
+        )
+        assertEquals(
+            CloudLiveOutcome.BATCH_SERVED_UNUSABLE_FINAL,
+            CloudLiveOutcome.fromLogName("FALLBACK_UNUSABLE_FINAL"),
+        )
+        // Current spellings resolve to themselves, and LIVE_DELIVERED never had an alias.
+        for (outcome in CloudLiveOutcome.entries) {
+            assertEquals(outcome, CloudLiveOutcome.fromLogName(outcome.name))
+        }
+        assertNull(CloudLiveOutcome.LIVE_DELIVERED.legacyName)
+        assertNull(CloudLiveOutcome.fromLogName("NOT_AN_OUTCOME"))
+    }
+
+    @Test
+    fun `every batch-served outcome reports falling back and live-delivered does not`() {
+        // The invariant the name change is meant to make obvious: BATCH_SERVED_* means the user
+        // still got their text, via batch. Only LIVE_DELIVERED skipped the fallback entirely.
+        for (outcome in CloudLiveOutcome.entries) {
+            val stage = cloudLiveBenchmarkStage(outcome, terminal = null, timing = null)
+            val expected = outcome != CloudLiveOutcome.LIVE_DELIVERED
+            assertEquals(
+                "$outcome should report fellBackToBatch=$expected",
+                expected,
+                stage.fellBackToBatch,
+            )
+            assertEquals(expected, outcome.name.startsWith("BATCH_SERVED_"))
+        }
     }
 
     /** Same narrow capture-boundary fake DictationRuntimeTest uses (its copy is private to that
