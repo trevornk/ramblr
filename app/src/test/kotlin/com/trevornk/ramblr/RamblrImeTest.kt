@@ -622,6 +622,68 @@ class RamblrImeTest {
         )
     }
 
+    @Test
+    fun `secure editor then normal editor restores dictation on the same controller`() {
+        // #241 regression: every prior secure-field test built a fresh controller and exercised one
+        // editor, so the real sequence (secure editor, then an ordinary one) was never covered.
+        val runtime = FakeRuntimeControl()
+        val states = mutableListOf<ImeUiState>()
+        val controller = ImePanelController(runtime, states::add)
+        val secure = ImeEditorIdentity(
+            "harness.example",
+            1,
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD,
+        )
+        val normal = ImeEditorIdentity("harness.example", 2, InputType.TYPE_CLASS_TEXT)
+
+        controller.onEditorChanged(1L, secure, Any())
+        controller.onMicTap()
+        assertEquals(0, runtime.taps)
+        assertFalse(controller.currentEditorPolicy().allowsDictation)
+
+        controller.onEditorChanged(2L, normal, Any())
+        assertTrue(controller.currentEditorPolicy().allowsDictation)
+        controller.onMicTap()
+
+        assertEquals("mic must work again in an ordinary field", 1, runtime.taps)
+        assertEquals(ImeUiState.SECURE_FIELD, states.first())
+    }
+
+    @Test
+    fun `editor transition rearms the runtime when the panel was torn down`() {
+        // A WebView field switch delivers onStartInput(restarting=true) with no onStartInputView,
+        // so the dictation branch itself must re-arm the torn-down runtime and re-render.
+        // isInputViewShown is false in exactly this path, so recovery keys on panel absence.
+        val tornDown = imeEditorTransition(allowsDictation = true, panelPresent = false)
+        assertTrue("a torn-down panel must be rebuilt", tornDown.rearmRuntime)
+        assertTrue(tornDown.renderReady)
+        assertFalse(tornDown.blockSecure)
+
+        val alive = imeEditorTransition(allowsDictation = true, panelPresent = true)
+        assertFalse("must not rebuild a live panel", alive.rearmRuntime)
+        assertTrue(alive.renderReady)
+
+        val secure = imeEditorTransition(allowsDictation = false, panelPresent = true)
+        assertTrue(secure.blockSecure)
+        assertFalse(secure.rearmRuntime)
+        assertFalse(secure.renderReady)
+    }
+
+    @Test
+    fun `mic appearance marks every disabled state as disabled`() {
+        // #240: isEnabled alone leaves a custom oval drawable painted like an enabled control.
+        listOf(ImeUiState.SECURE_FIELD, ImeUiState.TRANSCRIBING, ImeUiState.CLEANING).forEach {
+            assertFalse("$it must disable the mic", imeMicEnabled(it))
+            assertEquals("$it must look disabled", ImeMicAppearance.DISABLED, imeMicAppearance(it))
+        }
+        listOf(ImeUiState.IDLE, ImeUiState.ERROR).forEach {
+            assertTrue("$it must keep the mic tappable", imeMicEnabled(it))
+            assertEquals(ImeMicAppearance.READY, imeMicAppearance(it))
+        }
+        assertTrue(imeMicEnabled(ImeUiState.RECORDING))
+        assertEquals(ImeMicAppearance.RECORDING, imeMicAppearance(ImeUiState.RECORDING))
+    }
+
     private class FakeRuntimeControl : ImeRuntimeControl {
         var taps = 0
         var invalidations = 0
