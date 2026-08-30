@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only manifest overlay. Adds the IME field harness used by the #233 device gates.
+
+  This overlay lives in app/src/debug, so the activity is compiled into debug builds only and is
+  never merged into a release APK. It is exported purely so `adb shell am start` can launch it for
+  device verification; it holds no permissions, reads nothing, and persists nothing.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <activity
+            android:name=".ImeTestHarnessActivity"
+            android:exported="true"
+            android:label="IME field harness"
+            android:windowSoftInputMode="stateHidden|adjustResize" />
+    </application>
+
+</manifest>
