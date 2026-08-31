@@ -87,15 +87,44 @@ basename "$GITHUB_APK" | grep -qE '^Ramblr-[0-9]+\.[0-9]+\.[0-9]+-github-release
   || fail "APK filename won't match SelfUpdateResolver.GITHUB_RELEASE_APK_NAME"
 
 # Confirm the APK is release-signed, not debug-signed. A debug-signed release cannot be
-# installed over an existing release-signed install.
-if command -v apksigner >/dev/null 2>&1; then
-  if apksigner verify --print-certs "$GITHUB_APK" 2>/dev/null | grep -qi 'CN=Android Debug'; then
-    fail "APK is DEBUG-signed -- existing users could not install it (signature mismatch)"
-  fi
-  echo "==> Signature check passed (not debug-signed)"
-else
-  echo "WARNING: apksigner not on PATH; skipping debug-signature check" >&2
+# installed over an existing release-signed install. apksigner lives in the versioned SDK
+# build-tools dirs and is not on PATH by default, so look it up rather than skipping the check.
+APKSIGNER="$(command -v apksigner || true)"
+if [ -z "$APKSIGNER" ]; then
+  APKSIGNER="$(find "${ANDROID_HOME:-$HOME/Library/Android/sdk}/build-tools" -maxdepth 2 -name apksigner -type f 2>/dev/null | sort -V | tail -1 || true)"
 fi
+[ -n "$APKSIGNER" ] && [ -x "$APKSIGNER" ] \
+  || fail "apksigner not found -- cannot verify the APK is release-signed. Install Android SDK build-tools or set ANDROID_HOME."
+
+if "$APKSIGNER" verify --print-certs "$GITHUB_APK" 2>/dev/null | grep -qi 'CN=Android Debug'; then
+  fail "APK is DEBUG-signed -- existing users could not install it (signature mismatch)"
+fi
+
+# Signing-identity continuity: Android refuses to install an update signed by a different key,
+# so a rotated/lost keystore must be caught here rather than by users. Compare this build's
+# signer against the currently published release's.
+NEW_SIGNER=$("$APKSIGNER" verify --print-certs "$GITHUB_APK" 2>/dev/null \
+  | grep -iE 'certificate SHA-256 digest' | head -1 | awk '{print $NF}')
+[ -n "$NEW_SIGNER" ] || fail "could not read this build's signing certificate digest"
+
+PREV_URL=$(gh release view --json assets \
+  --jq '.assets[]|select(.name|test("^Ramblr-[0-9.]+-github-release\\.apk$")).url' 2>/dev/null | head -1 || true)
+if [ -n "$PREV_URL" ]; then
+  PREV_APK=$(mktemp -t prev-release-XXXXXX.apk)
+  if curl -sfL -H "Accept: application/octet-stream" -o "$PREV_APK" "$PREV_URL"; then
+    PREV_SIGNER=$("$APKSIGNER" verify --print-certs "$PREV_APK" 2>/dev/null \
+      | grep -iE 'certificate SHA-256 digest' | head -1 | awk '{print $NF}')
+    if [ -n "$PREV_SIGNER" ] && [ "$PREV_SIGNER" != "$NEW_SIGNER" ]; then
+      rm -f "$PREV_APK"
+      fail "signing key CHANGED vs the published release (${PREV_SIGNER} -> ${NEW_SIGNER}) -- existing users could not install this update"
+    fi
+    echo "==> Signing identity matches the published release"
+  else
+    echo "WARNING: could not download previous release APK; skipped signer continuity check" >&2
+  fi
+  rm -f "$PREV_APK"
+fi
+echo "==> Signature check passed (release-signed)"
 
 # --- Compose the release body (the part that broke twice) --------------------------------
 BODY_FILE=$(mktemp)
