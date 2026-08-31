@@ -1,0 +1,26 @@
+New ways to start dictating, Gemini transcription, and a crash fix for older phones.
+
+- Ramblr Voice keyboard: a voice-only keyboard you can switch to like any other. It works
+  without the accessibility service, which makes it a good option if you would rather not
+  enable one. It has a mic and nothing else, so keep another keyboard installed for typing.
+- Choose how you start dictation: floating icon, the Android accessibility button or
+  volume-key hold, a Quick Settings tile, or the keyboard. There is now a setup screen for
+  picking between them.
+- Select existing text in another app and tap "Ramblr" to clean it up in place.
+- Gemini now transcribes, not just cleans up. Pick it as your transcription provider
+  alongside OpenAI, or keep everything on-device.
+- Experimental Gemini Cloud Live: interim text as you speak, in the Ramblr Voice keyboard
+  only. Off by default, costs roughly 1.8x normal cloud transcription.
+- Better default on-device model, and a free default cleanup model so cloud cleanup no
+  longer requires paid API access to try.
+- Vocabulary suggestions: Ramblr notices terms you correct repeatedly and offers to add
+  them. Nothing is added without you tapping to accept.
+
+Fixes:
+
+- Local cleanup crashed instantly on phones older than roughly 2019 (pre-ARMv8.2). Ramblr
+  now picks the right code path for your processor instead of assuming a recent one.
+- Asking a question in dictation no longer sometimes returned an answer instead of your
+  words.
+- Fixed the "Ramblr" entry missing from the text selection menu, first-use silence
+  detection, and recovery when the keyboard is used in a password field.
