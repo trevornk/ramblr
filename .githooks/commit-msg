@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Strips AI co-author trailers from commit messages.
+#
+# "Co-Authored-By: Claude ..." trailers make a solo project's history read as
+# machine-generated and, on some hosts, surface as extra contributors. Tooling
+# adds them by default, so they are removed here rather than remembered.
+#
+# Bypass: ATTRIBUTION_GUARD=off git commit ...
+
+set -euo pipefail
+
+[[ "${ATTRIBUTION_GUARD:-on}" == "off" ]] && exit 0
+
+MSG_FILE="$1"
+[[ -f "$MSG_FILE" ]] || exit 0
+
+# Match "Co-authored-by:" (any case) naming an AI assistant / non-human author.
+readonly PATTERN='^[[:space:]]*[Cc][Oo]-[Aa]uthored-[Bb][Yy]:[[:space:]]*(Claude|GPT|Codex|Neo|Hermes|Cursor|Copilot|OpenAI|Anthropic|.*<noreply@anthropic\.com>|.*<.*@openai\.com>)'
+
+if grep -qE "$PATTERN" "$MSG_FILE"; then
+  removed="$(grep -cE "$PATTERN" "$MSG_FILE")"
+  tmp="$(mktemp)"
+  grep -vE "$PATTERN" "$MSG_FILE" > "$tmp"
+  # Collapse trailing blank lines left behind by the removal.
+  awk 'BEGIN{n=0} {lines[NR]=$0} END{last=NR; while(last>0 && lines[last] ~ /^[[:space:]]*$/) last--; for(i=1;i<=last;i++) print lines[i]}' "$tmp" > "$MSG_FILE"
+  rm -f "$tmp"
+  echo "attribution guard: stripped ${removed} AI co-author trailer(s)." >&2
+fi
+
+exit 0

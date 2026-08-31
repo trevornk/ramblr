@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Attribution guard. Every commit in this repo must be authored AND committed
+# by Trevor's canonical GitHub-linked identity, or GitHub will show a stray
+# contributor (or credit a random account that owns the address).
+#
+# History has been cleaned of stray identities twice; nothing enforced it, so
+# it came back both times. This is the enforcement.
+#
+# Install (once per clone/worktree):
+#   git config core.hooksPath .githooks
+#
+# Emergency bypass:  ATTRIBUTION_GUARD=off git commit ...
+
+set -euo pipefail
+
+[[ "${ATTRIBUTION_GUARD:-on}" == "off" ]] && exit 0
+
+readonly WANT_NAME="Trevor Nash-Keller"
+readonly WANT_EMAIL="4496266+trevornk@users.noreply.github.com"
+
+# Emails that resolve to Trevor's own GitHub account. Accepted so an amend or
+# rebase of existing history is not blocked, but never used for NEW commits.
+readonly -a LEGACY_OK=(
+  "trevornk@users.noreply.github.com"
+  "trevornk@gmail.com"
+)
+
+fail() {
+  echo "BLOCKED: $1" >&2
+  echo >&2
+  echo "  author:    ${AN} <${AE}>" >&2
+  echo "  committer: ${CN} <${CE}>" >&2
+  echo >&2
+  echo "  Required:  ${WANT_NAME} <${WANT_EMAIL}>" >&2
+  echo >&2
+  echo "  Fix this clone/worktree:" >&2
+  echo "    git config user.name  \"${WANT_NAME}\"" >&2
+  echo "    git config user.email \"${WANT_EMAIL}\"" >&2
+  echo >&2
+  echo "  Then re-run the commit. Bypass (rare): ATTRIBUTION_GUARD=off git commit ..." >&2
+  exit 1
+}
+
+AN="$(git var GIT_AUTHOR_IDENT    | sed 's/ <.*//')"
+AE="$(git var GIT_AUTHOR_IDENT    | sed 's/.*<//; s/>.*//')"
+CN="$(git var GIT_COMMITTER_IDENT | sed 's/ <.*//')"
+CE="$(git var GIT_COMMITTER_IDENT | sed 's/.*<//; s/>.*//')"
+
+is_ok_email() {
+  local e="$1"
+  [[ "$e" == "$WANT_EMAIL" ]] && return 0
+  local ok
+  for ok in "${LEGACY_OK[@]}"; do [[ "$e" == "$ok" ]] && return 0; done
+  return 1
+}
+
+# A bare "trevor@users.noreply.github.com" belongs to an unrelated GitHub user
+# named "trevor" -- it credits a stranger. The numeric 4496266+ prefix is what
+# ties the address to this account.
+[[ "$AE" == "trevor@users.noreply.github.com" ]] && \
+  fail "author email belongs to a DIFFERENT GitHub user (github.com/trevor), not you."
+[[ "$CE" == "trevor@users.noreply.github.com" ]] && \
+  fail "committer email belongs to a DIFFERENT GitHub user (github.com/trevor), not you."
+
+is_ok_email "$AE" || fail "author email is not a Trevor identity."
+is_ok_email "$CE" || fail "committer email is not a Trevor identity."
+
+[[ "$AN" == "$WANT_NAME" ]] || fail "author name must be exactly \"${WANT_NAME}\"."
+[[ "$CN" == "$WANT_NAME" ]] || fail "committer name must be exactly \"${WANT_NAME}\"."
+
+exit 0
