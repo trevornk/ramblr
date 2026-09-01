@@ -1,6 +1,8 @@
 package com.trevornk.ramblr
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Covers [SelfUpdateStatusFormatter], the pure status-string logic backing Part 3's Settings
@@ -71,5 +73,64 @@ class SelfUpdateStatusFormatterTest {
             runningVersionCode = 13,
         )
         assertEquals("Last checked 5m ago · Running v1.0.10 (13) · Up to date", subtitle)
+    }
+
+    // -- deferredReason: making a gate deferral visible (#249) --
+    //
+    // A staged, checksum-verified update waiting on the quiet-hours window used to be completely
+    // invisible to the user, which made correct deferral behavior look like a broken updater.
+
+    @Test fun `dictation deferral explains the immediate cause, not the overnight window`() {
+        val reason = SelfUpdateStatusFormatter.deferredReason(isDictating = true)
+        assertEquals("Downloaded. Waiting until dictation finishes.", reason)
+    }
+
+    @Test fun `quiet-hours deferral names the actual configured window`() {
+        val reason = SelfUpdateStatusFormatter.deferredReason(
+            isDictating = false,
+            quietHoursStartHour = 1,
+            quietHoursEndHour = 5,
+        )
+        assertEquals("Downloaded. Will install overnight, between 1am and 5am.", reason)
+    }
+
+    @Test fun `deferral copy tracks a reconfigured quiet-hours window`() {
+        val reason = SelfUpdateStatusFormatter.deferredReason(
+            isDictating = false,
+            quietHoursStartHour = 22,
+            quietHoursEndHour = 6,
+        )
+        assertEquals("Downloaded. Will install overnight, between 10pm and 6am.", reason)
+    }
+
+    @Test fun `dictation takes precedence when both conditions would defer`() {
+        // Telling someone who is mid-dictation to wait until 1am would be actively misleading:
+        // the dictation clears in seconds, the window is hours away.
+        val reason = SelfUpdateStatusFormatter.deferredReason(isDictating = true)
+        assertTrue(reason.contains("dictation"))
+        assertFalse(reason.contains("overnight"))
+    }
+
+    @Test fun `deferral copy never reads as a failure`() {
+        // The whole point of splitting this from postInstallFailure: nothing has gone wrong.
+        for (dictating in listOf(true, false)) {
+            val reason = SelfUpdateStatusFormatter.deferredReason(isDictating = dictating).lowercase()
+            assertFalse(reason, reason.contains("fail"))
+            assertFalse(reason, reason.contains("error"))
+        }
+    }
+
+    @Test fun `formatHour renders 12-hour clock boundaries correctly`() {
+        assertEquals("12am", SelfUpdateStatusFormatter.formatHour(0))
+        assertEquals("1am", SelfUpdateStatusFormatter.formatHour(1))
+        assertEquals("11am", SelfUpdateStatusFormatter.formatHour(11))
+        assertEquals("12pm", SelfUpdateStatusFormatter.formatHour(12))
+        assertEquals("1pm", SelfUpdateStatusFormatter.formatHour(13))
+        assertEquals("11pm", SelfUpdateStatusFormatter.formatHour(23))
+    }
+
+    @Test fun `formatHour normalizes out-of-range hours instead of throwing`() {
+        assertEquals("12am", SelfUpdateStatusFormatter.formatHour(24))
+        assertEquals("11pm", SelfUpdateStatusFormatter.formatHour(-1))
     }
 }

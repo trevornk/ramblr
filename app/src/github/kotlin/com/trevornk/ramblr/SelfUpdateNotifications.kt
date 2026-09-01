@@ -115,6 +115,38 @@ object SelfUpdateNotifications {
             .setOnlyAlertOnce(true)
             .build()
 
+    /** Posted when a fully downloaded, checksum-verified update is staged on disk but the install
+     *  gate deferred it (outside quiet hours, or dictation in progress -- see
+     *  [SelfUpdateInstallGate]). Distinct from [postInstallFailure]: nothing has gone wrong, the
+     *  bytes are ready and waiting for a safe moment.
+     *
+     *  This exists because a deferral was previously invisible. The only notification a user saw
+     *  was "Update available / Tap to view the release on GitHub", which understates reality once
+     *  the APK is already downloaded, and a deferred install could then sit for hours (the
+     *  default quiet-hours window is 1am-5am) with no indication of what it was waiting for. The
+     *  "Install now" action is the same manual, quiet-hours-free path as the Settings row, so a
+     *  user who doesn't want to wait for the overnight window has a one-tap way out.
+     *
+     *  Shares [INSTALL_PROGRESS_NOTIFICATION_ID] with the progress and failure notifications: all
+     *  three are states of the same single install attempt, so replacing rather than stacking is
+     *  correct -- the download-progress notification becoming "waiting" is the accurate story.
+     *  Never throws, mirrors [postUpdateAvailable]. */
+    fun postInstallDeferred(ctx: Context, update: UpdateCheckResult.UpdateAvailable, reason: String) {
+        ensureChannel(ctx)
+        val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_mic)
+            .setContentTitle("Update v${update.versionName} ready to install")
+            .setContentText(reason)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(reason))
+            .addAction(0, "Install now", installActionPendingIntent(ctx, update))
+            .setAutoCancel(true)
+            .build()
+        try {
+            NotificationManagerCompat.from(ctx).notify(INSTALL_PROGRESS_NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+        }
+    }
+
     /** Posted when the download or install fails outright (checksum mismatch, terminal I/O
      *  failure, or a [PackageInstaller] failure) -- never posted for a gate deferral (quiet-hours
      *  miss / dictation in progress), which is routine "try again later" behavior, not a failure

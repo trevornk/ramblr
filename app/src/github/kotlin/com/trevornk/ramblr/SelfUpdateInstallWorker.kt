@@ -3,6 +3,7 @@ package com.trevornk.ramblr
 import android.app.Notification
 import android.content.Context
 import android.content.pm.ServiceInfo
+import android.util.Log
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
@@ -25,17 +26,28 @@ import java.util.concurrent.TimeUnit
  * retryable failure classification -- but this Worker additionally gates its own final step (the
  * actual install) on [SelfUpdateInstallGate], which [ModelDownloadWorker] has no equivalent of.
  *
- * NOT wired to any trigger yet: [enqueue] is a plain public entry point for Part 5's periodic
- * checker to call once it exists (see the `// TODO(Part 5)` in [SelfUpdatePrefs.setAutoInstallEnabled]).
- * Nothing in this codebase calls [enqueue] today.
+ * Triggered by [SelfUpdateCheckWorker]'s periodic tick (via [SelfUpdateCheckDecision.shouldAutoInstall]),
+ * by [SelfUpdatePrefs.setAutoInstallEnabled] when auto-install is switched on with an update already
+ * cached, and by [enqueueManual] from the Settings row / notification action.
  */
 class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
 
     override fun doWork(): Result {
         val update = SelfUpdateChecker.cachedResult(applicationContext) as? UpdateCheckResult.UpdateAvailable
-            ?: return Result.failure(errorData("No cached UpdateAvailable result"))
+            ?: run {
+                // No update pending: nothing to install, but any previously-staged APK is now
+                // orphaned (the update landed, or the release was pulled). Reclaim it before
+                // bailing -- this is the path that fires once an update has actually installed.
+                pruneStagedApks(applicationContext, currentTargetVersionCode = null)
+                return Result.failure(errorData("No cached UpdateAvailable result"))
+            }
 
         SelfUpdateNotifications.ensureChannel(applicationContext)
+
+        // Drop staged APKs for every version except the one we're working toward now. Runs on
+        // every attempt (before the resume-skip below, so a re-download can't be tricked by a
+        // stale neighbour) and is cheap: a directory listing plus zero or more deletes.
+        pruneStagedApks(applicationContext, currentTargetVersionCode = update.versionCode)
 
         val apkFile = apkFile(applicationContext, update.versionCode)
 
@@ -141,8 +153,14 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
         }
         if (!allowedFirst) {
             // Not a failure -- just not a good moment. Keep the verified file on disk so the next
-            // periodic retry (Part 5) doesn't need to re-download. No failure notification either:
-            // this is expected, routine "try again later" behavior, not something to alarm about.
+            // periodic retry doesn't need to re-download. Not a failure notification either: this
+            // is routine "try again later" behavior. It IS surfaced though (postInstallDeferred,
+            // not postInstallFailure) -- a downloaded update waiting on quiet hours used to be
+            // completely invisible, which made a working deferral look like a broken updater.
+            SelfUpdateNotifications.postInstallDeferred(
+                applicationContext, update,
+                SelfUpdateStatusFormatter.deferredReason(isDictating = isDictating(recordingStateFirst)),
+            )
             return Result.retry()
         }
 
@@ -160,6 +178,10 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
             SelfUpdateInstallGate.shouldAttemptInstallNow(SelfUpdateInstallGate.isWithinQuietHours(currentHour()), recordingStateSecond)
         }
         if (!allowedSecond) {
+            SelfUpdateNotifications.postInstallDeferred(
+                applicationContext, update,
+                SelfUpdateStatusFormatter.deferredReason(isDictating = isDictating(recordingStateSecond)),
+            )
             return Result.retry()
         }
 
@@ -187,6 +209,13 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
 
     private fun currentHour(): Int = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
 
+    /** Whether [state] represents an active dictation, using the same semantics as
+     *  [SelfUpdateInstallGate.shouldAttemptInstallNow]: null (accessibility service not connected)
+     *  and IDLE both mean "not dictating". Kept in lockstep with the gate so the reason shown to
+     *  the user can never contradict the decision that was actually made. */
+    private fun isDictating(state: RecordingStateMachine.State?): Boolean =
+        !(state == null || state == RecordingStateMachine.State.IDLE)
+
     /** Mirrors [ModelDownloadWorker.postForeground]'s never-fail-doWork contract exactly: a
      *  missing POST_NOTIFICATIONS grant must not block the download/install itself. */
     private fun postForeground(notification: Notification) {
@@ -206,6 +235,7 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
 
     companion object {
         private const val KEY_ERROR = "error"
+        private const val TAG = "SelfUpdateInstall"
 
         /** Stable notification id for this Worker's own foreground-progress notification, kept
          *  out of [SelfUpdateNotifications.notificationId]'s per-version id space (that's for the
@@ -249,6 +279,57 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
             File(filesDir, "self_update/ramblr-update-$versionCode.apk")
 
         fun apkFile(ctx: Context, versionCode: Int): File = apkFilePath(ctx.filesDir, versionCode)
+
+        /** The directory [apkFilePath] stages into. */
+        fun stagingDir(filesDir: File): File = File(filesDir, "self_update")
+
+        /**
+         * Deletes staged APKs that [SelfUpdateInstallGate.orphanedStagedApks] judges orphaned
+         * relative to [currentTargetVersionCode] (null = no update pending, so all of them).
+         *
+         * Exists because staged APKs are keyed by versionCode and the worker's own deletes only
+         * ever touch the current target's file -- so a moved update target used to abandon the
+         * previous download on disk forever (observed: a 57 MB `ramblr-update-26.apk` left for 18
+         * days alongside the live `-29`, 113 MB total, in storage the user cannot see or clear).
+         *
+         * Never throws: reclaiming disk is best-effort housekeeping and must not be able to fail
+         * an install that would otherwise succeed. A delete that loses a race with something else
+         * removing the same file is equally fine -- the file is gone either way, which is the
+         * whole point. Returns the number actually deleted, for logging and tests.
+         *
+         * Takes a plain [filesDir] rather than a [Context] for the same reason [apkFilePath] is
+         * split from [apkFile] (and [ModelDownloader.modelDirPath] from [ModelDownloader.modelDir]):
+         * so the real deletion behavior is directly unit-testable against a real filesystem without
+         * a live Android Context. Deliberately free of `android.util.Log` for the same reason --
+         * this project has no Robolectric (see DownloadNotificationsTest's kdoc) and does not set
+         * `unitTests.returnDefaultValues`, so touching an Android API here would make the whole
+         * function untestable on the JVM. It returns the deleted names and lets the
+         * [Context]-taking overload do the logging.
+         */
+        fun pruneStagedApks(filesDir: File, currentTargetVersionCode: Int?): List<String> {
+            val dir = stagingDir(filesDir)
+            val present = try {
+                dir.list()?.toList() ?: return emptyList()
+            } catch (_: SecurityException) {
+                return emptyList()
+            }
+            val deleted = mutableListOf<String>()
+            for (name in SelfUpdateInstallGate.orphanedStagedApks(present, currentTargetVersionCode)) {
+                val ok = try {
+                    File(dir, name).delete()
+                } catch (_: SecurityException) {
+                    false
+                }
+                if (ok) deleted += name
+            }
+            return deleted
+        }
+
+        fun pruneStagedApks(ctx: Context, currentTargetVersionCode: Int?): List<String> {
+            val deleted = pruneStagedApks(ctx.filesDir, currentTargetVersionCode)
+            for (name in deleted) Log.i(TAG, "Pruned orphaned staged update APK: $name")
+            return deleted
+        }
 
         fun workName(): String = "self-update-install"
 

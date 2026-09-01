@@ -48,4 +48,42 @@ object SelfUpdateStatusFormatter {
         val status = statusLine(result)
         return "$checked · $running · $status"
     }
+
+    /**
+     * Why a staged, checksum-verified update isn't installing yet, in user-facing terms. Drives
+     * [SelfUpdateNotifications.postInstallDeferred].
+     *
+     * The two deferral causes are reported separately because the remedies differ: an in-progress
+     * dictation clears itself within seconds, whereas a quiet-hours wait can be hours away and is
+     * the case where a user most plausibly wants the "Install now" action instead. Dictation is
+     * checked first -- when both apply it's the more immediate and more surprising of the two, and
+     * telling someone mid-dictation to wait until 1am would be actively misleading.
+     *
+     * [quietHoursStartHour]/[quietHoursEndHour] are passed in rather than read from
+     * [SelfUpdateInstallGate]'s constants so the copy stays correct if the window ever becomes
+     * configurable, and so every phrasing is directly testable.
+     */
+    fun deferredReason(
+        isDictating: Boolean,
+        quietHoursStartHour: Int = SelfUpdateInstallGate.QUIET_HOURS_START_HOUR,
+        quietHoursEndHour: Int = SelfUpdateInstallGate.QUIET_HOURS_END_HOUR,
+    ): String = if (isDictating) {
+        "Downloaded. Waiting until dictation finishes."
+    } else {
+        "Downloaded. Will install overnight, between " +
+            "${formatHour(quietHoursStartHour)} and ${formatHour(quietHoursEndHour)}."
+    }
+
+    /** 24h hour-of-day to a 12h clock phrase ("1am", "12pm"), matching how the rest of the app's
+     *  user-facing copy reads. Only whole hours occur here: the quiet-hours window is defined in
+     *  whole hour-of-day units ([SelfUpdateInstallGate.isWithinQuietHours]). */
+    fun formatHour(hour: Int): String {
+        val normalized = ((hour % 24) + 24) % 24
+        val suffix = if (normalized < 12) "am" else "pm"
+        val twelve = when (normalized % 12) {
+            0 -> 12
+            else -> normalized % 12
+        }
+        return "$twelve$suffix"
+    }
 }
