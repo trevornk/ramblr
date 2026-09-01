@@ -1,0 +1,11 @@
+Housekeeping for the built-in updater.
+
+- Ramblr no longer leaves old downloaded update files behind. Each update was saved
+  under its own version number, and when a newer one came along the previous file was
+  never deleted -- on one phone that had quietly grown to 113 MB of storage you cannot
+  see or clear from the Files app. Old files are now cleaned up automatically.
+- When an update has downloaded but is waiting to install, Ramblr now says so. It
+  installs overnight, between 1am and 5am, and never interrupts you mid-dictation --
+  but the notification used to just say "tap to view the release", which made it look
+  like nothing had happened. It now tells you the update is ready, why it is waiting,
+  and offers an Install now button if you do not want to wait.
