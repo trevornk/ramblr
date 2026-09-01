@@ -96,4 +96,45 @@ object SelfUpdateInstallGate {
      */
     fun shouldAttemptManualInstallNow(recordingState: RecordingStateMachine.State?): Boolean =
         recordingState == null || recordingState == RecordingStateMachine.State.IDLE
+
+    /** Matches the staged-APK file names produced by [SelfUpdateInstallWorker.apkFilePath]
+     *  (`ramblr-update-<versionCode>.apk`) and captures the versionCode. Deliberately anchored and
+     *  digits-only so it can never match an unrelated file that happens to live in the same
+     *  directory -- an unrecognized name is left alone rather than deleted. */
+    private val STAGED_APK_NAME = Regex("""^ramblr-update-(\d+)\.apk$""")
+
+    /**
+     * Which of [presentFileNames] (the current contents of `filesDir/self_update/`) are orphaned
+     * staged APKs safe to delete, given the versionCode this pipeline is currently working toward
+     * ([currentTargetVersionCode], or null when no update is pending at all).
+     *
+     * Staged APKs are keyed by versionCode ([SelfUpdateInstallWorker.apkFilePath]), and every
+     * delete in the worker only ever touches *its own* target's file: the `.part` temp on a
+     * failed download, `dest` before a rename, and `apkFile` after a successful install. Nothing
+     * has ever deleted a staged file belonging to a *different* versionCode, so each time the
+     * update target moved (26 -> 29) the previous download was abandoned on disk permanently --
+     * app-private storage the user can neither see nor clear from Android's Files app. This is
+     * the pure half of fixing that; [SelfUpdateInstallWorker.pruneStagedApks] does the I/O.
+     *
+     * Rules, in order:
+     *  - Names that aren't recognizable staged APKs are never returned. Deleting an unrecognized
+     *    file in a directory this code doesn't exclusively own would be overreach, and failing
+     *    closed costs nothing.
+     *  - `.part` temp files are left to the download path's own cleanup, which already handles
+     *    them on every failure branch and knows whether one is mid-write. A concurrent download
+     *    writing `ramblr-update-29.apk.part` must not have it deleted out from under it.
+     *  - When [currentTargetVersionCode] is null (no update pending -- e.g. the check now says
+     *    UpToDate because the update was installed, or the release was pulled), every staged APK
+     *    is orphaned: there is no longer any version this pipeline intends to install.
+     *  - Otherwise every staged APK except the current target's is orphaned. Both older and newer
+     *    versionCodes qualify: a staged build the pipeline is no longer working toward will never
+     *    be installed by it, regardless of which direction it differs in.
+     */
+    fun orphanedStagedApks(
+        presentFileNames: Collection<String>,
+        currentTargetVersionCode: Int?,
+    ): List<String> = presentFileNames.filter { name ->
+        val versionCode = STAGED_APK_NAME.matchEntire(name)?.groupValues?.get(1)?.toIntOrNull()
+        versionCode != null && versionCode != currentTargetVersionCode
+    }
 }

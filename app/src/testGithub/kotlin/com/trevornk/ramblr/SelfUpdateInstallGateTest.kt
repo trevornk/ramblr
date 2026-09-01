@@ -158,6 +158,176 @@ class SelfUpdateInstallGateTest {
         assertEquals(SelfUpdateInstallWorker.workName(), SelfUpdateInstallWorker.workName())
     }
 
+    // -- orphanedStagedApks: the staged-APK leak fixed in #249 --
+    //
+    // Regression context: staged APKs are keyed by versionCode and every delete in the worker
+    // only ever touched the current target's own file, so a moved update target abandoned the
+    // previous download permanently. Observed on a real device as a 57 MB ramblr-update-26.apk
+    // left for 18 days next to the live -29, 113 MB total, in storage the user cannot clear.
+
+    @Test fun `staged apk for a different versionCode is orphaned`() {
+        val orphans = SelfUpdateInstallGate.orphanedStagedApks(
+            listOf("ramblr-update-26.apk", "ramblr-update-29.apk"),
+            currentTargetVersionCode = 29,
+        )
+        assertEquals(listOf("ramblr-update-26.apk"), orphans)
+    }
+
+    @Test fun `the current target's staged apk is never orphaned`() {
+        val orphans = SelfUpdateInstallGate.orphanedStagedApks(
+            listOf("ramblr-update-29.apk"),
+            currentTargetVersionCode = 29,
+        )
+        assertTrue(orphans.isEmpty())
+    }
+
+    @Test fun `every staged apk is orphaned when no update is pending`() {
+        val orphans = SelfUpdateInstallGate.orphanedStagedApks(
+            listOf("ramblr-update-26.apk", "ramblr-update-29.apk"),
+            currentTargetVersionCode = null,
+        )
+        assertEquals(listOf("ramblr-update-26.apk", "ramblr-update-29.apk"), orphans)
+    }
+
+    @Test fun `a newer staged versionCode than the target is also orphaned`() {
+        // Target can move backwards (a release pulled/yanked, cache refreshed to an older one).
+        // A staged build the pipeline is no longer working toward will never be installed by it.
+        val orphans = SelfUpdateInstallGate.orphanedStagedApks(
+            listOf("ramblr-update-30.apk"),
+            currentTargetVersionCode = 29,
+        )
+        assertEquals(listOf("ramblr-update-30.apk"), orphans)
+    }
+
+    @Test fun `unrecognized file names are never deleted`() {
+        // Fails closed: this code does not exclusively own the directory, so anything that isn't
+        // unmistakably a staged APK is left alone.
+        val orphans = SelfUpdateInstallGate.orphanedStagedApks(
+            listOf("notes.txt", "ramblr-update-.apk", "ramblr-update-abc.apk", "update-29.apk", ""),
+            currentTargetVersionCode = 29,
+        )
+        assertTrue("expected no matches, got $orphans", orphans.isEmpty())
+    }
+
+    @Test fun `part files are left to the download path's own cleanup`() {
+        // A concurrent download writing ramblr-update-29.apk.part must not have it deleted out
+        // from under it; the download path already cleans .part up on every failure branch.
+        val orphans = SelfUpdateInstallGate.orphanedStagedApks(
+            listOf("ramblr-update-26.apk.part", "ramblr-update-29.apk.part"),
+            currentTargetVersionCode = 29,
+        )
+        assertTrue("expected .part files to be skipped, got $orphans", orphans.isEmpty())
+    }
+
+    @Test fun `an empty directory yields no orphans`() {
+        assertTrue(SelfUpdateInstallGate.orphanedStagedApks(emptyList(), 29).isEmpty())
+        assertTrue(SelfUpdateInstallGate.orphanedStagedApks(emptyList(), null).isEmpty())
+    }
+
+    @Test fun `orphan detection round-trips with the real apkFilePath naming`() {
+        // Guards against the regex and the path builder drifting apart: if apkFilePath's naming
+        // ever changes, this fails rather than silently pruning nothing forever.
+        val filesDir = java.io.File(System.getProperty("java.io.tmpdir"), "self-update-test-files")
+        val staleName = SelfUpdateInstallWorker.apkFilePath(filesDir, 26).name
+        val currentName = SelfUpdateInstallWorker.apkFilePath(filesDir, 29).name
+        val orphans = SelfUpdateInstallGate.orphanedStagedApks(listOf(staleName, currentName), 29)
+        assertEquals(listOf(staleName), orphans)
+    }
+
+    @Test fun `staging dir is where apkFilePath actually writes`() {
+        val filesDir = java.io.File(System.getProperty("java.io.tmpdir"), "self-update-test-files")
+        assertEquals(
+            SelfUpdateInstallWorker.stagingDir(filesDir).path,
+            SelfUpdateInstallWorker.apkFilePath(filesDir, 29).parentFile?.path,
+        )
+    }
+
+    // -- pruneStagedApks against a REAL filesystem (not just the pure name filter above) --
+
+    /** Fresh, isolated staging dir per test, seeded with [names] as real non-empty files. */
+    private fun seedStagingDir(vararg names: String): java.io.File {
+        val filesDir = java.io.File(
+            System.getProperty("java.io.tmpdir"),
+            "ramblr-prune-test-${System.nanoTime()}",
+        )
+        val staging = SelfUpdateInstallWorker.stagingDir(filesDir)
+        staging.mkdirs()
+        for (name in names) java.io.File(staging, name).writeText("apk bytes")
+        return filesDir
+    }
+
+    private fun stagedNames(filesDir: java.io.File): List<String> =
+        SelfUpdateInstallWorker.stagingDir(filesDir).list()?.sorted() ?: emptyList()
+
+    @Test fun `prune actually deletes the orphan and keeps the current target on disk`() {
+        val filesDir = seedStagingDir("ramblr-update-26.apk", "ramblr-update-29.apk")
+        try {
+            val deleted = SelfUpdateInstallWorker.pruneStagedApks(filesDir, currentTargetVersionCode = 29)
+            assertEquals(listOf("ramblr-update-26.apk"), deleted)
+            assertEquals(listOf("ramblr-update-29.apk"), stagedNames(filesDir))
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test fun `prune with no pending update clears every staged apk but spares other files`() {
+        val filesDir = seedStagingDir("ramblr-update-26.apk", "ramblr-update-29.apk", "notes.txt")
+        try {
+            val deleted = SelfUpdateInstallWorker.pruneStagedApks(filesDir, currentTargetVersionCode = null)
+            assertEquals(listOf("ramblr-update-26.apk", "ramblr-update-29.apk"), deleted.sorted())
+            assertEquals(listOf("notes.txt"), stagedNames(filesDir))
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test fun `prune leaves a mid-download part file alone`() {
+        val filesDir = seedStagingDir("ramblr-update-29.apk.part", "ramblr-update-26.apk")
+        try {
+            val deleted = SelfUpdateInstallWorker.pruneStagedApks(filesDir, currentTargetVersionCode = 29)
+            assertEquals(listOf("ramblr-update-26.apk"), deleted)
+            assertEquals(listOf("ramblr-update-29.apk.part"), stagedNames(filesDir))
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test fun `prune on a missing staging dir is a harmless no-op`() {
+        // First-run case: nothing has ever been downloaded, so the directory doesn't exist yet.
+        val filesDir = java.io.File(
+            System.getProperty("java.io.tmpdir"),
+            "ramblr-prune-absent-${System.nanoTime()}",
+        )
+        assertTrue(SelfUpdateInstallWorker.pruneStagedApks(filesDir, 29).isEmpty())
+        assertTrue(SelfUpdateInstallWorker.pruneStagedApks(filesDir, null).isEmpty())
+    }
+
+    @Test fun `prune is idempotent`() {
+        val filesDir = seedStagingDir("ramblr-update-26.apk", "ramblr-update-29.apk")
+        try {
+            assertEquals(listOf("ramblr-update-26.apk"), SelfUpdateInstallWorker.pruneStagedApks(filesDir, 29))
+            assertTrue(SelfUpdateInstallWorker.pruneStagedApks(filesDir, 29).isEmpty())
+            assertEquals(listOf("ramblr-update-29.apk"), stagedNames(filesDir))
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test fun `prune reclaims the exact real-world leak from issue 249`() {
+        // The observed device state: an 18-day-old ramblr-update-26.apk stranded next to the
+        // live -29 because the update target moved and nothing ever deleted the old one.
+        val filesDir = seedStagingDir("ramblr-update-26.apk", "ramblr-update-29.apk")
+        try {
+            SelfUpdateInstallWorker.pruneStagedApks(filesDir, currentTargetVersionCode = 29)
+            val stale = java.io.File(SelfUpdateInstallWorker.stagingDir(filesDir), "ramblr-update-26.apk")
+            val live = java.io.File(SelfUpdateInstallWorker.stagingDir(filesDir), "ramblr-update-29.apk")
+            assertFalse("stale staged APK must be gone", stale.exists())
+            assertTrue("in-flight staged APK must survive", live.exists())
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
     private fun assertEquals(message: String, expected: Any?, actual: Any?) {
         org.junit.Assert.assertEquals(message, expected, actual)
     }
