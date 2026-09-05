@@ -273,5 +273,22 @@
                 android:resource="@xml/benchmark_log_file_paths" />
         </provider>
 
+        <!-- #257: automation off-hook. Exported so MacroDroid/Tasker/a shell can turn the
+             accessibility service off on a trigger (entering a banking app, a time of day)
+             without fighting the OS: an external write to enabled_accessibility_services is
+             component-addressed and racy, while this routes to disableSelf() on the live
+             service. Gated behind AutomationOffHookToggle, DEFAULT OFF, because exported means
+             any app on the device can silence dictation with no user interaction, so it stays
+             the user's explicit opt-in. Deliberately no enable counterpart (see
+             AutomationOffHookToggle's KDoc: re-enabling needs WRITE_SECURE_SETTINGS and is a
+             far worse capability to hand to arbitrary callers). -->
+        <receiver
+            android:name=".AutomationOffReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.trevornk.ramblr.action.TURN_OFF" />
+            </intent-filter>
+        </receiver>
+
     </application>
 </manifest>

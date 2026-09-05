@@ -24,6 +24,7 @@ class BehaviorActivity : BaseSettingsActivity() {
     private lateinit var debugVisibilitySwitch: MaterialSwitch
     private lateinit var perAppPersonaSwitch: MaterialSwitch
     private lateinit var hideIconSwitch: MaterialSwitch
+    private lateinit var automationOffHookSwitch: MaterialSwitch
     private lateinit var autoPeekSwitch: MaterialSwitch
     private lateinit var autoPeekDelayRow: LinearLayout
     private lateinit var peekSizeRow: LinearLayout
@@ -103,6 +104,26 @@ class BehaviorActivity : BaseSettingsActivity() {
             val newVal = !hideIconSwitch.isChecked
             HideIconToggle.setEnabled(this, newVal)
             hideIconSwitch.isChecked = newVal
+        })
+
+        // #257: opt-in automation hook. Placed next to the other invocation-adjacent toggles
+        // rather than in Advanced, because the people who want it (automation users trying to
+        // keep Ramblr out of banking apps) are looking at behavior, not internals.
+        automationOffHookSwitch = MaterialSwitch(this).apply {
+            isChecked = AutomationOffHookToggle.isEnabled(this@BehaviorActivity)
+            isClickable = false
+        }
+        root.addView(settingsRow(
+            "Let automation apps turn Ramblr off",
+            "Adds a broadcast MacroDroid or Tasker can send to switch the accessibility service " +
+                "off — more reliable than having them edit the accessibility setting directly. " +
+                "Any app on your phone can send it, so leave this off unless you use it",
+            automationOffHookSwitch
+        ) {
+            val newVal = !automationOffHookSwitch.isChecked
+            AutomationOffHookToggle.setEnabled(this, newVal)
+            automationOffHookSwitch.isChecked = newVal
+            if (newVal) showAutomationOffHookHelp()
         })
 
         autoPeekSwitch = MaterialSwitch(this).apply {
@@ -294,6 +315,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         debugVisibilitySwitch.isChecked = DebugVisibilityToggle.isEnabled(this)
         perAppPersonaSwitch.isChecked = PerAppPersonaToggle.isEnabled(this)
         hideIconSwitch.isChecked = HideIconToggle.isEnabled(this)
+        automationOffHookSwitch.isChecked = AutomationOffHookToggle.isEnabled(this)
         autoPeekSwitch.isChecked = AutoPeekToggle.isEnabled(this)
         singleTapRestoreSwitch.isChecked = SingleTapRestoreToggle.isEnabled(this)
         rawTextRetrySwitch.isChecked = RawTextRetryToggle.isEnabled(this)
@@ -342,6 +364,36 @@ class BehaviorActivity : BaseSettingsActivity() {
     private fun dismissedSuggestionsSummary(): String {
         val count = VocabularySuggestionStore.dismissedTerms(this).size
         return "$count term${if (count == 1) "" else "s"} you chose not to add. Tap to review or restore"
+    }
+
+    /**
+     * #257: shown once when the user opts in, because a broadcast hook is useless if you don't
+     * know the exact intent to send. Copy-to-clipboard rather than prose-only: the component
+     * name is long and mistyping it fails silently (an unmatched broadcast is a no-op, not an
+     * error), which would look exactly like the feature not working.
+     */
+    private fun showAutomationOffHookHelp() {
+        val command = "am broadcast -a ${AutomationOffReceiver.ACTION_TURN_OFF} " +
+            "-n $packageName/.AutomationOffReceiver"
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Automation off-hook enabled")
+            .setMessage(
+                "Ramblr now responds to this broadcast by turning its accessibility service " +
+                    "off:\n\n$command\n\nIn MacroDroid or Tasker, use a \u201CShell\u201D / \u201CRun " +
+                    "command\u201D action with that line — it needs ADB or root privileges, the " +
+                    "same as your existing accessibility actions.\n\nThere is no matching " +
+                    "\u201Cturn on\u201D broadcast: re-enabling an accessibility service needs a " +
+                    "permission apps aren't given, so that stays a manual step."
+            )
+            .setPositiveButton("Copy command") { _, _ ->
+                val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+                clipboard?.setPrimaryClip(
+                    android.content.ClipData.newPlainText("Ramblr off-hook", command)
+                )
+                toast("Command copied")
+            }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     /** Add/Dismiss decision dialog for one suggestion. Add goes through [VocabularyEditor.addTerm]
