@@ -40,6 +40,7 @@ class MainActivity : BaseSettingsActivity() {
     private lateinit var invocationRowSub: TextView
     private lateinit var voiceKeyboardRowSub: TextView
     private lateinit var serviceKilledBanner: View
+    private lateinit var staleComponentBanner: View
 
     // First-run wizard state (#6). Tracked in-memory so a dialog already on screen is never
     // duplicated by a stray onResume, and reset per Activity instance so a fresh launch always
@@ -90,6 +91,11 @@ class MainActivity : BaseSettingsActivity() {
         // Settings), so onResume picks up a fresh kill immediately.
         serviceKilledBanner = buildServiceKilledBanner()
         root.addView(serviceKilledBanner)
+
+        // #258 stale-component banner: same build-once/toggle-in-refresh pattern, same reason --
+        // an automation macro flips enabled_accessibility_services while this Activity is paused.
+        staleComponentBanner = buildStaleComponentBanner()
+        root.addView(staleComponentBanner)
 
         // Status row -- tapping it (re-)launches the setup walkthrough when setup isn't done yet
         // (#52); once ready it's just informational, same as before.
@@ -305,6 +311,24 @@ class MainActivity : BaseSettingsActivity() {
         serviceKilledBanner.visibility =
             if (InvocationGuardRail.shouldShowBanner(this)) View.VISIBLE else View.GONE
 
+        // #258: the inactive component is listed (or Ramblr was stripped) and the user didn't
+        // ask for that. On the advanced tier repair it silently -- the intent is unambiguous and
+        // a self-healing service beats a banner. Otherwise explain it, once.
+        staleComponentBanner.visibility = View.GONE
+        when (InvocationGuardRail.staleComponentAction(this)) {
+            StaleComponentAction.REPAIR_TO_ACTIVE ->
+                if (InvocationSecureSettings.repairToActiveComponent(this)) {
+                    toast("Ramblr's accessibility service was restored")
+                } else if (!InvocationGuardRail.staleBannerDismissed(this)) {
+                    staleComponentBanner.visibility = View.VISIBLE
+                }
+            StaleComponentAction.OFFER_RECOVERY ->
+                if (!InvocationGuardRail.staleBannerDismissed(this)) {
+                    staleComponentBanner.visibility = View.VISIBLE
+                }
+            StaleComponentAction.NONE -> Unit
+        }
+
         // Ready logic -- see OnboardingWizard.isSetupComplete for what "ready" means (#52).
         val ready = OnboardingWizard.isSetupComplete(
             audioGranted = audio,
@@ -412,6 +436,58 @@ class MainActivity : BaseSettingsActivity() {
             }
         }
         banner.addView(dismiss)
+        banner.setOnClickListener { onServiceKilledBannerTapped() }
+        return banner
+    }
+
+    /**
+     * The #258 recovery banner: Ramblr's accessibility service is off because something outside
+     * the app named the wrong service component -- in practice an automation macro holding a
+     * stale component after a mode switch, which AMS then strips from
+     * `enabled_accessibility_services` because the named component is PM-disabled.
+     *
+     * Only shown on the base tier (the advanced tier repairs silently in [refresh]) or when a
+     * repair write fails. Tap deep-links to the service's own Accessibility page where the enable
+     * switch lives; dismiss stays quiet until the service next connects, matching the #156
+     * banner's non-nagging contract.
+     */
+    private fun buildStaleComponentBanner(): View {
+        val banner = vertical(dp(16), dp(12)).apply {
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(withAlpha(attrColor(com.google.android.material.R.attr.colorPrimary), 0x22))
+            }
+            layoutParams = android.widget.LinearLayout.LayoutParams(LP_MATCH, LP_WRAP).apply {
+                setMargins(dp(16), 0, dp(16), dp(8))
+            }
+            visibility = View.GONE
+        }
+        banner.addView(TextView(this).apply {
+            text = "Ramblr's accessibility service was turned off"
+            textSize = 16f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(attrColor(android.R.attr.textColorPrimary))
+        })
+        banner.addView(TextView(this).apply {
+            text = staleComponentBannerText(InvocationServiceMode.currentMode(this@MainActivity))
+            textSize = 14f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+            setPadding(0, dp(4), 0, 0)
+        })
+        banner.addView(TextView(this).apply {
+            text = "Dismiss"
+            textSize = 14f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary))
+            setPadding(dp(8), dp(8), dp(8), dp(4))
+            setOnClickListener {
+                InvocationGuardRail.dismissStaleBanner(this@MainActivity)
+                refresh()
+            }
+        })
+        // Same recovery target as the #156 banner: advanced tier re-enables in one tap, base tier
+        // deep-links to the service's Accessibility page. Reused rather than duplicated -- the
+        // two banners differ in WHY the service is off, not in how to turn it back on.
         banner.setOnClickListener { onServiceKilledBannerTapped() }
         return banner
     }

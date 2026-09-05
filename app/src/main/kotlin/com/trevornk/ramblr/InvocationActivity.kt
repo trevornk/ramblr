@@ -522,6 +522,9 @@ class InvocationActivity : BaseSettingsActivity() {
         // it here marks this detection handled, and the service clears the dismissal itself the
         // next time it connects, so a genuine future kill still gets the banner.
         InvocationGuardRail.dismissBanner(this)
+        // Same reasoning for the #258 repair path: this off is deliberate, so the stale-component
+        // detector must not "recover" from it. Cleared when the service next connects.
+        InvocationGuardRail.recordUserTurnedOff(this)
         if (action == ServiceOffAction.SELF_DISABLE && WhisperAccessibilityService.disableServiceFromApp()) {
             toast("Ramblr turned off")
             // The OS unbinds asynchronously, so an immediate re-read can still show the old
