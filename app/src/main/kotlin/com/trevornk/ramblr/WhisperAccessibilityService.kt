@@ -772,6 +772,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
     // --- Overlay ---
 
     private fun showOverlay() {
+        // #260: no-op if the overlay is already attached. Without this, a second call would add
+        // a duplicate window and overwrite the tracking fields pointing at the first one,
+        // orphaning it beyond removeOverlay()'s reach.
+        if (overlayView != null) return
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val ringSizeDp = OverlayAppearancePrefs.load(this).ringSizeDp
         val buttonSize = (dpScaledToRing(BTN_DP, ringSizeDp) * dp).toInt()
@@ -1027,14 +1031,36 @@ open class WhisperAccessibilityService : AccessibilityService() {
         }
         positionFeedback(feedbackParams, params, feedbackHeight = 0)
 
-        wm.addView(overlay, params)
-        wm.addView(feedback, feedbackParams)
-        overlayView = overlay
-        button = img
-        spinner = ring
-        feedbackView = feedback
-        layoutParams = params
-        feedbackLayoutParams = feedbackParams
+        // #260: record each window as it attaches, rather than assigning every tracking field
+        // after both addView calls returned. Under the old ordering a throw on the second call
+        // left the first window attached with overlayView still null, and removeOverlay()'s
+        // null-guarded teardown could then never remove it -- the window leaked for the life of
+        // the process. These are TYPE_ACCESSIBILITY_OVERLAY windows whose token belongs to the
+        // live service connection, so addView legitimately throws BadTokenException when that
+        // connection is torn down between onServiceConnected() and here (an automation app
+        // toggling the service off mid-connect does exactly that). Uncaught, it propagated out
+        // of a lifecycle callback and took the process down; failing to attach the overlay
+        // should cost the user their floating button, not the whole service.
+        try {
+            wm.addView(overlay, params)
+            overlayView = overlay
+            button = img
+            spinner = ring
+            layoutParams = params
+            wm.addView(feedback, feedbackParams)
+            feedbackView = feedback
+            feedbackLayoutParams = feedbackParams
+        } catch (e: WindowManager.BadTokenException) {
+            Log.e(TAG, "Could not attach overlay windows; floating button unavailable", e)
+            removeOverlay()
+            return
+        } catch (e: IllegalStateException) {
+            // "View has already been added to the window manager" -- unreachable via the entry
+            // guard above, but unwinding beats leaking a window if it ever is reached.
+            Log.e(TAG, "Could not attach overlay windows; floating button unavailable", e)
+            removeOverlay()
+            return
+        }
         applyButtonAppearance(COLOR_IDLE)
         applyOverlayVisibility()
         armIdlePeekTimer()
@@ -1407,12 +1433,26 @@ open class WhisperAccessibilityService : AccessibilityService() {
         peekAnimator?.cancel()
         peekAnimator = null
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        // #260: removeOverlay() is now also the unwind path for a failed attach in showOverlay(),
+        // so a throw here would defeat that recovery. removeView throws IllegalArgumentException
+        // for a view WMS no longer considers attached, which is exactly the state a torn-down
+        // service connection leaves behind. Null the field either way: if the view is already
+        // gone there is nothing left to remove, and holding the reference only risks a later
+        // removeView against a stale token.
         overlayView?.let {
-            wm.removeView(it)
+            try {
+                wm.removeView(it)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Overlay window already detached", e)
+            }
             overlayView = null
         }
         feedbackView?.let {
-            wm.removeView(it)
+            try {
+                wm.removeView(it)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Feedback window already detached", e)
+            }
             feedbackView = null
         }
         button = null
@@ -1710,10 +1750,25 @@ open class WhisperAccessibilityService : AccessibilityService() {
             y = ringParams.y
         }
 
-        wm.addView(scrim, scrimParams)
-        wm.addView(menu, menuParams)
-        styleMenuScrim = scrim
-        styleMenuView = menu
+        // #260: same attach-ordering fix as showOverlay(). A throw on the second addView
+        // previously left the scrim attached with styleMenuScrim still null, which
+        // dismissStyleMenu()'s null-guarded teardown could never remove -- a full-screen scrim
+        // stuck over the user's screen until the process died. Lower exposure than the overlay
+        // (long-press triggered, not lifecycle driven) but the same failure.
+        try {
+            wm.addView(scrim, scrimParams)
+            styleMenuScrim = scrim
+            wm.addView(menu, menuParams)
+            styleMenuView = menu
+        } catch (e: WindowManager.BadTokenException) {
+            Log.e(TAG, "Could not attach style menu", e)
+            dismissStyleMenu()
+            return
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "Could not attach style menu", e)
+            dismissStyleMenu()
+            return
+        }
 
         // WRAP_CONTENT's real size isn't known until after the first layout pass, so the anchor
         // math runs once more here rather than trying to pre-compute the menu's height.
@@ -1727,8 +1782,21 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
     private fun dismissStyleMenu() {
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        styleMenuView?.let { wm.removeView(it) }
-        styleMenuScrim?.let { wm.removeView(it) }
+        // #260: also the unwind path for a failed attach above, so it must not throw.
+        styleMenuView?.let {
+            try {
+                wm.removeView(it)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Style menu already detached", e)
+            }
+        }
+        styleMenuScrim?.let {
+            try {
+                wm.removeView(it)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Style menu scrim already detached", e)
+            }
+        }
         styleMenuView = null
         styleMenuScrim = null
     }
