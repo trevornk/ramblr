@@ -152,6 +152,133 @@ enum class InvocationMode {
 fun resolveInvocationMode(systemComponentPmEnabled: Boolean): InvocationMode =
     if (systemComponentPmEnabled) InvocationMode.SYSTEM_CONTROLS else InvocationMode.FLOATING_ICON
 
+// --- #254 in-app off switch -----------------------------------------------------------------
+
+/**
+ * How the "Turn Ramblr off" row must act right now (#254).
+ *
+ * The row exists because in SYSTEM_CONTROLS mode the OS gives the user NO off switch at all:
+ * `flagRequestAccessibilityButton` + targetSdk > 29 classifies the component INVISIBLE_TOGGLE,
+ * and Settings' InvisibleToggleAccessibilityServicePreferenceFragment hides the master
+ * on/off preference outright -- the only switch left on Ramblr's Accessibility page is
+ * "Ramblr shortcut". Automation (MacroDroid/Tasker) can't fill the gap either: the framework
+ * re-enables an INVISIBLE_TOGGLE service whenever a shortcut is bound to it
+ * (ShortcutUtils.updateInvisibleToggleAccessibilityServiceEnableState) and again when the
+ * volume-keys shortcut fires (AMS.performAccessibilityShortcutTargetService). So the app has
+ * to provide the off switch, and [AccessibilityService.disableSelf] is the way: it needs no
+ * permission, it works identically in both modes, and it writes
+ * `enabled_accessibility_services` through AccessibilityServiceConnection.disableSelf ->
+ * persistComponentNamesToSettingLocked WITHOUT going near the invisible-toggle sync (that sync
+ * has exactly one caller, AMS.enableShortcutForTargets), so nothing undoes it.
+ *
+ * [NEEDS_SETTINGS] is the one case disableSelf can't serve: the OS lists the service as enabled
+ * but nothing is bound to call it on (crashed/not-yet-connected), so there's no live
+ * AccessibilityService instance and only system Settings can clear the entry.
+ */
+enum class ServiceOffAction {
+    /** Not in `enabled_accessibility_services`: the row is already in its target state. */
+    ALREADY_OFF,
+
+    /** A connected service instance exists -- call disableSelf() on it. */
+    SELF_DISABLE,
+
+    /** Listed as enabled but no live instance to disable: deep-link to the service's page. */
+    NEEDS_SETTINGS,
+}
+
+fun resolveServiceOffAction(serviceEnabled: Boolean, serviceConnected: Boolean): ServiceOffAction = when {
+    !serviceEnabled -> ServiceOffAction.ALREADY_OFF
+    serviceConnected -> ServiceOffAction.SELF_DISABLE
+    else -> ServiceOffAction.NEEDS_SETTINGS
+}
+
+/**
+ * Whether an OS shortcut binding will undo the off switch, and whether Ramblr can do anything
+ * about it before disabling itself (#254).
+ *
+ * Only SYSTEM_CONTROLS mode is at risk: the floating component is an ordinary TOGGLE service,
+ * so the OS never re-enables it from a shortcut. Within system mode the two bindings behave
+ * DIFFERENTLY and the copy must not lump them together:
+ *
+ *  - volume-keys (`accessibility_shortcut_target_service`): AMS 4341-4346 -- for targetSdk > Q
+ *    WITH the button flag, the hardware shortcut enables the service when it is not enabled.
+ *    Holding both volume keys genuinely turns Ramblr back on.
+ *  - a11y button/gesture (`accessibility_button_targets`): the same path falls through to the
+ *    "callback to a bound service" branch, which bails out when the service isn't running
+ *    (AMS 4349-4355). It does NOT revive Ramblr -- it just leaves a button on screen that
+ *    silently does nothing.
+ *
+ * Both are sweepable with the WRITE_SECURE_SETTINGS tier, because raw Secure writes bypass the
+ * invisible-toggle sync (#156 memo §3, device-verified) -- unbinding via raw write cannot itself
+ * trip the "last shortcut off" kill, and once nothing is bound, nothing can resurrect the
+ * service.
+ */
+enum class ServiceOffShortcutRisk {
+    /** Floating-icon mode, or nothing binds Ramblr: off stays off. */
+    NONE,
+
+    /** System mode with bindings AND the advanced tier: sweep them, then disable. */
+    SWEEPABLE,
+
+    /** Volume-keys bound with no way to unbind in-app: holding them re-enables Ramblr. */
+    VOLUME_KEYS,
+
+    /** Only the button/gesture bound with no way to unbind in-app: it won't revive Ramblr,
+     *  but it stays on screen doing nothing until the user removes it in system Settings. */
+    STALE_BUTTON,
+}
+
+fun resolveServiceOffShortcutRisk(
+    mode: InvocationMode,
+    buttonTargetBound: Boolean,
+    volumeKeysBound: Boolean,
+    canWrite: Boolean,
+): ServiceOffShortcutRisk = when {
+    mode != InvocationMode.SYSTEM_CONTROLS -> ServiceOffShortcutRisk.NONE
+    !buttonTargetBound && !volumeKeysBound -> ServiceOffShortcutRisk.NONE
+    canWrite -> ServiceOffShortcutRisk.SWEEPABLE
+    volumeKeysBound -> ServiceOffShortcutRisk.VOLUME_KEYS
+    else -> ServiceOffShortcutRisk.STALE_BUTTON
+}
+
+/** The "Turn Ramblr off" row subtitle. In system mode it says WHY the row exists, because the
+ *  user's instinct is to look in system Settings -- where the switch has been hidden by the OS. */
+fun serviceOffRowSubtitleText(serviceEnabled: Boolean, mode: InvocationMode): String = when {
+    !serviceEnabled -> "Ramblr's accessibility service is off — turn it back on from the setup screen"
+    mode == InvocationMode.SYSTEM_CONTROLS ->
+        "Stops dictation everywhere and releases the accessibility service. In this mode " +
+            "Android hides the off switch on Ramblr's system Accessibility page, so this is it."
+    else -> "Stops dictation everywhere and releases the accessibility service. Same as the " +
+        "switch on Ramblr's system Accessibility page."
+}
+
+/**
+ * The confirmation dialog body. Every branch states plainly what happens to the OS shortcuts,
+ * because "off" that quietly comes back on is the exact complaint in #254 and a user turning
+ * Ramblr off before a banking app needs to know whether it actually stayed off.
+ */
+fun serviceOffConfirmMessage(risk: ServiceOffShortcutRisk): String {
+    val base = "Dictation stops everywhere and Ramblr releases the accessibility service — it " +
+        "can no longer read or type into any app.\n\nTurn it back on from Ramblr's home screen " +
+        "whenever you want it again.\n\n"
+    return base + when (risk) {
+        ServiceOffShortcutRisk.NONE ->
+            "Nothing will turn it back on by itself."
+        ServiceOffShortcutRisk.SWEEPABLE ->
+            "Ramblr's system button and volume-keys shortcuts will be removed first, so nothing " +
+                "can turn the service back on by itself."
+        ServiceOffShortcutRisk.VOLUME_KEYS ->
+            "\u26a0\ufe0f Heads up: the volume-keys shortcut is still bound to Ramblr, and Android " +
+                "turns an accessibility service back ON when that shortcut is used. To make the " +
+                "off stick, switch to Floating icon mode first, or remove the volume-keys " +
+                "shortcut on Ramblr's system Accessibility page."
+        ServiceOffShortcutRisk.STALE_BUTTON ->
+            "The system accessibility button is still bound to Ramblr. It won't turn the service " +
+                "back on, but it will stay on screen doing nothing until you remove it on " +
+                "Ramblr's system Accessibility page."
+    }
+}
+
 /**
  * The #156 guard-rail decision: should the "Ramblr was turned off by the system shortcut
  * switch" recovery banner be showing right now?

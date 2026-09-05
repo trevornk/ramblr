@@ -241,6 +241,31 @@ open class WhisperAccessibilityService : AccessibilityService() {
         /** Best-effort package name for whichever app currently owns the active accessibility root. */
         fun foregroundPackageNameOrNull(): String? = instance?.currentForegroundPackageName()
 
+        /**
+         * The #254 in-app off switch: turn the accessibility service off from inside Ramblr.
+         * Returns false when no service instance is connected (nothing to disable -- caller
+         * falls back to the system Settings deep link; see [resolveServiceOffAction]).
+         *
+         * [AccessibilityService.disableSelf] is the only app-callable way to leave
+         * `enabled_accessibility_services`, and it is the ONLY correct one here: in
+         * SYSTEM_CONTROLS mode the OS hides the master on/off switch on Ramblr's own
+         * Accessibility page (INVISIBLE_TOGGLE classification), so without this the user has no
+         * off switch anywhere. disableSelf routes through
+         * AccessibilityServiceConnection.disableSelf, which persists the enabled-services list
+         * directly and never calls the invisible-toggle shortcut sync, so the OS does not undo
+         * it -- unlike an external write, which a bound shortcut can immediately reverse.
+         *
+         * Any in-flight recording is torn down by the ordinary destroy path: disableSelf()
+         * unbinds the service, so [onDestroy] -> [DictationRuntime.shutdown] runs exactly as it
+         * does when the user flips the system Settings switch off -- reader forced off
+         * RECORDING, AudioRecord released, no stranded mic. Nothing extra to do here.
+         */
+        fun disableServiceFromApp(): Boolean {
+            val service = instance ?: return false
+            service.disableSelf()
+            return true
+        }
+
         private const val TAG = "PhoneWhisper"
         private const val BTN_DP = 44
         private const val PAD_DP = 10
