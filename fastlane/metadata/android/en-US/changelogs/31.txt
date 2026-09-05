@@ -1,0 +1,20 @@
+Automation control, and recovery when something else turns Ramblr off.
+
+- If you use MacroDroid, Tasker or similar to switch Ramblr off around banking apps,
+  there is now a proper way to do it. Editing Android's accessibility setting from
+  outside the app is unreliable: it names one exact service, and Ramblr has two (only
+  one is active at a time), so the wrong choice either does nothing or makes Android
+  drop Ramblr entirely until you turn it back on by hand. Turn on "Let automation apps
+  turn Ramblr off" in Settings > Behavior and Ramblr will show you a command to paste
+  into your macro. It is off by default, because any app on your phone could send it.
+- Ramblr now notices when it has been switched off by something other than you. If it
+  has permission it puts itself back; if not, it explains what happened and offers a
+  one-tap way to fix it, instead of silently staying off.
+- Turning Ramblr off yourself, in the app or from a macro, is respected. It will not
+  undo a choice you made on purpose.
+- The two accessibility services are now named "Ramblr (Floating icon)" and
+  "Ramblr (System controls)" instead of both being called "Ramblr", so you can tell
+  which is which if you ever see both.
+
+Known issue: one user reports crashes when another app hands off to a banking app.
+That is not fixed here and is still being investigated.
