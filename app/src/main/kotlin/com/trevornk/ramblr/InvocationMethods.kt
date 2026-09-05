@@ -279,6 +279,97 @@ fun serviceOffConfirmMessage(risk: ServiceOffShortcutRisk): String {
     }
 }
 
+// --- #258 stale-component detection ---------------------------------------------------------
+
+/**
+ * What the app should do about the INACTIVE service component appearing in (or Ramblr being
+ * missing from) `enabled_accessibility_services` (#258).
+ *
+ * Ramblr ships two components and exactly one is PM-enabled at a time. Automation apps address
+ * accessibility services by COMPONENT, not by app: MacroDroid's "Disable: [Ramblr]" stores the
+ * component that was active when the user picked it. When the stored component is no longer the
+ * active one, two failures follow, both reported in #254 and both reproduced on-device:
+ *
+ *  - DISABLE targets a component that isn't in the list -> no-op. The active component stays
+ *    enabled and bound, which the user experiences as "Ramblr turns itself back on".
+ *  - ENABLE writes the PM-DISABLED component into `enabled_accessibility_services`. AMS refuses
+ *    to bind an entry naming a component that PackageManager reports as disabled and drops the
+ *    entry on its next reconcile -- so Ramblr disappears from the list entirely and never comes
+ *    back until the user re-enables it by hand.
+ *
+ * The second case is the damaging one and it is silently recoverable: "the user's automation
+ * asked for Ramblr and the OS threw it away" is unambiguous intent, so [REPAIR_TO_ACTIVE] swaps
+ * the stale entry for the active component. [OFFER_RECOVERY] is the same intent without the
+ * means -- Ramblr was working, is now absent, and no in-app off switch was used, so the user is
+ * told rather than left to discover it.
+ *
+ * Note [userTurnedOffInApp]: the #254 off switch is a deliberate off, so it must NEVER be
+ * second-guessed by this repair path. That flag is the only thing distinguishing "automation
+ * broke it" from "the user meant it", which is why the off switch records it.
+ */
+enum class StaleComponentAction {
+    /** Nothing to do: the active component is enabled, or Ramblr is off on purpose. */
+    NONE,
+
+    /** The inactive component is listed (or Ramblr was stripped): rewrite it to the active
+     *  component. Requires the WRITE_SECURE_SETTINGS tier. */
+    REPAIR_TO_ACTIVE,
+
+    /** Same state, no way to write it: surface the recovery banner instead. */
+    OFFER_RECOVERY,
+}
+
+/**
+ * @param activeComponentEnabled  the PM-enabled component is in `enabled_accessibility_services`
+ * @param inactiveComponentEnabled  the OTHER component is listed -- the stale-macro signature
+ * @param serviceWasEnabled  this install has had a working service at least once (guard-rail pref)
+ * @param userTurnedOffInApp  the user's last off came from Ramblr's own off switch
+ * @param canWrite  WRITE_SECURE_SETTINGS granted
+ */
+fun resolveStaleComponentAction(
+    activeComponentEnabled: Boolean,
+    inactiveComponentEnabled: Boolean,
+    serviceWasEnabled: Boolean,
+    userTurnedOffInApp: Boolean,
+    canWrite: Boolean,
+): StaleComponentAction = when {
+    // The active component is enabled: whatever else is in the list, Ramblr works. A stale
+    // inactive entry alongside it is inert (AMS ignores it) and gets cleaned up by the next
+    // mode switch's componentListReplace.
+    activeComponentEnabled -> StaleComponentAction.NONE
+    // A deliberate off must stay off -- never fight the user's own choice.
+    userTurnedOffInApp -> StaleComponentAction.NONE
+    // Ramblr never worked here: this is an unfinished setup, not a broken one.
+    !serviceWasEnabled -> StaleComponentAction.NONE
+    // The inactive component is listed: automation asked for Ramblr and named the wrong
+    // component. Repair where we can, tell the user where we can't.
+    inactiveComponentEnabled -> if (canWrite) {
+        StaleComponentAction.REPAIR_TO_ACTIVE
+    } else {
+        StaleComponentAction.OFFER_RECOVERY
+    }
+    // Ramblr worked before, isn't listed now, and the user didn't turn it off in-app: the
+    // stripped-by-AMS end state. Same intent, same handling.
+    else -> if (canWrite) StaleComponentAction.REPAIR_TO_ACTIVE else StaleComponentAction.OFFER_RECOVERY
+}
+
+/** The #258 recovery banner's body: names the cause, because a user whose macro did this has no
+ *  way to guess it and will otherwise keep re-enabling Ramblr by hand forever. */
+fun staleComponentBannerText(mode: InvocationMode): String {
+    val other = when (mode) {
+        InvocationMode.FLOATING_ICON -> "Ramblr (System controls)"
+        InvocationMode.SYSTEM_CONTROLS -> "Ramblr (Floating icon)"
+    }
+    val active = when (mode) {
+        InvocationMode.FLOATING_ICON -> "Ramblr (Floating icon)"
+        InvocationMode.SYSTEM_CONTROLS -> "Ramblr (System controls)"
+    }
+    return "Ramblr's accessibility service was switched off by something other than Ramblr. " +
+        "If you use an automation app (MacroDroid, Tasker), check which service it targets — " +
+        "picking \u201c$other\u201d while you're in the other mode turns Ramblr off without " +
+        "turning it back on. Select \u201c$active\u201d instead."
+}
+
 /**
  * The #156 guard-rail decision: should the "Ramblr was turned off by the system shortcut
  * switch" recovery banner be showing right now?

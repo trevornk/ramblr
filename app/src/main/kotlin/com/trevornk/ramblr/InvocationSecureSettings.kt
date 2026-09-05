@@ -84,6 +84,47 @@ object InvocationSecureSettings {
     fun isServiceEnabled(context: Context): Boolean =
         anyRamblrIn(context, read(context, KEY_ENABLED_SERVICES))
 
+    /** Whether the component the CURRENT mode actually uses is enabled (#258). Distinct from
+     *  [isServiceEnabled]: a stale automation entry naming the other component makes that
+     *  return true while Ramblr is in fact not running. */
+    fun isActiveComponentEnabled(context: Context): Boolean =
+        componentListContains(read(context, KEY_ENABLED_SERVICES), serviceComponent(context))
+
+    /** Whether the component the current mode does NOT use is enabled (#258) -- the signature of
+     *  an automation macro holding a stale component. AMS drops such an entry when it names the
+     *  PM-disabled component, which is what takes Ramblr out of the list entirely. */
+    fun isInactiveComponentEnabled(context: Context): Boolean {
+        val active = serviceComponent(context)
+        return InvocationServiceMode.allComponents(context)
+            .filterNot { componentEquals(it, active) }
+            .any { componentListContains(read(context, KEY_ENABLED_SERVICES), it) }
+    }
+
+    /**
+     * Replaces a stale INACTIVE-component entry with the active one, or adds the active one when
+     * Ramblr was stripped from the list entirely (#258). Other apps' entries are preserved
+     * verbatim by [componentListReplace]/[componentListAdd]. Advanced tier only -- returns false
+     * so the caller can fall back to the recovery banner.
+     */
+    fun repairToActiveComponent(context: Context): Boolean {
+        if (!canWrite(context)) return false
+        val active = serviceComponent(context)
+        val current = read(context, KEY_ENABLED_SERVICES)
+        val stale = InvocationServiceMode.allComponents(context)
+            .firstOrNull { !componentEquals(it, active) && componentListContains(current, it) }
+        val updated = if (stale != null) {
+            componentListReplace(current, stale, active)
+        } else {
+            componentListAdd(current, active)
+        }
+        return try {
+            Settings.Secure.putString(context.contentResolver, KEY_ENABLED_SERVICES, updated)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "WRITE_SECURE_SETTINGS repair of $KEY_ENABLED_SERVICES failed despite grant", e)
+            false
+        }
+    }
+
     /** Whether ANY OS shortcut still binds Ramblr -- the guard rail's "targets empty" input. */
     fun anyShortcutBound(context: Context): Boolean =
         isButtonTargetBound(context) || isVolumeKeysBound(context)

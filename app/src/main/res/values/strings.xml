@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Ramblr</string>
+    <!-- #258: the two accessibility-service components MUST NOT share a label. Only one is ever
+         PM-enabled, so system Settings shows one entry either way, but automation apps
+         (MacroDroid/Tasker) address services by COMPONENT and let the user pick from a list of
+         labels. With both labelled plain "Ramblr" the user cannot tell which component they
+         captured, and a macro holding the inactive one silently no-ops on disable and, on
+         enable, writes a PM-disabled component that AMS strips (taking Ramblr out of
+         enabled_accessibility_services entirely). Distinct labels make the two visibly
+         different at pick time. Keep the mode names identical to the Invocation screen's cards
+         so a user can map picker entry to mode without guessing. -->
+    <string name="accessibility_service_label_floating">Ramblr (Floating icon)</string>
+    <string name="accessibility_service_label_system">Ramblr (System controls)</string>
     <string name="accessibility_description">Dictation: records audio, transcribes, and inserts text into focused fields. Note: Android may also show its own system Accessibility Button shortcut for Ramblr in Settings > Accessibility -- that\'s a separate OS-level shortcut, not Ramblr\'s own floating mic button.</string>
     <!-- Floating overlay mic button contentDescription (accessibility pass): announced by
          TalkBack per RecordingStateMachine.State, see applyButtonAppearance in

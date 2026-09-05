@@ -167,6 +167,7 @@
         <service
             android:name=".WhisperAccessibilityService"
             android:exported="false"
+            android:label="@string/accessibility_service_label_floating"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -184,14 +185,17 @@
              covers. Disabled by default so fresh installs and updates show exactly ONE "Ramblr"
              entry in system Settings; the Invocation screen's mode switch flips the two
              components via PackageManager.setComponentEnabledSetting (InvocationServiceMode).
-             android:label stays the plain app name: only one component is ever PM-enabled at a
-             time, so Settings never lists both, and the plain name reads cleanest in the
-             shortcut UIs (a11y button chooser, volume-keys first-use dialog). -->
+             android:label MUST differ from the floating component's (#258): system Settings only
+             ever lists one of the two, but automation apps (MacroDroid/Tasker) address services
+             by COMPONENT and present a picker of labels. Two entries both reading "Ramblr" are
+             indistinguishable, and a macro that captured the inactive one silently no-ops on
+             disable and strips Ramblr from enabled_accessibility_services on enable (AMS drops
+             any entry naming a PM-disabled component). -->
         <service
             android:name=".SystemControlsAccessibilityService"
             android:enabled="false"
             android:exported="false"
-            android:label="@string/app_name"
+            android:label="@string/accessibility_service_label_system"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -268,6 +272,23 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/benchmark_log_file_paths" />
         </provider>
+
+        <!-- #257: automation off-hook. Exported so MacroDroid/Tasker/a shell can turn the
+             accessibility service off on a trigger (entering a banking app, a time of day)
+             without fighting the OS: an external write to enabled_accessibility_services is
+             component-addressed and racy, while this routes to disableSelf() on the live
+             service. Gated behind AutomationOffHookToggle, DEFAULT OFF, because exported means
+             any app on the device can silence dictation with no user interaction, so it stays
+             the user's explicit opt-in. Deliberately no enable counterpart (see
+             AutomationOffHookToggle's KDoc: re-enabling needs WRITE_SECURE_SETTINGS and is a
+             far worse capability to hand to arbitrary callers). -->
+        <receiver
+            android:name=".AutomationOffReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.trevornk.ramblr.action.TURN_OFF" />
+            </intent-filter>
+        </receiver>
 
     </application>
 </manifest>

@@ -216,6 +216,89 @@ class InvocationMethodsTest {
         assertEquals(InvocationMode.FLOATING_ICON, resolveInvocationMode(systemComponentPmEnabled = false))
     }
 
+    // --- #258 resolveStaleComponentAction ---------------------------------------------------
+
+    // The reporter's exact case (#254): floating mode, a MacroDroid macro holding the SYSTEM
+    // component. Its "enable" writes a PM-disabled component, AMS strips the entry, and Ramblr
+    // ends up absent from enabled_accessibility_services with the user having asked for the
+    // opposite. Base tier can't write, so the banner explains it.
+    @Test fun `stripped service with no direct control offers recovery`() {
+        assertEquals(StaleComponentAction.OFFER_RECOVERY, resolveStaleComponentAction(
+            activeComponentEnabled = false,
+            inactiveComponentEnabled = false,
+            serviceWasEnabled = true,
+            userTurnedOffInApp = false,
+            canWrite = false,
+        ))
+    }
+
+    @Test fun `stripped service repairs itself on the advanced tier`() {
+        assertEquals(StaleComponentAction.REPAIR_TO_ACTIVE, resolveStaleComponentAction(
+            activeComponentEnabled = false,
+            inactiveComponentEnabled = false,
+            serviceWasEnabled = true,
+            userTurnedOffInApp = false,
+            canWrite = true,
+        ))
+    }
+
+    @Test fun `inactive component listed alone is the stale-macro signature and repairs`() {
+        assertEquals(StaleComponentAction.REPAIR_TO_ACTIVE, resolveStaleComponentAction(
+            activeComponentEnabled = false,
+            inactiveComponentEnabled = true,
+            serviceWasEnabled = true,
+            userTurnedOffInApp = false,
+            canWrite = true,
+        ))
+    }
+
+    @Test fun `deliberate in-app off is never second-guessed by the repair path`() {
+        // The #254 off switch must stay off. This is the ONLY thing separating "automation
+        // broke it" from "the user meant it", so it outranks every repair signal.
+        assertEquals(StaleComponentAction.NONE, resolveStaleComponentAction(
+            activeComponentEnabled = false,
+            inactiveComponentEnabled = true,
+            serviceWasEnabled = true,
+            userTurnedOffInApp = true,
+            canWrite = true,
+        ))
+    }
+
+    @Test fun `fresh install that never had a working service is left alone`() {
+        // Unfinished setup, not breakage: onboarding owns this state, not the repair path.
+        assertEquals(StaleComponentAction.NONE, resolveStaleComponentAction(
+            activeComponentEnabled = false,
+            inactiveComponentEnabled = false,
+            serviceWasEnabled = false,
+            userTurnedOffInApp = false,
+            canWrite = true,
+        ))
+    }
+
+    @Test fun `active component enabled means nothing to repair`() {
+        // Even with a stale inactive entry alongside it: AMS ignores that entry, Ramblr works,
+        // and the next mode switch's componentListReplace cleans it up.
+        assertEquals(StaleComponentAction.NONE, resolveStaleComponentAction(
+            activeComponentEnabled = true,
+            inactiveComponentEnabled = true,
+            serviceWasEnabled = true,
+            userTurnedOffInApp = false,
+            canWrite = true,
+        ))
+    }
+
+    @Test fun `stale banner names the component to pick for the current mode`() {
+        // The whole point of the banner: tell the user WHICH picker entry is right. In floating
+        // mode that's the floating label, and the wrong one it warns about is the system label.
+        val floating = staleComponentBannerText(InvocationMode.FLOATING_ICON)
+        assertTrue(floating.contains("Ramblr (System controls)"))
+        assertTrue(floating.contains("Ramblr (Floating icon)"))
+
+        val system = staleComponentBannerText(InvocationMode.SYSTEM_CONTROLS)
+        assertTrue(system.contains("Ramblr (Floating icon)"))
+        assertTrue(system.contains("Ramblr (System controls)"))
+    }
+
     // --- shouldShowServiceKilledBanner ------------------------------------------------------
 
     @Test fun `banner fires on the exact invisible-toggle kill state in system controls mode`() {
