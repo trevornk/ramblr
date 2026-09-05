@@ -50,6 +50,7 @@ class InvocationActivity : BaseSettingsActivity() {
     private lateinit var systemButtonRowSub: TextView
     private lateinit var volumeKeysRowSub: TextView
     private lateinit var advancedTierRowSub: TextView
+    private lateinit var serviceOffRowSub: TextView
     private lateinit var voiceKeyboardSectionSub: TextView
     private lateinit var voiceKeyboardRowSub: TextView
 
@@ -178,6 +179,15 @@ class InvocationActivity : BaseSettingsActivity() {
 
         root.addView(sectionHeader("Advanced"))
 
+        // --- #254 off switch. Deliberately NOT hidden in Advanced-only territory despite
+        // sitting under that header: in system-controls mode this is the ONLY off switch that
+        // exists anywhere, because the OS hides the master toggle on Ramblr's own Accessibility
+        // page for INVISIBLE_TOGGLE services. A user who wants Ramblr gone before opening a
+        // banking app must be able to find it here.
+        val serviceOffRow = settingsRow("Turn Ramblr off", "Checking...") { onServiceOffRowTapped() }
+        serviceOffRowSub = serviceOffRow.findViewWithTag("subtitle")
+        root.addView(serviceOffRow)
+
         val advancedTierRow = settingsRow("Direct shortcut control", "Checking...") {
             showAdvancedTierDialog()
         }
@@ -219,6 +229,10 @@ class InvocationActivity : BaseSettingsActivity() {
             directControl = direct,
         )
         advancedTierRowSub.text = invocationAdvancedTierSubtitleText(granted = direct)
+        serviceOffRowSub.text = serviceOffRowSubtitleText(
+            serviceEnabled = InvocationSecureSettings.isServiceEnabled(this),
+            mode = mode,
+        )
 
         // Read live from the OS every refresh -- nothing about the keyboard is persisted by
         // Ramblr, so onResume after a trip to system settings always reflects reality.
@@ -455,6 +469,70 @@ class InvocationActivity : BaseSettingsActivity() {
             )
             .setPositiveButton("OK", null)
             .show()
+    }
+
+    // --- #254 in-app off switch -------------------------------------------------------------
+
+    /**
+     * "Turn Ramblr off": the app-side master off switch, and in system-controls mode the only
+     * one that exists (the OS hides the master toggle on an INVISIBLE_TOGGLE service's own
+     * Accessibility page). Confirm first -- this stops dictation everywhere -- then take the
+     * action [resolveServiceOffAction] picks, sweeping OS shortcut bindings beforehand when we
+     * can, since a bound volume-keys shortcut would otherwise turn the service straight back on
+     * (AMS.performAccessibilityShortcutTargetService).
+     */
+    private fun onServiceOffRowTapped() {
+        val action = resolveServiceOffAction(
+            serviceEnabled = InvocationSecureSettings.isServiceEnabled(this),
+            serviceConnected = WhisperAccessibilityService.instance != null,
+        )
+        if (action == ServiceOffAction.ALREADY_OFF) {
+            toast("Ramblr's accessibility service is already off")
+            refresh()
+            return
+        }
+        val risk = resolveServiceOffShortcutRisk(
+            mode = InvocationServiceMode.currentMode(this),
+            buttonTargetBound = InvocationSecureSettings.isButtonTargetBound(this),
+            volumeKeysBound = InvocationSecureSettings.isVolumeKeysBound(this),
+            canWrite = InvocationSecureSettings.canWrite(this),
+        )
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Turn Ramblr off?")
+            .setMessage(serviceOffConfirmMessage(risk))
+            .setPositiveButton("Turn off") { _, _ -> performServiceOff(action, risk) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun performServiceOff(action: ServiceOffAction, risk: ServiceOffShortcutRisk) {
+        // Sweep the OS shortcut bindings BEFORE disabling, in that order and only on the tier
+        // that can: raw Secure writes bypass the invisible-toggle sync (#156 memo §3), so this
+        // cannot itself trip the "last shortcut off" kill, and once nothing is bound there is
+        // nothing left that can resurrect the service after disableSelf().
+        if (risk == ServiceOffShortcutRisk.SWEEPABLE) {
+            InvocationSecureSettings.setBinding(
+                this, InvocationSecureSettings.KEY_BUTTON_TARGETS, bound = false,
+            )
+            InvocationSecureSettings.setBinding(
+                this, InvocationSecureSettings.KEY_SHORTCUT_TARGET_SERVICE, bound = false,
+            )
+        }
+        // The guard-rail banner must not fire for a disable the user just asked for: dismissing
+        // it here marks this detection handled, and the service clears the dismissal itself the
+        // next time it connects, so a genuine future kill still gets the banner.
+        InvocationGuardRail.dismissBanner(this)
+        if (action == ServiceOffAction.SELF_DISABLE && WhisperAccessibilityService.disableServiceFromApp()) {
+            toast("Ramblr turned off")
+            // The OS unbinds asynchronously, so an immediate re-read can still show the old
+            // enabled state; refresh on the next resume instead of asserting a state we
+            // haven't observed.
+            return
+        }
+        // Listed as enabled with no live instance to disable (crashed / not yet connected):
+        // only system Settings can clear the entry. Same deep link the mode switch uses.
+        toast("Opening Ramblr's accessibility settings")
+        openServiceDetailsSettings()
     }
 
     /** The advanced tier's explainer: what it unlocks, the exact adb command (selectable for

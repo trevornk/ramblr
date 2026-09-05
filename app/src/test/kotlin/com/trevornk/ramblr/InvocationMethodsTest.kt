@@ -283,6 +283,156 @@ class InvocationMethodsTest {
         ))
     }
 
+    // --- #254 in-app off switch -------------------------------------------------------------
+
+    @Test fun `off action is a self-disable when the service is enabled and connected`() {
+        assertEquals(
+            ServiceOffAction.SELF_DISABLE,
+            resolveServiceOffAction(serviceEnabled = true, serviceConnected = true),
+        )
+    }
+
+    @Test fun `off action falls back to settings when enabled but no live instance`() {
+        // Listed in enabled_accessibility_services with nothing bound to call disableSelf() on
+        // (crashed or not yet connected): only system Settings can clear the entry.
+        assertEquals(
+            ServiceOffAction.NEEDS_SETTINGS,
+            resolveServiceOffAction(serviceEnabled = true, serviceConnected = false),
+        )
+    }
+
+    @Test fun `off action is a no-op when the service is already disabled`() {
+        assertEquals(
+            ServiceOffAction.ALREADY_OFF,
+            resolveServiceOffAction(serviceEnabled = false, serviceConnected = false),
+        )
+        // A stale instance reference must not turn "already off" into a disable attempt.
+        assertEquals(
+            ServiceOffAction.ALREADY_OFF,
+            resolveServiceOffAction(serviceEnabled = false, serviceConnected = true),
+        )
+    }
+
+    @Test fun `floating icon mode has no shortcut risk even with stale bindings`() {
+        // The floating component is TOGGLE-classified: the OS never re-enables it from a
+        // shortcut, so a leftover pre-rework binding can't undo the off switch.
+        assertEquals(
+            ServiceOffShortcutRisk.NONE,
+            resolveServiceOffShortcutRisk(
+                mode = InvocationMode.FLOATING_ICON,
+                buttonTargetBound = true,
+                volumeKeysBound = true,
+                canWrite = false,
+            ),
+        )
+    }
+
+    @Test fun `system mode with nothing bound has no shortcut risk`() {
+        assertEquals(
+            ServiceOffShortcutRisk.NONE,
+            resolveServiceOffShortcutRisk(
+                mode = InvocationMode.SYSTEM_CONTROLS,
+                buttonTargetBound = false,
+                volumeKeysBound = false,
+                canWrite = false,
+            ),
+        )
+    }
+
+    @Test fun `advanced tier sweeps bindings instead of warning`() {
+        assertEquals(
+            ServiceOffShortcutRisk.SWEEPABLE,
+            resolveServiceOffShortcutRisk(
+                mode = InvocationMode.SYSTEM_CONTROLS,
+                buttonTargetBound = true,
+                volumeKeysBound = true,
+                canWrite = true,
+            ),
+        )
+    }
+
+    @Test fun `bound volume keys without the write tier is the re-enable risk`() {
+        // AMS.performAccessibilityShortcutTargetService: for targetSdk > Q WITH the button flag,
+        // the hardware shortcut ENABLES a disabled service. This one genuinely undoes the off.
+        assertEquals(
+            ServiceOffShortcutRisk.VOLUME_KEYS,
+            resolveServiceOffShortcutRisk(
+                mode = InvocationMode.SYSTEM_CONTROLS,
+                buttonTargetBound = false,
+                volumeKeysBound = true,
+                canWrite = false,
+            ),
+        )
+        // Volume keys outrank a co-bound button: it's the branch with the worse consequence.
+        assertEquals(
+            ServiceOffShortcutRisk.VOLUME_KEYS,
+            resolveServiceOffShortcutRisk(
+                mode = InvocationMode.SYSTEM_CONTROLS,
+                buttonTargetBound = true,
+                volumeKeysBound = true,
+                canWrite = false,
+            ),
+        )
+    }
+
+    @Test fun `button-only binding is the stale-button case, not a re-enable`() {
+        // The a11y-button path falls through to "callback to a bound service" and bails when the
+        // service isn't running -- it leaves a dead button on screen, it does not revive Ramblr.
+        assertEquals(
+            ServiceOffShortcutRisk.STALE_BUTTON,
+            resolveServiceOffShortcutRisk(
+                mode = InvocationMode.SYSTEM_CONTROLS,
+                buttonTargetBound = true,
+                volumeKeysBound = false,
+                canWrite = false,
+            ),
+        )
+    }
+
+    @Test fun `off row subtitle names the hidden system switch only in system mode`() {
+        val systemMode = serviceOffRowSubtitleText(
+            serviceEnabled = true, mode = InvocationMode.SYSTEM_CONTROLS,
+        )
+        assertTrue(systemMode.contains("hides the off switch"))
+        val floatingMode = serviceOffRowSubtitleText(
+            serviceEnabled = true, mode = InvocationMode.FLOATING_ICON,
+        )
+        assertFalse(floatingMode.contains("hides the off switch"))
+        assertTrue(floatingMode.contains("system Accessibility page"))
+    }
+
+    @Test fun `off row subtitle reports the already-off state in both modes`() {
+        for (mode in InvocationMode.entries) {
+            assertTrue(
+                serviceOffRowSubtitleText(serviceEnabled = false, mode = mode)
+                    .startsWith("Ramblr's accessibility service is off"),
+            )
+        }
+    }
+
+    @Test fun `confirm copy tells the truth about what happens to the shortcuts`() {
+        // The whole point of #254 is an "off" the user can trust, so each branch must state
+        // whether something can turn Ramblr back on -- and only the volume-keys branch may
+        // claim it will.
+        val none = serviceOffConfirmMessage(ServiceOffShortcutRisk.NONE)
+        assertTrue(none.contains("Nothing will turn it back on"))
+
+        val sweepable = serviceOffConfirmMessage(ServiceOffShortcutRisk.SWEEPABLE)
+        assertTrue(sweepable.contains("will be removed first"))
+
+        val volumeKeys = serviceOffConfirmMessage(ServiceOffShortcutRisk.VOLUME_KEYS)
+        assertTrue(volumeKeys.contains("turns an accessibility service back ON"))
+        assertTrue(volumeKeys.contains("Floating icon mode"))
+
+        val staleButton = serviceOffConfirmMessage(ServiceOffShortcutRisk.STALE_BUTTON)
+        assertTrue(staleButton.contains("won't turn the service back on"))
+
+        // Every branch keeps the shared lead-in: what "off" actually means for the user.
+        for (risk in ServiceOffShortcutRisk.entries) {
+            assertTrue(serviceOffConfirmMessage(risk).contains("Dictation stops everywhere"))
+        }
+    }
+
     // --- subtitle formatters ----------------------------------------------------------------
 
     @Test fun `main row subtitle leads with the mode and lists active methods`() {
