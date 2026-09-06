@@ -461,10 +461,18 @@ open class WhisperAccessibilityService : AccessibilityService() {
     // because every real access (onTap()/callbacks, and onServiceConnected() itself) runs after
     // the service is fully attached and connected -- the same safe timing RamblrImeService gets
     // for free because ensureRuntime() is called from its own post-attach lifecycle methods.
+    //
+    // The DictationRuntime itself is still created lazily, once, and kept for the process
+    // lifetime of this long-lived accessibility service. But `cloudLiveFactory` is passed as a
+    // provider lambda (re-invoked on every dictation attempt), not a resolved value captured at
+    // this one-time construction -- otherwise toggling Cloud Live on/off, switching cloud/local
+    // transcription, or rotating the Gemini key while the service is already running would have
+    // no effect until the service process was killed and recreated, since nothing here ever
+    // rebuilds `runtimeInstance`. See DictationRuntime's `cloudLiveFactory` kdoc.
     private var runtimeInstance: DictationRuntime? = null
     internal val runtime: DictationRuntime
         get() = runtimeInstance ?: DictationRuntime(
-            this, runtimeListener, cloudLiveFactory = CloudLiveWiring.factoryOrNull(this)
+            this, runtimeListener, cloudLiveFactory = { CloudLiveWiring.factoryOrNull(this) }
         ).also { runtimeInstance = it }
 
     private var overlayView: FrameLayout? = null
@@ -738,18 +746,27 @@ open class WhisperAccessibilityService : AccessibilityService() {
         instance = null
         unregisterNetworkCallback()
         unregisterScreenStateReceiver()
-        // The runtime owns the recording/transcription teardown: state machine reset, reader
-        // teardown, stray session release, watchdog/guard/in-flight cancel, wakelock release,
-        // cleanup-model release, and streaming teardown -- in exactly the pre-extraction order
-        // (see [DictationRuntime.shutdown]).
-        runtime.shutdown()
+        // Only tear down a runtime that was actually constructed. `runtime`'s getter is lazy
+        // (see its kdoc above) -- if the service is destroyed before onServiceConnected ever ran
+        // (e.g. the framework unbinds it right after a failed/aborted bind), naively reading
+        // `runtime` here would construct a brand-new DictationRuntime for the sole purpose of
+        // immediately shutting it down: wasted work, and a DictationRuntime instance nobody
+        // needed that would itself need tearing down again. Guard on the backing field instead.
+        runtimeInstance?.let { runtime ->
+            // The runtime owns the recording/transcription teardown: state machine reset, reader
+            // teardown, stray session release, watchdog/guard/in-flight cancel, wakelock release,
+            // cleanup-model release, and streaming teardown -- in exactly the pre-extraction order
+            // (see [DictationRuntime.shutdown]).
+            runtime.shutdown()
+            // Release the native transcriber recognizers too (M7): like onTrimMemory, replace(null) can
+            // block on an in-flight transcription, so it runs off the main thread. Without this, a
+            // service destroy/recreate in the same process (accessibility toggle off/on) leaves the old
+            // instance's recognizers (batch model up to 465MB) resident alongside the new ones until
+            // process death.
+            runtime.releaseTranscribersAsync()
+        }
+        runtimeInstance = null
         flushPendingStreamingHandoff()
-        // Release the native transcriber recognizers too (M7): like onTrimMemory, replace(null) can
-        // block on an in-flight transcription, so it runs off the main thread. Without this, a
-        // service destroy/recreate in the same process (accessibility toggle off/on) leaves the old
-        // instance's recognizers (batch model up to 465MB) resident alongside the new ones until
-        // process death.
-        runtime.releaseTranscribersAsync()
         handler.removeCallbacks(expirePendingInjection)
         pendingInjection?.node?.recycle()
         pendingInjection = null

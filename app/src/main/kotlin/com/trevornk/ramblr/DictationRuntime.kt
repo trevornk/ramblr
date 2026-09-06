@@ -133,9 +133,20 @@ class DictationRuntime internal constructor(
     private val context: Context,
     private val listener: RuntimeListener,
     private val leaseRegistry: DictationSessionLeaseRegistry = ProcessDictationSessionLeaseRegistry,
-    /** Explicit internal seam: null in every shipped host, so this slice changes no default or
-     * provider catalog. A later opt-in wires a configured provider factory here. */
-    private val cloudLiveFactory: CloudLiveTranscriptionSessionFactory? = null,
+    /**
+     * Explicit internal seam: yields null in every shipped host until the user opts in, so this
+     * slice changes no default or provider catalog. Deliberately a *provider* re-invoked at the
+     * start of every [beginCloudLiveAttempt] rather than a resolved value captured once at
+     * construction time -- [WhisperAccessibilityService] and [RamblrImeService] can each keep a
+     * single [DictationRuntime] alive across many dictations (the accessibility host in
+     * particular holds one for its whole process lifetime), and [CloudLiveWiring.factoryOrNull]
+     * reads live preferences (opt-in toggle, cloud/local choice, Gemini credential). Resolving it
+     * once at construction meant flipping the toggle or rotating the API key mid-session had no
+     * effect until the host was torn down and rebuilt -- a live preference change silently didn't
+     * take effect. Re-reading it per attempt makes every dictation see current preferences,
+     * exactly like every other pref this runtime already reads live (e.g. `use_local`).
+     */
+    private val cloudLiveFactory: () -> CloudLiveTranscriptionSessionFactory? = { null },
     /** Test-only observation seam proving the preserved-PCM batch path is claimed once. */
     private val onCloudLiveBatchFallback: () -> Unit = {},
     /** Test seam: lets host-side unit tests substitute a fake engine at the capture boundary.
@@ -543,7 +554,7 @@ class DictationRuntime internal constructor(
     }
 
     private fun beginCloudLiveAttempt(lease: DictationSessionLease): CloudLiveAttempt? {
-        val factory = cloudLiveFactory ?: return null
+        val factory = cloudLiveFactory() ?: return null
         val attempt = CloudLiveAttempt(lease)
         return try {
             attempt.session = factory.create(object : CloudLiveTranscriptionListener {

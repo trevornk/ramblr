@@ -277,7 +277,7 @@ class RamblrImeService : InputMethodService() {
         // CloudLiveWiring returns null unless the user opted in, chose cloud transcription, and
         // has a Gemini key -- so the default construction is byte-for-byte the previous behavior.
         // Accessibility stays final-only in this phase and is intentionally not wired.
-        createdRuntime = DictationRuntime(this, controller.listener, cloudLiveFactory = CloudLiveWiring.factoryOrNull(this))
+        createdRuntime = DictationRuntime(this, controller.listener, cloudLiveFactory = { CloudLiveWiring.factoryOrNull(this) })
         panelController = controller
         runtime = createdRuntime
         controller.onEditorChanged(editorGeneration, editorIdentity, currentInputConnection)

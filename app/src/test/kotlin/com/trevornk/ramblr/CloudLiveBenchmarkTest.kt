@@ -101,7 +101,7 @@ class CloudLiveBenchmarkTest {
     }
 
     private fun cloudLiveRuntime(factory: FakeCloudLiveFactory) {
-        runtime = DictationRuntime(app, listener, leaseRegistry, cloudLiveFactory = factory) {
+        runtime = DictationRuntime(app, listener, leaseRegistry, cloudLiveFactory = { factory }) {
             cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it }
         }
     }

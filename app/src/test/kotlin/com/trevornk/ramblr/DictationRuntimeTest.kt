@@ -639,7 +639,7 @@ class DictationRuntimeTest {
         var fallbacks = 0
         runtime = DictationRuntime(
             app, listener, leaseRegistry,
-            cloudLiveFactory = liveFactory,
+            cloudLiveFactory = { liveFactory },
             onCloudLiveBatchFallback = { fallbacks++ },
         ) { cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it } }
         val pcm = realSizedPcm()
@@ -683,7 +683,7 @@ class DictationRuntimeTest {
         var fallbacks = 0
         runtime = DictationRuntime(
             app, listener, leaseRegistry,
-            cloudLiveFactory = liveFactory,
+            cloudLiveFactory = { liveFactory },
             onCloudLiveBatchFallback = { fallbacks++ },
         ) { cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it } }
         val pcm = realSizedPcm()
@@ -711,7 +711,7 @@ class DictationRuntimeTest {
     @Test
     fun `shutdown cancels cloud live session before late callbacks`() {
         val liveFactory = FakeCloudLiveFactory()
-        runtime = DictationRuntime(app, listener, leaseRegistry, cloudLiveFactory = liveFactory) {
+        runtime = DictationRuntime(app, listener, leaseRegistry, cloudLiveFactory = { liveFactory }) {
             cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it }
         }
         runtime.onTap()
@@ -738,7 +738,7 @@ class DictationRuntimeTest {
     private fun cloudLiveRuntime(liveFactory: FakeCloudLiveFactory, onFallback: () -> Unit = {}) {
         runtime = DictationRuntime(
             app, listener, leaseRegistry,
-            cloudLiveFactory = liveFactory,
+            cloudLiveFactory = { liveFactory },
             onCloudLiveBatchFallback = onFallback,
         ) { cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine).also { engines += it } }
     }

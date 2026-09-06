@@ -64,13 +64,16 @@ class AccessibilityCloudLiveWiringTest {
 
     private fun runtimeField(service: WhisperAccessibilityService): DictationRuntime = service.runtime
 
-    /** Reads the private constructor-injected `cloudLiveFactory` field straight off the real
-     *  [DictationRuntime] instance -- the exact seam #233/#245 gate on -- rather than trusting
-     *  behavior alone, which can pass by accident (e.g. a listener bug masking a null factory). */
+    /** Reads the private constructor-injected `cloudLiveFactory` provider off the real
+     *  [DictationRuntime] instance and invokes it -- the exact seam #233/#245 gate on -- rather
+     *  than trusting behavior alone, which can pass by accident (e.g. a listener bug masking a
+     *  null factory). */
     private fun cloudLiveFactoryOf(runtime: DictationRuntime): CloudLiveTranscriptionSessionFactory? {
         val field: Field = DictationRuntime::class.java.getDeclaredField("cloudLiveFactory")
         field.isAccessible = true
-        return field.get(runtime) as CloudLiveTranscriptionSessionFactory?
+        @Suppress("UNCHECKED_CAST")
+        val provider = field.get(runtime) as () -> CloudLiveTranscriptionSessionFactory?
+        return provider()
     }
 
     // --- construction: the same three-condition gate CloudLiveWiringTest proves for the IME ---
@@ -117,6 +120,77 @@ class AccessibilityCloudLiveWiringTest {
         val second = runtimeField(service)
 
         assertTrue("re-reading the field must not construct a second DictationRuntime", first === second)
+    }
+
+    /**
+     * Regression test for the exact production gap: once a host's single, long-lived
+     * [DictationRuntime] is constructed, live preference changes (toggling Cloud Live, switching
+     * cloud/local transcription, rotating the Gemini key) must still take effect on the NEXT
+     * dictation attempt -- not require the accessibility service process to be killed and
+     * recreated. This drives the real [WhisperAccessibilityService.runtime] getter (which caches
+     * the DictationRuntime instance itself) and asserts that flipping the preference between two
+     * reads of the *factory provider* changes the outcome, proving the seam is re-evaluated live
+     * rather than captured once at construction time.
+     */
+    @Test
+    fun `a live preference change after construction is reflected on the next dictation, not stale`() {
+        // Start disabled: default install, no factory.
+        val service = build()
+        val runtime = runtimeField(service)
+        assertNull("must start with no factory", cloudLiveFactoryOf(runtime))
+
+        // Opt in without rebuilding the service/runtime -- exactly what happens when a user
+        // flips the Cloud Live toggle or adds a Gemini key while the accessibility service is
+        // already connected and running.
+        configureFullyEnabledCloudLive()
+
+        assertNotNull(
+            "the SAME runtime instance must see the just-enabled Cloud Live on its next attempt",
+            cloudLiveFactoryOf(runtime),
+        )
+        assertTrue(runtimeField(service) === runtime)
+    }
+
+    /** Symmetric case: opting back out (or the credential being cleared) must also be honored
+     *  immediately by the same long-lived runtime, not just the one-way enable direction. */
+    @Test
+    fun `opting back out after construction also takes effect immediately, not just opting in`() {
+        configureFullyEnabledCloudLive()
+        val service = build()
+        val runtime = runtimeField(service)
+        assertNotNull("must start enabled", cloudLiveFactoryOf(runtime))
+
+        CloudLiveToggle.setEnabled(app, false)
+
+        assertNull(
+            "the same runtime instance must stop offering live once the toggle flips off",
+            cloudLiveFactoryOf(runtime),
+        )
+    }
+
+    /**
+     * onDestroy must not construct a DictationRuntime it never needed. If the service is
+     * created and torn down without anything ever touching the lazy `runtime` property (e.g. the
+     * framework aborts the bind before onServiceConnected runs), a naive `runtime.shutdown()` in
+     * onDestroy would build a brand-new instance for the sole purpose of shutting it down --
+     * wasted native model-init work on a teardown path, and it would leave the private
+     * `runtimeInstance` backing field non-null after destroy for no benefit. This drives the
+     * real onDestroy() and reads the real backing field, not a source-string check.
+     */
+    @Test
+    fun `onDestroy on a never-connected service does not construct a runtime`() {
+        val service = Robolectric.buildService(TestService::class.java, null).create().get()
+
+        val runtimeInstanceField = WhisperAccessibilityService::class.java.getDeclaredField("runtimeInstance")
+            .apply { isAccessible = true }
+        assertNull("no runtime should exist before onDestroy on a service that never connected", runtimeInstanceField.get(service))
+
+        service.onDestroy()
+
+        assertNull(
+            "onDestroy must not have constructed a runtime merely to tear it down",
+            runtimeInstanceField.get(service),
+        )
     }
 
     // --- callback wiring: onCloudLiveInterim must actually route to field/bubble injection ---
