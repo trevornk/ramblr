@@ -1243,6 +1243,23 @@ class DictationRuntime internal constructor(
     private fun vocabularyTerms(): List<String> =
         VocabularyTerms.parse(prefs().getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED))
 
+    /**
+     * The last step before [RuntimeListener.deliverText] on every code path in
+     * [handleTranscriptionResult] (#248): applies Snippets to whatever text is about to be
+     * delivered. Runs after cleanup and after [VocabularyPostCorrector] (which already executed
+     * inside [PostProcessor.processProviderChain]'s LOCAL step before this text reached here),
+     * so a configured expansion is guaranteed verbatim against whatever the cleanup waterfall
+     * actually produced -- see [SnippetExpander]'s kdoc for the explicit, tested limitation this
+     * implies when cleanup rewrites a trigger phrase beyond case/punctuation.
+     *
+     * Deliberately NOT applied to `rawText` (the raw-transcript "tap to undo cleanup" side
+     * channel) or to the no-speech/junk-gate early returns before this point -- those already
+     * skip this call entirely by construction. Every dictation host funnels through this single
+     * runtime method, so this one call site is the entire production integration; no per-host
+     * duplication is possible.
+     */
+    private fun finalizeForDelivery(text: String): String = SnippetRuntimeSupport.expand(context, text)
+
     private fun transcribeApi(
         file: File,
         token: Int,
@@ -1510,7 +1527,7 @@ class DictationRuntime internal constructor(
             Log.i(TAG, "Transcript is content-free (len=${text.length}); skipping cleanup waterfall")
             handler.post {
                 if (!guard.isCurrent(token)) return@post
-                listener.deliverText(text, rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
+                listener.deliverText(finalizeForDelivery(text), rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
                 resetToIdle(lease)
             }
             return
@@ -1544,7 +1561,7 @@ class DictationRuntime internal constructor(
             if (cleanupWaterfall.steps.isEmpty()) {
                 handler.post {
                     if (!guard.isCurrent(token)) return@post
-                    listener.deliverText(text, rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
+                    listener.deliverText(finalizeForDelivery(text), rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
                     resetToIdle(lease)
                 }
                 return
@@ -1561,7 +1578,7 @@ class DictationRuntime internal constructor(
                 handler.post {
                     if (!guard.isCurrent(token)) return@post
                     toast("Post-processing needs API key. Using raw text.")
-                    listener.deliverText(text, rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
+                    listener.deliverText(finalizeForDelivery(text), rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
                     resetToIdle(lease)
                 }
                 return
@@ -1602,7 +1619,12 @@ class DictationRuntime internal constructor(
                     if (result.text != null && result.text.isNotBlank()) {
                         val servingGroup = recordProviderChainCleanupSuccess(cleanupWaterfall)
                         val paidFallbackGroup = servingGroup?.takeIf { it.isPaidFallback() }
-                        listener.deliverText(result.text, rawText = text, paidFallbackGroup = paidFallbackGroup, cleanupError = null, feedbackDurationMs = 2000)
+                        // #248: Snippets expand AFTER cleanup and AFTER vocabulary correction
+                        // (VocabularyPostCorrector already ran inside processProviderChain's
+                        // LOCAL step), on the text actually about to be delivered -- never on
+                        // rawText, which exists only as the "tap to undo cleanup" raw transcript
+                        // and must stay the literal, unexpanded ASR output.
+                        listener.deliverText(finalizeForDelivery(result.text), rawText = text, paidFallbackGroup = paidFallbackGroup, cleanupError = null, feedbackDurationMs = 2000)
                     } else {
                         // Log + surface the real failure reason (bad/missing key, HTTP status,
                         // network error, etc.) instead of a generic "cleanup failed" that gives
@@ -1617,7 +1639,7 @@ class DictationRuntime internal constructor(
                         // known, so it can state the truth about the clipboard and keep executor
                         // diagnostics (nested prefixes, provider error bodies) out of a floating
                         // overlay.
-                        listener.deliverText(text, rawText = null, paidFallbackGroup = null, cleanupError = reason, feedbackDurationMs = 4000)
+                        listener.deliverText(finalizeForDelivery(text), rawText = null, paidFallbackGroup = null, cleanupError = reason, feedbackDurationMs = 4000)
                     }
                     resetToIdle(lease)
                 }
@@ -1625,7 +1647,7 @@ class DictationRuntime internal constructor(
         } else {
             handler.post {
                 if (!guard.isCurrent(token)) return@post
-                listener.deliverText(text, rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
+                listener.deliverText(finalizeForDelivery(text), rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
                 resetToIdle(lease)
             }
         }

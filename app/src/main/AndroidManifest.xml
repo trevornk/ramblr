@@ -90,6 +90,10 @@
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <activity android:name=".DataLogsActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <!-- Snippets manager (#248): same internal-only + fold/unfold handling as every other
+             per-category Settings screen above. -->
+        <activity android:name=".SnippetManagerActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
 
         <!-- "Type to fix" selection-menu entry point (#157 Option B): the user selects text in
              any app, taps Ramblr in the Copy/Paste popup, picks a style, and the cleaned text is

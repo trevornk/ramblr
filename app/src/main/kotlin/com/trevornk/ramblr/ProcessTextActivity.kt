@@ -184,7 +184,13 @@ class ProcessTextActivity : Activity() {
                     // no transcription stage. QualityLogger additionally persists the actual text,
                     // and text selected out of some other app is not this app's to record.
                 ) { result ->
-                    deliver(request, processTextOutcome(result.text, result.error))
+                    // #248: Snippets expand after cleanup and vocabulary correction, exactly as
+                    // in DictationRuntime.finalizeForDelivery -- this Activity has no
+                    // accessibility involvement at all (see class kdoc), so it must apply the
+                    // same shared-store, same-toggle expansion itself rather than relying on any
+                    // service that isn't even guaranteed to be running.
+                    val expandedText = result.text?.let { SnippetRuntimeSupport.expand(this, it) }
+                    deliver(request, processTextOutcome(expandedText, result.error))
                 }
             } catch (t: Throwable) {
                 // processProviderChain's own steps report failures through the callback; anything

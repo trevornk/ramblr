@@ -42,6 +42,7 @@ class BehaviorActivity : BaseSettingsActivity() {
      *  from an unrelated download (or one already in flight before this screen opened). */
     private var silenceAutoStopPendingEnable = false
     private lateinit var vocabularyRowSub: TextView
+    private lateinit var snippetsRowSub: TextView
     private lateinit var vocabSuggestionsSwitch: MaterialSwitch
     private lateinit var suggestionsContainer: LinearLayout
     private lateinit var dismissedSuggestionsRow: LinearLayout
@@ -237,6 +238,16 @@ class BehaviorActivity : BaseSettingsActivity() {
         }
         root.addView(iconHiddenRow)
 
+        // Snippets (#248): its own row, not folded into Vocabulary -- the two features solve
+        // different problems (spelling correction vs. whole-phrase canned-text insertion) and
+        // are deliberately independent (see SnippetExpander's kdoc for why expansion runs after
+        // vocabulary correction, never interleaved with it).
+        val snippetsRow = settingsRow("Snippets", SnippetManagerActivity.subtitle(this)) {
+            startActivity(android.content.Intent(this, SnippetManagerActivity::class.java))
+        }
+        snippetsRowSub = snippetsRow.findViewWithTag("subtitle")
+        root.addView(snippetsRow)
+
         root.addView(sectionHeader("Vocabulary"))
         val vocabularyRow = settingsRow("Personal vocabulary", VocabularyEditor.rowSummary(this)) {
             VocabularyEditor.prompt(this) { refresh() }
@@ -324,6 +335,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         refreshSilenceAutoStopSummary()
         compressedUploadSwitch.isChecked = CompressedUploadToggle.isEnabled(this)
         vocabularyRowSub.text = VocabularyEditor.rowSummary(this)
+        snippetsRowSub.text = SnippetManagerActivity.subtitle(this)
         vocabSuggestionsSwitch.isChecked = VocabularySuggestionsToggle.isEnabled(this)
         refreshSuggestionSections()
         localThreadsRowSub.text = localThreadsSummary()
