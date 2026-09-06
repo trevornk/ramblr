@@ -125,4 +125,77 @@ class ImePanelControllerExclusionTest {
 
         assertEquals("hello", committed)
     }
+
+    /**
+     * The suppression branch's own comment claims "History still records what was said (a local
+     * record, not a write into the excluded app -- same rationale as the accessibility-service
+     * path)", and [WhisperAccessibilityService.injectText] really does call `recordHistory(...)`
+     * before its own exclusion return. The IME must not silently diverge: an excluded dictation
+     * is exactly the case where local history is the user's only copy of what they just said,
+     * since nothing was committed to the field.
+     */
+    @Test fun `deliverText still records history for an excluded editor`() {
+        val recorded = mutableListOf<DictationHistoryEntry>()
+        var committed: String? = null
+        val controller = ImePanelController(
+            runtime = FakeRuntimeControl(),
+            renderState = {},
+            editorSnapshot = { Triple(1L, ImeEditorIdentity("com.example.app", 0, 0), Any()) },
+            commitText = { _, text -> committed = text; true },
+            userMessage = {},
+            recordHistory = { entry -> recorded.add(entry); true },
+            isPackageExcluded = { pkg -> pkg == "com.example.app" },
+        )
+        controller.onEditorChanged(1L, ImeEditorIdentity("com.example.app", 0, 0), Any())
+        controller.listener.onRecordingStartRequested()
+
+        controller.listener.deliverText(
+            text = "hello",
+            rawText = null,
+            paidFallbackGroup = null,
+            cleanupError = null,
+            feedbackDurationMs = 2000,
+        )
+
+        assertEquals("nothing may be committed into the excluded editor", null, committed)
+        assertEquals("the dictation must still reach local history", 1, recorded.size)
+        assertEquals("hello", recorded.single().rawText)
+    }
+
+    /**
+     * ...but retention policy still wins over that: an editor that opted out of personalized
+     * learning ([EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING]) must never be written to history,
+     * excluded or not. Guards against "excluded" becoming a backdoor around
+     * [ImeEditorPolicy.allowsRetention].
+     */
+    @Test fun `deliverText does not record history for an excluded no-retention editor`() {
+        val recorded = mutableListOf<DictationHistoryEntry>()
+        val noRetention = ImeEditorIdentity(
+            packageName = "com.example.app",
+            fieldId = 0,
+            inputType = 0,
+            imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING,
+        )
+        val controller = ImePanelController(
+            runtime = FakeRuntimeControl(),
+            renderState = {},
+            editorSnapshot = { Triple(1L, noRetention, Any()) },
+            commitText = { _, _ -> true },
+            userMessage = {},
+            recordHistory = { entry -> recorded.add(entry); true },
+            isPackageExcluded = { pkg -> pkg == "com.example.app" },
+        )
+        controller.onEditorChanged(1L, noRetention, Any())
+        controller.listener.onRecordingStartRequested()
+
+        controller.listener.deliverText(
+            text = "hello",
+            rawText = null,
+            paidFallbackGroup = null,
+            cleanupError = null,
+            feedbackDurationMs = 2000,
+        )
+
+        assertTrue("a no-retention editor must never reach history", recorded.isEmpty())
+    }
 }

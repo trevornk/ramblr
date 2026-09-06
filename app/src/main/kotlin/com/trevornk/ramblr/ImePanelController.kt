@@ -197,10 +197,21 @@ internal class ImePanelController(
             if (!active || deliveryTerminal) return
             deliveryTerminal = true
             val ticket = deliveryTicket
+            val entry = DictationHistoryEntry(
+                timestamp = nowMs(),
+                rawText = rawText ?: text,
+                cleanedText = text.takeIf { rawText != null },
+                paidFallbackGroup = paidFallbackGroup,
+            )
             // #256: suppress the commit into an excluded editor. History still records what was
             // said (a local record, not a write into the excluded app -- same rationale as the
-            // accessibility-service path), but the commit itself never reaches the field.
+            // accessibility-service path, which records before its own exclusion return), but the
+            // commit itself never reaches the field. Retention policy still wins: a no-retention
+            // editor is never written to history, excluded or not.
             if (isPackageExcluded(cachedPackageName)) {
+                if (sessionAllowsRetention) {
+                    runCatching { runHistoryWrite { runCatching { recordHistory(entry) } } }
+                }
                 val ownsUi = latestUiTicket === ticket
                 if (ownsUi) latestUiTicket = null
                 if (ownsUi && active) {
@@ -209,12 +220,6 @@ internal class ImePanelController(
                 }
                 return
             }
-            val entry = DictationHistoryEntry(
-                timestamp = nowMs(),
-                rawText = rawText ?: text,
-                cleanedText = text.takeIf { rawText != null },
-                paidFallbackGroup = paidFallbackGroup,
-            )
 
             // File read/parse/rewrite is unbounded and must never run on the IME main thread. The
             // immutable ticket is revalidated only after the durable write returns to main.
