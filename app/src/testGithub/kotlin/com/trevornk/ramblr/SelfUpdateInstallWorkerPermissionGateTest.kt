@@ -42,12 +42,14 @@ class ThrowingShadowNotificationManager : ShadowNotificationManager() {
          *  reset automatically between tests -- callers must reset it themselves (see this
          *  test's [tearDown]) since Robolectric shadow state does not scope per-@Test. */
         @Volatile var throwOnNotify: Boolean = false
+        @Volatile var injectedFailures: Int = 0
     }
 
     @Implementation
     override fun notify(id: Int, notification: Notification) {
         if (throwOnNotify) {
-            throw SecurityException("test-injected: notification access revoked")
+            injectedFailures++
+            throw SecurityException("test-injected notification failure")
         }
         super.notify(id, notification)
     }
@@ -63,7 +65,8 @@ class ThrowingShadowNotificationManager : ShadowNotificationManager() {
     @Implementation
     override fun notify(tag: String?, id: Int, notification: Notification) {
         if (throwOnNotify) {
-            throw SecurityException("test-injected: notification access revoked")
+            injectedFailures++
+            throw SecurityException("test-injected notification failure")
         }
         super.notify(tag, id, notification)
     }
@@ -93,12 +96,14 @@ class SelfUpdateInstallWorkerPermissionGateTest {
         settingsPrefs().edit().clear().apply()
         shadowOf(app.packageManager).setCanRequestPackageInstalls(true)
         ThrowingShadowNotificationManager.throwOnNotify = false
+        ThrowingShadowNotificationManager.injectedFailures = 0
     }
 
     @After fun tearDown() {
         cachePrefs().edit().clear().apply()
         settingsPrefs().edit().clear().apply()
         ThrowingShadowNotificationManager.throwOnNotify = false
+        ThrowingShadowNotificationManager.injectedFailures = 0
     }
 
     private fun cachePrefs() = app.getSharedPreferences("ramblr_self_update_cache", Context.MODE_PRIVATE)
@@ -197,8 +202,8 @@ class SelfUpdateInstallWorkerPermissionGateTest {
         val notificationManager = shadowOf(
             app.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         )
-        // Reaching this line at all (doWork() returned normally instead of the SecurityException
-        // propagating out) is itself proof the try/catch actually swallowed the injected throw.
+        assertEquals("notify failure must actually be injected", 1,
+            ThrowingShadowNotificationManager.injectedFailures)
         assertEquals(
             "no notification can have been recorded as posted -- notify() threw before the " +
                 "shadow could record anything",
