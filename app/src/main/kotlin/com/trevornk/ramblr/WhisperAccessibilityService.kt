@@ -409,6 +409,19 @@ open class WhisperAccessibilityService : AccessibilityService() {
             maybeInjectPartial(text)
         }
 
+        // #245: route the Gemini Cloud Live interim through the exact same throttled,
+        // node-tracked direct-injection path local streaming preview already uses (#29),
+        // instead of leaving DictationRuntime's default no-op. This reuses -- rather than
+        // reimplements -- the field-verified safety properties that path already has: the
+        // recording-state guard, the shared streamingSession span tracking, and the
+        // onStreamingTeardown()/pendingStreamingHandoff reconciliation that resolves a
+        // dropped or superseded partial span cleanly instead of leaving stray text behind
+        // (the exact risk #245 flagged for naive interim injection). Preview-before-inject
+        // is honored because maybeInjectPartial() itself branches on that toggle first.
+        override fun onCloudLiveInterim(text: String) {
+            maybeInjectPartial(text)
+        }
+
         override fun deliverText(
             text: String,
             rawText: String?,
@@ -434,7 +447,25 @@ open class WhisperAccessibilityService : AccessibilityService() {
         override fun foregroundPackageName(): String? = currentForegroundPackageName()
     }
 
-    internal val runtime = DictationRuntime(this, runtimeListener)
+    // #245: the accessibility/floating-icon host now reaches the same merged cloud-live seam
+    // the IME host has used since #233 Phase 1 (RamblrImeService.kt). CloudLiveWiring.factoryOrNull
+    // returns null unless the user opted into Cloud Live, chose cloud transcription, and has a
+    // configured Gemini credential -- so this is a no-op, byte-for-byte-identical construction for
+    // every shipped/default configuration, exactly as it was for the IME host at merge time.
+    //
+    // Backed by an explicit nullable field and a get()-based accessor rather than an eager field
+    // initializer: an AccessibilityService's field initializers run during the framework's no-arg
+    // construction, before attachBaseContext() -- calling `this` as a Context that early
+    // (CloudLiveWiring.factoryOrNull reads SharedPreferences off it) would crash before the
+    // service ever reaches onServiceConnected(). Deferring construction to first access is safe
+    // because every real access (onTap()/callbacks, and onServiceConnected() itself) runs after
+    // the service is fully attached and connected -- the same safe timing RamblrImeService gets
+    // for free because ensureRuntime() is called from its own post-attach lifecycle methods.
+    private var runtimeInstance: DictationRuntime? = null
+    internal val runtime: DictationRuntime
+        get() = runtimeInstance ?: DictationRuntime(
+            this, runtimeListener, cloudLiveFactory = CloudLiveWiring.factoryOrNull(this)
+        ).also { runtimeInstance = it }
 
     private var overlayView: FrameLayout? = null
     private var button: ImageView? = null
