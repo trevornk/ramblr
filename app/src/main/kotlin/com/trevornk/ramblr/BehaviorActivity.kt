@@ -25,6 +25,7 @@ class BehaviorActivity : BaseSettingsActivity() {
     private lateinit var perAppPersonaSwitch: MaterialSwitch
     private lateinit var hideIconSwitch: MaterialSwitch
     private lateinit var automationOffHookSwitch: MaterialSwitch
+    private lateinit var exclusionListRowSub: TextView
     private lateinit var autoPeekSwitch: MaterialSwitch
     private lateinit var autoPeekDelayRow: LinearLayout
     private lateinit var peekSizeRow: LinearLayout
@@ -126,6 +127,21 @@ class BehaviorActivity : BaseSettingsActivity() {
             automationOffHookSwitch.isChecked = newVal
             if (newVal) showAutomationOffHookHelp()
         })
+
+        // #256: per-app exclusion list. A settings row that just launches its own picker screen,
+        // same pattern as StyleManagerActivity's link from elsewhere in Settings -- the summary
+        // states plainly that this is a behavioral suppression, not the off switch, per the
+        // issue's own privacy-copy requirement, so a user landing here from a search never reads
+        // this as a security boundary before even opening the picker.
+        val exclusionListRow = settingsRow(
+            "App exclusions",
+            exclusionListSummary(),
+            indent = 0
+        ) {
+            startActivity(android.content.Intent(this, ExclusionListActivity::class.java))
+        }
+        exclusionListRowSub = exclusionListRow.findViewWithTag("subtitle")
+        root.addView(exclusionListRow)
 
         autoPeekSwitch = MaterialSwitch(this).apply {
             isChecked = AutoPeekToggle.isEnabled(this@BehaviorActivity)
@@ -327,6 +343,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         perAppPersonaSwitch.isChecked = PerAppPersonaToggle.isEnabled(this)
         hideIconSwitch.isChecked = HideIconToggle.isEnabled(this)
         automationOffHookSwitch.isChecked = AutomationOffHookToggle.isEnabled(this)
+        exclusionListRowSub.text = exclusionListSummary()
         autoPeekSwitch.isChecked = AutoPeekToggle.isEnabled(this)
         singleTapRestoreSwitch.isChecked = SingleTapRestoreToggle.isEnabled(this)
         rawTextRetrySwitch.isChecked = RawTextRetryToggle.isEnabled(this)
@@ -457,6 +474,19 @@ class BehaviorActivity : BaseSettingsActivity() {
 
     private fun toastShort(message: String) =
         android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_SHORT).show()
+
+    // --- App exclusions (#256) ---
+
+    /** States plainly, right on the settings row summary, that this suppresses Ramblr's own
+     *  behavior without detaching the accessibility service or affecting bank fraud detection --
+     *  the exact caveat the issue's body requires, worded so it's visible without opening the
+     *  picker screen at all. */
+    private fun exclusionListSummary(): String {
+        val count = PerAppExclusionStore.exclusions(this).size
+        val countText = if (count == 0) "No apps excluded" else "$count app${if (count == 1) "" else "s"} excluded"
+        return "$countText — suppresses recording and insertion, does not detach the service " +
+            "or bypass bank fraud detection. Use the off switch to fully disable Ramblr."
+    }
 
     // --- Auto-hide delay (Feature A follow-up) ---
 

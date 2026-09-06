@@ -137,6 +137,18 @@ internal class ImePanelController(
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val runHistoryWrite: (() -> Unit) -> Unit = { it() },
     private val postToMain: (() -> Unit) -> Unit = { it() },
+    // #256: the IME is a distinct OS registration from the accessibility service (a separate
+    // invocation surface entirely -- see the issue's own "open questions" section), so it needs
+    // its own exclusion read rather than inheriting WhisperAccessibilityService's. Checked against
+    // the editor's package identity (the field this dictation is actually bound to), which the IME
+    // already has for free via [ImeEditorIdentity] -- no accessibility-tree read, no new
+    // permission, no polling: an editor package is only ever known because the OS handed it to
+    // this IME's own onStartInput/onStartInputView.
+    private val isPackageExcluded: (String?) -> Boolean = { false },
+    /** Whether a dictation is currently RECORDING, so [onMicTap] can block only a NEW start
+     *  (mirrors [ExclusionGating.shouldBlockNewRecording]) and never the stop tap of one already
+     *  in flight. */
+    private val isRecording: () -> Boolean = { false },
 ) {
     private var active = true
     private var deliveryTerminal = false
@@ -185,6 +197,18 @@ internal class ImePanelController(
             if (!active || deliveryTerminal) return
             deliveryTerminal = true
             val ticket = deliveryTicket
+            // #256: suppress the commit into an excluded editor. History still records what was
+            // said (a local record, not a write into the excluded app -- same rationale as the
+            // accessibility-service path), but the commit itself never reaches the field.
+            if (isPackageExcluded(cachedPackageName)) {
+                val ownsUi = latestUiTicket === ticket
+                if (ownsUi) latestUiTicket = null
+                if (ownsUi && active) {
+                    renderState(ImeUiState.IDLE)
+                    userMessage("Ramblr is excluded in this app — nothing inserted")
+                }
+                return
+            }
             val entry = DictationHistoryEntry(
                 timestamp = nowMs(),
                 rawText = rawText ?: text,
@@ -252,6 +276,11 @@ internal class ImePanelController(
         if (!editorPolicy.allowsDictation) {
             renderState(ImeUiState.SECURE_FIELD)
             userMessage("Voice input unavailable in secure fields")
+            return
+        }
+        // #256: only blocks a NEW recording (not currently recording) -- stop stays reachable.
+        if (!isRecording() && isPackageExcluded(cachedPackageName)) {
+            userMessage("Ramblr is excluded in this app — see Settings > Behavior")
             return
         }
         runtime.onTap()

@@ -1257,7 +1257,22 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * back off from outside this class.
      */
     internal fun applyOverlayVisibility() {
-        val visible = overlayShouldBeVisible(mainActivityForeground, IconHiddenState.isHidden(this), isKeyguardLocked(), overlayForceVisibleOverride)
+        // #256: only ever reads currentForegroundPackageName() at this same on-demand trigger
+        // point applyOverlayVisibility() already runs at (app foreground change, screen/keyguard
+        // events, hide-icon toggle, force-visible override) -- no new subscription or polling
+        // added. See ExclusionGating's doc for the honest limit this implies: the ring can lag a
+        // real foreground switch by however long until one of those existing triggers next fires.
+        val excludedForeground = ExclusionGating.ringHiddenForExclusion(
+            currentForegroundPackageName(),
+            PerAppExclusionStore.exclusions(this),
+        )
+        val visible = overlayShouldBeVisible(
+            mainActivityForeground,
+            IconHiddenState.isHidden(this),
+            isKeyguardLocked(),
+            overlayForceVisibleOverride,
+            excludedForeground,
+        )
         setOverlayTouchable(visible)
         // alpha, not View.GONE (Pixel Fold display-transition stall, root-caused via Opus + real
         // on-device logcat capture: this runs on the same SCREEN_ON/SCREEN_OFF/USER_PRESENT/
@@ -2194,6 +2209,18 @@ open class WhisperAccessibilityService : AccessibilityService() {
     // --- State machine ---
 
     private fun onTap() {
+        // #256: only blocks a NEW recording start (state == IDLE) -- stop/cancel of an
+        // already-running dictation must stay reachable regardless of exclusion, so this never
+        // touches RECORDING/TRANSCRIBING. On-demand read of currentForegroundPackageName(), same
+        // primitive already used elsewhere in this class -- no new subscription.
+        if (ExclusionGating.shouldBlockNewRecording(
+                runtime.currentState(),
+                PerAppExclusionStore.isExcluded(this, currentForegroundPackageName()),
+            )
+        ) {
+            toast("Ramblr is excluded in this app — see Settings > Behavior")
+            return
+        }
         runtime.onTap()
     }
 
@@ -2436,6 +2463,34 @@ open class WhisperAccessibilityService : AccessibilityService() {
         val streamingHandoff = streamingSession ?: pendingStreamingHandoff
         streamingSession = null
         pendingStreamingHandoff = null
+
+        // #256: final-insertion suppression. Read on demand, right here, at the moment injection
+        // is about to happen -- this is deliberately a *fresh* currentForegroundPackageName()
+        // read rather than whatever package was foreground when recording started, because the
+        // exclusion list's whole point is "text never lands in this app," and the user may have
+        // switched apps mid-dictation. No clipboard write and no node write happen on this path --
+        // clipboard is itself a hop the text could be manually pasted from into the excluded app,
+        // so it's suppressed too, not just the direct node injection. History recording above is
+        // unaffected: it's a local record of what was said, not a write into the excluded app.
+        if (ExclusionGating.shouldSuppressInsertion(
+                PerAppExclusionStore.isExcluded(this, currentForegroundPackageName())
+            )
+        ) {
+            Log.i(TAG, "Suppressing final insertion -- foreground app is on the exclusion list")
+            if (streamingHandoff != null) {
+                clearStreamingLeftover(streamingHandoff)
+                streamingHandoff.node.recycle()
+            }
+            updatePendingInjection(InjectMethod.NONE, text, rawText ?: text, null, null, null, historyTimestamp)
+            fallbackClipboardText = null
+            showFeedback(
+                "Ramblr is excluded in this app — nothing inserted or copied",
+                FALLBACK_FEEDBACK_DURATION_MS,
+                touchable = false,
+                isFallback = true,
+            )
+            return
+        }
 
         val priorClipboard = currentClipboardText()
         ClipboardUtil.copy(this, text)

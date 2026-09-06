@@ -20,8 +20,23 @@ package com.trevornk.ramblr
  * [forceVisibleOverride] is intentionally checked AFTER [lockedByKeyguard], never before: forcing
  * the overlay visible for onboarding's "Try it out" step must never bypass the keyguard's own
  * hide-while-locked security guarantee.
+ *
+ * [excludedForeground] is #256's per-app exclusion signal (see [ExclusionGating.ringHiddenForExclusion]):
+ * true only when the foreground app's package identity is positively known AND on the user's
+ * exclusion list. Checked in the same tier as [lockedByKeyguard] -- before [forceVisibleOverride]
+ * -- so the onboarding "Try it out" override can't accidentally paint the ring over an app the
+ * user explicitly asked Ramblr to stay out of. This is evaluated only when a caller already has a
+ * fresh foreground-package read (an existing [applyOverlayVisibility] trigger), never from a new
+ * poll or subscription -- see [ExclusionGating]'s doc for the honest limits that implies.
  */
-fun overlayShouldBeVisible(mainActivityForeground: Boolean, hiddenByUser: Boolean, lockedByKeyguard: Boolean, forceVisibleOverride: Boolean = false): Boolean =
+fun overlayShouldBeVisible(
+    mainActivityForeground: Boolean,
+    hiddenByUser: Boolean,
+    lockedByKeyguard: Boolean,
+    forceVisibleOverride: Boolean = false,
+    excludedForeground: Boolean = false,
+): Boolean =
     if (lockedByKeyguard) false
+    else if (excludedForeground) false
     else if (forceVisibleOverride) !hiddenByUser
     else !mainActivityForeground && !hiddenByUser

@@ -101,6 +101,37 @@ Ramblr uses Android Accessibility Service only to identify the currently focused
 
 Ramblr is not designed to monitor browsing, collect screen content for analytics, or perform background automation.
 
+### Per-app exclusions
+
+Settings → Behavior → App exclusions lets you list specific app packages (banking apps, password
+managers, anything you consider sensitive) where Ramblr suppresses its own behavior: no new
+recording starts while that app is in the foreground, the floating ring is hidden there once
+Ramblr next checks, and a finished dictation's text is never inserted (or copied to the clipboard)
+into that app. Stopping or cancelling a dictation that was already running stays available
+regardless of exclusion.
+
+**This is a behavioral opt-out, not a security boundary.** The accessibility service stays
+enabled and bound exactly as it is for every other app; excluding an app does not detach the
+service, does not change what `onAccessibilityEvent` does (still an empty override — see above),
+and does not bypass or weaken that app's own fraud/security detections in any way. If you want
+Ramblr fully disabled before opening a sensitive app, use the in-app "Turn Ramblr off" switch
+(Settings → Invocation) or Floating icon mode's off switch — those actually remove Ramblr from the
+accessibility services list.
+
+The exclusion check reads the foreground app's package name on demand, at the same few moments
+Ramblr already checks it for other reasons (an app switch, screen on/off, unlocking, a tap on the
+ring or Quick Settings tile, or a finished dictation about to be delivered) — there is no
+continuous tracking of which app is in the foreground, and this feature adds no new
+accessibility-event subscription or background polling. In practice that means the floating ring
+can take a moment to disappear after you switch into an excluded app (until one of those existing
+checks next runs), while blocking a new recording and blocking final insertion are both immediate,
+since those are evaluated exactly at the moment they'd otherwise happen.
+
+The **Ramblr Voice keyboard** is a separate Android input-method registration from the
+accessibility service, so it checks the same exclusion list independently, against the package of
+whatever field it's currently bound to — matching the accessibility-service behavior (no new
+recording, no final commit) rather than adding a second, different rule set.
+
 ## Optional Ramblr Voice keyboard
 
 Ramblr Voice is an opt-in Android input method. Ramblr only opens Android's supported input-method

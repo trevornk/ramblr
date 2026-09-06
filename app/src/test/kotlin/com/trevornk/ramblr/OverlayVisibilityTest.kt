@@ -48,4 +48,45 @@ class OverlayVisibilityTest {
         // change behavior for any pre-#103 call site that doesn't know about it.
         assertEquals(false, overlayShouldBeVisible(mainActivityForeground = true, hiddenByUser = false, lockedByKeyguard = false))
     }
+
+    // --- #256: per-app exclusion ---
+
+    @Test fun `hidden when the foreground app is excluded, even though otherwise visible`() {
+        assertEquals(
+            false,
+            overlayShouldBeVisible(
+                mainActivityForeground = false, hiddenByUser = false, lockedByKeyguard = false,
+                excludedForeground = true,
+            ),
+        )
+    }
+
+    @Test fun `exclusion is checked before the force-visible override, not after`() {
+        // The onboarding "Try it out" override must never paint the ring over an app the user
+        // explicitly excluded -- same tier ordering as the keyguard check.
+        assertEquals(
+            false,
+            overlayShouldBeVisible(
+                mainActivityForeground = true, hiddenByUser = false, lockedByKeyguard = false,
+                forceVisibleOverride = true, excludedForeground = true,
+            ),
+        )
+    }
+
+    @Test fun `exclusion defaults to false, preserving existing callers' behavior`() {
+        assertEquals(
+            true,
+            overlayShouldBeVisible(mainActivityForeground = false, hiddenByUser = false, lockedByKeyguard = false),
+        )
+    }
+
+    @Test fun `keyguard still wins over a non-excluded foreground app`() {
+        assertEquals(
+            false,
+            overlayShouldBeVisible(
+                mainActivityForeground = false, hiddenByUser = false, lockedByKeyguard = true,
+                excludedForeground = false,
+            ),
+        )
+    }
 }
