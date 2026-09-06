@@ -97,6 +97,23 @@ object SelfUpdateInstallGate {
     fun shouldAttemptManualInstallNow(recordingState: RecordingStateMachine.State?): Boolean =
         recordingState == null || recordingState == RecordingStateMachine.State.IDLE
 
+    /**
+     * Pre-flight install-permission gate (#253). `REQUEST_INSTALL_PACKAGES` is a special app
+     * access (AppOps), not an ordinary runtime permission -- declaring it in the manifest grants
+     * nothing, the user must separately flip "Install unknown apps" on for this app in Settings.
+     * When it's off, [android.content.pm.PackageManager.canRequestPackageInstalls] returns false
+     * and the whole PackageInstaller pipeline is doomed to hit
+     * [android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION]'s confirmation dialog and
+     * then fail there for a reason the app already knew about before spending a single byte on
+     * the download.
+     *
+     * Takes the already-queried boolean rather than a [Context] so this stays a pure,
+     * directly-testable decision -- the [Context]-reading call happens once in
+     * [SelfUpdateInstallWorker.doWork], mirroring how [shouldAttemptInstallNow] takes an
+     * already-resolved snapshot rather than reading live state itself.
+     */
+    fun canAttemptInstall(canRequestPackageInstalls: Boolean): Boolean = canRequestPackageInstalls
+
     /** Matches the staged-APK file names produced by [SelfUpdateInstallWorker.apkFilePath]
      *  (`ramblr-update-<versionCode>.apk`) and captures the versionCode. Deliberately anchored and
      *  digits-only so it can never match an unrelated file that happens to live in the same

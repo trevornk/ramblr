@@ -166,4 +166,51 @@ object SelfUpdateNotifications {
         } catch (_: SecurityException) {
         }
     }
+
+    /** [Intent] to Android's own "Install unknown apps" settings screen for this app, scoped with
+     *  [Uri] `package:<applicationId>` the same way [Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES]'s
+     *  own docs require -- without the package-scheme data Uri, the system opens the generic list
+     *  of every app instead of jumping straight to this one. `FLAG_ACTIVITY_NEW_TASK` since this
+     *  can be launched from a notification tap (no existing Activity context) exactly like
+     *  [SelfUpdateInstallReceiver]'s own confirmation-Intent launch. */
+    private fun manageUnknownAppSourcesIntent(ctx: Context): Intent =
+        Intent(
+            android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            Uri.parse("package:${ctx.packageName}"),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    private fun manageUnknownAppSourcesPendingIntent(ctx: Context, versionCode: Int): PendingIntent =
+        PendingIntent.getActivity(
+            ctx,
+            notificationId(versionCode) xor INSTALL_ACTION_REQUEST_CODE_MASK,
+            manageUnknownAppSourcesIntent(ctx),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+    /** Posted when [SelfUpdateInstallGate.canAttemptInstall] blocks an install before it starts
+     *  (#253): the app cannot proceed until the user grants "Install unknown apps" access for
+     *  itself. Distinct from [postInstallFailure] -- nothing has been attempted or failed yet --
+     *  and distinct from [postInstallDeferred] -- this doesn't resolve on its own with time, the
+     *  user must act. Tapping the notification (and its action button) both jump directly to the
+     *  system settings screen where that access is granted, via [manageUnknownAppSourcesIntent].
+     *  Shares [INSTALL_PROGRESS_NOTIFICATION_ID] with the other install-attempt states for the
+     *  same reason [postInstallFailure] does. Never throws, mirrors [postInstallFailure]. */
+    fun postInstallPermissionNeeded(ctx: Context, update: UpdateCheckResult.UpdateAvailable) {
+        ensureChannel(ctx)
+        val reason = SelfUpdateStatusFormatter.permissionNeededReason()
+        val settingsIntent = manageUnknownAppSourcesPendingIntent(ctx, update.versionCode)
+        val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_mic)
+            .setContentTitle("Update v${update.versionName} needs a permission to install")
+            .setContentText(reason)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(reason))
+            .setContentIntent(settingsIntent)
+            .addAction(0, "Open settings", settingsIntent)
+            .setAutoCancel(true)
+            .build()
+        try {
+            NotificationManagerCompat.from(ctx).notify(INSTALL_PROGRESS_NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+        }
+    }
 }

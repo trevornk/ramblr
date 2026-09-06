@@ -137,6 +137,23 @@ class SelfUpdateInstallGateTest {
         assertFalse(SelfUpdateInstallGate.shouldAttemptManualInstallNow(RecordingStateMachine.State.TRANSCRIBING))
     }
 
+    // -- canAttemptInstall: pre-flight install-permission gate (#253) --
+    //
+    // Regression context: the app used to download ~60MB, checksum-verify, create a
+    // PackageInstaller session, and only THEN discover (via the confirmation dialog) that
+    // REQUEST_INSTALL_PACKAGES (the "install unknown apps" special app access) was denied --
+    // wasting the download and leaving the user staring at a stale "Update available"
+    // notification forever, since nothing distinguished a permission wall from any other outcome.
+    // This checks canRequestPackageInstalls() BEFORE the download even starts.
+
+    @Test fun `install is allowed to proceed when install-unknown-apps access is granted`() {
+        assertTrue(SelfUpdateInstallGate.canAttemptInstall(canRequestPackageInstalls = true))
+    }
+
+    @Test fun `install is blocked pre-flight when install-unknown-apps access is denied`() {
+        assertFalse(SelfUpdateInstallGate.canAttemptInstall(canRequestPackageInstalls = false))
+    }
+
     // -- SelfUpdateInstallWorker pure helpers --
 
     @Test fun `apkFile path is keyed by versionCode so different versions never collide`() {

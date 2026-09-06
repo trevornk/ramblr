@@ -44,6 +44,18 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
 
         SelfUpdateNotifications.ensureChannel(applicationContext)
 
+        // Pre-flight install-permission gate (#253): REQUEST_INSTALL_PACKAGES is a special app
+        // access the user must separately grant in Settings, not something the manifest
+        // declaration alone provides. Checking BEFORE the download starts avoids spending ~60MB
+        // on an APK that the PackageInstaller confirmation step is guaranteed to reject, and
+        // surfaces the real blocker instead of leaving the stale "Update available" notification
+        // as the only visible state forever.
+        val canInstall = applicationContext.packageManager.canRequestPackageInstalls()
+        if (!SelfUpdateInstallGate.canAttemptInstall(canInstall)) {
+            SelfUpdateNotifications.postInstallPermissionNeeded(applicationContext, update)
+            return Result.failure(errorData("Install unknown apps access not granted"))
+        }
+
         // Drop staged APKs for every version except the one we're working toward now. Runs on
         // every attempt (before the resume-skip below, so a re-download can't be tricked by a
         // stale neighbour) and is cheap: a directory listing plus zero or more deletes.

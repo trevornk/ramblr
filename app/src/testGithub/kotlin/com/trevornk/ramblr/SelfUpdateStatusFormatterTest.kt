@@ -85,6 +85,17 @@ class SelfUpdateStatusFormatterTest {
         assertEquals("Downloaded. Waiting until dictation finishes.", reason)
     }
 
+    @Test fun `permission-needed reason names the actual blocker, not a generic failure`() {
+        val reason = SelfUpdateStatusFormatter.permissionNeededReason()
+        assertTrue(reason.contains("Install unknown apps") || reason.contains("install unknown apps"))
+    }
+
+    @Test fun `permission-needed reason never reads as a routine deferral`() {
+        val reason = SelfUpdateStatusFormatter.permissionNeededReason().lowercase()
+        assertFalse(reason.contains("overnight"))
+        assertFalse(reason.contains("dictation"))
+    }
+
     @Test fun `quiet-hours deferral names the actual configured window`() {
         val reason = SelfUpdateStatusFormatter.deferredReason(
             isDictating = false,

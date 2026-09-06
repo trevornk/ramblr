@@ -74,6 +74,17 @@ object SelfUpdateStatusFormatter {
             "${formatHour(quietHoursStartHour)} and ${formatHour(quietHoursEndHour)}."
     }
 
+    /**
+     * Why the pre-flight install-permission check ([SelfUpdateInstallGate.canAttemptInstall])
+     * blocked an install before it ever downloaded anything (#253). Deliberately distinct copy
+     * from [deferredReason]: this is not "try again later" (nothing here resolves on its own --
+     * the user must act), and not a generic failure either (the app hasn't attempted or failed
+     * anything yet, it just knows in advance that it would). Drives
+     * [SelfUpdateNotifications.postInstallPermissionNeeded].
+     */
+    fun permissionNeededReason(): String =
+        "Install unknown apps access is required to finish installing this update."
+
     /** 24h hour-of-day to a 12h clock phrase ("1am", "12pm"), matching how the rest of the app's
      *  user-facing copy reads. Only whole hours occur here: the quiet-hours window is defined in
      *  whole hour-of-day units ([SelfUpdateInstallGate.isWithinQuietHours]). */
