@@ -256,4 +256,44 @@ class AccessibilityCloudLiveWiringTest {
         val feedbackView = feedbackViewField.get(service) as android.widget.TextView
         assertFalse(feedbackView.text.toString().contains("must be dropped", ignoreCase = true))
     }
+
+    /**
+     * The lazy `runtime` getter replaced an eager field initializer, so it must stay safe for the
+     * concurrent first-access pattern production actually has: [onServiceConnected] starts two
+     * background threads that each touch `runtime` (`initLocalModel()` / `initStreamingModel()`)
+     * while the main thread can reach it too. An unsynchronized `?:` check-then-assign lets two
+     * threads each construct a [DictationRuntime]; the loser is silently orphaned -- never
+     * shut down and never released by [onDestroy], which only ever sees whichever instance won
+     * the assignment race -- while both have already begun loading native models.
+     */
+    @Test
+    fun `concurrent first access constructs exactly one runtime`() {
+        val service = build()
+        val threads = 8
+        val barrier = java.util.concurrent.CyclicBarrier(threads)
+        val seen = java.util.Collections.synchronizedList(mutableListOf<DictationRuntime>())
+        val failures = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+
+        val workers = (1..threads).map {
+            Thread {
+                try {
+                    barrier.await()
+                    seen.add(service.runtime)
+                } catch (t: Throwable) {
+                    failures.add(t)
+                }
+            }
+        }
+        workers.forEach { it.start() }
+        workers.forEach { it.join(10_000) }
+
+        assertTrue("no worker may fail: $failures", failures.isEmpty())
+        assertEquals("every thread must observe a runtime", threads, seen.size)
+        assertEquals(
+            "all threads must observe the same DictationRuntime instance -- a second one would " +
+                "be orphaned past onDestroy with native models already loading",
+            1,
+            seen.distinctBy { System.identityHashCode(it) }.size,
+        )
+    }
 }

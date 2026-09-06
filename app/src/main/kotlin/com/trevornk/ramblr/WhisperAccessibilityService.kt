@@ -469,9 +469,18 @@ open class WhisperAccessibilityService : AccessibilityService() {
     // transcription, or rotating the Gemini key while the service is already running would have
     // no effect until the service process was killed and recreated, since nothing here ever
     // rebuilds `runtimeInstance`. See DictationRuntime's `cloudLiveFactory` kdoc.
+    // Construction is @Synchronized because onServiceConnected() reaches `runtime` from two
+    // background threads (initLocalModel()/initStreamingModel()) while the main thread can touch
+    // it too. An unsynchronized check-then-assign would let two threads each build a
+    // DictationRuntime and silently orphan the loser -- never shut down by onDestroy(), which
+    // only sees whichever won the assignment, with native models already loading on both.
     private var runtimeInstance: DictationRuntime? = null
     internal val runtime: DictationRuntime
-        get() = runtimeInstance ?: DictationRuntime(
+        get() = obtainRuntime()
+
+    @Synchronized
+    private fun obtainRuntime(): DictationRuntime =
+        runtimeInstance ?: DictationRuntime(
             this, runtimeListener, cloudLiveFactory = { CloudLiveWiring.factoryOrNull(this) }
         ).also { runtimeInstance = it }
 
