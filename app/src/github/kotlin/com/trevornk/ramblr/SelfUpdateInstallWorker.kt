@@ -47,14 +47,28 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
         // Pre-flight install-permission gate (#253): REQUEST_INSTALL_PACKAGES is a special app
         // access the user must separately grant in Settings, not something the manifest
         // declaration alone provides. Checking BEFORE the download starts avoids spending ~60MB
-        // on an APK that the PackageInstaller confirmation step is guaranteed to reject, and
-        // surfaces the real blocker instead of leaving the stale "Update available" notification
-        // as the only visible state forever.
+        // on an APK when the app already knows "Install unknown apps" is off for it, and surfaces
+        // the real blocker instead of leaving the stale "Update available" notification as the
+        // only visible state forever. (Not framed as a certainty about what PackageInstaller
+        // would have done next -- canRequestPackageInstalls()==false means the OS has not granted
+        // this app permission to request installs at all; whether the framework would have shown
+        // its own confirmation dialog, a permission-request screen, or failed outright depends on
+        // OS version and isn't something this check needs to predict to justify bailing early.)
         val canInstall = applicationContext.packageManager.canRequestPackageInstalls()
         if (!SelfUpdateInstallGate.canAttemptInstall(canInstall)) {
             SelfUpdateNotifications.postInstallPermissionNeeded(applicationContext, update)
-            return Result.failure(errorData("Install unknown apps access not granted"))
+            SelfUpdatePrefs.setInstallBlockedOnPermission(applicationContext, true)
+            // Result.retry() (not failure()): this deferral resolves itself the moment the user
+            // grants "Install unknown apps" in Settings, exactly like the quiet-hours/dictation
+            // deferral below already does with the same Result.retry() + postInstallDeferred
+            // pattern. A terminal failure() here would mean the ONLY way to ever install this
+            // update again is another explicit user tap (Settings row or notification action) --
+            // granting the permission and simply coming back to the app should be enough; see
+            // SelfUpdateSettingsActivity.onResume() for the immediate (non-backoff-bound) half of
+            // that path, and this retry for the case where the app is never reopened at all.
+            return Result.retry()
         }
+        SelfUpdatePrefs.setInstallBlockedOnPermission(applicationContext, false)
 
         // Drop staged APKs for every version except the one we're working toward now. Runs on
         // every attempt (before the resume-skip below, so a re-download can't be tricked by a

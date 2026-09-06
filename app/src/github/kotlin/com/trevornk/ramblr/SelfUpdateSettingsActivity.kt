@@ -108,6 +108,16 @@ class SelfUpdateSettingsActivity : BaseSettingsActivity() {
 
     override fun onResume() {
         super.onResume()
+        // #253: a user who tapped "Open settings" from the permission-needed notification/row,
+        // granted "Install unknown apps", and came straight back to Ramblr should not have to
+        // wait for SelfUpdateInstallWorker's own backoff-scheduled retry to pick the install back
+        // up -- checking the real permission state here and re-firing the manual install path
+        // the moment it flips true closes that gap immediately instead of leaving the user
+        // staring at the same stale notification until the next backoff tick.
+        if (SelfUpdatePrefs.isInstallBlockedOnPermission(this) && packageManager.canRequestPackageInstalls()) {
+            SelfUpdatePrefs.setInstallBlockedOnPermission(this, false)
+            SelfUpdateInstallWorker.enqueueManual(applicationContext)
+        }
         refresh()
     }
 

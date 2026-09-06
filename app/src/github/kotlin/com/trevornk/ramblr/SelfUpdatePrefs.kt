@@ -60,5 +60,22 @@ object SelfUpdatePrefs {
         }
     }
 
+    /** Set (#253) whenever [SelfUpdateInstallWorker.doWork] finds
+     *  [android.content.pm.PackageManager.canRequestPackageInstalls] false and blocks before
+     *  downloading; cleared the moment a run gets past that gate. Backs
+     *  [SelfUpdateSettingsActivity.onResume]'s immediate re-check: a user who taps "Open settings"
+     *  from the permission-needed notification, grants the access, and comes straight back to
+     *  Ramblr should not have to wait for [SelfUpdateInstallWorker]'s own backoff-scheduled retry
+     *  to actually pick the install back up -- reading this flag on resume lets the app kick a
+     *  fresh manual attempt off immediately instead. */
+    fun isInstallBlockedOnPermission(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_INSTALL_BLOCKED_ON_PERMISSION, false)
+
+    fun setInstallBlockedOnPermission(context: Context, blocked: Boolean) {
+        prefs(context).edit().putBoolean(KEY_INSTALL_BLOCKED_ON_PERMISSION, blocked).apply()
+    }
+
+    private const val KEY_INSTALL_BLOCKED_ON_PERMISSION = "self_update_install_blocked_on_permission"
+
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 }
