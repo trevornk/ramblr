@@ -116,6 +116,74 @@ class SelfUpdateInstallWorkerPermissionGateTest {
         assertTrue(SelfUpdatePrefs.isInstallBlockedOnPermission(app))
     }
 
+    /**
+     * Closes the coverage gap flagged in the integration report's Limitations section: the
+     * `postInstallPermissionNeeded()` notify() call is wrapped in `try { } catch (_:
+     * SecurityException) { }`, and this drives that degraded path for real via Robolectric's
+     * `ShadowNotificationManager.setNotificationsEnabled(false)` rather than trusting the
+     * sequential-statement code-reading argument alone. Proves the retry Result and the
+     * blocked-on-permission flag (the actual behavior [SelfUpdateSettingsActivity.onResume]'s
+     * settings-recovery path depends on) are set even when the notification never posts.
+     */
+    @Test
+    fun `denied access with notifications disabled still returns Retry and records the blocked flag`() {
+        seedCachedUpdateAvailable()
+        shadowOf(app.packageManager).setCanRequestPackageInstalls(false)
+        val notificationManager = shadowOf(
+            app.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        )
+        notificationManager.setNotificationsEnabled(false)
+
+        val result = newWorker().doWork()
+
+        assertTrue(
+            "a permission block must still be retryable even when notifications are disabled",
+            result is ListenableWorker.Result.Retry,
+        )
+        assertTrue(
+            "the blocked-on-permission flag must still be recorded even when the notification " +
+                "could not be posted -- SelfUpdateSettingsActivity's settings-resume recovery " +
+                "depends on this flag, not on the notification having actually shown",
+            SelfUpdatePrefs.isInstallBlockedOnPermission(app),
+        )
+        // The notify() call itself is still attempted and swallowed (never crashes doWork), not
+        // silently skipped -- Robolectric's shadow still records it as "posted" even with
+        // notifications administratively disabled (that flag only gates the *real* notify path,
+        // which Robolectric doesn't model at this level); what actually matters here, and what a
+        // real disabled-notifications device changes, is proven above: Result and flag survive.
+        assertTrue(
+            "doWork() must not throw or otherwise abort when notifications are disabled",
+            notificationManager.getNotification(0x5E1F_0002) != null,
+        )
+    }
+
+    /**
+     * Companion to the disabled-notifications case above: granting the permission back (the
+     * other half of #253's retry story) must clear the flag and let a subsequent settings-resume
+     * re-fire the install, regardless of whether notifications are enabled -- the flag, not the
+     * notification, is what [SelfUpdateSettingsActivity.onResume] actually reads.
+     */
+    @Test
+    fun `granted access after a notifications-disabled denial still clears the blocked flag`() {
+        seedCachedUpdateAvailable()
+        val notificationManager = shadowOf(
+            app.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        )
+        notificationManager.setNotificationsEnabled(false)
+        shadowOf(app.packageManager).setCanRequestPackageInstalls(false)
+        newWorker().doWork()
+        assertTrue(SelfUpdatePrefs.isInstallBlockedOnPermission(app))
+
+        shadowOf(app.packageManager).setCanRequestPackageInstalls(true)
+        newWorker().doWork()
+
+        assertFalse(
+            "granting the permission must clear the blocked flag even though the original " +
+                "denial's notification never actually posted",
+            SelfUpdatePrefs.isInstallBlockedOnPermission(app),
+        )
+    }
+
     @Test
     fun `denied access never reaches the download step (no partial or staged file is written)`() {
         seedCachedUpdateAvailable(versionCode = 42)

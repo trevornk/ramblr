@@ -57,11 +57,7 @@ class SnippetManagerActivity : BaseSettingsActivity() {
         root.addView(enabledRow)
 
         root.addView(TextView(this).apply {
-            text = "Say a trigger phrase while dictating and it's replaced with the canned text " +
-                "you configure below -- useful for addresses, signatures, or anything you'd " +
-                "rather not fully dictate every time. Matching ignores case and punctuation but " +
-                "not wording, and the expansion is inserted exactly as written, after cleanup " +
-                "and vocabulary correction run."
+            text = HELP_TEXT
             textSize = 13f
             setTextColor(attrColor(android.R.attr.textColorSecondary))
             setPadding(dp(24), 0, dp(24), dp(16))
@@ -245,5 +241,21 @@ class SnippetManagerActivity : BaseSettingsActivity() {
             val state = if (SnippetsToggle.isEnabled(context)) "on" else "off (kept, not applied)"
             return "$count snippet${if (count == 1) "" else "s"} \u2014 $state"
         }
+
+        /**
+         * Explicit, plain-language statement of the cleanup-interaction limitation
+         * [SnippetExpander]'s kdoc documents and [SnippetExpanderCleanupInteractionTest] tests
+         * directly: expansion runs on cleanup's OUTPUT, so a cleanup pass that rewrites the
+         * trigger phrase's wording (not just case/punctuation) can stop it from matching. Kept
+         * as a `const` (not inline string literal at the call site) so a JVM test can assert on
+         * the exact copy shown to the user without a Robolectric UI test.
+         */
+        const val HELP_TEXT =
+            "Say a trigger phrase while dictating and it's replaced with the canned text " +
+                "you configure below -- useful for addresses, signatures, or anything you'd " +
+                "rather not fully dictate every time. The expansion is inserted exactly as " +
+                "written, after cleanup and vocabulary correction run -- so a cleanup rewrite " +
+                "that changes the wording of your trigger phrase (not just its case or " +
+                "punctuation) can prevent it from matching."
     }
 }
