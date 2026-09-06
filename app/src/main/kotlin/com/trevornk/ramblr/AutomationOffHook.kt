@@ -81,3 +81,70 @@ fun resolveAutomationOff(hookEnabled: Boolean, serviceConnected: Boolean): Autom
     !serviceConnected -> AutomationOffOutcome.IGNORED_NOT_RUNNING
     else -> AutomationOffOutcome.DISABLE
 }
+
+/**
+ * `am broadcast` sends an ordered broadcast and prints back `result=<code>`, but
+ * [AutomationOffReceiver] never called [android.content.BroadcastReceiver.setResultCode], so
+ * every outcome silently kept the platform default of 0. This mapping only takes effect when the
+ * delivery is actually an ordered broadcast ([android.content.BroadcastReceiver.isOrderedBroadcast]);
+ * for a normal broadcast there is no result slot to set, and the receiver's other behavior is
+ * unaffected either way.
+ *
+ * [AutomationOffOutcome.IGNORED_DISABLED] keeps result code 0 deliberately: that is also
+ * Android's own default for a mistyped action or no registered receiver, so a disabled hook is
+ * not distinguishable from "nothing here" -- see [resolveAutomationOff]'s ordering note. This
+ * protects service-*state* disclosure (running vs. not) while the hook is opted out; it says
+ * nothing about whether Ramblr is installed, which any caller can already determine other ways
+ * (e.g. querying installed packages).
+ *
+ * [RESULT_DISABLE_REQUESTED] means only that [WhisperAccessibilityService.disableServiceFromApp]
+ * returned `true`: a live instance existed and `disableSelf()` was invoked. It is not a
+ * confirmation that the service has finished tearing down.
+ */
+fun resultCodeFor(outcome: AutomationOffOutcome): Int = when (outcome) {
+    AutomationOffOutcome.IGNORED_DISABLED -> RESULT_HOOK_DISABLED
+    AutomationOffOutcome.IGNORED_NOT_RUNNING -> RESULT_NOT_RUNNING
+    AutomationOffOutcome.DISABLE -> RESULT_DISABLE_REQUESTED
+}
+
+/**
+ * Result code for the [AutomationOffOutcome.DISABLE] path once
+ * [WhisperAccessibilityService.disableServiceFromApp]'s actual return value is known.
+ * [disabled] can be false if the live instance disappeared between the receiver's
+ * serviceConnected check and the call itself; in that case the caller gets
+ * [RESULT_NOT_RUNNING] rather than a falsely-accepted [RESULT_DISABLE_REQUESTED].
+ */
+fun resultCodeForDisableAttempt(disabled: Boolean): Int =
+    if (disabled) RESULT_DISABLE_REQUESTED else RESULT_NOT_RUNNING
+
+/** Matches Android's own default ordered-broadcast result code (no receiver set one). */
+const val RESULT_HOOK_DISABLED = 0
+
+/** Hook is enabled, but there is no live service instance to disable. */
+const val RESULT_NOT_RUNNING = 2
+
+/** disableSelf() was invoked on a live instance; see [resultCodeFor]'s KDoc for what this does
+ *  NOT guarantee. */
+const val RESULT_DISABLE_REQUESTED = 1
+
+/**
+ * `UserHandle.getIdentifier()` is `@SystemApi`-only and absent from the public SDK stub an
+ * ordinary app compiles against, but [android.os.Process.myUid] is public, and every Android
+ * build since multi-user support landed (API 17) partitions uids as
+ * `userId * PER_USER_RANGE + appId`, with PER_USER_RANGE fixed at 100000 -- the same constant
+ * `UserHandle.PER_USER_RANGE` uses internally. This lets an app derive its own hosting user id
+ * without any permission.
+ */
+const val PER_USER_RANGE = 100000
+
+/** The numeric Android user id hosting the process with the given [uid]. */
+fun userIdForUid(uid: Int): Int = uid / PER_USER_RANGE
+
+/**
+ * Explicitly targets Ramblr's hosting user. Implicit/current-user selection can require
+ * cross-user privileges unavailable to an ordinary app caller, even on the primary user.
+ * Derive [userId] from Ramblr's uid rather than assuming user 0.
+ */
+fun automationOffHookCommand(packageName: String, userId: Int): String =
+    "am broadcast -a ${AutomationOffReceiver.ACTION_TURN_OFF} " +
+        "-n $packageName/.AutomationOffReceiver --user $userId"

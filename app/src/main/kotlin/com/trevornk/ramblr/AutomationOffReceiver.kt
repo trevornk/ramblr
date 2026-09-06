@@ -22,11 +22,9 @@ import android.util.Log
  * while disableSelf targets the live service directly. See [AutomationOffHookToggle] for why
  * there is no enable counterpart.
  *
- * Like the in-app switch, this records the user-intent flag so #258's stale-component repair
- * does not treat an automation-requested off as damage to be undone -- otherwise every macro
- * that turns Ramblr off before a banking app would be fought by Ramblr turning itself back on
- * at next launch. [InvocationGuardRail.recordServiceConnected] clears it when the service is
- * next enabled, so a genuine later loss is still detected.
+ * Also records the user-intent flag via [InvocationGuardRail] so #258's stale-component repair
+ * does not treat an automation-requested off as damage to be undone. [InvocationGuardRail.recordServiceConnected]
+ * clears it when the service is next enabled, so a genuine later loss is still detected.
  */
 class AutomationOffReceiver : BroadcastReceiver() {
 
@@ -38,6 +36,8 @@ class AutomationOffReceiver : BroadcastReceiver() {
             serviceConnected = WhisperAccessibilityService.instance != null,
         )
 
+        var resultCode = resultCodeFor(outcome)
+
         when (outcome) {
             AutomationOffOutcome.IGNORED_DISABLED ->
                 Log.i(TAG, "Automation off-hook broadcast ignored: hook disabled in settings")
@@ -46,14 +46,25 @@ class AutomationOffReceiver : BroadcastReceiver() {
                 Log.i(TAG, "Automation off-hook broadcast ignored: service not connected")
 
             AutomationOffOutcome.DISABLE -> {
-                // Mark the off as intentional BEFORE disabling: onDestroy runs synchronously
-                // inside disableSelf()'s teardown, and #258's detector reads this flag on the
-                // next MainActivity refresh.
+                // Mark the off as intentional before disabling, so #258's detector reads this
+                // flag on the next MainActivity refresh regardless of when onDestroy fires.
                 InvocationGuardRail.dismissBanner(context)
                 InvocationGuardRail.recordUserTurnedOff(context)
                 val disabled = WhisperAccessibilityService.disableServiceFromApp()
+                // disableServiceFromApp() returns false if the live instance disappeared
+                // between the serviceConnected check above and this call. Only report the
+                // accepted-disable code when the invocation actually returned true, so a caller
+                // never sees RESULT_DISABLE_REQUESTED for a request that found nothing to
+                // disable. `disabled == true` still means only "disableSelf() was invoked", not
+                // "the service is now confirmed off" -- see resultCodeFor's KDoc.
+                resultCode = resultCodeForDisableAttempt(disabled)
                 Log.i(TAG, "Automation off-hook: disableSelf dispatched (success=$disabled)")
             }
+        }
+
+        // Only ordered broadcasts return result feedback to the caller.
+        if (isOrderedBroadcast) {
+            setResultCode(resultCode)
         }
     }
 

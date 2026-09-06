@@ -368,20 +368,27 @@ class BehaviorActivity : BaseSettingsActivity() {
 
     /**
      * #257: shown once when the user opts in, because a broadcast hook is useless if you don't
-     * know the exact intent to send. Copy-to-clipboard rather than prose-only: the component
+     * know the exact intent to send. Copy-to-clipboard rather than prose-only: the command
      * name is long and mistyping it fails silently (an unmatched broadcast is a no-op, not an
      * error), which would look exactly like the feature not working.
+     *
+     * Targets Ramblr's numeric hosting user to avoid implicit/current-user selection requiring
+     * cross-user privileges from an ordinary app caller.
      */
     private fun showAutomationOffHookHelp() {
-        val command = "am broadcast -a ${AutomationOffReceiver.ACTION_TURN_OFF} " +
-            "-n $packageName/.AutomationOffReceiver"
+        val hostingUserId = userIdForUid(android.os.Process.myUid())
+        val command = automationOffHookCommand(packageName, hostingUserId)
         android.app.AlertDialog.Builder(this)
             .setTitle("Automation off-hook enabled")
             .setMessage(
                 "Ramblr now responds to this broadcast by turning its accessibility service " +
                     "off:\n\n$command\n\nIn MacroDroid or Tasker, use a \u201CShell\u201D / \u201CRun " +
-                    "command\u201D action with that line — it needs ADB or root privileges, the " +
-                    "same as your existing accessibility actions.\n\nThere is no matching " +
+                    "command\u201D action with that line -- it runs as an ordinary same-user " +
+                    "command, no ADB or root needed.\n\nThe broadcast reports back a result " +
+                    "code if your automation tool captures one: 0 means the off-hook toggle is " +
+                    "off (nothing happened), 1 means Ramblr's service was live and disableSelf " +
+                    "was requested, 2 means the toggle is on but no live service was found to " +
+                    "disable.\n\nThere is no matching " +
                     "\u201Cturn on\u201D broadcast: re-enabling an accessibility service needs a " +
                     "permission apps aren't given, so that stays a manual step."
             )
