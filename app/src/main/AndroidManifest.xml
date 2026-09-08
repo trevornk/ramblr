@@ -90,6 +90,14 @@
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <activity android:name=".DataLogsActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <!-- Snippets manager (#248): same internal-only + fold/unfold handling as every other
+             per-category Settings screen above. -->
+        <activity android:name=".SnippetManagerActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+        <!-- #256: per-app exclusion list picker, same internal-only + fold/unfold handling as
+             every other Settings sub-screen above. -->
+        <activity android:name=".ExclusionListActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
 
         <!-- "Type to fix" selection-menu entry point (#157 Option B): the user selects text in
              any app, taps Ramblr in the Copy/Paste popup, picks a style, and the cleaned text is
@@ -281,12 +289,20 @@
              any app on the device can silence dictation with no user interaction, so it stays
              the user's explicit opt-in. Deliberately no enable counterpart (see
              AutomationOffHookToggle's KDoc: re-enabling needs WRITE_SECURE_SETTINGS and is a
-             far worse capability to hand to arbitrary callers). -->
+             far worse capability to hand to arbitrary callers).
+
+             #254 investigation: TURN_OFF's read-only sibling action, DIAGNOSTIC, is added to
+             this SAME receiver/intent-filter rather than a new exported component; it shares
+             the identical exported=true surface and the identical AutomationOffHookToggle gate
+             (see AutomationOffReceiver.handleDiagnostic's kdoc), so no new unrestricted exported
+             receiver is introduced. The action set on an already-exported, already-gated
+             receiver just grew by one read-only entry. -->
         <receiver
             android:name=".AutomationOffReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="com.trevornk.ramblr.action.TURN_OFF" />
+                <action android:name="com.trevornk.ramblr.action.DIAGNOSTIC" />
             </intent-filter>
         </receiver>
 

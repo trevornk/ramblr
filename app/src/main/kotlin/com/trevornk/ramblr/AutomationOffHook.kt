@@ -148,3 +148,53 @@ fun userIdForUid(uid: Int): Int = uid / PER_USER_RANGE
 fun automationOffHookCommand(packageName: String, userId: Int): String =
     "am broadcast -a ${AutomationOffReceiver.ACTION_TURN_OFF} " +
         "-n $packageName/.AutomationOffReceiver --user $userId"
+
+/**
+ * #254 investigation (read-only diagnostic, not a fix): the reporter's automation shell has no
+ * way to see WHY a restore attempt did or didn't take -- `settings get`/`dumpsys` are blocked by
+ * `INTERACT_ACROSS_USERS`/`DUMP` for a non-root shell (confirmed on-device this session, see
+ * docs/254-lifecycle-verification-report.md §7), and the app has no shareable status surface.
+ * This is a pure snapshot of exactly the fields the diagnostic broadcast action
+ * ([AutomationOffReceiver.ACTION_DIAGNOSTIC]) reports -- no SharedPreferences keys, no
+ * installed-app lists, no credentials, nothing not already readable by any app via the same
+ * `Settings.Secure` calls (see [InvocationSecureSettings]'s class kdoc: those reads require no
+ * permission).
+ *
+ * SECURITY POSTURE: deliberately gated behind the SAME [AutomationOffHookToggle] as the
+ * destructive TURN_OFF action, default off, rather than exposed unconditionally -- per
+ * instruction, this investigation adds no new unrestricted exported action. Reusing the existing
+ * opt-in gate (rather than inventing a separate always-on toggle) means enabling automation
+ * control at all is the one decision the user already has to make; there's no new consent surface
+ * to reason about, and the blast radius is unchanged from what #257 already shipped.
+ *
+ * Field choices, and why each is safe/useful:
+ *  - [serviceInstanceConnected]: [WhisperAccessibilityService.instance] != null -- the same
+ *    signal MainActivity's own "acc" status row already uses; not a secret, and the whole point
+ *    of the diagnostic.
+ *  - [activeComponentEnabledInSettings] / [inactiveComponentEnabledInSettings]: distinguishes a
+ *    genuine "not enabled" from #258's stale-wrong-component failure mode -- exactly the
+ *    distinction the parent asked to preserve (coalesced/never-took vs. genuine toggle).
+ *  - [automationOffHookEnabled]: always true when this snapshot could be produced at all (the
+ *    action is gated on it), included anyway so a MacroDroid/Tasker parser has one field it can
+ *    assert on to confirm the broadcast reached a real, opted-in install rather than a stale
+ *    cached result.
+ *  - [writeSecureSettingsGranted]: whether the advanced tier (in-app self-heal via
+ *    `reEnableService()`) is even available on this install, so the reporter knows which recovery
+ *    path applies without pulling `dumpsys package`.
+ */
+data class RamblrDiagnosticSnapshot(
+    val serviceInstanceConnected: Boolean,
+    val activeComponentEnabledInSettings: Boolean,
+    val inactiveComponentEnabledInSettings: Boolean,
+    val automationOffHookEnabled: Boolean,
+    val writeSecureSettingsGranted: Boolean,
+)
+
+/** Stable, MacroDroid/Tasker-parseable `key=value;key=value` encoding, deliberately not JSON --
+ *  no dependency needed to read it back out of a broadcast result string in either tool. */
+fun formatDiagnosticSnapshot(s: RamblrDiagnosticSnapshot): String =
+    "instance_connected=${s.serviceInstanceConnected};" +
+        "active_component_enabled=${s.activeComponentEnabledInSettings};" +
+        "inactive_component_enabled=${s.inactiveComponentEnabledInSettings};" +
+        "automation_off_hook_enabled=${s.automationOffHookEnabled};" +
+        "write_secure_settings_granted=${s.writeSecureSettingsGranted}"
