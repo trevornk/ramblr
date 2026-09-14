@@ -30,11 +30,18 @@ import android.content.SharedPreferences
  * Enabling it is a deliberate act by someone who already runs an automation tool; the default
  * install surface is unchanged.
  *
- * There is deliberately NO enable counterpart. An app cannot add itself back to
- * `enabled_accessibility_services` without WRITE_SECURE_SETTINGS, so a symmetric "on" action
+ * There is deliberately NO enable counterpart RECEIVER. An app cannot add itself back to
+ * `enabled_accessibility_services` without WRITE_SECURE_SETTINGS, so a symmetric "on" broadcast
  * would work only on the advanced tier and would hand arbitrary callers the power to switch an
  * accessibility service ON -- a much worse thing to expose than the power to switch it off.
- * Re-enabling stays a user action (Settings, or Ramblr's own one-tap route on the advanced tier).
+ * Re-enabling stays a user action (Settings, or Ramblr's own one-tap route on the advanced
+ * tier) -- or the copyable `settings` command from [automationOffHookEnableCommand], for someone
+ * who separately controls a shell that itself already holds WRITE_SECURE_SETTINGS (an adb shell
+ * granted that permission, or a root shell). Granting WRITE_SECURE_SETTINGS to Ramblr does NOT
+ * hand that authority to a caller's shell: the OS enforces the permission against whichever
+ * process executes the `settings` command, not against Ramblr. This is still just documentation
+ * of the same raw write Ramblr's own advanced-tier UI already performs, not an app-callable
+ * action.
  */
 object AutomationOffHookToggle {
     private const val PREFS_NAME = "ramblr"
@@ -263,3 +270,57 @@ fun automationReEnableVerifyGuidance(): String =
         "result data. If it is false, run the enable action again. Android can discard a write " +
         "to the accessibility list shortly after it lands, and re-checking is the only reliable " +
         "way to tell -- Ramblr isn't running at that moment, so it cannot retry for you."
+
+/**
+ * The privileged counterpart shown alongside [automationOffHookCommand] in the same help
+ * dialog: a copyable `settings` one-liner that re-adds Ramblr's CURRENT-mode component
+ * ([component], from [InvocationServiceMode.activeComponent] / [InvocationSecureSettings]) to
+ * `enabled_accessibility_services` and writes `accessibility_enabled` to `1`.
+ *
+ * This is deliberately NOT a broadcast to an exported receiver -- see [AutomationOffHookToggle]'s
+ * KDoc for why a symmetric "on" receiver would be a much worse thing to expose than the "off"
+ * one. Instead it is the same raw `Settings.Secure` write [InvocationSecureSettings.reEnableService]
+ * already performs in-app on the advanced (WRITE_SECURE_SETTINGS) tier, spelled out as a shell
+ * command for someone who separately controls a process that already holds that permission.
+ *
+ * IMPORTANT: WRITE_SECURE_SETTINGS is enforced against the process that executes `settings`, not
+ * against Ramblr. Granting the permission to Ramblr (e.g. via `pm grant` for the app's own
+ * advanced-tier UI) does NOT give an arbitrary caller's shell -- an automation tool's "Run shell
+ * command" action, an adb shell, or anything else -- the authority to run this command; that
+ * caller's own process must independently hold WRITE_SECURE_SETTINGS (typically an adb shell
+ * itself granted the permission, or a root shell). Whether an ordinary automation tool's shell
+ * action can run this depends entirely on what that action executes as -- it is not true that
+ * every ordinary automation shell action necessarily fails, but none of Ramblr's supported
+ * automation tiers grant that authority on their own.
+ *
+ * Explicitly targets [userId] the same way [automationOffHookCommand] does, and NEVER assumes
+ * `--user current` for the same cross-user-privilege reason.
+ *
+ * Safety properties of the generated script, in order:
+ *  - The read is checked (`$?`) before anything else happens; a failed read (bad `--user`, no
+ *    permission, OEM quirk) aborts with a non-zero exit and touches nothing, rather than
+ *    treating a read failure as "list is empty" and clobbering every other service's entry.
+ *  - Every other entry in the existing list (Tasker, TalkBack, anything else) is preserved
+ *    verbatim; [component] is appended, never used to replace the whole value.
+ *  - The `enabled_accessibility_services` write is idempotent: if [component] is already present
+ *    the list is left untouched (no second write). `accessibility_enabled` is written
+ *    unconditionally on every run, including when the list was already correct.
+ *  - It is NOT atomic: the read, the decision, and the writes are separate OS calls, so a
+ *    concurrent writer (another automation tool, or Ramblr's own mode switch) racing between them
+ *    can still lose its change or get clobbered. There is no cross-process lock available to a
+ *    shell command here, and this script does not attempt to add one.
+ *  - A successful write is not confirmation the accessibility service actually bound: the OS
+ *    applies the setting on its own schedule, and other processes can still write over it
+ *    afterward. There is no automatic retry here; a failed or reverted write requires re-running
+ *    the command or using Settings directly.
+ */
+fun automationOffHookEnableCommand(component: String, userId: Int): String =
+    "C=$component; U=$userId; " +
+        "L=\$(settings --user \$U get secure enabled_accessibility_services); R=\$?; " +
+        "if [ \$R -ne 0 ]; then echo 'ramblr: read of enabled_accessibility_services failed; aborting' >&2; exit 1; fi; " +
+        "[ \"\$L\" = null ] && L=; " +
+        "case \":\$L:\" in " +
+        "*\":\$C:\"*) ;; " +
+        "*) L=\${L:+\$L:}\$C; settings --user \$U put secure enabled_accessibility_services \"\$L\" || exit 1;; " +
+        "esac; " +
+        "settings --user \$U put secure accessibility_enabled 1"

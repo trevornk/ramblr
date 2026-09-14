@@ -403,38 +403,87 @@ class BehaviorActivity : BaseSettingsActivity() {
      *
      * Targets Ramblr's numeric hosting user to avoid implicit/current-user selection requiring
      * cross-user privileges from an ordinary app caller.
+     *
+     * Also surfaces the privileged re-enable command ([automationOffHookEnableCommand]) as a
+     * SEPARATE copy action from the off command: the two commands need different execution
+     * contexts (off runs as an ordinary same-user command; enable needs a process that already
+     * holds WRITE_SECURE_SETTINGS), so keeping them as distinct buttons avoids implying either
+     * works the same way as the other. The enable command bakes in whichever mode/user is
+     * current AT COPY TIME ([InvocationServiceMode.activeComponent], [hostingUserId]); if the
+     * mode or hosting user changes afterward, the user must reopen this dialog and copy again.
      */
     private fun showAutomationOffHookHelp() {
         val hostingUserId = userIdForUid(android.os.Process.myUid())
-        val command = automationOffHookCommand(packageName, hostingUserId)
+        val offCommand = automationOffHookCommand(packageName, hostingUserId)
         val diagnosticCommand = automationDiagnosticCommand(packageName, hostingUserId)
+        val enableComponent = InvocationSecureSettings.serviceComponent(this)
+        val enableCommand = automationOffHookEnableCommand(enableComponent, hostingUserId)
         android.app.AlertDialog.Builder(this)
             .setTitle("Automation off-hook enabled")
             .setMessage(
                 "Ramblr now responds to this broadcast by turning its accessibility service " +
-                    "off:\n\n$command\n\nIn MacroDroid or Tasker, use a \u201CShell\u201D / \u201CRun " +
+                    "off:\n\n$offCommand\n\nIn MacroDroid or Tasker, use a \u201CShell\u201D / \u201CRun " +
                     "command\u201D action with that line -- it runs as an ordinary same-user " +
                     "command, no ADB or root needed.\n\nThe broadcast reports back a result " +
                     "code if your automation tool captures one: 0 means the off-hook toggle is " +
                     "off (nothing happened), 1 means Ramblr's service was live and disableSelf " +
                     "was requested, 2 means the toggle is on but no live service was found to " +
-                    "disable.\n\nThere is no matching " +
-                    "\u201Cturn on\u201D broadcast: re-enabling an accessibility service needs a " +
-                    "permission apps aren't given, so that stays a manual step -- your " +
-                    "automation tool's own \u201CAccessibility Service \u2192 Enable\u201D action, " +
-                    "or Android's Accessibility settings.\n\n" +
+                    "disable.\n\n" +
                     "CHECKING RAMBLR'S STATUS\n\nThis companion broadcast reports status without " +
                     "changing anything:\n\n$diagnosticCommand\n\nIt replies with result code 3 " +
                     "and a data line of five true/false fields, the useful one being " +
-                    "active_component_enabled.\n\n" + automationReEnableVerifyGuidance()
+                    "active_component_enabled.\n\n" + automationReEnableVerifyGuidance() +
+                    "\n\nTURNING IT BACK ON\n\nThere is no \u201Cturn on\u201D broadcast: " +
+                    "re-enabling an accessibility service needs a permission apps aren't given, " +
+                    "so that stays your automation tool's own \u201CAccessibility Service " +
+                    "\u2192 Enable\u201D action, or Android's Accessibility settings.\n\nWhere you " +
+                    "control a shell that already holds WRITE_SECURE_SETTINGS itself (an adb " +
+                    "shell granted it, or root), this command re-adds Ramblr directly:\n\n" +
+                    "$enableCommand\n\nIt is written for user $hostingUserId and " +
+                    "$enableComponent as of now -- copy it again if the mode or hosting user " +
+                    "changes. Granting that permission to Ramblr does NOT give it to an " +
+                    "automation tool's shell action; whether a given shell action can run this " +
+                    "depends on what that action executes as, and it fails with a permission " +
+                    "error anywhere that authority is missing. It preserves other apps' " +
+                    "accessibility entries and is safe to re-run, but the read/write isn't " +
+                    "atomic -- another writer racing it can still win -- and a successful write " +
+                    "is not proof the service actually bound."
             )
-            .setPositiveButton("Copy off command") { _, _ ->
-                copyToClipboard("Ramblr off-hook", command)
-            }
-            .setNeutralButton("Copy status command") { _, _ ->
-                copyToClipboard("Ramblr status check", diagnosticCommand)
+            .setPositiveButton("Copy a command\u2026") { _, _ ->
+                showAutomationCommandCopyChooser(offCommand, diagnosticCommand, enableCommand)
             }
             .setNegativeButton("Close", null)
+            .show()
+    }
+
+    /**
+     * Copy picker for [showAutomationOffHookHelp]'s three commands (#254).
+     *
+     * A second step rather than three dialog buttons because AlertDialog has exactly three button
+     * slots and one is spent on Close -- and dropping Close to free a slot would leave a wall of
+     * help text with no visible way out. Mirrors the existing [setItems] chooser this screen
+     * already uses for restoring dismissed banners.
+     */
+    private fun showAutomationCommandCopyChooser(
+        offCommand: String,
+        diagnosticCommand: String,
+        enableCommand: String,
+    ) {
+        val choices = arrayOf(
+            "Off command",
+            "Status command",
+            "Re-enable command (privileged shell only)",
+        )
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Copy which command?")
+            .setItems(choices) { _, which ->
+                when (which) {
+                    0 -> copyToClipboard("Ramblr off-hook", offCommand)
+                    1 -> copyToClipboard("Ramblr status check", diagnosticCommand)
+                    else -> copyToClipboard("Ramblr re-enable (privileged)", enableCommand)
+                }
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 

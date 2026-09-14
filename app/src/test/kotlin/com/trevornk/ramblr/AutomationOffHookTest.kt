@@ -235,4 +235,240 @@ class AutomationOffHookTest {
         assertTrue("guidance must name a field the snapshot actually emits",
             snapshot.contains("active_component_enabled"))
     }
+
+    // --- privileged re-enable command (help-dialog counterpart to the off command) -----------
+    //
+    // automationOffHookEnableCommand documents the WRITE_SECURE_SETTINGS-gated `settings`
+    // one-liner shown next to the off command. It must: target the same explicit numeric user as
+    // the off command; add the given component to enabled_accessibility_services without
+    // clobbering other apps' entries; be idempotent if the component is already present; and
+    // fail closed (no write at all) if the read fails.
+
+    private val component = "com.trevornk.ramblr/.WhisperAccessibilityService"
+
+    @Test
+    fun `enable command targets the given numeric user explicitly, like the off command`() {
+        val command = automationOffHookEnableCommand(component, userId = 10)
+        assertTrue(command.contains("--user \$U"))
+        assertTrue(command.contains("U=10"))
+    }
+
+    @Test
+    fun `enable command for user 0 still targets it explicitly rather than omitting --user`() {
+        val command = automationOffHookEnableCommand(component, userId = 0)
+        assertTrue("must not omit --user even for the primary user", command.contains("U=0"))
+        assertTrue(command.contains("--user \$U"))
+    }
+
+    @Test
+    fun `enable command never uses --user current`() {
+        val command = automationOffHookEnableCommand(component, userId = 7)
+        assertTrue(!command.contains("current"))
+    }
+
+    @Test
+    fun `enable command checks the read exit code before writing`() {
+        val command = automationOffHookEnableCommand(component, userId = 0)
+        assertTrue(command.contains("R=\$?"))
+        assertTrue(command.contains("if [ \$R -ne 0 ]"))
+    }
+
+    @Test
+    fun `enable command embeds the given component and user id literally`() {
+        val command = automationOffHookEnableCommand(
+            "com.trevornk.ramblr/.SystemControlsAccessibilityService",
+            userId = 3,
+        )
+        assertTrue(command.contains("C=com.trevornk.ramblr/.SystemControlsAccessibilityService"))
+        assertTrue(command.contains("U=3"))
+    }
+
+    @Test
+    fun `enable command never writes the whole list -- only appends via colon-join`() {
+        // Guards against a future edit regressing to a blind overwrite that would drop every
+        // other app's accessibility-service entry (Tasker's, TalkBack's, etc).
+        val command = automationOffHookEnableCommand(component, userId = 0)
+        assertTrue(command.contains("L=\${L:+\$L:}\$C"))
+    }
+
+    // --- fake-`settings`-executable shell harness ---------------------------------------------
+    //
+    // Runs the ACTUAL generated command against a tiny fake `settings` shell script that reads
+    // and writes a plain state file, standing in for Settings.Secure without touching a real
+    // device or emulator. This exercises the real string this function returns, not a
+    // re-implementation of its logic, while never mutating anything outside a temp dir.
+
+    private fun runEnableCommand(
+        component: String,
+        userId: Int,
+        initialList: String?,
+        failRead: Boolean = false,
+        failWrite: Boolean = false,
+    ): ShellResult {
+        val dir = createTempDir(prefix = "ramblr-settings-harness")
+        try {
+            val stateFile = java.io.File(dir, "enabled_accessibility_services.txt")
+            if (initialList != null) stateFile.writeText(initialList)
+
+            val fakeSettings = java.io.File(dir, "settings")
+            fakeSettings.writeText(
+                """
+                #!/bin/sh
+                # Fake `settings` for the harness: only understands the two calls the generated
+                # command makes (get/put secure enabled_accessibility_services, put secure
+                # accessibility_enabled) behind an explicit --user flag.
+                set -e
+                if [ "$1" != "--user" ]; then echo "fake settings: expected --user first" >&2; exit 64; fi
+                shift; shift # drop --user <id>
+                op=$1; ns=$2; key=$3
+                if [ "${'$'}op" = "get" ] && [ "${'$'}key" = "enabled_accessibility_services" ]; then
+                  if [ "${'$'}FAIL_READ" = "1" ]; then exit 1; fi
+                  if [ -f "${stateFile.absolutePath}" ]; then cat "${stateFile.absolutePath}"; else echo null; fi
+                  exit 0
+                fi
+                if [ "${'$'}op" = "put" ] && [ "${'$'}key" = "enabled_accessibility_services" ]; then
+                  if [ "${'$'}FAIL_WRITE" = "1" ]; then exit 1; fi
+                  printf '%s' "$4" > "${stateFile.absolutePath}"
+                  exit 0
+                fi
+                if [ "${'$'}op" = "put" ] && [ "${'$'}key" = "accessibility_enabled" ]; then
+                  exit 0
+                fi
+                echo "fake settings: unhandled op ${'$'}op ${'$'}ns ${'$'}key" >&2
+                exit 65
+                """.trimIndent()
+            )
+            fakeSettings.setExecutable(true)
+
+            val command = automationOffHookEnableCommand(component, userId)
+            val pb = ProcessBuilder("sh", "-c", command)
+            pb.environment()["PATH"] = dir.absolutePath + ":" + System.getenv("PATH")
+            if (failRead) pb.environment()["FAIL_READ"] = "1"
+            if (failWrite) pb.environment()["FAIL_WRITE"] = "1"
+            pb.redirectErrorStream(false)
+            val process = pb.start()
+            val stdout = process.inputStream.bufferedReader().readText()
+            val stderr = process.errorStream.bufferedReader().readText()
+            val exitCode = process.waitFor()
+            val finalList = if (stateFile.exists()) stateFile.readText() else null
+            return ShellResult(exitCode, stdout, stderr, finalList)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    private data class ShellResult(
+        val exitCode: Int,
+        val stdout: String,
+        val stderr: String,
+        val finalList: String?,
+    )
+
+    @Test
+    fun `harness -- empty list adds the component and enables the service`() {
+        val result = runEnableCommand(component, userId = 0, initialList = null)
+        assertEquals(0, result.exitCode)
+        assertEquals(component, result.finalList)
+    }
+
+    @Test
+    fun `harness -- other apps' entries are preserved, component appended after a colon`() {
+        val result = runEnableCommand(
+            component,
+            userId = 0,
+            initialList = "com.tasker/.a11y.Service:com.talkback/.Service",
+        )
+        assertEquals(0, result.exitCode)
+        assertEquals(
+            "com.tasker/.a11y.Service:com.talkback/.Service:$component",
+            result.finalList,
+        )
+    }
+
+    @Test
+    fun `harness -- already-present component is left untouched (idempotent)`() {
+        val existing = "com.tasker/.a11y.Service:$component"
+        val result = runEnableCommand(component, userId = 0, initialList = existing)
+        assertEquals(0, result.exitCode)
+        // No write call for the list happened at all -- file content is unchanged verbatim.
+        assertEquals(existing, result.finalList)
+    }
+
+    @Test
+    fun `harness -- running twice in a row is a no-op the second time`() {
+        val dir = createTempDir(prefix = "ramblr-settings-harness-idempotent")
+        try {
+            val stateFile = java.io.File(dir, "enabled_accessibility_services.txt")
+            stateFile.writeText("com.tasker/.a11y.Service")
+            val fakeSettings = java.io.File(dir, "settings")
+            fakeSettings.writeText(
+                """
+                #!/bin/sh
+                set -e
+                shift; shift
+                op=$1; key=$3
+                if [ "${'$'}op" = "get" ] && [ "${'$'}key" = "enabled_accessibility_services" ]; then
+                  cat "${stateFile.absolutePath}"; exit 0
+                fi
+                if [ "${'$'}op" = "put" ] && [ "${'$'}key" = "enabled_accessibility_services" ]; then
+                  printf '%s' "$4" > "${stateFile.absolutePath}"; exit 0
+                fi
+                exit 0
+                """.trimIndent()
+            )
+            fakeSettings.setExecutable(true)
+            val command = automationOffHookEnableCommand(component, userId = 0)
+            val pb = ProcessBuilder("sh", "-c", command)
+            pb.environment()["PATH"] = dir.absolutePath + ":" + System.getenv("PATH")
+            pb.start().waitFor()
+            val afterFirst = stateFile.readText()
+            pb.start().waitFor()
+            val afterSecond = stateFile.readText()
+            assertEquals(afterFirst, afterSecond)
+            assertEquals("com.tasker/.a11y.Service:$component", afterSecond)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `harness -- a failed read aborts with nonzero exit and writes nothing`() {
+        val existing = "com.tasker/.a11y.Service"
+        val result = runEnableCommand(component, userId = 0, initialList = existing, failRead = true)
+        assertNotEquals(0, result.exitCode)
+        // File must be exactly what it was before -- the read failure must not fall through to
+        // treating the list as empty and clobbering it.
+        assertEquals(existing, result.finalList)
+    }
+
+    @Test
+    fun `harness -- a failed write reports nonzero exit`() {
+        val result = runEnableCommand(component, userId = 0, initialList = null, failWrite = true)
+        assertNotEquals(0, result.exitCode)
+    }
+
+    @Test
+    fun `harness -- explicit numeric nonzero user id is passed through to settings`() {
+        val dir = createTempDir(prefix = "ramblr-settings-harness-user")
+        try {
+            val fakeSettings = java.io.File(dir, "settings")
+            fakeSettings.writeText(
+                """
+                #!/bin/sh
+                echo "user=${'$'}2" >> "${dir.absolutePath}/calls.log"
+                if [ "$3" = "get" ]; then echo null; exit 0; fi
+                exit 0
+                """.trimIndent()
+            )
+            fakeSettings.setExecutable(true)
+            val command = automationOffHookEnableCommand(component, userId = 10)
+            val pb = ProcessBuilder("sh", "-c", command)
+            pb.environment()["PATH"] = dir.absolutePath + ":" + System.getenv("PATH")
+            pb.start().waitFor()
+            val log = java.io.File(dir, "calls.log").readText()
+            assertTrue(log.lines().filter { it.isNotBlank() }.all { it == "user=10" })
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }
