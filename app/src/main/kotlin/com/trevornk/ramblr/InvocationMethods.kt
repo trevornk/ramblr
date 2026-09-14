@@ -371,6 +371,39 @@ fun staleComponentBannerText(mode: InvocationMode): String {
 }
 
 /**
+ * #254: should the out-of-app recovery notification be posted right now?
+ *
+ * Split from [ServiceRecoveryWorker] so every combination is testable without WorkManager or a
+ * device. The inputs come from [InvocationGuardRail.staleComponentAction]'s own decision plus two
+ * notification-layer facts.
+ *
+ * @param action what the #258 detector concluded. [StaleComponentAction.NONE] means the service is
+ *   fine or the user turned it off deliberately -- nothing to say either way.
+ * @param repairSucceeded whether the advanced tier already put the service back this tick. A
+ *   successful silent repair must NOT notify: the user's problem is solved, and a notification
+ *   about a fixed problem is pure noise. This is why the parameter exists rather than deriving
+ *   everything from [action] alone -- REPAIR_TO_ACTIVE can still fail (write revoked mid-flight,
+ *   OEM quirk), and a failed repair leaves the user just as stuck as the base tier.
+ * @param alreadyPosted the notification is already in the shade: re-posting would re-alert for a
+ *   condition the user has already been told about, every single worker tick.
+ * @param userDismissedNotification the user swiped it away. Stay quiet until the service next
+ *   connects, which clears the flag ([InvocationGuardRail.recordServiceConnected]) and re-arms this
+ *   for the NEXT fresh loss. Same non-nagging contract as the in-app banners' dismissal.
+ */
+fun shouldPostServiceRecoveryNotification(
+    action: StaleComponentAction,
+    repairSucceeded: Boolean,
+    alreadyPosted: Boolean,
+    userDismissedNotification: Boolean,
+): Boolean = when {
+    action == StaleComponentAction.NONE -> false
+    repairSucceeded -> false
+    alreadyPosted -> false
+    userDismissedNotification -> false
+    else -> true
+}
+
+/**
  * The #156 guard-rail decision: should the "Ramblr was turned off by the system shortcut
  * switch" recovery banner be showing right now?
  *

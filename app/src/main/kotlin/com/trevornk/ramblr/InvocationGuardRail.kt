@@ -25,6 +25,7 @@ object InvocationGuardRail {
     const val KEY_BANNER_DISMISSED = "service_killed_banner_dismissed"
     const val KEY_USER_TURNED_OFF = "user_turned_off_in_app"
     const val KEY_STALE_BANNER_DISMISSED = "stale_component_banner_dismissed"
+    const val KEY_RECOVERY_NOTIFICATION_DISMISSED = "service_recovery_notification_dismissed"
 
     /** Called from [WhisperAccessibilityService.onServiceConnected]: records that this install
      *  has a working service and re-arms the banner for the next fresh detection. */
@@ -36,8 +37,21 @@ object InvocationGuardRail {
             // disappearance is a fresh event the #258 repair path is allowed to act on.
             .putBoolean(KEY_USER_TURNED_OFF, false)
             .putBoolean(KEY_STALE_BANNER_DISMISSED, false)
+            // Same re-arming for #254's out-of-app notification: a dismissal silences the CURRENT
+            // loss, not every future one.
+            .putBoolean(KEY_RECOVERY_NOTIFICATION_DISMISSED, false)
             .apply()
     }
+
+    /** #254: the user swiped the recovery notification away. Stay quiet about THIS loss; the next
+     *  [recordServiceConnected] re-arms it. */
+    fun recordRecoveryNotificationDismissed(context: Context) {
+        prefs(context).edit().putBoolean(KEY_RECOVERY_NOTIFICATION_DISMISSED, true).apply()
+    }
+
+    /** Whether the #254 recovery notification has been dismissed for this detection. */
+    fun recoveryNotificationDismissed(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_RECOVERY_NOTIFICATION_DISMISSED, false)
 
     /** The user turned Ramblr off with the in-app off switch (#254). Distinguishes a deliberate
      *  off from the #258 automation breakage, which is the only thing keeping the repair path

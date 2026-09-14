@@ -186,4 +186,53 @@ class AutomationOffHookTest {
         // invocation actually returned, not what resolveAutomationOff optimistically decided.
         assertEquals(RESULT_NOT_RUNNING, resultCodeForDisableAttempt(disabled = false))
     }
+
+    // --- #254 diagnostic command ------------------------------------------------------------
+
+    @Test
+    fun `diagnostic command targets the receiver and the given numeric user explicitly`() {
+        val command = automationDiagnosticCommand("com.trevornk.ramblr", userId = 0)
+        assertEquals(
+            "am broadcast -a com.trevornk.ramblr.action.DIAGNOSTIC " +
+                "-n com.trevornk.ramblr/.AutomationOffReceiver --user 0",
+            command,
+        )
+    }
+
+    @Test
+    fun `diagnostic command never uses --user current`() {
+        // Same cross-user-permission trap as the off command: USER_CURRENT (-2) requires
+        // INTERACT_ACROSS_USERS, which is exactly the SecurityException the #254 reporter hit.
+        val command = automationDiagnosticCommand("com.trevornk.ramblr", userId = 11)
+        assertTrue(!command.contains("current"))
+        assertTrue(command.contains("--user 11"))
+    }
+
+    @Test
+    fun `diagnostic command is explicit-component, since implicit broadcasts are not delivered`() {
+        // A manifest receiver does not receive implicit broadcasts on modern Android, so an
+        // action-only command would silently do nothing -- indistinguishable from the feature
+        // being broken.
+        assertTrue(automationDiagnosticCommand("com.trevornk.ramblr", userId = 0)
+            .contains("-n com.trevornk.ramblr/.AutomationOffReceiver"))
+    }
+
+    @Test
+    fun `verify guidance names the field an automation macro must actually read`() {
+        // The guidance is useless unless it names the exact key from formatDiagnosticSnapshot;
+        // a macro parses that string literally.
+        val guidance = automationReEnableVerifyGuidance()
+        assertTrue(guidance.contains("active_component_enabled"))
+        val snapshot = formatDiagnosticSnapshot(
+            RamblrDiagnosticSnapshot(
+                serviceInstanceConnected = false,
+                activeComponentEnabledInSettings = false,
+                inactiveComponentEnabledInSettings = false,
+                automationOffHookEnabled = true,
+                writeSecureSettingsGranted = false,
+            )
+        )
+        assertTrue("guidance must name a field the snapshot actually emits",
+            snapshot.contains("active_component_enabled"))
+    }
 }

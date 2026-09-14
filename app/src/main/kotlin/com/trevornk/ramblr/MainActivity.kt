@@ -217,6 +217,12 @@ class MainActivity : BaseSettingsActivity() {
         // which never has those classes at all -- mirrors AdvancedActivity's identical
         // selfUpdateSettingsActivityClass() Class.forName pattern.
         scheduleSelfUpdateCheckIfEnabled()
+
+        // #254: the out-of-app half of the #258 recovery story. Idempotent (KEEP), so calling it
+        // on every onCreate is a no-op once scheduled. Unlike the self-update scheduling above
+        // this needs no reflection -- ServiceRecoveryWorker is in src/main and exists in every
+        // flavor, because an automation-broken accessibility service is not a github-only problem.
+        ServiceRecoveryWorker.schedule(this)
     }
 
     /** No-op on the storefront flavor (ClassNotFoundException, caught silently) -- see call

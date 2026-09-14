@@ -407,6 +407,7 @@ class BehaviorActivity : BaseSettingsActivity() {
     private fun showAutomationOffHookHelp() {
         val hostingUserId = userIdForUid(android.os.Process.myUid())
         val command = automationOffHookCommand(packageName, hostingUserId)
+        val diagnosticCommand = automationDiagnosticCommand(packageName, hostingUserId)
         android.app.AlertDialog.Builder(this)
             .setTitle("Automation off-hook enabled")
             .setMessage(
@@ -419,17 +420,28 @@ class BehaviorActivity : BaseSettingsActivity() {
                     "was requested, 2 means the toggle is on but no live service was found to " +
                     "disable.\n\nThere is no matching " +
                     "\u201Cturn on\u201D broadcast: re-enabling an accessibility service needs a " +
-                    "permission apps aren't given, so that stays a manual step."
+                    "permission apps aren't given, so that stays a manual step -- your " +
+                    "automation tool's own \u201CAccessibility Service \u2192 Enable\u201D action, " +
+                    "or Android's Accessibility settings.\n\n" +
+                    "CHECKING RAMBLR'S STATUS\n\nThis companion broadcast reports status without " +
+                    "changing anything:\n\n$diagnosticCommand\n\nIt replies with result code 3 " +
+                    "and a data line of five true/false fields, the useful one being " +
+                    "active_component_enabled.\n\n" + automationReEnableVerifyGuidance()
             )
-            .setPositiveButton("Copy command") { _, _ ->
-                val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-                clipboard?.setPrimaryClip(
-                    android.content.ClipData.newPlainText("Ramblr off-hook", command)
-                )
-                toast("Command copied")
+            .setPositiveButton("Copy off command") { _, _ ->
+                copyToClipboard("Ramblr off-hook", command)
+            }
+            .setNeutralButton("Copy status command") { _, _ ->
+                copyToClipboard("Ramblr status check", diagnosticCommand)
             }
             .setNegativeButton("Close", null)
             .show()
+    }
+
+    private fun copyToClipboard(label: String, value: String) {
+        val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText(label, value))
+        toast("Command copied")
     }
 
     /** Add/Dismiss decision dialog for one suggestion. Add goes through [VocabularyEditor.addTerm]

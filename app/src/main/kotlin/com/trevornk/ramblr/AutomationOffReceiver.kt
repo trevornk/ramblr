@@ -29,8 +29,14 @@ import android.util.Log
 class AutomationOffReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION_TURN_OFF) return
+        when (intent.action) {
+            ACTION_TURN_OFF -> handleTurnOff(context)
+            ACTION_DIAGNOSTIC -> handleDiagnostic(context)
+            else -> return
+        }
+    }
 
+    private fun handleTurnOff(context: Context) {
         val outcome = resolveAutomationOff(
             hookEnabled = AutomationOffHookToggle.isEnabled(context),
             serviceConnected = WhisperAccessibilityService.instance != null,
@@ -68,8 +74,59 @@ class AutomationOffReceiver : BroadcastReceiver() {
         }
     }
 
+    /**
+     * #254 investigation: read-only diagnostic companion to [handleTurnOff]. Gated behind the
+     * SAME [AutomationOffHookToggle] (see [RamblrDiagnosticSnapshot]'s "SECURITY POSTURE" kdoc
+     * for why) -- when the hook is off, this is indistinguishable from "nothing here" exactly
+     * like the off action's own IGNORED_DISABLED case, via the ordered-broadcast result string:
+     * a hook-disabled install returns no result data at all (result code 0, same as
+     * [RESULT_HOOK_DISABLED]) rather than a snapshot.
+     *
+     * Performs NO writes and NO state changes -- every field read is either already
+     * unconditionally readable by any app (the `Settings.Secure` accessibility lists, via
+     * [InvocationSecureSettings]) or a same-process static read
+     * ([WhisperAccessibilityService.instance]). Nothing here dumps SharedPreferences contents,
+     * installed-app lists, or any credential/token.
+     */
+    private fun handleDiagnostic(context: Context) {
+        if (!AutomationOffHookToggle.isEnabled(context)) {
+            Log.i(TAG, "Automation diagnostic broadcast ignored: hook disabled in settings")
+            if (isOrderedBroadcast) setResultCode(RESULT_HOOK_DISABLED)
+            return
+        }
+        val snapshot = RamblrDiagnosticSnapshot(
+            serviceInstanceConnected = WhisperAccessibilityService.instance != null,
+            activeComponentEnabledInSettings = InvocationSecureSettings.isActiveComponentEnabled(context),
+            inactiveComponentEnabledInSettings = InvocationSecureSettings.isInactiveComponentEnabled(context),
+            automationOffHookEnabled = true,
+            writeSecureSettingsGranted = InvocationSecureSettings.canWrite(context),
+        )
+        val formatted = formatDiagnosticSnapshot(snapshot)
+        Log.i(TAG, "Automation diagnostic: $formatted")
+        if (isOrderedBroadcast) {
+            setResultCode(RESULT_DIAGNOSTIC_OK)
+            setResultData(formatted)
+        }
+    }
+
     companion object {
         const val ACTION_TURN_OFF = "com.trevornk.ramblr.action.TURN_OFF"
+
+        /** #254: read-only status snapshot, see [handleDiagnostic]'s kdoc. Reply comes back as
+         *  the ordered broadcast's result DATA string (`am broadcast` prints it as `data="..."`),
+         *  not a separate extra, so no extras-parsing dependency is needed to read it from a
+         *  plain shell/automation-tool broadcast call.
+         *
+         *  Shipped rather than reverted with the investigation that introduced it: it is the
+         *  verify half of the write-then-verify macro pattern that makes an external re-enable
+         *  converge. See [RamblrDiagnosticSnapshot] and [automationReEnableVerifyGuidance]. */
+        const val ACTION_DIAGNOSTIC = "com.trevornk.ramblr.action.DIAGNOSTIC"
+
+        /** Result code for a successful [ACTION_DIAGNOSTIC] reply; distinct from every
+         *  [AutomationOffOutcome]-derived code above so a caller can tell the two actions'
+         *  replies apart even if it doesn't track which action it sent. */
+        const val RESULT_DIAGNOSTIC_OK = 3
+
         private const val TAG = "PhoneWhisper"
     }
 }

@@ -148,3 +148,118 @@ fun userIdForUid(uid: Int): Int = uid / PER_USER_RANGE
 fun automationOffHookCommand(packageName: String, userId: Int): String =
     "am broadcast -a ${AutomationOffReceiver.ACTION_TURN_OFF} " +
         "-n $packageName/.AutomationOffReceiver --user $userId"
+
+/**
+ * #254: the readable status snapshot behind [AutomationOffReceiver.ACTION_DIAGNOSTIC].
+ *
+ * WHY THIS IS A SHIPPED FEATURE AND NOT A ONE-OFF DIAGNOSTIC
+ *
+ * This began as an investigation-only action in the `diagnostic-254-1` prerelease, to find out
+ * why an external re-enable sometimes didn't take. It earned permanent status by answering that
+ * question: the reporter's two snapshots showed `instance_connected=true,
+ * active_component_enabled=true` while working and `active_component_enabled=false,
+ * inactive_component_enabled=false` after a failed restore -- Ramblr absent from
+ * `enabled_accessibility_services` entirely. That is a write that did not persist, not a service
+ * that failed to bind, and not #258's stale-component failure (which would show the INACTIVE
+ * component listed). It also cleared #258's fix: no stale entry remained.
+ *
+ * A write to `enabled_accessibility_services` is not reliably durable from outside the app.
+ * [InvocationServiceMode.verifySettled] exists because we device-observed AMS asynchronously
+ * re-persisting its in-memory state AFTER our own writes landed and clobbering them -- Ramblr
+ * fights that with a poll-and-repair loop internally. An automation tool writing the same key
+ * has no such loop and no way to see the outcome, because `settings get` and `dumpsys` are both
+ * blocked for an ordinary same-user shell (`INTERACT_ACROSS_USERS` / `DUMP`).
+ *
+ * So this action is the verify half of a write-then-verify pair that an automation user cannot
+ * otherwise build: enable, wait, read this snapshot, and enable again if it didn't stick. That
+ * makes an unreliable external write into a convergent one. Removing this action would take that
+ * capability away, which is why it ships rather than being reverted with the investigation.
+ *
+ * It reports no SharedPreferences keys, no installed-app lists, and no credentials -- nothing not
+ * already readable by any app via the same `Settings.Secure` calls (see [InvocationSecureSettings]'s
+ * class kdoc: those reads require no permission).
+ *
+ * SECURITY POSTURE: deliberately gated behind the SAME [AutomationOffHookToggle] as the
+ * destructive TURN_OFF action, default off, rather than exposed unconditionally. Reusing the
+ * existing opt-in gate (rather than inventing a separate always-on toggle) means enabling
+ * automation control at all is the one decision the user already has to make; there's no new
+ * consent surface to reason about, and the blast radius is unchanged from what #257 shipped.
+ *
+ * Field choices, and why each is safe/useful:
+ *  - [serviceInstanceConnected]: [WhisperAccessibilityService.instance] != null -- the same
+ *    signal MainActivity's own "acc" status row already uses; not a secret, and the whole point
+ *    of the diagnostic.
+ *  - [activeComponentEnabledInSettings] / [inactiveComponentEnabledInSettings]: distinguishes a
+ *    genuine "not enabled" from #258's stale-wrong-component failure mode -- exactly the
+ *    distinction the parent asked to preserve (coalesced/never-took vs. genuine toggle).
+ *  - [automationOffHookEnabled]: always true when this snapshot could be produced at all (the
+ *    action is gated on it), included anyway so a MacroDroid/Tasker parser has one field it can
+ *    assert on to confirm the broadcast reached a real, opted-in install rather than a stale
+ *    cached result.
+ *  - [writeSecureSettingsGranted]: whether the advanced tier (in-app self-heal via
+ *    `reEnableService()`) is even available on this install, so the reporter knows which recovery
+ *    path applies without pulling `dumpsys package`.
+ */
+data class RamblrDiagnosticSnapshot(
+    val serviceInstanceConnected: Boolean,
+    val activeComponentEnabledInSettings: Boolean,
+    val inactiveComponentEnabledInSettings: Boolean,
+    val automationOffHookEnabled: Boolean,
+    val writeSecureSettingsGranted: Boolean,
+)
+
+/** Stable, MacroDroid/Tasker-parseable `key=value;key=value` encoding, deliberately not JSON --
+ *  no dependency needed to read it back out of a broadcast result string in either tool. */
+fun formatDiagnosticSnapshot(s: RamblrDiagnosticSnapshot): String =
+    "instance_connected=${s.serviceInstanceConnected};" +
+        "active_component_enabled=${s.activeComponentEnabledInSettings};" +
+        "inactive_component_enabled=${s.inactiveComponentEnabledInSettings};" +
+        "automation_off_hook_enabled=${s.automationOffHookEnabled};" +
+        "write_secure_settings_granted=${s.writeSecureSettingsGranted}"
+
+/**
+ * The status-query counterpart to [automationOffHookCommand], for an automation tool's shell
+ * action. Targets Ramblr's hosting user explicitly for the same reason the off command does --
+ * implicit/current-user selection requires cross-user privileges an ordinary app caller does not
+ * have, and assuming user 0 is wrong on a secondary profile.
+ *
+ * `am broadcast` prints the reply as `result=<code>` plus `data="<snapshot>"`; see
+ * [AutomationOffReceiver.ACTION_DIAGNOSTIC]. Reading `data` is what makes the verify-and-retry
+ * pattern in [automationReEnableVerifyGuidance] possible without any permission.
+ */
+fun automationDiagnosticCommand(packageName: String, userId: Int): String =
+    "am broadcast -a ${AutomationOffReceiver.ACTION_DIAGNOSTIC} " +
+        "-n $packageName/.AutomationOffReceiver --user $userId"
+
+/**
+ * The user-facing recipe for making an external re-enable actually stick (#254).
+ *
+ * WHY THIS EXISTS RATHER THAN A CODE FIX
+ *
+ * Ramblr cannot fix this one from the inside. The failing step is an automation tool's own write
+ * to `enabled_accessibility_services`, performed while Ramblr's service is NOT running -- there
+ * is no Ramblr process alive at that moment to detect the failure, retry it, or even observe it.
+ * A re-enable broadcast receiver is not an option either: adding itself back to that list needs
+ * WRITE_SECURE_SETTINGS, and exposing an app-callable "turn an accessibility service ON" action
+ * to arbitrary callers is a far worse capability than the "off" one (see [AutomationOffHookToggle]).
+ *
+ * What Ramblr CAN do is make the write verifiable, which is the whole point of promoting
+ * [AutomationOffReceiver.ACTION_DIAGNOSTIC] to a shipped action. The macro becomes convergent
+ * rather than hopeful:
+ *
+ *  1. Enable action (the tool's own Accessibility Service -> Enable).
+ *  2. Wait ~2 seconds -- long enough for a late AMS re-persist to land and clobber the write if
+ *     it is going to (observed ~1s in [InvocationServiceMode.verifySettled]'s device testing).
+ *  3. Diagnostic broadcast; read `active_component_enabled` out of the result data.
+ *  4. If false, enable again and repeat. Two or three attempts is plenty in practice.
+ *
+ * This is the same settle-verify-repair shape [InvocationServiceMode.verifySettled] runs
+ * internally for Ramblr's own mode switch, for exactly the same reason, just expressed in the
+ * automation tool instead of in Kotlin.
+ */
+fun automationReEnableVerifyGuidance(): String =
+    "If an external re-enable sometimes doesn't take, add a verify step after it: wait about " +
+        "2 seconds, send the diagnostic broadcast, and read active_component_enabled from the " +
+        "result data. If it is false, run the enable action again. Android can discard a write " +
+        "to the accessibility list shortly after it lands, and re-checking is the only reliable " +
+        "way to tell -- Ramblr isn't running at that moment, so it cannot retry for you."

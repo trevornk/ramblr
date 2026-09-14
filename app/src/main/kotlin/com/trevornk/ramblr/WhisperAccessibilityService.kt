@@ -603,6 +603,16 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // separates "killed by the OS shortcut switch" from "never enabled") and re-arm the
         // recovery banner's dismissal for the next fresh detection.
         InvocationGuardRail.recordServiceConnected(this)
+        // #254: the service is demonstrably back, so any "Ramblr was turned off" notification in
+        // the shade is now stale and must go immediately -- waiting for the next worker tick (up
+        // to 15 minutes) would leave a notification claiming Ramblr is off while it is running.
+        // recordServiceConnected above has already re-armed the dismissal flag, so a genuine
+        // later loss still notifies.
+        ServiceRecoveryNotifications.cancel(this)
+        // Schedule the recovery check from here too, not just MainActivity.onCreate: a user who
+        // sets Ramblr up through onboarding and never reopens the main screen would otherwise
+        // never get the periodic check scheduled at all. KEEP makes the overlap a no-op.
+        ServiceRecoveryWorker.schedule(this)
         CustomPersonaStore.ensureLegacySeeded(this)
         ProviderChainMigration.runIfNeeded(this)
         showOverlay()

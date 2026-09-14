@@ -267,6 +267,29 @@
             android:excludeFromRecents="true"
             android:noHistory="true" />
 
+        <!-- #254: no-UI trampoline for the "Ramblr was turned off" notification's tap target.
+             Same rationale as RestoreIconActivity above (Activity, not receiver, so the shade
+             collapses normally) plus one of its own: the base tier's recovery path is starting
+             the system Accessibility settings Activity, which a background broadcast cannot
+             reliably do. -->
+        <activity
+            android:name=".ServiceRecoveryActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true" />
+
+        <!-- #254: records a swipe-dismissal of the recovery notification so ServiceRecoveryWorker
+             stops re-posting it every tick for the same unchanged condition. Not exported: only
+             the system notification manager delivers this notification's delete intent. -->
+        <receiver
+            android:name=".ServiceRecoveryDismissReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.trevornk.ramblr.action.RECOVERY_NOTIFICATION_DISMISSED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Exposes app-private files/benchmark_log.jsonl as a content:// URI to whatever app
              Trevor shares it via (Gmail, Discord, Drive, ...) from AdvancedActivity's "Share
              benchmark log" action (#100), without granting broader access to app-private
@@ -289,12 +312,22 @@
              any app on the device can silence dictation with no user interaction, so it stays
              the user's explicit opt-in. Deliberately no enable counterpart (see
              AutomationOffHookToggle's KDoc: re-enabling needs WRITE_SECURE_SETTINGS and is a
-             far worse capability to hand to arbitrary callers). -->
+             far worse capability to hand to arbitrary callers).
+
+             #254: TURN_OFF's read-only sibling action, DIAGNOSTIC, is on this SAME
+             receiver/intent-filter rather than a new exported component; it shares the identical
+             exported=true surface and the identical AutomationOffHookToggle gate (see
+             AutomationOffReceiver.handleDiagnostic's kdoc), so no new unrestricted exported
+             receiver is introduced. The action set on an already-exported, already-gated
+             receiver just grew by one read-only entry. It reports service/component status so an
+             automation macro can verify its own re-enable actually persisted, which is the
+             write-then-verify pattern in automationReEnableVerifyGuidance. -->
         <receiver
             android:name=".AutomationOffReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="com.trevornk.ramblr.action.TURN_OFF" />
+                <action android:name="com.trevornk.ramblr.action.DIAGNOSTIC" />
             </intent-filter>
         </receiver>
 

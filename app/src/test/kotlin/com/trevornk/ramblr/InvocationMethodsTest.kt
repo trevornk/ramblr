@@ -299,6 +299,78 @@ class InvocationMethodsTest {
         assertTrue(system.contains("Ramblr (System controls)"))
     }
 
+    // --- #254 shouldPostServiceRecoveryNotification -------------------------------------------
+    //
+    // The out-of-app half of the #258 recovery story. #258's detector already decides WHETHER the
+    // service is broken; these cases only govern whether the user gets told about it out of app,
+    // which is a different question with its own three suppressors.
+
+    @Test fun `base-tier user whose automation re-enable failed gets notified`() {
+        // The reporter's exact case: no WRITE_SECURE_SETTINGS, so the app cannot self-heal and
+        // OFFER_RECOVERY is all #258 can conclude. Before this, that conclusion was only ever
+        // rendered inside MainActivity -- invisible to someone who never opens Ramblr, which is
+        // the entire automation use case.
+        assertTrue(shouldPostServiceRecoveryNotification(
+            action = StaleComponentAction.OFFER_RECOVERY,
+            repairSucceeded = false,
+            alreadyPosted = false,
+            userDismissedNotification = false,
+        ))
+    }
+
+    @Test fun `a successful silent repair never notifies`() {
+        // Advanced tier put the service back this tick. The user's problem is solved; telling
+        // them about a fixed problem is pure noise.
+        assertFalse(shouldPostServiceRecoveryNotification(
+            action = StaleComponentAction.REPAIR_TO_ACTIVE,
+            repairSucceeded = true,
+            alreadyPosted = false,
+            userDismissedNotification = false,
+        ))
+    }
+
+    @Test fun `a failed repair on the advanced tier still notifies`() {
+        // REPAIR_TO_ACTIVE is an intent, not a guarantee: the write can fail if the grant was
+        // revoked mid-flight or an OEM rejects it. A user left broken must still be told, which
+        // is exactly why repairSucceeded is a separate input from action.
+        assertTrue(shouldPostServiceRecoveryNotification(
+            action = StaleComponentAction.REPAIR_TO_ACTIVE,
+            repairSucceeded = false,
+            alreadyPosted = false,
+            userDismissedNotification = false,
+        ))
+    }
+
+    @Test fun `a healthy service is never notified about`() {
+        assertFalse(shouldPostServiceRecoveryNotification(
+            action = StaleComponentAction.NONE,
+            repairSucceeded = false,
+            alreadyPosted = false,
+            userDismissedNotification = false,
+        ))
+    }
+
+    @Test fun `an already-posted notification is not re-posted`() {
+        // Without this the worker would re-alert for the same unchanged condition every tick.
+        assertFalse(shouldPostServiceRecoveryNotification(
+            action = StaleComponentAction.OFFER_RECOVERY,
+            repairSucceeded = false,
+            alreadyPosted = true,
+            userDismissedNotification = false,
+        ))
+    }
+
+    @Test fun `a dismissed notification stays dismissed while the condition persists`() {
+        // Swiping it away must mean something. The flag is cleared by recordServiceConnected, so
+        // this silences the CURRENT loss only -- a later fresh loss notifies again.
+        assertFalse(shouldPostServiceRecoveryNotification(
+            action = StaleComponentAction.OFFER_RECOVERY,
+            repairSucceeded = false,
+            alreadyPosted = false,
+            userDismissedNotification = true,
+        ))
+    }
+
     // --- shouldShowServiceKilledBanner ------------------------------------------------------
 
     @Test fun `banner fires on the exact invisible-toggle kill state in system controls mode`() {

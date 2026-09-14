@@ -110,7 +110,18 @@ class RamblrQsTileService : TileService() {
                 // "tap to deep-link to Settings" affordance below unreachable. INACTIVE keeps
                 // the tile tappable while the subtitle still makes the disabled state clear.
                 tile.state = Tile.STATE_INACTIVE
-                tile.subtitle = getString(R.string.tile_subtitle_service_disabled)
+                // #254: distinguish "you never turned it on" from "it was on and something
+                // switched it off". The second is the automation-breakage case, and a user whose
+                // macro's re-enable silently failed has no other instant signal -- the QS panel
+                // is the fastest place to see it, since they may already be pulling the shade
+                // down to dictate. Reuses #258's detector rather than a second notion of broken.
+                tile.subtitle = if (
+                    InvocationGuardRail.staleComponentAction(this) != StaleComponentAction.NONE
+                ) {
+                    getString(R.string.tile_subtitle_service_turned_off)
+                } else {
+                    getString(R.string.tile_subtitle_service_disabled)
+                }
             }
             RecordingStateMachine.State.RECORDING -> {
                 tile.state = Tile.STATE_ACTIVE
