@@ -167,6 +167,73 @@ object SelfUpdateNotifications {
         }
     }
 
+    /**
+     * Terminal install-failure notification for the ASYNCHRONOUS PackageInstaller callback (#253),
+     * as opposed to [postInstallFailure]'s synchronous worker-side throw.
+     *
+     * Two things distinguish it from [postInstallFailure] and are the entire reason it exists:
+     *
+     *  - It takes a versionCode, so it can CANCEL the per-version "update available" notification
+     *    ([notificationId]) that [postUpdateAvailable] left up. Without that, a user whose install
+     *    just failed keeps a cheerful "Update available -- tap to view the release" sitting in the
+     *    shade forever, which is the specific user-visible defect #253 reports: the failure was
+     *    detected and logged correctly and then only ever visible over adb.
+     *  - It offers the release page as the manual fallback, because by this point the automatic
+     *    path has definitively failed and re-running it is not going to help.
+     *
+     * Never throws (POST_NOTIFICATIONS may be denied), mirroring [postInstallFailure].
+     */
+    fun postInstallFailedAsync(
+        ctx: Context,
+        versionName: String,
+        versionCode: Int,
+        releaseUrl: String?,
+        reason: String,
+    ) {
+        ensureChannel(ctx)
+        val builder = NotificationCompat.Builder(ctx, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_mic)
+            .setContentTitle("Update v$versionName failed to install")
+            .setContentText(reason)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(reason))
+            .setAutoCancel(true)
+        if (!releaseUrl.isNullOrBlank()) {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val pending = PendingIntent.getActivity(
+                ctx,
+                notificationId(versionCode) xor RELEASE_FALLBACK_REQUEST_CODE_MASK,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.setContentIntent(pending).addAction(0, "Open release page", pending)
+        }
+        try {
+            val manager = NotificationManagerCompat.from(ctx)
+            // Clear the stale "update available" prompt for THIS version first: leaving it up
+            // next to a failure notification for the same release is contradictory, and tapping
+            // it does nothing useful now.
+            manager.cancel(notificationId(versionCode))
+            manager.notify(INSTALL_PROGRESS_NOTIFICATION_ID, builder.build())
+        } catch (_: SecurityException) {
+        }
+    }
+
+    /** Distinct request-code mask for [postInstallFailedAsync]'s release-page PendingIntent, so it
+     *  can never collide with [releasePendingIntent] or [installActionPendingIntent] for the same
+     *  version -- same reasoning as [INSTALL_ACTION_REQUEST_CODE_MASK]. */
+    private const val RELEASE_FALLBACK_REQUEST_CODE_MASK = 0x2000_0000
+
+    /** Clears the per-version "update available" notification (#253). Used when that prompt has
+     *  become actively wrong -- the update it advertises is now installed, or has definitively
+     *  failed to install. Never throws, for the same POST_NOTIFICATIONS reason as the posters. */
+    fun cancelUpdateAvailable(ctx: Context, versionCode: Int) {
+        try {
+            NotificationManagerCompat.from(ctx).cancel(notificationId(versionCode))
+        } catch (_: SecurityException) {
+        }
+    }
+
     /** [Intent] to Android's own "Install unknown apps" settings screen for this app, scoped with
      *  [Uri] `package:<applicationId>` the same way [Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES]'s
      *  own docs require -- without the package-scheme data Uri, the system opens the generic list

@@ -60,10 +60,10 @@ object SelfUpdateInstaller {
      *  `requireUserAction`) if the silent attempt isn't available or throws for any reason.
      *  Throws [IOException] if even the fallback attempt fails to start (e.g. can't open a
      *  session at all) -- caller (SelfUpdateInstallWorker) treats that as a terminal failure. */
-    fun install(ctx: Context, apkFile: File) {
+    fun install(ctx: Context, apkFile: File, update: UpdateCheckResult.UpdateAvailable? = null) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
-                installSession(ctx, apkFile, silent = true)
+                installSession(ctx, apkFile, silent = true, update = update)
                 return
             } catch (e: Exception) {
                 // Any failure of the silent path (permission not actually effective, session
@@ -74,10 +74,15 @@ object SelfUpdateInstaller {
                 // outside this app's control (see the kdoc above).
             }
         }
-        installSession(ctx, apkFile, silent = false)
+        installSession(ctx, apkFile, silent = false, update = update)
     }
 
-    private fun installSession(ctx: Context, apkFile: File, silent: Boolean) {
+    private fun installSession(
+        ctx: Context,
+        apkFile: File,
+        silent: Boolean,
+        update: UpdateCheckResult.UpdateAvailable?,
+    ) {
         val packageInstaller = ctx.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         if (silent && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -91,6 +96,17 @@ object SelfUpdateInstaller {
                 session.fsync(out)
             }
             val intent = Intent(ctx, SelfUpdateInstallReceiver::class.java)
+            // Carry the release identity on the callback Intent (#253). PackageInstaller's status
+            // callback tells us WHAT happened but nothing about WHICH release it happened to, and
+            // the receiver is manifest-declared precisely so it survives the process that started
+            // the session -- so it cannot read this back out of memory. Without these extras the
+            // receiver can neither name the version in a failure notification nor cancel that
+            // version's stale "update available" one.
+            update?.let {
+                intent.putExtra(SelfUpdateInstallReceiver.EXTRA_VERSION_NAME, it.versionName)
+                intent.putExtra(SelfUpdateInstallReceiver.EXTRA_VERSION_CODE, it.versionCode)
+                intent.putExtra(SelfUpdateInstallReceiver.EXTRA_RELEASE_URL, it.releaseUrl)
+            }
             val pendingIntent = PendingIntent.getBroadcast(
                 ctx, sessionId, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,

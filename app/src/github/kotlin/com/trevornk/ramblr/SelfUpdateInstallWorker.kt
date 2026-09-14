@@ -220,7 +220,7 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
         // the window further, it can't remove it -- there is no atomic "check-and-install"
         // primitive across the accessibility-service boundary.
         return try {
-            SelfUpdateInstaller.install(applicationContext, apkFile)
+            SelfUpdateInstaller.install(applicationContext, apkFile, update)
             // The staged APK has been successfully handed off to (and committed by)
             // PackageInstaller -- it's no longer needed on disk. Mirrors the downloadApk()
             // path's tmp.delete() cleanup for the .part file: a successful terminal outcome

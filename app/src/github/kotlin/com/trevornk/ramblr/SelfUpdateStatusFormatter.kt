@@ -85,6 +85,38 @@ object SelfUpdateStatusFormatter {
     fun permissionNeededReason(): String =
         "Install unknown apps access is required to finish installing this update."
 
+    /**
+     * User-facing reason for a terminal PackageInstaller failure delivered asynchronously to
+     * [SelfUpdateInstallReceiver] (#253).
+     *
+     * Exists because the framework's own [android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE]
+     * is developer-facing diagnostic text -- `INSTALL_FAILED_UPDATE_INCOMPATIBLE` means nothing to
+     * a user -- but it is also the only thing that distinguishes one failure from another, so it
+     * is appended rather than discarded. Keeping the mapping here (pure, no Android types) is what
+     * makes it directly testable, matching how [permissionNeededReason] and [deferredReason] are
+     * already structured.
+     *
+     * [message] is nullable because the extra is genuinely absent on some failure paths.
+     */
+    fun installFailureReason(message: String?): String {
+        val detail = message?.trim().orEmpty()
+        val base = when {
+            detail.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") ->
+                "This update is signed with a different key than the installed copy. " +
+                    "Reinstalling from the release page is the only way forward."
+            detail.contains("INSTALL_FAILED_INSUFFICIENT_STORAGE") ->
+                "Not enough free storage to install this update."
+            detail.contains("INSTALL_FAILED_VERSION_DOWNGRADE") ->
+                "The installed version is already newer than this update."
+            detail.contains("ABORTED") ->
+                "The install was cancelled before it finished."
+            else -> "The update downloaded but could not be installed."
+        }
+        // Keep the raw framework text when there is any, so a bug report carries the real cause
+        // instead of only this app's paraphrase of it.
+        return if (detail.isEmpty()) base else "$base ($detail)"
+    }
+
     /** 24h hour-of-day to a 12h clock phrase ("1am", "12pm"), matching how the rest of the app's
      *  user-facing copy reads. Only whole hours occur here: the quiet-hours window is defined in
      *  whole hour-of-day units ([SelfUpdateInstallGate.isWithinQuietHours]). */

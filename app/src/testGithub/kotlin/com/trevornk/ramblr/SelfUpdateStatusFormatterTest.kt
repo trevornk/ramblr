@@ -144,4 +144,38 @@ class SelfUpdateStatusFormatterTest {
         assertEquals("12am", SelfUpdateStatusFormatter.formatHour(24))
         assertEquals("11pm", SelfUpdateStatusFormatter.formatHour(-1))
     }
+
+    // --- #253 async install failure reasons -----------------------------------------------
+
+    @Test fun `install failure reason explains the signing mismatch in plain language`() {
+        // The device-observed failure in #253. INSTALL_FAILED_UPDATE_INCOMPATIBLE is meaningless
+        // to a user, so the paraphrase carries the actual meaning.
+        val reason = SelfUpdateStatusFormatter
+            .installFailureReason("INSTALL_FAILED_UPDATE_INCOMPATIBLE")
+        assertTrue(reason, reason.contains("signed with a different key"))
+    }
+
+    @Test fun `install failure reason keeps the raw framework message for bug reports`() {
+        // Paraphrasing must not DESTROY the only text that distinguishes one failure from
+        // another -- a user pasting this into an issue should still carry the real cause.
+        val reason = SelfUpdateStatusFormatter
+            .installFailureReason("INSTALL_FAILED_INSUFFICIENT_STORAGE")
+        assertTrue(reason, reason.contains("INSTALL_FAILED_INSUFFICIENT_STORAGE"))
+        assertTrue(reason, reason.contains("Not enough free storage"))
+    }
+
+    @Test fun `install failure reason handles a missing message without dangling punctuation`() {
+        // EXTRA_STATUS_MESSAGE is genuinely absent on some paths; the result must still read as
+        // a sentence rather than trailing an empty "()".
+        val reason = SelfUpdateStatusFormatter.installFailureReason(null)
+        assertTrue(reason, reason.isNotBlank())
+        assertFalse(reason, reason.contains("()"))
+        assertFalse(reason, reason.contains("null"))
+    }
+
+    @Test fun `install failure reason is never empty for an unrecognized message`() {
+        val reason = SelfUpdateStatusFormatter.installFailureReason("SOME_NEW_ANDROID_CODE")
+        assertTrue(reason, reason.contains("could not be installed"))
+        assertTrue(reason, reason.contains("SOME_NEW_ANDROID_CODE"))
+    }
 }
