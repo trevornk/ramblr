@@ -40,7 +40,7 @@ jobs:
       - name: Checkout
         # Actions pinned to full commit SHAs, not mutable tags, so a compromised tag can't
         # silently swap the action out from under CI (L-3). Trailing comment records the version.
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # llama.cpp (#37) is a git submodule the native cleanup build depends on -- without
           # this, CI's checkout leaves it as an empty directory and CMake fails configuring
@@ -48,19 +48,26 @@ jobs:
           submodules: recursive
 
       - name: Set up JDK 17
-        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        # DELIBERATELY HELD AT v5, do not bump to v6+ without a licensing decision.
+        # gradle/actions@v6 extracted the caching functionality into `gradle-actions-caching`,
+        # a proprietary component NOT covered by the MIT license, and using v6 constitutes
+        # acceptance of https://gradle.com/legal/terms-of-use/. See
+        # https://blog.gradle.org/github-actions-for-gradle-v6. v5.0.2 is still MIT, carries no
+        # proprietary dependency, and already runs on node24 -- so it satisfies the Node 20
+        # deprecation without taking on commercial terms for an F-Droid-distributed app.
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
 
       - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        uses: gradle/actions/wrapper-validation@0723195856401067f7a2779048b490ace7a47d7c # v5
 
       - name: Unit tests
         run: ./gradlew testGithubDebugUnitTest testStorefrontDebugUnitTest
@@ -76,7 +83,7 @@ jobs:
           echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Upload debug APKs
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: app-debug
           # app/build.gradle.kts renames the output to Ramblr-<versionName>-<flavor>-debug.apk
@@ -102,10 +109,10 @@ jobs:
         # rebuild anything; it just needs `git rev-parse` for the short SHA and the release
         # notes/tag text. This is the actual minutes savings versus the old release.yml,
         # which re-ran the full submodule checkout + toolchain + test + build for this.
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Download build artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: app-debug
           path: app/build/outputs/apk
