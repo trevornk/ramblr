@@ -55,6 +55,12 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          # The action's own default is `packages: 'tools platform-tools'`, and the `tools`
+          # package is obsolete -- it no longer exists in the SDK repository, so sdkmanager
+          # exits 1 with "Failed to find package 'tools'" and the step fails. This is not a
+          # flake: it reproduced identically on a re-run. Request only platform-tools.
+          packages: platform-tools
 
       - name: Set up Gradle
         # cache-provider: basic keeps us on the MIT-licensed caching path. gradle/actions@v6
