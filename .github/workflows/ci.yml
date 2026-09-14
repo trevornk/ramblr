@@ -57,17 +57,20 @@ jobs:
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
       - name: Set up Gradle
-        # DELIBERATELY HELD AT v5, do not bump to v6+ without a licensing decision.
-        # gradle/actions@v6 extracted the caching functionality into `gradle-actions-caching`,
-        # a proprietary component NOT covered by the MIT license, and using v6 constitutes
-        # acceptance of https://gradle.com/legal/terms-of-use/. See
-        # https://blog.gradle.org/github-actions-for-gradle-v6. v5.0.2 is still MIT, carries no
-        # proprietary dependency, and already runs on node24 -- so it satisfies the Node 20
-        # deprecation without taking on commercial terms for an F-Droid-distributed app.
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+        # cache-provider: basic keeps us on the MIT-licensed caching path. gradle/actions@v6
+        # moved the default ("enhanced") caching into `gradle-actions-caching`, a proprietary
+        # closed-source component governed by Gradle's Terms of Use rather than the MIT license.
+        # v6.1 added `basic`, a 100% open-source provider over actions/cache, and the proprietary
+        # library "is not loaded or used with basic caching" (see the repo's DISTRIBUTION.md).
+        # Keep this input: dropping it silently opts an F-Droid-distributed app into proprietary
+        # code and Free-Preview terms that Gradle has said may later carry usage-based pricing.
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+        with:
+          cache-provider: basic
 
       - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@0723195856401067f7a2779048b490ace7a47d7c # v5
+        # No caching in this action, so the licensing note above doesn't apply here.
+        uses: gradle/actions/wrapper-validation@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
 
       - name: Unit tests
         run: ./gradlew testGithubDebugUnitTest testStorefrontDebugUnitTest

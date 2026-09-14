@@ -55,9 +55,12 @@ jobs:
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
       - name: Set up Gradle
-        # Held at v5 on purpose -- see the licensing note in ci.yml. v6 pulls in the
-        # proprietary `gradle-actions-caching` component; v5.0.2 is MIT and already node24.
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+        # cache-provider: basic pins this to the MIT-licensed caching implementation; v6's
+        # default "enhanced" provider loads the proprietary `gradle-actions-caching` library.
+        # See the fuller note in ci.yml. Do not drop this input.
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+        with:
+          cache-provider: basic
 
       - name: Assemble unsigned release APKs
         # Builds BOTH flavors' release variants (github + storefront). Storefront is the one
