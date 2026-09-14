@@ -51,4 +51,39 @@ class MainActivityOnboardingWiringTest {
         assertTrue(statusTap.contains("hasLocalModel = transcriptionModelReady()"))
         assertFalse(statusTap.contains("LocalTranscriber.availableModels(this).isNotEmpty()"))
     }
+
+    /**
+     * #254: opening the app must clear a stale "Ramblr was turned off" notification.
+     *
+     * WhisperAccessibilityService.onServiceConnected cancels too, but only when the service
+     * actually rebinds inside this process. A user whose service came back another way opens the
+     * app to fix the notification and would otherwise still see it for up to a worker tick
+     * (15 minutes), claiming Ramblr is off while it is demonstrably running. Scoped to refresh()'s
+     * balanced body so a cancel call somewhere else in the file cannot satisfy it.
+     */
+    @Test fun `refresh cancels the recovery notification once the loss is over`() {
+        val refresh = functionBody("refresh")
+        val healthyBranch = refresh.indexOf("StaleComponentAction.NONE ->")
+
+        assertTrue("refresh must handle the healthy branch", healthyBranch >= 0)
+        assertTrue(
+            "the healthy branch must cancel the recovery notification, not fall through to Unit",
+            refresh.substring(healthyBranch).startsWith(
+                "StaleComponentAction.NONE -> ServiceRecoveryNotifications.cancel(this)"
+            ),
+        )
+    }
+
+    @Test fun `a successful silent repair also clears the recovery notification`() {
+        val refresh = functionBody("refresh")
+        val repaired = refresh.indexOf("toast(\"Ramblr's accessibility service was restored\")")
+        val elseBranch = refresh.indexOf("} else if (!InvocationGuardRail.staleBannerDismissed(this))")
+
+        assertTrue("the repair-success branch must exist", repaired >= 0)
+        assertTrue("the repair-failure branch must exist", elseBranch > repaired)
+        assertTrue(
+            "repairing the very condition the notification reports must also cancel it",
+            refresh.substring(repaired, elseBranch).contains("ServiceRecoveryNotifications.cancel(this)"),
+        )
+    }
 }

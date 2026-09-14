@@ -325,6 +325,9 @@ class MainActivity : BaseSettingsActivity() {
             StaleComponentAction.REPAIR_TO_ACTIVE ->
                 if (InvocationSecureSettings.repairToActiveComponent(this)) {
                     toast("Ramblr's accessibility service was restored")
+                    // #254: the repair just fixed the very condition the notification reports, so
+                    // drop it here rather than leaving it until the next worker tick.
+                    ServiceRecoveryNotifications.cancel(this)
                 } else if (!InvocationGuardRail.staleBannerDismissed(this)) {
                     staleComponentBanner.visibility = View.VISIBLE
                 }
@@ -332,7 +335,12 @@ class MainActivity : BaseSettingsActivity() {
                 if (!InvocationGuardRail.staleBannerDismissed(this)) {
                     staleComponentBanner.visibility = View.VISIBLE
                 }
-            StaleComponentAction.NONE -> Unit
+            // #254: the loss is over. WhisperAccessibilityService.onServiceConnected also cancels,
+            // but it only fires when the service actually rebinds in this process -- a user whose
+            // service came back some other way (or whose process was already running) would
+            // otherwise stare at a "Ramblr was turned off" notification, open the app to fix it,
+            // and find it still there for up to 15 minutes. Opening the app must clear it.
+            StaleComponentAction.NONE -> ServiceRecoveryNotifications.cancel(this)
         }
 
         // Ready logic -- see OnboardingWizard.isSetupComplete for what "ready" means (#52).
