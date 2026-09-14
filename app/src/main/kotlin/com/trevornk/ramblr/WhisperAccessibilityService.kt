@@ -752,7 +752,21 @@ open class WhisperAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
-        instance = null
+        // Defensive identity check, NOT a confirmed fix for #254: unconditionally clearing the
+        // shared companion `instance` field here would be wrong *if* a superseded instance's
+        // onDestroy() were ever able to run after a newer instance's onServiceConnected() already
+        // reassigned `instance`. As of this investigation that ordering has not been reproduced
+        // on-device (see /Users/aiserver/.hermes/ramblr-254-platform-investigation.md and the
+        // #254 investigation notes) and AOSP's ActiveServices/Binder-ordering behavior for a
+        // same-process rebind appears to serialize old onDestroy() strictly before new
+        // onServiceConnected() runs, which would make this branch a no-op in practice. Kept
+        // because it is a correct, harmless guard regardless (an instance should never clear a
+        // *different* live instance's reference), not because it has been shown to fix a real
+        // bug. Do not cite this as resolving #254's intermittent-restore reports without new
+        // reproduction evidence.
+        if (instance === this) {
+            instance = null
+        }
         unregisterNetworkCallback()
         unregisterScreenStateReceiver()
         // Only tear down a runtime that was actually constructed. `runtime`'s getter is lazy
