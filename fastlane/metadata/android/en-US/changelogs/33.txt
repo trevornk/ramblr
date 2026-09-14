@@ -1,0 +1,27 @@
+Status command for automation tools, a notification when Ramblr gets switched
+off, and clearer update failures.
+
+- If something switches Ramblr's accessibility service off while you are in
+  another app, Ramblr now tells you instead of staying silently dead until you
+  next open it. The notification takes you straight to the switch. If you have
+  granted the optional advanced permission, Ramblr turns itself back on and
+  says nothing.
+- The quick settings tile now says "Turned off" when the service was switched
+  off unexpectedly, rather than looking the same as when you turned it off
+  yourself.
+- Settings > Advanced > Behavior gains a status command you can run from
+  MacroDroid, Tasker or a shell. It reports whether Ramblr's service is
+  actually running. If your automation turns Ramblr on and it does not stick,
+  run this about two seconds afterward to see what really happened, and turn it
+  on again if the status says it is still off.
+- The same screen documents the raw command for turning the service back on. It
+  works only from something that already has authority to change secure
+  settings, such as an ADB shell or a rooted device. Your tool's own "enable
+  accessibility service" action remains the normal route.
+- Update failures are no longer invisible. If an update downloads but will not
+  install, Ramblr says so and explains why, instead of leaving an "Update
+  available" notification that does nothing when tapped.
+
+The reported problem where an automation tool re-enables Ramblr and the setting
+does not stick is not fixed here, and may not be fixable from inside Ramblr.
+The status command exists so you can see it happening and retry.
