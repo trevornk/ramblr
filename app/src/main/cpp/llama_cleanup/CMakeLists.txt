@@ -96,9 +96,25 @@ set(GIT_EXE "GIT_EXE-NOTFOUND" CACHE FILEPATH "" FORCE)
 # libggml-cpu-android_*.so files link at the linker's 4KB default while every other library in
 # the APK is 16KB aligned; confirmed on-device, where Android's own compatibility dialog listed
 # exactly those seven and nothing else.
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
-set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
+# --build-id=none (#268): the same MODULE-vs-SHARED split above also broke reproducibility.
+# LLD writes .note.gnu.build-id into MODULE targets, and its hash covers the linked output
+# including absolute build paths, so it differs per build host. Every SHARED library in this
+# APK has no build-id section at all, so only the ggml-cpu variants carried one -- and F-Droid's
+# builder reproduced v1.0.30 byte-for-byte EXCEPT for exactly 20 bytes at offsets 793-812 in
+# each of the four libggml-cpu-android_*.so, which is precisely that note's descriptor
+# (.note.gnu.build-id lives at Off 0x308, Size 0x24). Verified by cmp(1) against the failed
+# job's own artifact, not inferred: fdroiddata!42401 job 16596692481.
+#
+# The merge*ReleaseNativeLibs llvm-strip --strip-all pass below cannot remove it: the section is
+# SHF_ALLOC, so strip keeps it by design. That pass fixes .comment (#66) and nothing here.
+# --build-id=sha1 would not help either, since the hash still covers host-specific input.
+# Dropping the section matches what every SHARED library in this APK already does.
+#
+# Set on SHARED/EXE too even though they emit no build-id today: that is the NDK's current
+# default rather than something we pin, and a toolchain bump could silently reintroduce this.
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 -Wl,--build-id=none")
+set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 -Wl,--build-id=none")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 -Wl,--build-id=none")
 
 # CPU feature targeting (#37 follow-up, then #187): ggml's GGML_NATIVE defaults OFF for any
 # cross-compiled build (this NDK build included -- see CMAKE_CROSSCOMPILING in

@@ -98,8 +98,8 @@ android {
         applicationId = "com.trevornk.ramblr"
         minSdk = 30
         targetSdk = 36
-        versionCode = 33
-        versionName = "1.0.30"
+        versionCode = 34
+        versionName = "1.0.31"
 
         buildConfigField("String", "OMNIROUTE_BASE_URL", "\"$omniRouteBaseUrl\"")
 
@@ -356,6 +356,53 @@ tasks.matching { it.name.matches(Regex("merge.*ReleaseNativeLibs")) }.configureE
                         commandLine(ramblrLlvmStrip.absolutePath, "--strip-all", soFile.absolutePath)
                     }
                 }
+        }
+
+        // Reproducibility gate (#268). `--strip-all` above CANNOT remove .note.gnu.build-id:
+        // that section is SHF_ALLOC, so llvm-strip keeps it by design. LLD's build-id hash
+        // covers the linked output including absolute build paths, so any library that carries
+        // one is guaranteed to differ between this host and F-Droid's buildserver -- which is
+        // exactly how v1.0.30 failed (the four libggml-cpu-android_*.so MODULE targets differed
+        // in precisely the 20 bytes of that note's descriptor and nothing else).
+        //
+        // The linker flags in llama_cleanup/CMakeLists.txt are the fix; this is the assertion
+        // that they actually took effect on every packaged library. Cheap, and it fails the
+        // release build here instead of surfacing a week later as a red F-Droid MR.
+        val ramblrLlvmReadelf = ramblrLlvmStrip.resolveSibling("llvm-readelf")
+        if (!ramblrLlvmReadelf.exists()) {
+            logger.warn("Ramblr build-id check skipped: llvm-readelf not found at $ramblrLlvmReadelf")
+            return@doLast
+        }
+        // Prebuilt third-party binaries we ship but do NOT link: libomp.so ships inside the
+        // pinned NDK, libonnxruntime.so is downloaded as a pinned release artifact. Their
+        // build-ids were baked in by whoever built them, so they are byte-identical on every
+        // host and cannot cause a reproducibility failure. This is not an assumption: F-Droid's
+        // buildserver reproduced versionCodes 26/27/28 byte-for-byte with these exact files
+        // already present and carrying build-ids (fdroiddata!42401). Only libraries THIS build
+        // links are host-sensitive, and those are what the linker flags cover.
+        val ramblrPrebuiltSos = setOf("libomp.so", "libonnxruntime.so")
+        val withBuildId = outputs.files.files.flatMap { outDir ->
+            outDir.walkTopDown()
+                .filter { it.isFile && it.name.endsWith(".so") }
+                .filter { it.name !in ramblrPrebuiltSos }
+                .filter { soFile ->
+                    val sections = providers.exec {
+                        commandLine(ramblrLlvmReadelf.absolutePath, "-S", soFile.absolutePath)
+                    }.standardOutput.asText.get()
+                    sections.contains(".note.gnu.build-id")
+                }
+                .map { it.name }
+                .toList()
+        }
+        if (withBuildId.isNotEmpty()) {
+            throw GradleException(
+                "Reproducible-build check failed (#268): these native libraries still carry a " +
+                    "host-dependent .note.gnu.build-id and will not reproduce on F-Droid's " +
+                    "buildserver: ${withBuildId.sorted().joinToString(", ")}. " +
+                    "Ensure -Wl,--build-id=none is applied to the linker flags for their target " +
+                    "kind in app/src/main/cpp/llama_cleanup/CMakeLists.txt -- note MODULE targets " +
+                    "take CMAKE_MODULE_LINKER_FLAGS, not CMAKE_SHARED_LINKER_FLAGS."
+            )
         }
     }
 }

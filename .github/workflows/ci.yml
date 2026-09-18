@@ -131,7 +131,24 @@ jobs:
         run: |
           SHORT_SHA=$(git rev-parse --short=7 HEAD)
           VERSION_NAME="${{ needs.build-and-test.outputs.version_name }}"
-          TAG="v${VERSION_NAME}-dev.$(date -u +%Y%m%d%H%M).${SHORT_SHA}"
+          # `dev/` prefix, NOT `v${VERSION_NAME}-dev...` (#269). These debug prereleases carry
+          # the same versionCode/versionName as the real release they follow, so a
+          # `v1.0.30-dev.<ts>.<sha>` tag is indistinguishable from `v1.0.30` to anything that
+          # parses a version out of a tag, and sorts LATER. Two concrete breakages that caused:
+          #
+          #  1. F-Droid's `UpdateCheckMode: Tags` + `AutoUpdateMode: Version` scanned tags for
+          #     the highest version, found two claiming 1.0.30, and pinned the build entry to
+          #     the dev commit (8dc3be0) instead of the release commit (18618b0). That entry
+          #     could never reproduce against the published APK, and in the worst case would
+          #     publish from an unreviewed commit -- see fdroiddata!42401.
+          #  2. reproducible-build.yml triggers on tags `v*.*.*`, which these matched, so every
+          #     single push to main also kicked off a full unsigned release build for nothing.
+          #
+          # A `/`-containing ref is the cleanest fix: GitHub's tag filter globs don't match `/`
+          # across segments, and no version parser will read `dev/...` as a release version.
+          # SelfUpdateResolver.isCleanReleaseTag (`^v\d+\.\d+\.\d+$`) rejects both old and new
+          # forms, so the sideload updater is unaffected either way.
+          TAG="dev/${VERSION_NAME}.$(date -u +%Y%m%d%H%M).${SHORT_SHA}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           # Matches the path the downloaded artifact was restored to above -- same
