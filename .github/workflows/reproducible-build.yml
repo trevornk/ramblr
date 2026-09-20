@@ -68,10 +68,39 @@ jobs:
         with:
           cache-provider: basic
 
-      - name: Assemble unsigned release APKs
+      - name: Test and assemble fresh unsigned release APKs
         # Builds BOTH flavors' release variants (github + storefront). Storefront is the one
         # F-Droid consumes; github is kept for the self-updating sideload channel.
-        run: ./gradlew assembleRelease
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          printf '%s\n' "$(git rev-parse HEAD)" > r8-source-commit.txt
+          ./gradlew testGithubDebugUnitTest testStorefrontDebugUnitTest assembleRelease \
+            --no-build-cache --rerun-tasks
+
+      - name: Verify optimized release contracts
+        run: |
+          set -euo pipefail
+          python3 tools/verify_r8_release.py --source \
+            --storefront-apk app/build/outputs/apk/storefront/release/Ramblr-*-storefront-release.apk \
+            --github-apk app/build/outputs/apk/github/release/Ramblr-*-github-release.apk \
+            --storefront-mapping app/build/outputs/mapping/storefrontRelease/mapping.txt \
+            --github-mapping app/build/outputs/mapping/githubRelease/mapping.txt
+          python3 - <<'PY' > r8-unit-test-summary.txt
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          # Gradle just generated these local reports in the preceding trusted task, not user input.
+          for flavor in ("github", "storefront"):
+              reports = sorted(Path("app/build/test-results").glob(f"test{flavor.title()}DebugUnitTest/*.xml"))
+              assert reports, f"no {flavor} unit-test XML reports found"
+              totals = {key: 0 for key in ("tests", "failures", "errors", "skipped")}
+              for report in reports:
+                  root = ET.parse(report).getroot()
+                  for key in totals:
+                      totals[key] += int(root.attrib.get(key, 0))
+              assert totals["failures"] == totals["errors"] == 0, (flavor, totals)
+              print(flavor, " ".join(f"{key}={value}" for key, value in totals.items()))
+          PY
 
       - name: Upload unsigned release APKs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -98,4 +127,8 @@ jobs:
             app/build/outputs/mapping/*Release/usage.txt
             app/build/outputs/mapping/*Release/configuration.txt
             app/build/outputs/mapping/*Release/seeds.txt
+            app/build/test-results/testGithubDebugUnitTest/*.xml
+            app/build/test-results/testStorefrontDebugUnitTest/*.xml
+            r8-source-commit.txt
+            r8-unit-test-summary.txt
           if-no-files-found: error

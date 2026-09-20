@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import zipfile
@@ -41,33 +40,41 @@ JNI_SURFACES = {
         "completionLoop", "stopCompletion", "close",
     ),
 }
-JNI_CONFIG_CLASSES = (
-    "FeatureConfig", "QnnConfig", "HomophoneReplacerConfig", "OfflineRecognizerConfig",
-    "OfflineModelConfig", "OfflineTransducerModelConfig", "OfflineParaformerModelConfig",
-    "OfflineWhisperModelConfig", "OfflineFireRedAsrModelConfig", "OfflineMoonshineModelConfig",
-    "OfflineSenseVoiceModelConfig", "OfflineNemoEncDecCtcModelConfig",
-    "OfflineZipformerCtcModelConfig", "OfflineWenetCtcModelConfig",
-    "OfflineOmnilingualAsrCtcModelConfig", "OfflineMedAsrCtcModelConfig",
-    "OfflineFunAsrNanoModelConfig", "OfflineQwen3AsrModelConfig",
-    "OfflineFireRedAsrCtcModelConfig", "OfflineCanaryModelConfig",
-    "OfflineCohereTranscribeModelConfig", "OfflineDolphinModelConfig", "OnlineRecognizerConfig",
-    "OnlineModelConfig", "OnlineTransducerModelConfig", "OnlineParaformerModelConfig",
-    "OnlineZipformer2CtcModelConfig", "OnlineNeMoCtcModelConfig", "OnlineToneCtcModelConfig",
-    "OnlineLMConfig", "OnlineCtcFstDecoderConfig", "EndpointConfig", "EndpointRule",
-    "VadModelConfig", "SileroVadModelConfig", "TenVadModelConfig",
-)
-JNI_RESULT_CLASSES = ("OfflineRecognizerResult", "OnlineRecognizerResult", "SpeechSegment")
 JNI_FIELD_CONTRACT = {
-    "FeatureConfig": ("sampleRate", "featureDim", "dither"),
-    "OfflineRecognizerConfig": ("featConfig", "modelConfig", "hr"),
-    "VadModelConfig": ("sileroVadModelConfig", "tenVadModelConfig", "sampleRate", "numThreads", "provider", "debug"),
-    "SileroVadModelConfig": ("model", "threshold", "minSilenceDuration", "minSpeechDuration", "windowSize", "maxSpeechDuration"),
-    "TenVadModelConfig": ("model", "threshold", "minSilenceDuration", "minSpeechDuration", "windowSize", "maxSpeechDuration"),
+    "FeatureConfig": {"sampleRate": "I", "featureDim": "I", "dither": "F"},
+    "OfflineRecognizerConfig": {
+        "featConfig": "Lcom/k2fsa/sherpa/onnx/FeatureConfig;",
+        "modelConfig": "Lcom/k2fsa/sherpa/onnx/OfflineModelConfig;",
+        "hr": "Lcom/k2fsa/sherpa/onnx/HomophoneReplacerConfig;",
+    },
+    "VadModelConfig": {
+        "sileroVadModelConfig": "Lcom/k2fsa/sherpa/onnx/SileroVadModelConfig;",
+        "tenVadModelConfig": "Lcom/k2fsa/sherpa/onnx/TenVadModelConfig;",
+        "sampleRate": "I", "numThreads": "I", "provider": "Ljava/lang/String;", "debug": "Z",
+    },
+    "SileroVadModelConfig": {
+        "model": "Ljava/lang/String;", "threshold": "F", "minSilenceDuration": "F",
+        "minSpeechDuration": "F", "windowSize": "I", "maxSpeechDuration": "F",
+    },
+    "TenVadModelConfig": {
+        "model": "Ljava/lang/String;", "threshold": "F", "minSilenceDuration": "F",
+        "minSpeechDuration": "F", "windowSize": "I", "maxSpeechDuration": "F",
+    },
 }
 JNI_RESULT_CONSTRUCTORS = {
     "OfflineRecognizerResult": "(Ljava/lang/String;[Ljava/lang/String;[FLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[F)V",
     "OnlineRecognizerResult": "(Ljava/lang/String;[Ljava/lang/String;[F[F)V",
     "SpeechSegment": "(I[F)V",
+}
+REFLECTION_CONTRACT = {
+    "SelfUpdatePrefs": {
+        "INSTANCE": "Lcom/trevornk/ramblr/SelfUpdatePrefs;",
+        "isNotifyEnabled": "(Landroid/content/Context;)Z",
+    },
+    "SelfUpdateCheckWorker": {
+        "Companion": "Lcom/trevornk/ramblr/SelfUpdateCheckWorker$Companion;",
+    },
+    "SelfUpdateCheckWorker$Companion": {"schedule": "(Landroid/content/Context;)V"},
 }
 
 
@@ -161,25 +168,12 @@ def mapping_class_block(text: str, class_name: str) -> str:
     return match.group(1)
 
 
-def verify_mapping(mapping: Path, github: bool) -> None:
+def verify_mapping(mapping: Path) -> None:
     text = mapping.read_text()
     require("# compiler: R8" in text, f"{mapping}: R8 marker absent")
     for descriptor in JNI_SURFACES:
         class_name = descriptor[1:-1].replace("/", ".")
         mapping_class_block(text, class_name)
-
-    return
-
-    # MainActivity reflects this exact owner/member chain; class retention alone is insufficient.
-    for owner, member in (
-        ("com.trevornk.ramblr.SelfUpdatePrefs", "INSTANCE"),
-        ("com.trevornk.ramblr.SelfUpdatePrefs", "isNotifyEnabled"),
-        ("com.trevornk.ramblr.SelfUpdateCheckWorker", "Companion"),
-        ("com.trevornk.ramblr.SelfUpdateCheckWorker$Companion", "schedule"),
-    ):
-        block = mapping_class_block(text, owner)
-        require(re.search(rf"\b{re.escape(member)}(?:\([^)]*\))?\s+->\s+{re.escape(member)}$", block, re.M) is not None,
-                f"{mapping}: reflected member was renamed or removed: {owner}.{member}")
 
 
 def dexdump_classes(apk: Path) -> dict[str, str]:
@@ -208,53 +202,44 @@ def dexdump_classes(apk: Path) -> dict[str, str]:
     return classes
 
 
-def kotlin_source_for(class_name: str) -> Path:
-    root = ROOT / "app/src/main/kotlin/com/k2fsa/sherpa/onnx"
-    pattern = re.compile(rf"\b(?:data\s+)?class\s+{re.escape(class_name)}\b")
-    matches = [path for path in root.glob("*.kt") if pattern.search(path.read_text())]
-    require(len(matches) == 1, f"expected one Kotlin source for JNI config {class_name}, found {len(matches)}")
-    return matches[0]
+def dexdump_members(block: str) -> dict[str, set[str]]:
+    """Return exact DEX member names and descriptors from one dexdump class block."""
+    pairs = re.findall(r"name\s+: '([^']+)'\s+type\s+: '([^']+)'", block)
+    return {name: {descriptor for candidate, descriptor in pairs if candidate == name}
+            for name, _ in pairs}
 
 
-def kotlin_class_block(source: Path, class_name: str) -> str:
-    match = re.search(
-        rf"\b(?:data\s+)?class\s+{re.escape(class_name)}\b.*?(?=\n(?:data\s+)?class\s+|\Z)",
-        source.read_text(),
-        re.S,
-    )
-    if match is None:
-        fail(f"{source}: missing class block for {class_name}")
-        raise AssertionError("unreachable")
-    return match.group(0)
-
-
-def verify_dex_contract(apk: Path, github: bool) -> None:
-    classes = dexdump_classes(apk)
+def verify_dex_contract_from_classes(classes: dict[str, str], github: bool) -> None:
     # GetFieldID binds the owning class, field name, and descriptor. dexdump is the authoritative
     # post-R8 view; mapping omits unchanged fields, so it cannot prove this contract on its own.
     for class_name, fields in JNI_FIELD_CONTRACT.items():
         descriptor = f"Lcom/k2fsa/sherpa/onnx/{class_name};"
         block = classes.get(descriptor)
         if block is None:
-            fail(f"{apk}: JNI config class missing: {descriptor}")
-        for field in fields:
-            require(f"name          : '{field}'" in block,
-                    f"{apk}: JNI field missing or renamed in owner {class_name}: {field}")
+            fail(f"JNI config class missing: {descriptor}")
+        assert block is not None
+        members = dexdump_members(block)
+        for field, field_descriptor in fields.items():
+            require(field_descriptor in members.get(field, set()),
+                    f"JNI field missing, renamed, or retyped in owner {class_name}: "
+                    f"{field} {field_descriptor}")
     for class_name, signature in JNI_RESULT_CONSTRUCTORS.items():
         descriptor = f"Lcom/k2fsa/sherpa/onnx/{class_name};"
         block = classes.get(descriptor)
-        require(block is not None and "name          : '<init>'" in block and f"type          : '{signature}'" in block,
-                f"{apk}: JNI constructor missing or descriptor changed: {class_name}{signature}")
+        require(block is not None and signature in dexdump_members(block).get("<init>", set()),
+                f"JNI constructor missing or descriptor changed: {class_name}{signature}")
     if github:
-        for owner, member in (
-            ("SelfUpdatePrefs", "INSTANCE"),
-            ("SelfUpdatePrefs", "isNotifyEnabled"),
-            ("SelfUpdateCheckWorker", "Companion"),
-            ("SelfUpdateCheckWorker$Companion", "schedule"),
-        ):
+        for owner, required_members in REFLECTION_CONTRACT.items():
             block = classes.get(f"Lcom/trevornk/ramblr/{owner};")
-            require(block is not None and f"name          : '{member}'" in block,
-                    f"{apk}: reflected member missing or renamed: {owner}.{member}")
+            members = dexdump_members(block) if block is not None else {}
+            for member, descriptor in required_members.items():
+                require(descriptor in members.get(member, set()),
+                        f"reflected member missing, renamed, or retyped: "
+                        f"{owner}.{member} {descriptor}")
+
+
+def verify_dex_contract(apk: Path, github: bool) -> None:
+    verify_dex_contract_from_classes(dexdump_classes(apk), github=github)
 
 
 def verify_native_libraries(storefront: Path, github: Path) -> None:
@@ -281,7 +266,7 @@ def verify_variant(apk: Path, mapping: Path, github: bool) -> None:
                 f"{apk}: permission policy failure for {permission}")
     verify_jni(apk)
     verify_dex_contract(apk, github=github)
-    verify_mapping(mapping, github=github)
+    verify_mapping(mapping)
     print(f"{'github' if github else 'storefront'} artifact policy and JNI surface: PASS")
 
 
