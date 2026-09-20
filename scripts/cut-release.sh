@@ -78,8 +78,17 @@ echo "==> Assembling signed release APKs (both flavors)"
 
 GITHUB_APK="app/build/outputs/apk/github/release/Ramblr-${VERSION_NAME}-github-release.apk"
 STOREFRONT_APK="app/build/outputs/apk/storefront/release/Ramblr-${VERSION_NAME}-storefront-release.apk"
-[ -f "$GITHUB_APK" ] || fail "expected APK not found: ${GITHUB_APK}"
-[ -f "$STOREFRONT_APK" ] || fail "expected APK not found: ${STOREFRONT_APK}"
+[ -f "$GITHUB_APK" ] || fail "expected APK not found: $GITHUB_APK"
+[ -f "$STOREFRONT_APK" ] || fail "expected APK not found: $STOREFRONT_APK"
+
+# A successful Gradle task is not enough after enabling R8: JNI binds exact names and
+# MainActivity reflects exact updater members. Validate both finished APKs and mappings before
+# the release can create a tag or upload an artifact.
+python3 tools/verify_r8_release.py --source \
+  --storefront-apk "$STOREFRONT_APK" \
+  --github-apk "$GITHUB_APK" \
+  --storefront-mapping app/build/outputs/mapping/storefrontRelease/mapping.txt \
+  --github-mapping app/build/outputs/mapping/githubRelease/mapping.txt
 
 # The self-update checker only accepts an asset named exactly Ramblr-X.Y.Z-github-release.apk
 # (SelfUpdateResolver.GITHUB_RELEASE_APK_NAME). Verify rather than assume.

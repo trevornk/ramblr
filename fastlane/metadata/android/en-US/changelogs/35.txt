@@ -1,0 +1,3 @@
+- Optimized release builds with R8 code and resource shrinking.
+- Added release checks for native JNI and updater compatibility after optimization.
+- Kept storefront builds free of the self-updater.

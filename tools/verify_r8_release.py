@@ -5,9 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import shutil
 import subprocess
-import sys
 import zipfile
 from pathlib import Path
 
@@ -41,6 +39,22 @@ JNI_SURFACES = {
         "completionLoop", "stopCompletion", "close",
     ),
 }
+JNI_CONFIG_CLASSES = (
+    "FeatureConfig", "QnnConfig", "HomophoneReplacerConfig", "OfflineRecognizerConfig",
+    "OfflineModelConfig", "OfflineTransducerModelConfig", "OfflineParaformerModelConfig",
+    "OfflineWhisperModelConfig", "OfflineFireRedAsrModelConfig", "OfflineMoonshineModelConfig",
+    "OfflineSenseVoiceModelConfig", "OfflineNemoEncDecCtcModelConfig",
+    "OfflineZipformerCtcModelConfig", "OfflineWenetCtcModelConfig",
+    "OfflineOmnilingualAsrCtcModelConfig", "OfflineMedAsrCtcModelConfig",
+    "OfflineFunAsrNanoModelConfig", "OfflineQwen3AsrModelConfig",
+    "OfflineFireRedAsrCtcModelConfig", "OfflineCanaryModelConfig",
+    "OfflineCohereTranscribeModelConfig", "OfflineDolphinModelConfig", "OnlineRecognizerConfig",
+    "OnlineModelConfig", "OnlineTransducerModelConfig", "OnlineParaformerModelConfig",
+    "OnlineZipformer2CtcModelConfig", "OnlineNeMoCtcModelConfig", "OnlineToneCtcModelConfig",
+    "OnlineLMConfig", "OnlineCtcFstDecoderConfig", "EndpointConfig", "EndpointRule",
+    "VadModelConfig", "SileroVadModelConfig", "TenVadModelConfig",
+)
+JNI_RESULT_CLASSES = ("OfflineRecognizerResult", "OnlineRecognizerResult", "SpeechSegment")
 
 
 def fail(message: str) -> None:
@@ -122,13 +136,54 @@ def verify_jni(apk: Path) -> None:
                     f"{apk}: native symbol missing for {descriptor}.{member}")
 
 
+def mapping_class_block(text: str, class_name: str) -> str:
+    match = re.search(
+        rf"^{re.escape(class_name)} -> {re.escape(class_name)}:\n(.*?)(?=^[^ \t].* -> .*:$|\Z)",
+        text,
+        re.M | re.S,
+    )
+    if match is None:
+        fail(f"mapping: class was renamed or removed: {class_name}")
+    return match.group(1)
+
+
 def verify_mapping(mapping: Path) -> None:
     text = mapping.read_text()
     require("# compiler: R8" in text, f"{mapping}: R8 marker absent")
     for descriptor in JNI_SURFACES:
         class_name = descriptor[1:-1].replace("/", ".")
-        require(re.search(rf"^{re.escape(class_name)} -> {re.escape(class_name)}:$", text, re.M),
-                f"{mapping}: JNI class was renamed or removed: {class_name}")
+        mapping_class_block(text, class_name)
+
+    # GetFieldID binds to a field on a particular class and descriptor. Compare each Kotlin
+    # property in the native configuration graph against its own R8 mapping block, rather than
+    # accepting an unrelated global string match.
+    for class_name in JNI_CONFIG_CLASSES:
+        source = ROOT / "app/src/main/kotlin/com/k2fsa/sherpa/onnx" / f"{class_name}.kt"
+        require(source.is_file(), f"missing JNI config source: {source}")
+        fields = re.findall(r"\b(?:var|val)\s+(\w+)\s*:", source.read_text())
+        require(bool(fields), f"{source}: no Kotlin fields found for JNI contract")
+        block = mapping_class_block(text, f"com.k2fsa.sherpa.onnx.{class_name}")
+        for field in fields:
+            require(re.search(rf"\b{re.escape(field)}\s+->\s+{re.escape(field)}$", block, re.M) is not None,
+                    f"{mapping}: JNI field was renamed or removed: {class_name}.{field}")
+
+    # JNI NewObject calls use these constructor descriptors; mapping retains the source
+    # signature and must keep the JVM constructor name in the owning result class.
+    for class_name in JNI_RESULT_CLASSES:
+        block = mapping_class_block(text, f"com.k2fsa.sherpa.onnx.{class_name}")
+        require(re.search(r"<init>\([^)]*\).*->\s+<init>$", block, re.M) is not None,
+                f"{mapping}: JNI result constructor missing or renamed: {class_name}")
+
+    # MainActivity reflects this exact owner/member chain; class retention alone is insufficient.
+    for owner, member in (
+        ("com.trevornk.ramblr.SelfUpdatePrefs", "INSTANCE"),
+        ("com.trevornk.ramblr.SelfUpdatePrefs", "isNotifyEnabled"),
+        ("com.trevornk.ramblr.SelfUpdateCheckWorker", "Companion"),
+        ("com.trevornk.ramblr.SelfUpdateCheckWorker$Companion", "schedule"),
+    ):
+        block = mapping_class_block(text, owner)
+        require(re.search(rf"\b{re.escape(member)}(?:\([^)]*\))?\s+->\s+{re.escape(member)}$", block, re.M) is not None,
+                f"{mapping}: reflected member was renamed or removed: {owner}.{member}")
 
 
 def verify_native_libraries(storefront: Path, github: Path) -> None:
