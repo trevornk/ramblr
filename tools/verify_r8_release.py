@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -55,6 +57,18 @@ JNI_CONFIG_CLASSES = (
     "VadModelConfig", "SileroVadModelConfig", "TenVadModelConfig",
 )
 JNI_RESULT_CLASSES = ("OfflineRecognizerResult", "OnlineRecognizerResult", "SpeechSegment")
+JNI_FIELD_CONTRACT = {
+    "FeatureConfig": ("sampleRate", "featureDim", "dither"),
+    "OfflineRecognizerConfig": ("featConfig", "modelConfig", "hr"),
+    "VadModelConfig": ("sileroVadModelConfig", "tenVadModelConfig", "sampleRate", "numThreads", "provider", "debug"),
+    "SileroVadModelConfig": ("model", "threshold", "minSilenceDuration", "minSpeechDuration", "windowSize", "maxSpeechDuration"),
+    "TenVadModelConfig": ("model", "threshold", "minSilenceDuration", "minSpeechDuration", "windowSize", "maxSpeechDuration"),
+}
+JNI_RESULT_CONSTRUCTORS = {
+    "OfflineRecognizerResult": "(Ljava/lang/String;[Ljava/lang/String;[FLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[F)V",
+    "OnlineRecognizerResult": "(Ljava/lang/String;[Ljava/lang/String;[F[F)V",
+    "SpeechSegment": "(I[F)V",
+}
 
 
 def fail(message: str) -> None:
@@ -147,32 +161,14 @@ def mapping_class_block(text: str, class_name: str) -> str:
     return match.group(1)
 
 
-def verify_mapping(mapping: Path) -> None:
+def verify_mapping(mapping: Path, github: bool) -> None:
     text = mapping.read_text()
     require("# compiler: R8" in text, f"{mapping}: R8 marker absent")
     for descriptor in JNI_SURFACES:
         class_name = descriptor[1:-1].replace("/", ".")
         mapping_class_block(text, class_name)
 
-    # GetFieldID binds to a field on a particular class and descriptor. Compare each Kotlin
-    # property in the native configuration graph against its own R8 mapping block, rather than
-    # accepting an unrelated global string match.
-    for class_name in JNI_CONFIG_CLASSES:
-        source = ROOT / "app/src/main/kotlin/com/k2fsa/sherpa/onnx" / f"{class_name}.kt"
-        require(source.is_file(), f"missing JNI config source: {source}")
-        fields = re.findall(r"\b(?:var|val)\s+(\w+)\s*:", source.read_text())
-        require(bool(fields), f"{source}: no Kotlin fields found for JNI contract")
-        block = mapping_class_block(text, f"com.k2fsa.sherpa.onnx.{class_name}")
-        for field in fields:
-            require(re.search(rf"\b{re.escape(field)}\s+->\s+{re.escape(field)}$", block, re.M) is not None,
-                    f"{mapping}: JNI field was renamed or removed: {class_name}.{field}")
-
-    # JNI NewObject calls use these constructor descriptors; mapping retains the source
-    # signature and must keep the JVM constructor name in the owning result class.
-    for class_name in JNI_RESULT_CLASSES:
-        block = mapping_class_block(text, f"com.k2fsa.sherpa.onnx.{class_name}")
-        require(re.search(r"<init>\([^)]*\).*->\s+<init>$", block, re.M) is not None,
-                f"{mapping}: JNI result constructor missing or renamed: {class_name}")
+    return
 
     # MainActivity reflects this exact owner/member chain; class retention alone is insufficient.
     for owner, member in (
@@ -184,6 +180,81 @@ def verify_mapping(mapping: Path) -> None:
         block = mapping_class_block(text, owner)
         require(re.search(rf"\b{re.escape(member)}(?:\([^)]*\))?\s+->\s+{re.escape(member)}$", block, re.M) is not None,
                 f"{mapping}: reflected member was renamed or removed: {owner}.{member}")
+
+
+def dexdump_classes(apk: Path) -> dict[str, str]:
+    sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+    roots = [Path(sdk)] if sdk else []
+    roots.append(Path.home() / "Library/Android/sdk")
+    candidates = [p for root in roots for p in root.glob("build-tools/*/dexdump")]
+    dexdump = next((p for p in sorted(candidates, reverse=True) if p.is_file() and os.access(p, os.X_OK)), None)
+    require(dexdump is not None, "dexdump is unavailable; cannot verify JNI owners and descriptors")
+    with tempfile.TemporaryDirectory() as raw:
+        directory = Path(raw)
+        with zipfile.ZipFile(apk) as archive:
+            dexes = [name for name in archive.namelist() if re.fullmatch(r"classes\d*\.dex", name)]
+            for name in dexes:
+                (directory / name).write_bytes(archive.read(name))
+        output = "".join(
+            subprocess.run([str(dexdump), "-d", str(path)], check=True, text=True,
+                           errors="replace", capture_output=True).stdout
+            for path in directory.iterdir()
+        )
+    classes: dict[str, str] = {}
+    for block in output.split("Class descriptor  : ")[1:]:
+        match = re.match(r"'([^']+)'", block)
+        if match:
+            classes[match.group(1)] = block
+    return classes
+
+
+def kotlin_source_for(class_name: str) -> Path:
+    root = ROOT / "app/src/main/kotlin/com/k2fsa/sherpa/onnx"
+    pattern = re.compile(rf"\b(?:data\s+)?class\s+{re.escape(class_name)}\b")
+    matches = [path for path in root.glob("*.kt") if pattern.search(path.read_text())]
+    require(len(matches) == 1, f"expected one Kotlin source for JNI config {class_name}, found {len(matches)}")
+    return matches[0]
+
+
+def kotlin_class_block(source: Path, class_name: str) -> str:
+    match = re.search(
+        rf"\b(?:data\s+)?class\s+{re.escape(class_name)}\b.*?(?=\n(?:data\s+)?class\s+|\Z)",
+        source.read_text(),
+        re.S,
+    )
+    if match is None:
+        fail(f"{source}: missing class block for {class_name}")
+        raise AssertionError("unreachable")
+    return match.group(0)
+
+
+def verify_dex_contract(apk: Path, github: bool) -> None:
+    classes = dexdump_classes(apk)
+    # GetFieldID binds the owning class, field name, and descriptor. dexdump is the authoritative
+    # post-R8 view; mapping omits unchanged fields, so it cannot prove this contract on its own.
+    for class_name, fields in JNI_FIELD_CONTRACT.items():
+        descriptor = f"Lcom/k2fsa/sherpa/onnx/{class_name};"
+        block = classes.get(descriptor)
+        if block is None:
+            fail(f"{apk}: JNI config class missing: {descriptor}")
+        for field in fields:
+            require(f"name          : '{field}'" in block,
+                    f"{apk}: JNI field missing or renamed in owner {class_name}: {field}")
+    for class_name, signature in JNI_RESULT_CONSTRUCTORS.items():
+        descriptor = f"Lcom/k2fsa/sherpa/onnx/{class_name};"
+        block = classes.get(descriptor)
+        require(block is not None and "name          : '<init>'" in block and f"type          : '{signature}'" in block,
+                f"{apk}: JNI constructor missing or descriptor changed: {class_name}{signature}")
+    if github:
+        for owner, member in (
+            ("SelfUpdatePrefs", "INSTANCE"),
+            ("SelfUpdatePrefs", "isNotifyEnabled"),
+            ("SelfUpdateCheckWorker", "Companion"),
+            ("SelfUpdateCheckWorker$Companion", "schedule"),
+        ):
+            block = classes.get(f"Lcom/trevornk/ramblr/{owner};")
+            require(block is not None and f"name          : '{member}'" in block,
+                    f"{apk}: reflected member missing or renamed: {owner}.{member}")
 
 
 def verify_native_libraries(storefront: Path, github: Path) -> None:
@@ -209,7 +280,8 @@ def verify_variant(apk: Path, mapping: Path, github: bool) -> None:
         require((permission in permission_dump) == github,
                 f"{apk}: permission policy failure for {permission}")
     verify_jni(apk)
-    verify_mapping(mapping)
+    verify_dex_contract(apk, github=github)
+    verify_mapping(mapping, github=github)
     print(f"{'github' if github else 'storefront'} artifact policy and JNI surface: PASS")
 
 
