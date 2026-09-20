@@ -22,7 +22,11 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || fail "required command unavailable: $1"; }
 need gh
 need python3
-need apksigcopier
+APKSIGCOPIER=${APKSIGCOPIER:-$(command -v apksigcopier || true)}
+if [ -z "$APKSIGCOPIER" ]; then
+  APKSIGCOPIER="$(python3 -m site --user-base)/bin/apksigcopier"
+fi
+[ -x "$APKSIGCOPIER" ] || fail "apksigcopier is unavailable; install it or set APKSIGCOPIER"
 
 [ -z "$(git status --porcelain)" ] || fail "working tree is dirty"
 [ -r "$KEYSTORE" ] || fail "keystore is unreadable"
@@ -94,7 +98,7 @@ for flavor in github storefront; do
   "$APKSIGNER" verify --verbose --print-certs "$output" >/dev/null || fail "signed candidate verification failed: $output"
   [ "$(signer "$output")" = "$EXPECTED_SIGNER" ] || fail "candidate signer mismatch: $output"
   "$ZIPALIGN" -c -p 4 "$output" >/dev/null || fail "candidate lost ZIP alignment: $output"
-  apksigcopier compare "$output" "$input" || fail "candidate differs from CI APK outside its signature: $output"
+  "$APKSIGCOPIER" compare "$output" "$input" || fail "candidate differs from CI APK outside its signature: $output"
 done
 
 {
