@@ -83,10 +83,17 @@ signer() {
     | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]'
 }
 for apk in "$GITHUB_APK" "$STOREFRONT_APK"; do
-  "$APKSIGNER" verify --verbose "$apk" >/dev/null || fail "CI APK signature is invalid: $apk"
-  INPUT_SIGNER=$(signer "$apk")
-  [ -n "$INPUT_SIGNER" ] || fail "could not read CI APK signer: $apk"
-  [ "$INPUT_SIGNER" != "$EXPECTED_SIGNER" ] || fail "CI APK is already release-signed; refusing to re-sign: $apk"
+  # This workflow intentionally uploads unsigned APKs. Accept only apksigner's exact unsigned
+  # diagnostic; any other verification failure is corrupt input, not an invitation to sign it.
+  VERIFY_LOG="$TMP/$(basename "$apk").verify.log"
+  if "$APKSIGNER" verify --verbose --print-certs "$apk" >"$VERIFY_LOG" 2>&1; then
+    INPUT_SIGNER=$(signer "$apk")
+    [ -n "$INPUT_SIGNER" ] || fail "could not read CI APK signer: $apk"
+    [ "$INPUT_SIGNER" != "$EXPECTED_SIGNER" ] || fail "CI APK is already release-signed; refusing to re-sign: $apk"
+  else
+    grep -q 'Missing META-INF/MANIFEST.MF' "$VERIFY_LOG" \
+      || fail "CI APK is neither validly signed nor unsigned: $apk"
+  fi
 done
 
 for flavor in github storefront; do
@@ -98,7 +105,7 @@ for flavor in github storefront; do
   "$APKSIGNER" verify --verbose --print-certs "$output" >/dev/null || fail "signed candidate verification failed: $output"
   [ "$(signer "$output")" = "$EXPECTED_SIGNER" ] || fail "candidate signer mismatch: $output"
   "$ZIPALIGN" -c -p 4 "$output" >/dev/null || fail "candidate lost ZIP alignment: $output"
-  "$APKSIGCOPIER" compare "$output" "$input" || fail "candidate differs from CI APK outside its signature: $output"
+  "$APKSIGCOPIER" compare --unsigned "$output" "$input" || fail "candidate differs from CI APK outside its signature: $output"
 done
 
 {
