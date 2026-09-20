@@ -92,5 +92,10 @@ jobs:
           # Ramblr-<version>-storefront-release.apk -- the metadata must not be switched before
           # a matching signed reference binary exists at that URL, or F-Droid's binary
           # comparison has nothing to compare against.
-          path: app/build/outputs/apk/*/release/Ramblr-*-release.apk
+          path: |
+            app/build/outputs/apk/*/release/Ramblr-*-release.apk
+            app/build/outputs/mapping/*Release/mapping.txt
+            app/build/outputs/mapping/*Release/usage.txt
+            app/build/outputs/mapping/*Release/configuration.txt
+            app/build/outputs/mapping/*Release/seeds.txt
           if-no-files-found: error

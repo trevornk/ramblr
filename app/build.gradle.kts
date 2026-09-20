@@ -74,6 +74,14 @@ android {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
+            // Optimize only distribution artifacts. The targeted JNI/reflection contract lives in
+            // app/proguard-rules.pro; keep the optimized baseline so R8 can actually optimize.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             // F-Droid reproducible-build requirement (MR !42401): AGP embeds a
             // META-INF/version-control-info.textproto file recording the exact git commit hash
             // (and whether the tree is clean) into the APK whenever it can detect a git repo --
