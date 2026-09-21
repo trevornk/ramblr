@@ -101,23 +101,25 @@ class NativeProbeModelProvisioningTest {
         return "downloaded"
     }
 
-    private fun hasValidProbeIntegrity(ctx: Context, model: Model): Boolean = try {
-        val installedDir = ModelDownloader.modelDir(ctx, model)
-        val manifest = integrityFile(ctx, model)
-        if (!ModelDownloader.isInstalledDir(installedDir) || !manifest.isFile) return false
-        val parsed = JSONObject(manifest.readText())
-        if (parsed.optString("catalogSha256") != model.sha256) return false
-        val expected = parsed.getJSONArray("payloadHashes")
-        if (expected.toString() != payloadHashes(installedDir).toString()) return false
-        if (model.isSingleFile) {
-            val file = if (model.isVadModel) ModelDownloader.vadModelFile(ctx, model)
-            else ModelDownloader.localCleanupModelFile(ctx, model)
-            if (file == null || ModelDownloader.sha256(file) != model.sha256) return false
+    private fun hasValidProbeIntegrity(ctx: Context, model: Model): Boolean {
+        return try {
+            val installedDir = ModelDownloader.modelDir(ctx, model)
+            val manifest = integrityFile(ctx, model)
+            if (!ModelDownloader.isInstalledDir(installedDir) || !manifest.isFile) return false
+            val parsed = JSONObject(manifest.readText())
+            if (parsed.optString("catalogSha256") != model.sha256) return false
+            val expected = parsed.getJSONArray("payloadHashes")
+            if (expected.toString() != payloadHashes(installedDir).toString()) return false
+            if (model.isSingleFile) {
+                val file = if (model.isVadModel) ModelDownloader.vadModelFile(ctx, model)
+                else ModelDownloader.localCleanupModelFile(ctx, model)
+                if (file == null || ModelDownloader.sha256(file) != model.sha256) return false
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "MODEL_CACHE_INVALID archive=${model.archive}", t)
+            false
         }
-        true
-    } catch (t: Throwable) {
-        Log.w(TAG, "MODEL_CACHE_INVALID archive=${model.archive}", t)
-        false
     }
 
     private fun writeProbeIntegrity(ctx: Context, model: Model) {
