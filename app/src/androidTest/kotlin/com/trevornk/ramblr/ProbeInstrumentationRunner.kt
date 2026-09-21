@@ -20,12 +20,17 @@ class ProbeInstrumentationRunner : Instrumentation() {
         ProbeRuntimeContext.targetContext = targetContext
         val result = Bundle()
         try {
-            NativeProbeModelProvisioningTest().downloadsVerifiedModelsOnlyInsideNonDebuggableProbe()
-            AsrDecodeBenchmark().benchmarkDecode()
-            NativeProbeVadTest().emitsSpeechSegmentFrom512SampleFrames()
-            LocalNumericCleanupDeviceTest().numericPreservationThroughRealLocalModel()
-            NativeProbeEvidenceAndCleanupTest().reportsNativeResultsAndRemovesProbeModels()
-            result.putString("nativeProbe", "PASS")
+            VoiceImeDeviceMetadataTest().compiledVoiceSubtypeIsDiscoverableAndStandalone()
+            if (arguments.getString("voiceImeOnly") == "true") {
+                result.putString("voiceImeProbe", "PASS")
+            } else {
+                NativeProbeModelProvisioningTest().downloadsVerifiedModelsOnlyInsideNonDebuggableProbe()
+                AsrDecodeBenchmark().benchmarkDecode()
+                NativeProbeVadTest().emitsSpeechSegmentFrom512SampleFrames()
+                LocalNumericCleanupDeviceTest().numericPreservationThroughRealLocalModel()
+                NativeProbeEvidenceAndCleanupTest().reportsNativeResultsAndRemovesProbeModels()
+                result.putString("nativeProbe", "PASS")
+            }
             sendStatus(0, result)
             finish(Activity.RESULT_OK, result)
         } catch (t: Throwable) {
