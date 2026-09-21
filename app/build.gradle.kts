@@ -300,6 +300,9 @@ dependencies {
     // AndroidJUnitRunner. No androidx.test:rules -- nothing in the benchmark needs a rule.
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    // AndroidJUnitRunner 1.6.x references Trace at startup, but AGP does not package its
+    // optional dependency into this app's test APK. Keep it test-only; no production R8 input changes.
+    androidTestImplementation("androidx.tracing:tracing:1.1.0")
 }
 
 // Unzips the onnxruntime AAR's C/C++ headers and arm64-v8a libonnxruntime.so into
