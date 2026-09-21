@@ -45,7 +45,7 @@ jobs:
           def identity(apk):
               package = command(latest / "aapt2", "dump", "packagename", apk).strip()
               certs = command(latest / "apksigner", "verify", "--print-certs", apk)
-              match = re.search(r"(?i)sha-?256 digest:\\s*([0-9a-f:]+)", certs)
+              match = re.search(r"(?i)sha-?256 digest:\s*([0-9a-f:]+)", certs)
               assert match, certs
               cert = match.group(1).replace(":", "").lower()
               with apk.open("rb") as stream:
