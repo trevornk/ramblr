@@ -43,11 +43,14 @@ jobs:
           latest = sorted(tools.iterdir(), key=lambda p: tuple(map(int, re.findall(r"\d+", p.name))))[-1]
           def command(*args): return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT)
           def identity(apk):
-              badging = command(latest / "aapt", "dump", "badging", apk)
+              package = command(latest / "aapt2", "dump", "packagename", apk).strip()
               certs = command(latest / "apksigner", "verify", "--print-certs", apk)
-              package = re.search(r"package: name='([^']+)'", badging).group(1)
-              cert = re.search(r"certificate SHA-256 digest: ([0-9A-F:]+)", certs).group(1).replace(":", "").lower()
-              return {"path": str(apk), "bytes": apk.stat().st_size, "sha256": hashlib.file_digest(apk.open("rb"), "sha256").hexdigest(), "package": package, "certificateSha256": cert}
+              match = re.search(r"(?i)sha-?256 digest:\\s*([0-9a-f:]+)", certs)
+              assert match, certs
+              cert = match.group(1).replace(":", "").lower()
+              with apk.open("rb") as stream:
+                  sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+              return {"path": str(apk), "bytes": apk.stat().st_size, "sha256": sha256, "package": package, "certificateSha256": cert}
           with zipfile.ZipFile(target) as apk:
               native = {entry.filename: hashlib.sha256(apk.read(entry)).hexdigest() for entry in apk.infolist() if entry.filename.startswith("lib/arm64-v8a/") and entry.filename.endswith(".so")}
           result = {"target": identity(target), "test": identity(test), "signersMatch": identity(target)["certificateSha256"] == identity(test)["certificateSha256"], "targetNonDebuggable": "runtimeProbe", "nativeLibrarySha256": native, "mapping": {"target": "app/build/outputs/mapping/github/runtimeProbe/mapping.txt", "androidTest": "app/build/outputs/mapping/githubRuntimeProbeAndroidTest/mapping.txt"}}
