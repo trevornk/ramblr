@@ -26,17 +26,17 @@ class NativeProbeVadTest {
             ?: throw AssertionError("provisioning did not install ASR speech fixture")
 
         val samples = readWavMono16(wav)
-        val vad = SherpaVadHandle.create(model)
-        assertNotNull("SherpaVadHandle.create returned null", vad)
+        val handle = SherpaVadHandle.create(model)
+            ?: throw AssertionError("SherpaVadHandle.create returned null")
         val segments = JSONArray()
-        vad!!.use {
-            feed512(it, samples)
-            repeat(SILENCE_FRAMES) { it.acceptWaveform(FloatArray(FRAME_SIZE)) }
-            it.flush()
-            while (!it.isEmpty()) {
-                val segment = it.front()
+        handle.use { vad ->
+            feed512(vad, samples)
+            repeat(SILENCE_FRAMES) { vad.acceptWaveform(FloatArray(FRAME_SIZE)) }
+            vad.flush()
+            while (!vad.isEmpty()) {
+                val segment = vad.front()
                 segments.put(JSONObject().put("start", segment.start).put("samples", segment.samples.size))
-                it.pop()
+                vad.pop()
             }
         }
         assertTrue("VAD emitted no speech segment for ${wav.name}", segments.length() > 0)
