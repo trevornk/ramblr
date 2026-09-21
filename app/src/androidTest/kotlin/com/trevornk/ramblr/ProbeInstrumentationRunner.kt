@@ -2,9 +2,13 @@ package com.trevornk.ramblr
 
 import android.app.Activity
 import android.app.Instrumentation
+import android.content.Context
 import android.os.Bundle
 import android.util.Log
-import androidx.test.platform.app.InstrumentationRegistry
+
+object ProbeRuntimeContext {
+    lateinit var targetContext: Context
+}
 
 /**
  * Minimal target-process runner for the isolated R8 probe. It avoids AndroidJUnitRunner's optional
@@ -13,7 +17,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 class ProbeInstrumentationRunner : Instrumentation() {
     override fun onStart() {
         super.onStart()
-        InstrumentationRegistry.registerInstance(this, arguments)
+        ProbeRuntimeContext.targetContext = targetContext
         val result = Bundle()
         try {
             NativeProbeModelProvisioningTest().downloadsVerifiedModelsOnlyInsideNonDebuggableProbe()

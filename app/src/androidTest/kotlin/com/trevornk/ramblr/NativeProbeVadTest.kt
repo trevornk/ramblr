@@ -17,7 +17,7 @@ import java.io.File
 class NativeProbeVadTest {
     @Test
     fun emitsSpeechSegmentFrom512SampleFrames() {
-        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val ctx = ProbeRuntimeContext.targetContext
         val model = ModelDownloader.vadModelFile(ctx, SILERO_VAD_MODEL)
             ?: throw AssertionError("provisioning did not install VAD model")
         val wav = File(ctx.filesDir, "bench_models/$ASR_ARCHIVE/test_wavs").listFiles { f ->

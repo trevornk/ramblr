@@ -108,7 +108,7 @@ android {
             // CI's ephemeral debug signer changes each run. A failed same-package update must
             // never be resolved by removing a probe from this restored-user-app device, so this
             // rerun uses a fresh isolated package identity.
-            applicationIdSuffix = ".r8probe4"
+            applicationIdSuffix = ".r8probe5"
             isDebuggable = false
             signingConfig = signingConfigs.getByName("debug")
         }

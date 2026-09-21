@@ -50,7 +50,7 @@ class LocalNumericCleanupDeviceTest {
 
     @Test
     fun numericPreservationThroughRealLocalModel() {
-        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val ctx = ProbeRuntimeContext.targetContext
         val model = LocalCleanupProvider.selectedModel(ctx)
         val modelFile = ModelDownloader.localCleanupModelFile(ctx, model)
         assumeTrue(

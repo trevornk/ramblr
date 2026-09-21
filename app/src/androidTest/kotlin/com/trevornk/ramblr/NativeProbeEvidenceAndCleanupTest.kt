@@ -14,7 +14,7 @@ import java.io.File
 class NativeProbeEvidenceAndCleanupTest {
     @Test
     fun reportsNativeResultsAndRemovesProbeModels() {
-        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val ctx = ProbeRuntimeContext.targetContext
         val expected = listOf(
             "native_probe_provisioning.json",
             "bench_results.json",

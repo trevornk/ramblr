@@ -55,13 +55,11 @@ class AsrDecodeBenchmark {
 
     @Test
     fun benchmarkDecode() {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val args = InstrumentationRegistry.getArguments()
-        val ctx = instrumentation.targetContext
+        val ctx = ProbeRuntimeContext.targetContext
 
-        val benchDirName = args.getString("benchDir") ?: DEFAULT_BENCH_DIR
-        val threads = args.getString("threads")?.toIntOrNull() ?: DEFAULT_THREADS
-        val repeats = args.getString("repeats")?.toIntOrNull() ?: DEFAULT_REPEATS
+        val benchDirName = DEFAULT_BENCH_DIR
+        val threads = DEFAULT_THREADS
+        val repeats = DEFAULT_REPEATS
 
         val benchRoot = File(ctx.filesDir, benchDirName)
         val modelDirs = benchRoot.listFiles { f -> f.isDirectory }?.sortedBy { it.name }.orEmpty()
