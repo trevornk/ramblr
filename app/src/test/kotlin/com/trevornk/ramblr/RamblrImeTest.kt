@@ -49,10 +49,27 @@ class RamblrImeTest {
         assertEquals("RamblrImeService must own exactly one input-method metadata entry", 1, metadata.size)
         assertEquals("@xml/method", metadata.single().getAttributeNS(androidNamespace, "resource"))
 
-        val method = File(repoRoot(), "app/src/main/res/xml/method.xml").readText()
+        val methodFile = File(repoRoot(), "app/src/main/res/xml/method.xml")
+        val method = methodFile.readText()
         assertTrue(method.contains("input-method"))
         assertTrue(method.contains("supportsSwitchingToNextInputMethod"))
         assertFalse("voice-only multilingual IME must not claim a false locale", method.contains("imeSubtypeLocale"))
+
+        // FlorisBoard discovers a voice IME by iterating InputMethodInfo.subtypes and selecting
+        // subtype.mode == "voice". Keep that platform metadata contract explicit while leaving
+        // its locale blank: dictation language comes from Ramblr's selected provider/model.
+        val methodDocument = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+        }.newDocumentBuilder().parse(methodFile)
+        val subtypes = methodDocument.getElementsByTagName("subtype").let { nodes ->
+            (0 until nodes.length).map { nodes.item(it) as Element }
+        }
+        assertEquals("voice discovery needs exactly one declared subtype", 1, subtypes.size)
+        val voiceSubtype = subtypes.single()
+        assertEquals("voice", voiceSubtype.getAttributeNS(androidNamespace, "imeSubtypeMode"))
+        assertEquals("false", voiceSubtype.getAttributeNS(androidNamespace, "isAuxiliary"))
+        assertFalse("voice subtype must not force an implicit default", voiceSubtype.hasAttributeNS(androidNamespace, "overridesImplicitlyEnabledSubtype"))
+        assertFalse("voice subtype must remain locale-neutral", voiceSubtype.hasAttributeNS(androidNamespace, "imeSubtypeLocale"))
     }
 
     @Test
