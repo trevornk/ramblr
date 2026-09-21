@@ -17,6 +17,15 @@ RUNNER_DESCRIPTOR = "Lcom/trevornk/ramblr/ProbeInstrumentationRunner;"
 SETS_DESCRIPTOR = "Lkotlin/collections/SetsKt;"
 
 
+def decode_modified_utf8(data: bytes) -> str:
+    """Decode DEX's Java modified UTF-8 without rejecting encoded NUL characters."""
+    # DEX strings use Java's modified UTF-8: U+0000 is C0 80, while non-BMP characters are
+    # represented as UTF-8-encoded surrogate pairs. Python accepts the latter with
+    # surrogatepass; a final UTF-16 round-trip combines valid pairs for normal string handling.
+    text = data.replace(b"\xc0\x80", b"\0").decode("utf-8", "surrogatepass")
+    return text.encode("utf-16", "surrogatepass").decode("utf-16", "surrogatepass")
+
+
 def read_uleb128(data: bytes, offset: int) -> tuple[int, int]:
     """Return one unsigned little-endian base-128 integer and the next offset."""
     value = 0
@@ -50,7 +59,7 @@ def dex_types_and_definitions(data: bytes) -> tuple[set[str], set[str]]:
         (offset,) = struct.unpack_from("<I", data, string_offset + index * 4)
         _, offset = read_uleb128(data, offset)  # UTF-16 length; bytes are nul-terminated.
         end = data.index(b"\0", offset)
-        strings.append(data[offset:end].decode("utf-8"))
+        strings.append(decode_modified_utf8(data[offset:end]))
 
     types: list[str] = []
     for index in range(type_count):
