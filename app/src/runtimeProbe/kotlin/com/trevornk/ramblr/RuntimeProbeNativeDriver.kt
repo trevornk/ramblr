@@ -116,5 +116,29 @@ object RuntimeProbeNativeDriver {
     }
 
     private fun digitsSurvive(input:String,out:String):Boolean { val wanted=Regex("[0-9][0-9,]*(?:\\.[0-9]+)?").findAll(input).map{it.value.replace(",","")}.toList();var i=0;for(g in Regex("[0-9][0-9,]*(?:\\.[0-9]+)?").findAll(out).map{it.value.replace(",","")})if(i<wanted.size&&g==wanted[i])i++;return i==wanted.size }
-    private fun readWav(file:File):FloatArray=DataInputStream(file.inputStream().buffered()).use { input -> fun tag()=String(ByteArray(4).also{input.readFully(it)},Charsets.US_ASCII);fun leI()=input.read()or(input.read()shl 8)or(input.read()shl 16)or(input.read()shl 24);fun leS()=input.read()or(input.read()shl 8);check(tag()=="RIFF");leI();check(tag()=="WAVE");var ch=-1;var bits=-1;while(true){when(val t=tag()){"fmt "->{check(leS()==1);ch=leS();leI();leI();leS();bits=leS()}"data"->{check(ch==1&&bits==16);val b=ByteArray(leI());input.readFully(b);return@use FloatArray(b.size/2){i->(((b[2*i+1].toInt()shl 8)or(b[2*i].toInt()and 255)).toShort().toInt()/32768f)}}else->{val n=leI();input.skipBytes(n+(n and 1))}}};error("unreachable") }
+    private fun readWav(file: File): FloatArray = DataInputStream(file.inputStream().buffered()).use { input ->
+        fun tag() = String(ByteArray(4).also { input.readFully(it) }, Charsets.US_ASCII)
+        fun leInt() = input.read() or (input.read() shl 8) or (input.read() shl 16) or (input.read() shl 24)
+        fun leShort() = input.read() or (input.read() shl 8)
+        check(tag() == "RIFF"); leInt(); check(tag() == "WAVE")
+        var channels = -1; var bits = -1
+        while (true) {
+            when (tag()) {
+                "fmt " -> {
+                    val size = leInt()
+                    check(leShort() == 1); channels = leShort(); leInt(); leInt(); leShort(); bits = leShort()
+                    input.skipBytes(size - 16)
+                }
+                "data" -> {
+                    val size = leInt(); check(channels == 1 && bits == 16)
+                    val bytes = ByteArray(size); input.readFully(bytes)
+                    return@use FloatArray(bytes.size / 2) { i ->
+                        (((bytes[2 * i + 1].toInt() shl 8) or (bytes[2 * i].toInt() and 255)).toShort().toInt() / 32768f)
+                    }
+                }
+                else -> { val size = leInt(); input.skipBytes(size + (size and 1)) }
+            }
+        }
+        error("unreachable")
+    }
 }
