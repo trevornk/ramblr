@@ -46,6 +46,7 @@ class ProbeInstrumentationLifecycleTest(unittest.TestCase):
     def test_ci_runs_lifecycle_regression_and_uploads_test_mapping(self) -> None:
         workflow = WORKFLOW.read_text()
         self.assertIn("test_probe_instrumentation_lifecycle.py", workflow)
+        self.assertIn("mapping/githubRuntimeProbe/*", workflow)
         self.assertIn("mapping/githubRuntimeProbeAndroidTest/*", workflow)
 
     def test_ci_uses_checksum_pinned_official_gradle_fallback_only_for_probe(self) -> None:

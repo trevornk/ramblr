@@ -44,8 +44,10 @@ jobs:
         run: python3 -m unittest tools/test_probe_instrumentation_lifecycle.py -v
       - name: Build optimized non-debuggable probe and matching tests
         run: ./gradlew assembleGithubRuntimeProbe assembleGithubRuntimeProbeAndroidTest
-      - name: Require generated androidTest R8 mapping
-        run: test -f app/build/outputs/mapping/githubRuntimeProbeAndroidTest/mapping.txt
+      - name: Require generated target and androidTest R8 mappings
+        run: |
+          test -f app/build/outputs/mapping/githubRuntimeProbe/mapping.txt
+          test -f app/build/outputs/mapping/githubRuntimeProbeAndroidTest/mapping.txt
       - name: Verify narrow known optimized-probe Kotlin facade regression
         run: |
           python3 tools/verify_probe_dex_linkage.py \
@@ -87,7 +89,7 @@ jobs:
           path: |
             app/build/outputs/apk/github/runtimeProbe/*.apk
             app/build/outputs/apk/androidTest/github/runtimeProbe/*.apk
-            app/build/outputs/mapping/github/runtimeProbe/*
+            app/build/outputs/mapping/githubRuntimeProbe/*
             app/build/outputs/mapping/githubRuntimeProbeAndroidTest/*
             app/build/probe-artifact-identity.json
           if-no-files-found: error
