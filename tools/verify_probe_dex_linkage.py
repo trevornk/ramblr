@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Check emitted DEX for optimized probe runner's known Kotlin facade regressions.
+"""Check the explicit test-to-target ABI in emitted optimized probe DEX.
 
 Instrumentation executes in the optimized target process. AndroidTest dependencies can be
 de-duplicated against that target. This narrow regression check proves the runner stays in the
-test APK while its known target-process dependencies, kotlin.collections.SetsKt and the watchdog's
-kotlin.ranges.RangesKt, stay in the isolated target APK. It is not a general DEX method/field
-linkage-closure verifier; device entry smoke is
+test APK while its sole target boundary stays in the isolated target APK. Production calls remain
+inside the target graph, avoiding separately optimized AndroidTest-to-target ABI drift. Device
+entry smoke is
 the next gate for additional classpath failures.
 """
 from __future__ import annotations
@@ -17,10 +17,7 @@ import zipfile
 from pathlib import Path
 
 RUNNER_DESCRIPTOR = "Lcom/trevornk/ramblr/ProbeInstrumentationRunner;"
-REQUIRED_TARGET_KOTLIN_DESCRIPTORS = (
-    "Lkotlin/collections/SetsKt;",
-    "Lkotlin/ranges/RangesKt;",
-)
+ENTRY_DESCRIPTOR = "Lcom/trevornk/ramblr/RuntimeProbeEntry;"
 
 
 def decode_modified_utf8(data: bytes) -> str:
@@ -113,11 +110,12 @@ def main() -> None:
         raise SystemExit(
             "probe test APK is missing the custom instrumentation runner definition: " + RUNNER_DESCRIPTOR
         )
-    missing = [descriptor for descriptor in REQUIRED_TARGET_KOTLIN_DESCRIPTORS if descriptor not in target_definitions]
-    if missing:
+    if ENTRY_DESCRIPTOR not in target_definitions:
         raise SystemExit(
-            "optimized probe target APK is missing Kotlin facade(s) required by its runner: " + ", ".join(missing)
+            "optimized probe target APK is missing its explicit instrumentation boundary: " + ENTRY_DESCRIPTOR
         )
+    if ENTRY_DESCRIPTOR not in test_references:
+        raise SystemExit("probe test APK does not reference the explicit target boundary: " + ENTRY_DESCRIPTOR)
 
     target_api_references = test_references & target_definitions
     if not target_api_references:
@@ -130,7 +128,7 @@ def main() -> None:
         "targetKotlinDefinitions": len({descriptor for descriptor in target_definitions if descriptor.startswith("Lkotlin/")}),
         "testKotlinDefinitions": len({descriptor for descriptor in test_definitions if descriptor.startswith("Lkotlin/")}),
         "resolvedTargetApiReferences": len(target_api_references),
-        "requiredDefinitions": [RUNNER_DESCRIPTOR, *REQUIRED_TARGET_KOTLIN_DESCRIPTORS],
+        "requiredDefinitions": [RUNNER_DESCRIPTOR, ENTRY_DESCRIPTOR],
     }
     print(json.dumps(result, sort_keys=True))
 

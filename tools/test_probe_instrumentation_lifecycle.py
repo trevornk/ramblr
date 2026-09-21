@@ -34,7 +34,7 @@ class ProbeInstrumentationLifecycleTest(unittest.TestCase):
     def test_runner_emits_entry_stage_before_native_work(self) -> None:
         self.assertIn('"runner.onCreate"', self.source)
         self.assertIn('"runner.onStart"', self.source)
-        self.assertLess(self.source.index('"runner.onStart"'), self.source.index("NativeProbeModelProvisioningTest"))
+        self.assertLess(self.source.index('"runner.onStart"'), self.source.index("RuntimeProbeEntry.run(targetContext"))
 
     def test_runner_has_bounded_stage_contract(self) -> None:
         self.assertIn("isValidStage(selected)", self.source)
@@ -58,13 +58,13 @@ class ProbeInstrumentationLifecycleTest(unittest.TestCase):
         self.assertIn("distributionSha256Sum", workflow)
         self.assertIn("probe checkout only", workflow)
 
-    def test_probe_runtime_classpath_closes_kotlin_linkage_and_checks_emitted_dex(self) -> None:
-        """A runner in the target process needs Kotlin helpers retained by isolated target R8."""
+    def test_probe_runtime_boundary_is_explicit_and_dex_checked(self) -> None:
+        """Only the Java entry point is a test-to-target ABI; target owns production calls."""
         self.assertIn('androidTestImplementation(kotlin("stdlib"))', BUILD_GRADLE.read_text())
         self.assertIn('proguardFiles("probe-runtime-rules.pro")', BUILD_GRADLE.read_text())
-        self.assertIn("-keep class kotlin.collections.SetsKt", PROBE_RUNTIME_RULES.read_text())
-        self.assertIn("-keep class kotlin.ranges.RangesKt", PROBE_RUNTIME_RULES.read_text())
-        self.assertIn("ProbeKotlinRuntimeLinkage.verify()", self.source)
+        self.assertIn("-keep class com.trevornk.ramblr.RuntimeProbeEntry", PROBE_RUNTIME_RULES.read_text())
+        self.assertIn("RuntimeProbeEntry.run(targetContext", self.source)
+        self.assertIn("lastStageElapsedMs", self.source)
         workflow = WORKFLOW.read_text()
         self.assertIn("verify_probe_dex_linkage.py", workflow)
         self.assertIn("--target", workflow)

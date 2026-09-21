@@ -28,6 +28,7 @@ class ProbeInstrumentationRunner : Instrumentation() {
     private val stageToken = AtomicLong(0)
     @Volatile private var currentStage = "runner.onCreate"
     @Volatile private var stageDeadline = 0L
+    @Volatile private var lastStageElapsedMs = 0L
 
     override fun onCreate(arguments: Bundle) {
         runtimeArguments = arguments
@@ -38,39 +39,31 @@ class ProbeInstrumentationRunner : Instrumentation() {
 
     override fun onStart() {
         super.onStart()
-        ProbeRuntimeContext.targetContext = targetContext
         emitStage("runner.onStart", "START", 0)
         val selected = runtimeArguments.getString("stage") ?: "all"
         try {
             require(isValidStage(selected)) {
                 "unknown stage '$selected'; expected one of all, asr, cleanup, provision, vad"
             }
-            runStage("harness", HARNESS_BUDGET_MS) {
-                ProbeKotlinRuntimeLinkage.verify()
-            }
+            runStage("harness", HARNESS_BUDGET_MS) { RuntimeProbeEntry.run(targetContext, "harness") }
             runStage("voiceIme", VOICE_IME_BUDGET_MS) {
-                VoiceImeDeviceMetadataTest().compiledVoiceSubtypeIsDiscoverableAndStandalone()
+                RuntimeProbeEntry.run(targetContext, "voiceIme")
             }
             if (runtimeArguments.getString("voiceImeOnly") == "true") {
                 terminal(Activity.RESULT_OK, "voiceIme", "PASS", "voiceImeProbe=PASS")
                 return
             }
             if (selected == "all" || selected == "provision") {
-                runStage("provision", PROVISION_BUDGET_MS) {
-                    NativeProbeModelProvisioningTest().downloadsVerifiedModelsOnlyInsideNonDebuggableProbe()
-                }
+                runStage("provision", PROVISION_BUDGET_MS) { RuntimeProbeEntry.run(targetContext, "provision") }
             }
             if (selected == "all" || selected == "asr") {
-                runStage("asr", ASR_BUDGET_MS) { AsrDecodeBenchmark().benchmarkDecode() }
+                runStage("asr", ASR_BUDGET_MS) { RuntimeProbeEntry.run(targetContext, "asr") }
             }
             if (selected == "all" || selected == "vad") {
-                runStage("vad", VAD_BUDGET_MS) { NativeProbeVadTest().emitsSpeechSegmentFrom512SampleFrames() }
+                runStage("vad", VAD_BUDGET_MS) { RuntimeProbeEntry.run(targetContext, "vad") }
             }
             if (selected == "all" || selected == "cleanup") {
-                runStage("cleanup", CLEANUP_BUDGET_MS) {
-                    LocalNumericCleanupDeviceTest().numericPreservationThroughRealLocalModel()
-                    NativeProbeEvidenceAndCleanupTest().reportsNativeResultsAndRemovesProbeModels()
-                }
+                runStage("cleanup", CLEANUP_BUDGET_MS) { RuntimeProbeEntry.run(targetContext, "cleanup") }
             }
             terminal(Activity.RESULT_OK, selected, "PASS", "nativeProbe=PASS")
         } catch (t: Throwable) {
@@ -85,6 +78,7 @@ class ProbeInstrumentationRunner : Instrumentation() {
                 currentStage,
                 status,
                 "${t.javaClass.name}: ${t.message}",
+                stageStartedAt = if (stageDeadline == 0L) null else stageDeadline - stageBudgetFor(currentStage),
             )
         }
     }
@@ -97,7 +91,8 @@ class ProbeInstrumentationRunner : Instrumentation() {
         stageDeadline = started + budgetMs
         emitStage(name, "START", 0)
         val watchdog = Thread({
-            val remaining = (stageDeadline - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+            val now = SystemClock.elapsedRealtime()
+            val remaining = if (stageDeadline > now) stageDeadline - now else 0L
             try {
                 Thread.sleep(remaining)
             } catch (_: InterruptedException) {
@@ -123,6 +118,7 @@ class ProbeInstrumentationRunner : Instrumentation() {
             if (terminalOnce.get()) throw StageWatchdogExpired(name)
             emitStage(name, "END", SystemClock.elapsedRealtime() - started)
         } finally {
+            lastStageElapsedMs = SystemClock.elapsedRealtime() - started
             stageToken.compareAndSet(token, 0)
             watchdog.interrupt()
             stageDeadline = 0L
@@ -145,13 +141,13 @@ class ProbeInstrumentationRunner : Instrumentation() {
         sendStatus(1, result)
     }
 
-    private fun terminal(code: Int, stage: String, status: String, detail: String) {
+    private fun terminal(code: Int, stage: String, status: String, detail: String, stageStartedAt: Long? = null) {
         if (!terminalOnce.compareAndSet(false, true)) return
         val result = Bundle().apply {
             putString("stage", stage)
             putString("status", status)
             putString("detail", detail)
-            putLong("elapsedMs", SystemClock.elapsedRealtime())
+            putLong("elapsedMs", stageStartedAt?.let { SystemClock.elapsedRealtime() - it } ?: lastStageElapsedMs)
         }
         Log.i(TAG, "TERMINAL stage=$stage status=$status detail=$detail")
         sendStatus(0, result)
@@ -159,6 +155,16 @@ class ProbeInstrumentationRunner : Instrumentation() {
     }
 
     private class StageWatchdogExpired(stage: String) : IllegalStateException("watchdog expired in $stage")
+
+    private fun stageBudgetFor(stage: String): Long = when (stage) {
+        "harness" -> HARNESS_BUDGET_MS
+        "voiceIme" -> VOICE_IME_BUDGET_MS
+        "provision" -> PROVISION_BUDGET_MS
+        "asr" -> ASR_BUDGET_MS
+        "vad" -> VAD_BUDGET_MS
+        "cleanup" -> CLEANUP_BUDGET_MS
+        else -> 0L
+    }
 
     private companion object {
         const val TAG = "NativeProbeRunner"
