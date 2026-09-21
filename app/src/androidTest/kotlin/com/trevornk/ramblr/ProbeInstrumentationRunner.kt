@@ -42,8 +42,8 @@ class ProbeInstrumentationRunner : Instrumentation() {
         emitStage("runner.onStart", "START", 0)
         val selected = runtimeArguments.getString("stage") ?: "all"
         try {
-            require(selected in validStages) {
-                "unknown stage '$selected'; expected one of ${validStages.sorted()}"
+            require(isValidStage(selected)) {
+                "unknown stage '$selected'; expected one of all, asr, cleanup, provision, vad"
             }
             runStage("voiceIme", VOICE_IME_BUDGET_MS) {
                 VoiceImeDeviceMetadataTest().compiledVoiceSubtypeIsDiscoverableAndStandalone()
@@ -126,6 +126,11 @@ class ProbeInstrumentationRunner : Instrumentation() {
         }
     }
 
+    // This runner is loaded before AndroidTest can provide Kotlin runtime classes. Keep stage
+    // validation free of Kotlin collection initialization so runner.onStart remains reachable.
+    private fun isValidStage(stage: String): Boolean =
+        stage == "provision" || stage == "asr" || stage == "vad" || stage == "cleanup" || stage == "all"
+
     private fun emitStage(stage: String, status: String, elapsedMs: Long, detail: String? = null) {
         val result = Bundle().apply {
             putString("stage", stage)
@@ -159,6 +164,5 @@ class ProbeInstrumentationRunner : Instrumentation() {
         const val ASR_BUDGET_MS = 60_000L
         const val VAD_BUDGET_MS = 60_000L
         const val CLEANUP_BUDGET_MS = 720_000L
-        val validStages = setOf("provision", "asr", "vad", "cleanup", "all")
     }
 }

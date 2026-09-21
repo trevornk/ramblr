@@ -35,7 +35,8 @@ class ProbeInstrumentationLifecycleTest(unittest.TestCase):
         self.assertLess(self.source.index('"runner.onStart"'), self.source.index("NativeProbeModelProvisioningTest"))
 
     def test_runner_has_bounded_stage_contract(self) -> None:
-        self.assertIn("validStages", self.source)
+        self.assertIn("isValidStage(selected)", self.source)
+        self.assertNotIn("setOf(", self.source)
         self.assertIn("Thread.getAllStackTraces()", self.source)
         self.assertIn("terminalOnce", self.source)
         self.assertIn("stageDeadline", self.source)
