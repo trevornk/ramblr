@@ -100,6 +100,15 @@ android {
             // GGML_COMMIT for the native library.
             vcsInfo.include = false
         }
+        // Never-release hardware-validation surrogate. It deliberately inherits the optimized
+        // release configuration, but isolates every mutable file under a distinct application ID.
+        // Do NOT make it debuggable: AGP disables R8 optimization for debuggable targets.
+        create("runtimeProbe") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".r8probe"
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     defaultConfig {
