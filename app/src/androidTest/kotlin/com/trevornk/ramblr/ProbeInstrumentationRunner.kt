@@ -15,13 +15,20 @@ object ProbeRuntimeContext {
  * tracing dependency, which otherwise changes the target runtime before native validation begins.
  */
 class ProbeInstrumentationRunner : Instrumentation() {
+    private var runtimeArguments = Bundle.EMPTY
+
+    override fun onCreate(arguments: Bundle) {
+        runtimeArguments = arguments
+        super.onCreate(arguments)
+    }
+
     override fun onStart() {
         super.onStart()
         ProbeRuntimeContext.targetContext = targetContext
         val result = Bundle()
         try {
             VoiceImeDeviceMetadataTest().compiledVoiceSubtypeIsDiscoverableAndStandalone()
-            if (arguments.getString("voiceImeOnly") == "true") {
+            if (runtimeArguments.getString("voiceImeOnly") == "true") {
                 result.putString("voiceImeProbe", "PASS")
             } else {
                 NativeProbeModelProvisioningTest().downloadsVerifiedModelsOnlyInsideNonDebuggableProbe()
