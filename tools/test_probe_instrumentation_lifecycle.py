@@ -63,6 +63,7 @@ class ProbeInstrumentationLifecycleTest(unittest.TestCase):
         self.assertIn('androidTestImplementation(kotlin("stdlib"))', BUILD_GRADLE.read_text())
         self.assertIn('proguardFiles("probe-runtime-rules.pro")', BUILD_GRADLE.read_text())
         self.assertIn("-keep class kotlin.collections.SetsKt", PROBE_RUNTIME_RULES.read_text())
+        self.assertIn("-keep class kotlin.ranges.RangesKt", PROBE_RUNTIME_RULES.read_text())
         self.assertIn("ProbeKotlinRuntimeLinkage.verify()", self.source)
         workflow = WORKFLOW.read_text()
         self.assertIn("verify_probe_dex_linkage.py", workflow)

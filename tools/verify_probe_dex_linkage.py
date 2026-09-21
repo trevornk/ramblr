@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Check the emitted DEX for the optimized probe runner's known Kotlin facade regression.
+"""Check emitted DEX for optimized probe runner's known Kotlin facade regressions.
 
 Instrumentation executes in the optimized target process. AndroidTest dependencies can be
 de-duplicated against that target. This narrow regression check proves the runner stays in the
-test APK while its known pre-entry dependency, kotlin.collections.SetsKt, stays in the isolated
-target APK. It is not a general DEX method/field linkage-closure verifier; device entry smoke is
+test APK while its known target-process dependencies, kotlin.collections.SetsKt and the watchdog's
+kotlin.ranges.RangesKt, stay in the isolated target APK. It is not a general DEX method/field
+linkage-closure verifier; device entry smoke is
 the next gate for additional classpath failures.
 """
 from __future__ import annotations
@@ -16,7 +17,10 @@ import zipfile
 from pathlib import Path
 
 RUNNER_DESCRIPTOR = "Lcom/trevornk/ramblr/ProbeInstrumentationRunner;"
-SETS_DESCRIPTOR = "Lkotlin/collections/SetsKt;"
+REQUIRED_TARGET_KOTLIN_DESCRIPTORS = (
+    "Lkotlin/collections/SetsKt;",
+    "Lkotlin/ranges/RangesKt;",
+)
 
 
 def decode_modified_utf8(data: bytes) -> str:
@@ -109,9 +113,10 @@ def main() -> None:
         raise SystemExit(
             "probe test APK is missing the custom instrumentation runner definition: " + RUNNER_DESCRIPTOR
         )
-    if SETS_DESCRIPTOR not in target_definitions:
+    missing = [descriptor for descriptor in REQUIRED_TARGET_KOTLIN_DESCRIPTORS if descriptor not in target_definitions]
+    if missing:
         raise SystemExit(
-            "optimized probe target APK is missing the Kotlin SetsKt facade required by its runner: " + SETS_DESCRIPTOR
+            "optimized probe target APK is missing Kotlin facade(s) required by its runner: " + ", ".join(missing)
         )
 
     target_api_references = test_references & target_definitions
@@ -125,7 +130,7 @@ def main() -> None:
         "targetKotlinDefinitions": len({descriptor for descriptor in target_definitions if descriptor.startswith("Lkotlin/")}),
         "testKotlinDefinitions": len({descriptor for descriptor in test_definitions if descriptor.startswith("Lkotlin/")}),
         "resolvedTargetApiReferences": len(target_api_references),
-        "requiredDefinitions": [RUNNER_DESCRIPTOR, SETS_DESCRIPTOR],
+        "requiredDefinitions": [RUNNER_DESCRIPTOR, *REQUIRED_TARGET_KOTLIN_DESCRIPTORS],
     }
     print(json.dumps(result, sort_keys=True))
 
