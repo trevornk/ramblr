@@ -29,8 +29,9 @@ class NativeProbeEvidenceAndCleanupTest {
         listOf(SILERO_VAD_MODEL, MODEL_CATALOG.first { it.archive == ASR_ARCHIVE }, MUMBLE_CLEANUP_Q4_0_MODEL)
             .forEach { ModelDownloader.delete(ctx, it) }
         File(ctx.filesDir, "bench_models").deleteRecursively()
+        File(ctx.filesDir, "native_probe_integrity").deleteRecursively()
         ctx.getSharedPreferences("ramblr", Context.MODE_PRIVATE).edit().remove("local_cleanup_model_name").apply()
-        val remnants = listOf("models", "vad_models", "cleanup_models", "bench_models")
+        val remnants = listOf("models", "vad_models", "cleanup_models", "bench_models", "native_probe_integrity")
             .flatMap { dir -> File(ctx.filesDir, dir).walkTopDown().filter { it.isFile && it.name != ".complete" }.map { it.absolutePath }.toList() }
         assertTrue("probe fixture cleanup left payloads: $remnants", remnants.isEmpty())
         Log.i(TAG, "PROBE_MODEL_CLEANUP=OK package=${ctx.packageName}")

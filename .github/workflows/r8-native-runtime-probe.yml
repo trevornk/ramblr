@@ -25,9 +25,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
         with:
           cache-provider: basic
+      - name: Check custom instrumentation lifecycle contract
+        run: python3 -m unittest tools/test_probe_instrumentation_lifecycle.py -v
       - name: Build optimized non-debuggable probe and matching tests
         run: ./gradlew assembleGithubRuntimeProbe assembleGithubRuntimeProbeAndroidTest
-      - name: Upload probe artifacts and R8 mapping
+      - name: Require generated androidTest R8 mapping
+        run: test -f app/build/outputs/mapping/githubRuntimeProbeAndroidTest/mapping.txt
+      - name: Upload probe artifacts and R8 mappings
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: r8-native-runtime-probe
@@ -35,4 +39,5 @@ jobs:
             app/build/outputs/apk/github/runtimeProbe/*.apk
             app/build/outputs/apk/androidTest/github/runtimeProbe/*.apk
             app/build/outputs/mapping/github/runtimeProbe/*
+            app/build/outputs/mapping/githubRuntimeProbeAndroidTest/*
           if-no-files-found: error
