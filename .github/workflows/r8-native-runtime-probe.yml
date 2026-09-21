@@ -31,6 +31,11 @@ jobs:
         run: ./gradlew assembleGithubRuntimeProbe assembleGithubRuntimeProbeAndroidTest
       - name: Require generated androidTest R8 mapping
         run: test -f app/build/outputs/mapping/githubRuntimeProbeAndroidTest/mapping.txt
+      - name: Verify optimized probe test DEX linkage closure
+        run: |
+          python3 tools/verify_probe_dex_linkage.py \
+            --target app/build/outputs/apk/github/runtimeProbe/Ramblr-1.0.32-github-runtimeProbe.apk \
+            --test app/build/outputs/apk/androidTest/github/runtimeProbe/app-github-runtimeProbe-androidTest.apk
       - name: Record matching probe APK identities and native hashes
         run: |
           python3 - <<'PY'
@@ -54,8 +59,8 @@ jobs:
           with zipfile.ZipFile(target) as apk:
               native = {entry.filename: hashlib.sha256(apk.read(entry)).hexdigest() for entry in apk.infolist() if entry.filename.startswith("lib/arm64-v8a/") and entry.filename.endswith(".so")}
           result = {"target": identity(target), "test": identity(test), "signersMatch": identity(target)["certificateSha256"] == identity(test)["certificateSha256"], "targetNonDebuggable": "runtimeProbe", "nativeLibrarySha256": native, "mapping": {"target": "app/build/outputs/mapping/github/runtimeProbe/mapping.txt", "androidTest": "app/build/outputs/mapping/githubRuntimeProbeAndroidTest/mapping.txt"}}
-          assert result["target"]["package"] == "com.trevornk.ramblr.r8probe8", result
-          assert result["test"]["package"] == "com.trevornk.ramblr.r8probe8.test", result
+          assert result["target"]["package"] == "com.trevornk.ramblr.r8probe9", result
+          assert result["test"]["package"] == "com.trevornk.ramblr.r8probe9.test", result
           assert result["signersMatch"], result
           Path("app/build/probe-artifact-identity.json").write_text(json.dumps(result, indent=2, sort_keys=True))
           print(json.dumps(result, sort_keys=True))

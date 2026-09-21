@@ -43,6 +43,20 @@ val keystoreProperties = Properties().apply {
 }
 val hasReleaseSigning = keystoreProperties.getProperty("storeFile") != null
 
+// The hardware probe has a separate, local-only signer. It is intentionally unrelated to the
+// release key and CI's generated debug key: a local rerun must produce a stable target/test pair
+// without trying to update the already-installed probe8 signed by a lost CI certificate.
+val probeSigningPropertiesFile = rootProject.file("probe-signing.properties")
+val probeSigningProperties = Properties().apply {
+    if (probeSigningPropertiesFile.exists()) probeSigningPropertiesFile.inputStream().use { load(it) }
+}
+val hasProbeSigning = probeSigningPropertiesFile.exists()
+if (hasProbeSigning) {
+    require(listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all {
+        !probeSigningProperties.getProperty(it).isNullOrBlank()
+    }) { "probe-signing.properties must set storeFile, storePassword, keyAlias, and keyPassword" }
+}
+
 android {
     namespace = "com.trevornk.ramblr"
     compileSdk = 36
@@ -55,6 +69,14 @@ android {
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+        if (hasProbeSigning) {
+            create("runtimeProbeLocal") {
+                storeFile = rootProject.file(probeSigningProperties.getProperty("storeFile"))
+                storePassword = probeSigningProperties.getProperty("storePassword")
+                keyAlias = probeSigningProperties.getProperty("keyAlias")
+                keyPassword = probeSigningProperties.getProperty("keyPassword")
             }
         }
     }
@@ -108,9 +130,18 @@ android {
             // CI's ephemeral debug signer changes each run. A failed same-package update must
             // never be resolved by removing a probe from this restored-user-app device, so this
             // rerun uses a fresh isolated package identity.
-            applicationIdSuffix = ".r8probe8"
+            applicationIdSuffix = ".r8probe9"
             isDebuggable = false
-            signingConfig = signingConfigs.getByName("debug")
+            // CI has no probe key and remains artifact-only. A configured local probe build uses
+            // the persistent key for BOTH target and androidTest, which AGP signs as a pair.
+            if (hasProbeSigning) {
+                signingConfig = signingConfigs.getByName("runtimeProbeLocal")
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
+            }
+            // This applies to the separately R8-optimized androidTest APK only. It names the
+            // exact Kotlin facade exercised by the harness; production R8 rules stay untouched.
+            testProguardFiles("probe-test-rules.pro")
         }
     }
 
@@ -296,10 +327,16 @@ dependencies {
     // isIncludeAndroidResources = true.
     testImplementation("org.robolectric:robolectric:4.16")
 
-    // On-device ASR decode benchmark only (AsrDecodeBenchmark, #198) -- the androidTest source
-    // set has exactly that one class. junit:junit is already the unit-test framework above;
+    // The optimized androidTest APK is its own runtime classpath. The target R8 graph cannot see
+    // the custom runner or its later Kotlin test helpers, so do not let it accidentally supply
+    // Kotlin facades from the target APK: package the runtime explicitly with the test harness.
+    // CI validates the emitted DEX closure (including kotlin.collections.SetsKt), not just this
+    // declaration, because a future shrinker/configuration change can otherwise reintroduce the
+    // pre-runner NoClassDefFoundError.
+    androidTestImplementation(kotlin("stdlib"))
+    // On-device native-probe harness. junit:junit is already the unit-test framework above;
     // androidx.test's ext-junit + runner are the standard instrumentation pair for
-    // AndroidJUnitRunner. No androidx.test:rules -- nothing in the benchmark needs a rule.
+    // AndroidJUnitRunner. No androidx.test:rules -- nothing in the probe needs a rule.
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
 }

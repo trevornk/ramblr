@@ -13,6 +13,7 @@ eval-reports/
 *.keystore
 *.p12
 keystore.properties
+probe-signing.properties
 google-services.json
 
 # Local-only working data. `.artifacts/` holds the private transcription-eval

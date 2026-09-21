@@ -1,0 +1,7 @@
+# Copy to the repository root as probe-signing.properties; that local file is gitignored.
+# This key is for the isolated r8probe9 target + androidTest pair only. Never use a release key
+# or a CI-generated debug key here.
+storeFile=/absolute/path/to/ramblr-r8probe-local.keystore
+storePassword=REPLACE_LOCALLY
+keyAlias=ramblr-r8probe-local
+keyPassword=REPLACE_LOCALLY

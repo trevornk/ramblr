@@ -45,6 +45,9 @@ class ProbeInstrumentationRunner : Instrumentation() {
             require(isValidStage(selected)) {
                 "unknown stage '$selected'; expected one of all, asr, cleanup, provision, vad"
             }
+            runStage("harness", HARNESS_BUDGET_MS) {
+                ProbeKotlinRuntimeLinkage.verify()
+            }
             runStage("voiceIme", VOICE_IME_BUDGET_MS) {
                 VoiceImeDeviceMetadataTest().compiledVoiceSubtypeIsDiscoverableAndStandalone()
             }
@@ -159,6 +162,7 @@ class ProbeInstrumentationRunner : Instrumentation() {
 
     private companion object {
         const val TAG = "NativeProbeRunner"
+        const val HARNESS_BUDGET_MS = 10_000L
         const val VOICE_IME_BUDGET_MS = 10_000L
         const val PROVISION_BUDGET_MS = 1_440_000L
         const val ASR_BUDGET_MS = 60_000L
