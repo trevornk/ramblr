@@ -71,6 +71,11 @@ android {
             // share-to-Gmail flow.
         }
         release {
+            // RECOVERY ONLY — this isolated branch is a one-use, data-preserving bridge from
+            // the non-debuggable v35 test package to the original v32 package. Keep it
+            // debuggable so Android permits the subsequent same-signer downgrade. Never merge,
+            // tag, or publish this configuration.
+            isDebuggable = true
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -98,8 +103,10 @@ android {
         applicationId = "com.trevornk.ramblr"
         minSdk = 30
         targetSdk = 36
-        versionCode = 32
-        versionName = "1.0.29"
+        // RECOVERY ONLY — code remains exactly v1.0.29; Android needs a nondecreasing
+        // versionCode to replace the temporary v35 test package without touching user data.
+        versionCode = 36
+        versionName = "1.0.29-recovery"
 
         buildConfigField("String", "OMNIROUTE_BASE_URL", "\"$omniRouteBaseUrl\"")
 
