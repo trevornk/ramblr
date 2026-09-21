@@ -139,9 +139,9 @@ android {
             } else {
                 signingConfig = signingConfigs.getByName("debug")
             }
-            // This applies to the separately R8-optimized androidTest APK only. It names the
-            // exact Kotlin facade exercised by the harness; production R8 rules stay untouched.
-            testProguardFiles("probe-test-rules.pro")
+            // The custom runner executes in this target process. Keep the exact facade it
+            // invokes in this isolated target only; production R8 rules stay untouched.
+            proguardFiles("probe-runtime-rules.pro")
         }
     }
 

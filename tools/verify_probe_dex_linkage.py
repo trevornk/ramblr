@@ -103,18 +103,21 @@ def main() -> None:
     target_references, target_definitions = apk_types_and_definitions(args.target)
     test_references, test_definitions = apk_types_and_definitions(args.test)
 
-    required_test_definitions = {RUNNER_DESCRIPTOR, SETS_DESCRIPTOR}
-    missing_required = sorted(required_test_definitions - test_definitions)
-    if missing_required:
+    if RUNNER_DESCRIPTOR not in test_definitions:
         raise SystemExit(
-            "probe test APK is missing required runner/Kotlin linkage definitions: " + ", ".join(missing_required)
+            "probe test APK is missing the custom instrumentation runner definition: " + RUNNER_DESCRIPTOR
+        )
+    if SETS_DESCRIPTOR not in target_definitions:
+        raise SystemExit(
+            "optimized probe target APK is missing the Kotlin SetsKt facade required by its runner: " + SETS_DESCRIPTOR
         )
 
     kotlin_references = {descriptor for descriptor in test_references if descriptor.startswith("Lkotlin/")}
-    unresolved_kotlin = sorted(kotlin_references - test_definitions)
+    runtime_definitions = target_definitions | test_definitions
+    unresolved_kotlin = sorted(kotlin_references - runtime_definitions)
     if unresolved_kotlin:
         raise SystemExit(
-            "probe test APK relies on Kotlin classes outside its own optimized DEX: " + ", ".join(unresolved_kotlin)
+            "probe runtime classpath has unresolved Kotlin references: " + ", ".join(unresolved_kotlin)
         )
 
     target_api_references = test_references & target_definitions
@@ -125,9 +128,10 @@ def main() -> None:
         "targetDexClassDefinitions": len(target_definitions),
         "testDexClassDefinitions": len(test_definitions),
         "testKotlinReferences": len(kotlin_references),
+        "targetKotlinDefinitions": len({descriptor for descriptor in target_definitions if descriptor.startswith("Lkotlin/")}),
         "testKotlinDefinitions": len({descriptor for descriptor in test_definitions if descriptor.startswith("Lkotlin/")}),
         "resolvedTargetApiReferences": len(target_api_references),
-        "requiredDefinitions": sorted(required_test_definitions),
+        "requiredDefinitions": [RUNNER_DESCRIPTOR, SETS_DESCRIPTOR],
     }
     print(json.dumps(result, sort_keys=True))
 

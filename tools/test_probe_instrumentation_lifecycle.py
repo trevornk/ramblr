@@ -10,7 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "app/src/androidTest/kotlin/com/trevornk/ramblr/ProbeInstrumentationRunner.kt"
 WORKFLOW = ROOT / ".github/workflows/r8-native-runtime-probe.yml"
 BUILD_GRADLE = ROOT / "app/build.gradle.kts"
-PROBE_TEST_RULES = ROOT / "app/probe-test-rules.pro"
+PROBE_RUNTIME_RULES = ROOT / "app/probe-runtime-rules.pro"
 
 
 class ProbeInstrumentationLifecycleTest(unittest.TestCase):
@@ -48,11 +48,11 @@ class ProbeInstrumentationLifecycleTest(unittest.TestCase):
         self.assertIn("test_probe_instrumentation_lifecycle.py", workflow)
         self.assertIn("mapping/githubRuntimeProbeAndroidTest/*", workflow)
 
-    def test_probe_test_apk_owns_kotlin_runtime_and_checks_emitted_dex(self) -> None:
-        """A runner loaded from androidTest cannot rely on target R8 retaining Kotlin helpers."""
+    def test_probe_runtime_classpath_closes_kotlin_linkage_and_checks_emitted_dex(self) -> None:
+        """A runner in the target process needs Kotlin helpers retained by isolated target R8."""
         self.assertIn('androidTestImplementation(kotlin("stdlib"))', BUILD_GRADLE.read_text())
-        self.assertIn('testProguardFiles("probe-test-rules.pro")', BUILD_GRADLE.read_text())
-        self.assertIn("-keep class kotlin.collections.SetsKt", PROBE_TEST_RULES.read_text())
+        self.assertIn('proguardFiles("probe-runtime-rules.pro")', BUILD_GRADLE.read_text())
+        self.assertIn("-keep class kotlin.collections.SetsKt", PROBE_RUNTIME_RULES.read_text())
         self.assertIn("ProbeKotlinRuntimeLinkage.verify()", self.source)
         workflow = WORKFLOW.read_text()
         self.assertIn("verify_probe_dex_linkage.py", workflow)
