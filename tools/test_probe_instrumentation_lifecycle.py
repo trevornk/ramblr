@@ -11,6 +11,7 @@ RUNNER = ROOT / "app/src/androidTest/kotlin/com/trevornk/ramblr/ProbeInstrumenta
 WORKFLOW = ROOT / ".github/workflows/r8-native-runtime-probe.yml"
 BUILD_GRADLE = ROOT / "app/build.gradle.kts"
 PROBE_RUNTIME_RULES = ROOT / "app/probe-runtime-rules.pro"
+NATIVE_DRIVER = ROOT / "app/src/runtimeProbe/kotlin/com/trevornk/ramblr/RuntimeProbeNativeDriver.kt"
 
 
 class ProbeInstrumentationLifecycleTest(unittest.TestCase):
@@ -77,6 +78,43 @@ class ProbeInstrumentationLifecycleTest(unittest.TestCase):
         self.assertIn('create("runtimeProbeLocal")', gradle)
         self.assertIn('applicationIdSuffix = ".r8probe9"', gradle)
         self.assertIn('signingConfig = signingConfigs.getByName("runtimeProbeLocal")', gradle)
+
+
+class RuntimeProbeNativeAssertionTest(unittest.TestCase):
+    """Guard the negative ASR/VAD cases with direct, mutation-tested probe assertions."""
+
+    def setUp(self) -> None:
+        self.source = NATIVE_DRIVER.read_text()
+
+    def assert_native_assertions(self, source: str) -> None:
+        self.assertRegex(
+            source,
+            r"val wav=File\(dir,\"test_wavs/model0\.wav\"\).*?check\(wav\.isFile\)",
+            "ASR must use only the bundled public model0.wav fixture",
+        )
+        self.assertRegex(
+            source,
+            r"val text=recognizer\.getResult\(stream\)\.text\.trim\(\).*?check\(text\.isNotBlank\(\)\)",
+            "each decoded fixture transcript must reject blank output",
+        )
+        self.assertIn('"ASR_DECODE " + JSONObject().put("run",i).put("wav",wav.name).put("decodeMs",decodeMs).put("transcript",text).toString()', source)
+        self.assertIn("val silence=SherpaVadHandle.create(model)", source)
+        self.assertIn("check(silenceSegments == 0)", source)
+        self.assertIn('"SILENCE_PASS " + JSONObject().put("segments",silenceSegments).toString()', source)
+        self.assertRegex(source, r"check\(segments\.length\(\)>0 && speechNonEmptySegments>0\)")
+        self.assertIn('"SPEECH_PASS " + JSONObject().put("wav",wav.name).put("segments",segments.length()).put("nonEmptySegments",speechNonEmptySegments).toString()', source)
+
+    def test_asr_and_vad_negative_guards_reject_mutations(self) -> None:
+        self.assert_native_assertions(self.source)
+        for required in (
+            "check(text.isNotBlank())",
+            "check(silenceSegments == 0)",
+            "check(segments.length()>0 && speechNonEmptySegments>0)",
+        ):
+            mutated = self.source.replace(required, "check(true)", 1)
+            self.assertNotEqual(mutated, self.source, required)
+            with self.assertRaises(AssertionError, msg=required):
+                self.assert_native_assertions(mutated)
 
 
 if __name__ == "__main__":

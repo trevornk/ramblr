@@ -73,13 +73,13 @@ object RuntimeProbeNativeDriver {
     }
 
     private fun asr(context: Context) {
-        val dir=File(context.filesDir,"bench_models/$ASR_ARCHIVE"); val wav=File(dir,"test_wavs").listFiles { f->f.extension.equals("wav",true) }?.sortedBy { it.name }?.firstOrNull() ?: error("missing ASR wav")
+        val dir=File(context.filesDir,"bench_models/$ASR_ARCHIVE"); val wav=File(dir,"test_wavs/model0.wav"); check(wav.isFile) { "missing bundled ASR model0.wav" }
         val config=LocalTranscriber.detectModelConfig(dir,2) ?: error("no ASR config")
         val recognizer=com.k2fsa.sherpa.onnx.OfflineRecognizer(null,config)
         val results=JSONArray()
         try { repeat(3) { i ->
             val stream=recognizer.createStream(); val start=SystemClock.elapsedRealtime()
-            try { stream.acceptWaveform(readWav(wav),16000); recognizer.decode(stream); results.put(JSONObject().put("run",i).put("decodeMs",SystemClock.elapsedRealtime()-start).put("text",recognizer.getResult(stream).text)) } finally { stream.release() }
+            try { stream.acceptWaveform(readWav(wav),16000); recognizer.decode(stream); val decodeMs=SystemClock.elapsedRealtime()-start; val text=recognizer.getResult(stream).text.trim(); check(text.isNotBlank()) { "ASR blank transcript run=$i wav=${wav.name}" }; results.put(JSONObject().put("run",i).put("decodeMs",decodeMs).put("text",text)); Log.i(TAG,"ASR_DECODE " + JSONObject().put("run",i).put("wav",wav.name).put("decodeMs",decodeMs).put("transcript",text).toString()) } finally { stream.release() }
         }} finally { recognizer.release() }
         check(results.length() == 3) { "ASR produced no decodes" }
         File(context.filesDir,"bench_results.json").writeText(JSONObject().put("wav",wav.name).put("decodes",results).toString())
@@ -88,16 +88,22 @@ object RuntimeProbeNativeDriver {
 
     private fun vad(context: Context) {
         val model=ModelDownloader.vadModelFile(context,SILERO_VAD_MODEL) ?: error("missing VAD model")
-        val wav=File(context.filesDir,"bench_models/$ASR_ARCHIVE/test_wavs").listFiles { f->f.extension.equals("wav",true) }?.sortedBy { it.name }?.firstOrNull() ?: error("missing VAD wav")
+        val wav=File(context.filesDir,"bench_models/$ASR_ARCHIVE/test_wavs/model0.wav"); check(wav.isFile) { "missing bundled VAD model0.wav" }
+        val silence=SherpaVadHandle.create(model) ?: error("silence VAD native create null"); var silenceSegments=0
+        silence.use { h -> repeat(64) { h.acceptWaveform(FloatArray(FRAME)) }; h.flush(); while(!h.isEmpty()) { silenceSegments++;h.pop() } }
+        check(silenceSegments == 0) { "VAD emitted $silenceSegments silence segments" }
+        Log.i(TAG,"SILENCE_PASS " + JSONObject().put("segments",silenceSegments).toString())
         val vad=SherpaVadHandle.create(model) ?: error("VAD native create null"); val segments=JSONArray()
+        var speechNonEmptySegments=0
         vad.use { h ->
             val samples=readWav(wav); var off=0
             while(off<samples.size) { val frame=FloatArray(FRAME); val n=minOf(FRAME,samples.size-off);samples.copyInto(frame,0,off,off+n);h.acceptWaveform(frame);off+=n }
             repeat(64) { h.acceptWaveform(FloatArray(FRAME)) }; h.flush()
-            while(!h.isEmpty()) { val s=h.front();segments.put(JSONObject().put("start",s.start).put("samples",s.samples.size));h.pop() }
+            while(!h.isEmpty()) { val s=h.front();segments.put(JSONObject().put("start",s.start).put("samples",s.samples.size));if(s.samples.isNotEmpty()) speechNonEmptySegments++;h.pop() }
         }
-        check(segments.length()>0 && (0 until segments.length()).any { segments.getJSONObject(it).getInt("samples")>0 })
-        File(context.filesDir,"native_probe_vad.json").writeText(JSONObject().put("wav",wav.name).put("segments",segments).toString())
+        check(segments.length()>0 && speechNonEmptySegments>0)
+        Log.i(TAG,"SPEECH_PASS " + JSONObject().put("wav",wav.name).put("segments",segments.length()).put("nonEmptySegments",speechNonEmptySegments).toString())
+        File(context.filesDir,"native_probe_vad.json").writeText(JSONObject().put("wav",wav.name).put("silenceSegments",silenceSegments).put("segments",segments).toString())
         Log.i(TAG,"VAD_OK wav=${wav.name} segments=$segments")
     }
 
