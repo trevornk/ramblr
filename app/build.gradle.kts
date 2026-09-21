@@ -108,7 +108,7 @@ android {
             // CI's ephemeral debug signer changes each run. A failed same-package update must
             // never be resolved by removing a probe from this restored-user-app device, so this
             // rerun uses a fresh isolated package identity.
-            applicationIdSuffix = ".r8probe3"
+            applicationIdSuffix = ".r8probe4"
             isDebuggable = false
             signingConfig = signingConfigs.getByName("debug")
         }
@@ -123,11 +123,9 @@ android {
 
         buildConfigField("String", "OMNIROUTE_BASE_URL", "\"$omniRouteBaseUrl\"")
 
-        // Instrumentation infra exists solely for the on-device ASR decode benchmark
-        // (AsrDecodeBenchmark, #198) -- there were no androidTest sources at all before it.
-        // The stock AndroidJUnitRunner is enough: the benchmark is a plain instrumented test
-        // reading -e args, no custom runner behavior needed.
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // The probe-specific runner executes the same target-process calls without AndroidJUnitRunner's
+        // optional tracing dependency, which would otherwise alter this release-equivalent target.
+        testInstrumentationRunner = "com.trevornk.ramblr.ProbeInstrumentationRunner"
 
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -281,10 +279,6 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha07")
     implementation("androidx.work:work-runtime-ktx:2.11.2")
 
-    // AndroidJUnitRunner is instantiated in the target process. Its optional Trace reference
-    // must therefore live in the isolated target APK, not only the test APK. Scope it to this
-    // never-release probe build type so production R8 inputs remain unchanged.
-    runtimeProbeImplementation("androidx.tracing:tracing:1.1.0")
 
     // Packages arm64-v8a/libonnxruntime.so into the APK; the sherpa-onnx JNI lib (built
     // from source) links against it at runtime. See onnxRuntimeVersion above.
@@ -308,7 +302,6 @@ dependencies {
     // AndroidJUnitRunner. No androidx.test:rules -- nothing in the benchmark needs a rule.
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
-
 }
 
 // Unzips the onnxruntime AAR's C/C++ headers and arm64-v8a libonnxruntime.so into

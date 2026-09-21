@@ -24,7 +24,7 @@ class NativeProbeModelProvisioningTest {
     @Test
     fun downloadsVerifiedModelsOnlyInsideNonDebuggableProbe() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals("com.trevornk.ramblr.r8probe3", ctx.packageName)
+        assertEquals("com.trevornk.ramblr.r8probe4", ctx.packageName)
         assertFalse(
             "runtime probe must remain non-debuggable so AGP/R8 keeps release optimization enabled",
             ctx.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0,
