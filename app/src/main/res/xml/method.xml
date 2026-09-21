@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Ramblr follows the user's configured transcription language/provider. Declaring a fixed
-     subtype locale would be false, so this intentionally exposes one locale-neutral IME. -->
+<!-- Ramblr follows the user's configured transcription language/provider, so its voice subtype
+     deliberately has no fixed locale. FlorisBoard discovers voice IMEs by subtype mode. -->
 <input-method xmlns:android="http://schemas.android.com/apk/res/android"
-    android:supportsSwitchingToNextInputMethod="true" />
+    android:supportsSwitchingToNextInputMethod="true">
+    <subtype
+        android:imeSubtypeMode="voice"
+        android:isAuxiliary="false" />
+</input-method>
