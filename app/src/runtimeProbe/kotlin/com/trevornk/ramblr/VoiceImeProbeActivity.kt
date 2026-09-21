@@ -5,7 +5,7 @@ import android.os.Bundle
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 
-/** A disposable, no-content test editor used only to show the isolated voice IME. */
+/** A disposable, no-content test editor packaged only in the isolated runtimeProbe variant. */
 class VoiceImeProbeActivity : Activity() {
     private lateinit var editor: EditText
 
