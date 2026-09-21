@@ -48,6 +48,15 @@ class ProbeInstrumentationLifecycleTest(unittest.TestCase):
         self.assertIn("test_probe_instrumentation_lifecycle.py", workflow)
         self.assertIn("mapping/githubRuntimeProbeAndroidTest/*", workflow)
 
+    def test_ci_uses_checksum_pinned_official_gradle_fallback_only_for_probe(self) -> None:
+        workflow = WORKFLOW.read_text()
+        self.assertIn("downloads.gradle.org/distributions/gradle-8.13-bin.zip", workflow)
+        self.assertIn('source = "https" + chr(92) + "://services.gradle.org/distributions/gradle-8.13-bin.zip"', workflow)
+        self.assertIn('fallback = "https" + chr(92) + "://downloads.gradle.org/distributions/gradle-8.13-bin.zip"', workflow)
+        self.assertIn("20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78", workflow)
+        self.assertIn("distributionSha256Sum", workflow)
+        self.assertIn("probe checkout only", workflow)
+
     def test_probe_runtime_classpath_closes_kotlin_linkage_and_checks_emitted_dex(self) -> None:
         """A runner in the target process needs Kotlin helpers retained by isolated target R8."""
         self.assertIn('androidTestImplementation(kotlin("stdlib"))', BUILD_GRADLE.read_text())

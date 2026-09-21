@@ -327,12 +327,11 @@ dependencies {
     // isIncludeAndroidResources = true.
     testImplementation("org.robolectric:robolectric:4.16")
 
-    // The optimized androidTest APK is its own runtime classpath. The target R8 graph cannot see
-    // the custom runner or its later Kotlin test helpers, so do not let it accidentally supply
-    // Kotlin facades from the target APK: package the runtime explicitly with the test harness.
-    // CI validates the emitted DEX closure (including kotlin.collections.SetsKt), not just this
-    // declaration, because a future shrinker/configuration change can otherwise reintroduce the
-    // pre-runner NoClassDefFoundError.
+    // The optimized androidTest APK is a separate runtime classpath. The target R8 graph cannot
+    // see the custom runner or its later Kotlin test helpers, so package the runtime explicitly
+    // with the test harness. CI also has a narrow emitted-DEX regression check for the previously
+    // missing kotlin.collections.SetsKt facade; it is not a general classpath-closure proof, so
+    // each corrected artifact still needs fresh device entry smoke.
     androidTestImplementation(kotlin("stdlib"))
     // On-device native-probe harness. junit:junit is already the unit-test framework above;
     // androidx.test's ext-junit + runner are the standard instrumentation pair for

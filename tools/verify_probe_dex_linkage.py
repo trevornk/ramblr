@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Validate the emitted DEX linkage for the optimized probe runner's known Kotlin facade.
+"""Check the emitted DEX for the optimized probe runner's known Kotlin facade regression.
 
 Instrumentation executes in the optimized target process. AndroidTest dependencies can be
-de-duplicated against that target, so the gate proves the runner stays in the test APK while its
-known pre-entry dependency, kotlin.collections.SetsKt, stays in the isolated target APK.
+de-duplicated against that target. This narrow regression check proves the runner stays in the
+test APK while its known pre-entry dependency, kotlin.collections.SetsKt, stays in the isolated
+target APK. It is not a general DEX method/field linkage-closure verifier; device entry smoke is
+the next gate for additional classpath failures.
 """
 from __future__ import annotations
 
@@ -117,6 +119,7 @@ def main() -> None:
         raise SystemExit("probe test APK has no resolved references to the optimized target DEX")
 
     result = {
+        "gateScope": "narrow-known-kotlin-facade-regression-not-general-linkage-closure",
         "targetDexClassDefinitions": len(target_definitions),
         "testDexClassDefinitions": len(test_definitions),
         "targetKotlinDefinitions": len({descriptor for descriptor in target_definitions if descriptor.startswith("Lkotlin/")}),

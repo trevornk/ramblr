@@ -25,13 +25,28 @@ jobs:
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
         with:
           cache-provider: basic
+      - name: Use checksum-pinned official Gradle fallback for probe checkout only
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          properties = Path("gradle/wrapper/gradle-wrapper.properties")
+          source = "https" + chr(92) + "://services.gradle.org/distributions/gradle-8.13-bin.zip"
+          fallback = "https" + chr(92) + "://downloads.gradle.org/distributions/gradle-8.13-bin.zip"
+          checksum = "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78"
+          text = properties.read_text()
+          assert f"distributionUrl={source}" in text, text
+          assert f"distributionSha256Sum={checksum}" in text, text
+          properties.write_text(text.replace(source, fallback, 1))
+          PY
+      # The wrapper still validates distributionSha256Sum before configuration; this only changes
+      # the official origin in the disposable probe checkout after services.gradle.org returned 504.
       - name: Check custom instrumentation lifecycle contract
         run: python3 -m unittest tools/test_probe_instrumentation_lifecycle.py -v
       - name: Build optimized non-debuggable probe and matching tests
         run: ./gradlew assembleGithubRuntimeProbe assembleGithubRuntimeProbeAndroidTest
       - name: Require generated androidTest R8 mapping
         run: test -f app/build/outputs/mapping/githubRuntimeProbeAndroidTest/mapping.txt
-      - name: Verify optimized probe test DEX linkage closure
+      - name: Verify narrow known optimized-probe Kotlin facade regression
         run: |
           python3 tools/verify_probe_dex_linkage.py \
             --target app/build/outputs/apk/github/runtimeProbe/Ramblr-1.0.32-github-runtimeProbe.apk \
