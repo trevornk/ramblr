@@ -108,7 +108,7 @@ android {
             // CI's ephemeral debug signer changes each run. A failed same-package update must
             // never be resolved by removing a probe from this restored-user-app device, so this
             // rerun uses a fresh isolated package identity.
-            applicationIdSuffix = ".r8probe2"
+            applicationIdSuffix = ".r8probe3"
             isDebuggable = false
             signingConfig = signingConfigs.getByName("debug")
         }
@@ -281,6 +281,11 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha07")
     implementation("androidx.work:work-runtime-ktx:2.11.2")
 
+    // AndroidJUnitRunner is instantiated in the target process. Its optional Trace reference
+    // must therefore live in the isolated target APK, not only the test APK. Scope it to this
+    // never-release probe build type so production R8 inputs remain unchanged.
+    runtimeProbeImplementation("androidx.tracing:tracing:1.1.0")
+
     // Packages arm64-v8a/libonnxruntime.so into the APK; the sherpa-onnx JNI lib (built
     // from source) links against it at runtime. See onnxRuntimeVersion above.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:$onnxRuntimeVersion")
@@ -303,9 +308,7 @@ dependencies {
     // AndroidJUnitRunner. No androidx.test:rules -- nothing in the benchmark needs a rule.
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
-    // AndroidJUnitRunner 1.6.x references Trace at startup, but AGP does not package its
-    // optional dependency into this app's test APK. Keep it test-only; no production R8 input changes.
-    androidTestImplementation("androidx.tracing:tracing:1.1.0")
+
 }
 
 // Unzips the onnxruntime AAR's C/C++ headers and arm64-v8a libonnxruntime.so into
