@@ -73,7 +73,7 @@ object RuntimeProbeNativeDriver {
     }
 
     private fun asr(context: Context) {
-        val dir=File(context.filesDir,"bench_models/$ASR_ARCHIVE"); val wav=File(dir,"test_wavs/model0.wav"); check(wav.isFile) { "missing bundled ASR model0.wav" }
+        val dir=File(context.filesDir,"bench_models/$ASR_ARCHIVE"); val wav=File(dir,"test_wavs/0.wav"); check(wav.isFile) { "missing bundled ASR 0.wav" }
         val config=LocalTranscriber.detectModelConfig(dir,2) ?: error("no ASR config")
         val recognizer=com.k2fsa.sherpa.onnx.OfflineRecognizer(null,config)
         val results=JSONArray()
@@ -88,7 +88,7 @@ object RuntimeProbeNativeDriver {
 
     private fun vad(context: Context) {
         val model=ModelDownloader.vadModelFile(context,SILERO_VAD_MODEL) ?: error("missing VAD model")
-        val wav=File(context.filesDir,"bench_models/$ASR_ARCHIVE/test_wavs/model0.wav"); check(wav.isFile) { "missing bundled VAD model0.wav" }
+        val wav=File(context.filesDir,"bench_models/$ASR_ARCHIVE/test_wavs/0.wav"); check(wav.isFile) { "missing bundled VAD 0.wav" }
         val silence=SherpaVadHandle.create(model) ?: error("silence VAD native create null"); var silenceSegments=0
         silence.use { h -> repeat(64) { h.acceptWaveform(FloatArray(FRAME)) }; h.flush(); while(!h.isEmpty()) { silenceSegments++;h.pop() } }
         check(silenceSegments == 0) { "VAD emitted $silenceSegments silence segments" }

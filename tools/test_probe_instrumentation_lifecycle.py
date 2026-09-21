@@ -89,9 +89,10 @@ class RuntimeProbeNativeAssertionTest(unittest.TestCase):
     def assert_native_assertions(self, source: str) -> None:
         self.assertRegex(
             source,
-            r"val wav=File\(dir,\"test_wavs/model0\.wav\"\).*?check\(wav\.isFile\)",
-            "ASR must use only the bundled public model0.wav fixture",
+            r"val wav=File\(dir,\"test_wavs/0\.wav\"\).*?check\(wav\.isFile\)",
+            "ASR must use the previously verified bundled public 0.wav fixture",
         )
+        self.assertIn('val wav=File(context.filesDir,"bench_models/$ASR_ARCHIVE/test_wavs/0.wav")', source)
         self.assertRegex(
             source,
             r"val text=recognizer\.getResult\(stream\)\.text\.trim\(\).*?check\(text\.isNotBlank\(\)\)",
