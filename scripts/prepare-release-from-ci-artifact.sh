@@ -20,6 +20,14 @@ cd "$ROOT"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || fail "required command unavailable: $1"; }
+single_artifact_file() {
+  label=$1
+  shift
+  matches=$(find "$TMP" "$@" -type f -print)
+  count=$(printf '%s\n' "$matches" | grep -c . || true)
+  [ "$count" -eq 1 ] || fail "CI artifact expected exactly one $label (found $count)"
+  printf '%s\n' "$matches"
+}
 need gh
 need python3
 APKSIGCOPIER=${APKSIGCOPIER:-$(command -v apksigcopier || true)}
@@ -54,19 +62,16 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$OUTPUT_DIR"
 gh run download "$RUN_ID" --repo "$REPO" --name app-release-unsigned --dir "$TMP"
 
-PROVENANCE=$(find "$TMP" -name r8-source-commit.txt -type f -print -quit)
-TEST_SUMMARY=$(find "$TMP" -name r8-unit-test-summary.txt -type f -print -quit)
-[ -n "$PROVENANCE" ] && [ -n "$TEST_SUMMARY" ] || fail "CI artifact is missing provenance or per-flavor test summary"
+PROVENANCE=$(single_artifact_file provenance -name r8-source-commit.txt)
+TEST_SUMMARY=$(single_artifact_file per-flavor-test-summary -name r8-unit-test-summary.txt)
 [ "$(tr -d '[:space:]' < "$PROVENANCE")" = "$HEAD_SHA" ] || fail "artifact provenance does not equal current source SHA"
-grep -Eq '^github tests=[0-9]+ failures=0 errors=0 ' "$TEST_SUMMARY" || fail "github unit-test gate missing or failed"
-grep -Eq '^storefront tests=[0-9]+ failures=0 errors=0 ' "$TEST_SUMMARY" || fail "storefront unit-test gate missing or failed"
+grep -Eq '^github tests=[1-9][0-9]* failures=0 errors=0 ' "$TEST_SUMMARY" || fail "github unit-test gate missing or failed"
+grep -Eq '^storefront tests=[1-9][0-9]* failures=0 errors=0 ' "$TEST_SUMMARY" || fail "storefront unit-test gate missing or failed"
 
-GITHUB_APK=$(find "$TMP" -name 'Ramblr-*-github-release.apk' -type f -print -quit)
-STOREFRONT_APK=$(find "$TMP" -name 'Ramblr-*-storefront-release.apk' -type f -print -quit)
-GITHUB_MAPPING=$(find "$TMP" -path '*mapping/githubRelease/mapping.txt' -type f -print -quit)
-STOREFRONT_MAPPING=$(find "$TMP" -path '*mapping/storefrontRelease/mapping.txt' -type f -print -quit)
-[ -n "$GITHUB_APK" ] && [ -n "$STOREFRONT_APK" ] && [ -n "$GITHUB_MAPPING" ] && [ -n "$STOREFRONT_MAPPING" ] \
-  || fail "CI artifact is missing one of the two APKs or mappings"
+GITHUB_APK=$(single_artifact_file "github APK" -name 'Ramblr-*-github-release.apk')
+STOREFRONT_APK=$(single_artifact_file "storefront APK" -name 'Ramblr-*-storefront-release.apk')
+GITHUB_MAPPING=$(single_artifact_file "github mapping" -path '*mapping/githubRelease/mapping.txt')
+STOREFRONT_MAPPING=$(single_artifact_file "storefront mapping" -path '*mapping/storefrontRelease/mapping.txt')
 python3 tools/verify_r8_release.py --source \
   --storefront-apk "$STOREFRONT_APK" --github-apk "$GITHUB_APK" \
   --storefront-mapping "$STOREFRONT_MAPPING" --github-mapping "$GITHUB_MAPPING"
@@ -83,13 +88,12 @@ signer() {
     | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]'
 }
 for apk in "$GITHUB_APK" "$STOREFRONT_APK"; do
-  # This workflow intentionally uploads unsigned APKs. Accept only apksigner's exact unsigned
-  # diagnostic; any other verification failure is corrupt input, not an invitation to sign it.
+  # This workflow intentionally uploads unsigned APKs. A signed input contradicts that CI
+  # contract, while any other verification failure is corrupt input rather than an invitation
+  # to sign it.
   VERIFY_LOG="$TMP/$(basename "$apk").verify.log"
   if "$APKSIGNER" verify --verbose --print-certs "$apk" >"$VERIFY_LOG" 2>&1; then
-    INPUT_SIGNER=$(signer "$apk")
-    [ -n "$INPUT_SIGNER" ] || fail "could not read CI APK signer: $apk"
-    [ "$INPUT_SIGNER" != "$EXPECTED_SIGNER" ] || fail "CI APK is already release-signed; refusing to re-sign: $apk"
+    fail "CI APK is signed; expected unsigned input: $apk"
   else
     grep -q 'Missing META-INF/MANIFEST.MF' "$VERIFY_LOG" \
       || fail "CI APK is neither validly signed nor unsigned: $apk"
@@ -97,8 +101,10 @@ for apk in "$GITHUB_APK" "$STOREFRONT_APK"; do
 done
 
 for flavor in github storefront; do
-  input_var=${flavor^^}_APK
-  input=${!input_var}
+  case "$flavor" in
+    github) input=$GITHUB_APK ;;
+    storefront) input=$STOREFRONT_APK ;;
+  esac
   output="$OUTPUT_DIR/Ramblr-${VERSION_NAME}-${flavor}-release.apk"
   "$APKSIGNER" sign --ks "$KEYSTORE" --ks-key-alias "$KEY_ALIAS" --ks-pass "file:$PASSWORD_FILE" \
     --key-pass "file:$PASSWORD_FILE" --alignment-preserved true --out "$output" "$input"
