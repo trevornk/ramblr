@@ -31,6 +31,32 @@ jobs:
         run: ./gradlew assembleGithubRuntimeProbe assembleGithubRuntimeProbeAndroidTest
       - name: Require generated androidTest R8 mapping
         run: test -f app/build/outputs/mapping/githubRuntimeProbeAndroidTest/mapping.txt
+      - name: Record matching probe APK identities and native hashes
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, re, subprocess, zipfile
+          from pathlib import Path
+          root = Path("app/build/outputs/apk")
+          target = next(root.glob("github/runtimeProbe/*.apk"))
+          test = next(root.glob("androidTest/github/runtimeProbe/*.apk"))
+          tools = Path(os.environ["ANDROID_HOME"]) / "build-tools"
+          latest = sorted(tools.iterdir(), key=lambda p: tuple(map(int, re.findall(r"\d+", p.name))))[-1]
+          def command(*args): return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT)
+          def identity(apk):
+              badging = command(latest / "aapt", "dump", "badging", apk)
+              certs = command(latest / "apksigner", "verify", "--print-certs", apk)
+              package = re.search(r"package: name='([^']+)'", badging).group(1)
+              cert = re.search(r"certificate SHA-256 digest: ([0-9A-F:]+)", certs).group(1).replace(":", "").lower()
+              return {"path": str(apk), "bytes": apk.stat().st_size, "sha256": hashlib.file_digest(apk.open("rb"), "sha256").hexdigest(), "package": package, "certificateSha256": cert}
+          with zipfile.ZipFile(target) as apk:
+              native = {entry.filename: hashlib.sha256(apk.read(entry)).hexdigest() for entry in apk.infolist() if entry.filename.startswith("lib/arm64-v8a/") and entry.filename.endswith(".so")}
+          result = {"target": identity(target), "test": identity(test), "signersMatch": identity(target)["certificateSha256"] == identity(test)["certificateSha256"], "targetNonDebuggable": "runtimeProbe", "nativeLibrarySha256": native, "mapping": {"target": "app/build/outputs/mapping/github/runtimeProbe/mapping.txt", "androidTest": "app/build/outputs/mapping/githubRuntimeProbeAndroidTest/mapping.txt"}}
+          assert result["target"]["package"] == "com.trevornk.ramblr.r8probe8", result
+          assert result["test"]["package"] == "com.trevornk.ramblr.r8probe8.test", result
+          assert result["signersMatch"], result
+          Path("app/build/probe-artifact-identity.json").write_text(json.dumps(result, indent=2, sort_keys=True))
+          print(json.dumps(result, sort_keys=True))
+          PY
       - name: Upload probe artifacts and R8 mappings
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -40,4 +66,5 @@ jobs:
             app/build/outputs/apk/androidTest/github/runtimeProbe/*.apk
             app/build/outputs/mapping/github/runtimeProbe/*
             app/build/outputs/mapping/githubRuntimeProbeAndroidTest/*
+            app/build/probe-artifact-identity.json
           if-no-files-found: error
