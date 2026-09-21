@@ -25,5 +25,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
         with:
           cache-provider: basic
-      - name: Discover runtime-probe Android test task names
-        run: ./gradlew tasks --all | grep -Ei 'runtime.*probe|probe.*android.*test|android.*test.*probe'
+      - name: Build optimized non-debuggable probe and matching tests
+        run: ./gradlew assembleGithubRuntimeProbe assembleGithubRuntimeProbeAndroidTest
+      - name: Upload probe artifacts and R8 mapping
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: r8-native-runtime-probe
+          path: |
+            app/build/outputs/apk/github/runtimeProbe/*.apk
+            app/build/outputs/apk/androidTest/github/runtimeProbe/*.apk
+            app/build/outputs/mapping/github/runtimeProbe/*
+          if-no-files-found: error

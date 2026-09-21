@@ -129,6 +129,9 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    // Matching instrumentation must target the same non-debuggable, R8-optimized build type.
+    testBuildType = "runtimeProbe"
+
     // Distribution split (self-update mechanism, Google Play policy compliance): Google Play's
     // Developer Program Policy explicitly bans an app updating itself by any method other than
     // Play's own mechanism, and Trevor wants to keep pursuing both Play and F-Droid listings, so
