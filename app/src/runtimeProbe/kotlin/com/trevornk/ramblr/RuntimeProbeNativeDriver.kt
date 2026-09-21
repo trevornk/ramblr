@@ -112,7 +112,10 @@ object RuntimeProbeNativeDriver {
         listOf("native_probe_provisioning.json","bench_results.json","native_probe_vad.json","numeric_cleanup_results.json").forEach { check(File(context.filesDir,it).isFile) }
         listOf(SILERO_VAD_MODEL,MODEL_CATALOG.first { it.archive==ASR_ARCHIVE },MUMBLE_CLEANUP_Q4_0_MODEL).forEach { ModelDownloader.delete(context,it) }
         File(context.filesDir,"bench_models").deleteRecursively();context.getSharedPreferences("ramblr",Context.MODE_PRIVATE).edit().remove("local_cleanup_model_name").apply()
-        Log.i(TAG,"CLEANUP_OK accepted=$accepted escaped=$escaped")
+        val remnants = listOf("models", "vad_models", "cleanup_models", "bench_models", "native_probe_integrity")
+            .flatMap { dir -> File(context.filesDir, dir).walkTopDown().filter { it.isFile && it.name != ".complete" }.map { it.absolutePath }.toList() }
+        check(remnants.isEmpty()) { "probe fixture cleanup left payloads: $remnants" }
+        Log.i(TAG,"CLEANUP_OK accepted=$accepted escaped=$escaped remnants=0")
     }
 
     private fun digitsSurvive(input:String,out:String):Boolean { val wanted=Regex("[0-9][0-9,]*(?:\\.[0-9]+)?").findAll(input).map{it.value.replace(",","")}.toList();var i=0;for(g in Regex("[0-9][0-9,]*(?:\\.[0-9]+)?").findAll(out).map{it.value.replace(",","")})if(i<wanted.size&&g==wanted[i])i++;return i==wanted.size }
