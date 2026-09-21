@@ -105,7 +105,10 @@ android {
         // Do NOT make it debuggable: AGP disables R8 optimization for debuggable targets.
         create("runtimeProbe") {
             initWith(getByName("release"))
-            applicationIdSuffix = ".r8probe"
+            // CI's ephemeral debug signer changes each run. A failed same-package update must
+            // never be resolved by removing a probe from this restored-user-app device, so this
+            // rerun uses a fresh isolated package identity.
+            applicationIdSuffix = ".r8probe2"
             isDebuggable = false
             signingConfig = signingConfigs.getByName("debug")
         }
