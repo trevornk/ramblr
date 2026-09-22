@@ -149,6 +149,9 @@ class DictationRuntime internal constructor(
     private val cloudLiveFactory: () -> CloudLiveTranscriptionSessionFactory? = { null },
     /** Test-only observation seam proving the preserved-PCM batch path is claimed once. */
     private val onCloudLiveBatchFallback: () -> Unit = {},
+    /** Captured once per runtime: capacity is stable during a process, while this keeps Android's
+     *  ActivityManager calls out of the pure sequencing decisions and test seams. */
+    private val deviceMemoryTier: DeviceMemoryTier = DeviceMemoryTierDetector.tier(context),
     /** Test seam: lets host-side unit tests substitute a fake engine at the capture boundary.
      *  The default is exactly the pre-extraction construction. */
     private val engineFactory: (File, RecordingStateMachine) -> RecordingEngine =
@@ -310,10 +313,15 @@ class DictationRuntime internal constructor(
     private val streamingTranscriberSlot = TranscriberSlot<StreamingTranscriber> { it.release() }
     private val streamingTranscriberLifecycle = TranscriberLifecycle(streamingTranscriberSlot)
 
-    // Set by onTrimMemory (#98) when the transcriber slots were released under memory pressure;
+    // Set by onTrimMemory (#98) when both transcriber slots were released under memory pressure;
     // cleared once warmUpTranscribersIfTrimmed reloads them. Avoids reloading on every single
     // recording start -- only after a real trim actually emptied the slots.
     @Volatile private var transcribersTrimmed = false
+
+    // Constrained devices release only the batch recognizer between local ASR and local cleanup.
+    // Its next recording-start reload is deliberately separate from transcribersTrimmed so an
+    // optional streaming recognizer is not needlessly churned by this sequencing policy.
+    @Volatile private var batchTranscriberReleasedForCleanup = false
 
     /** Current [RecordingStateMachine.State] of the pipeline. */
     fun currentState(): RecordingStateMachine.State = stateMachine.current()
@@ -617,11 +625,15 @@ class DictationRuntime internal constructor(
     }
 
     /**
-     * Pre-warms the local cleanup model (#95) the instant recording starts, so its cold GGUF
-     * load (mmap + first-touch page faults on a several-hundred-MB file) overlaps with the user
-     * still talking and the transcription that follows, instead of starting only once cleanup
-     * itself runs and eating into [CLEANUP_WATERFALL_HARD_CAP_MS]'s budget -- see
-     * [LocalCleanupModelHolder.warmUpAsync]'s kdoc for the failure mode this fixes.
+     * Pre-warms the local cleanup model (#95) at recording start on capable devices, so its cold
+     * GGUF load (mmap + first-touch page faults on a several-hundred-MB file) overlaps with the
+     * user still talking and the transcription that follows rather than consuming
+     * [CLEANUP_WATERFALL_HARD_CAP_MS]'s cleanup budget -- see [LocalCleanupModelHolder.warmUpAsync].
+     *
+     * The F-Droid Redmi Note 8T reviewer measured 1.58 GB VmRSS on a 3.6 GB device while the
+     * ~1 GB cleanup model overlapped batch ASR. [LocalCleanupPrewarmDecision] therefore defers
+     * only that speculative load on constrained hardware; capable devices retain the exact former
+     * behavior because a cold GGUF load has consumed the entire cleanup waterfall budget in use.
      *
      * Deliberately checked (not unconditional): only bothers when cleanup is actually enabled
      * and the configured waterfall would use LOCAL_LLM for at least one step, since otherwise
@@ -629,6 +641,7 @@ class DictationRuntime internal constructor(
      * never touch it (e.g. cleanup off, or an all-cloud waterfall).
      */
     private fun warmUpLocalCleanupModelIfNeeded() {
+        if (!LocalCleanupPrewarmDecision.shouldWarmUp(deviceMemoryTier)) return
         if (!PostProcessingToggle.shouldRunCleanup(PostProcessingToggle.isEnabled(context))) return
         val providerChain = ProviderChainStore.load(context)
         if (!providerChain.usesLocalLlm()) return
@@ -639,17 +652,20 @@ class DictationRuntime internal constructor(
 
     /**
      * Reloads the batch (and, if enabled, streaming) transcriber if [onTrimMemory] released them
-     * under memory pressure (#98) -- mirrors [warmUpLocalCleanupModelIfNeeded]'s pre-warm timing:
-     * this runs the instant recording starts, so a reload (typically well under a second for
-     * these much-smaller-than-the-cleanup-LLM models) overlaps with the user still talking rather
-     * than adding perceived latency at transcription time. No-ops on the far more common case
-     * where no trim has happened since the last dictation.
+     * under memory pressure (#98), or reloads only batch ASR after constrained-device cleanup
+     * sequencing. Both paths run when recording starts so their smaller model loads overlap with
+     * the user speaking rather than adding transcription-time latency.
      */
     private fun warmUpTranscribersIfTrimmed() {
-        if (!transcribersTrimmed) return
-        transcribersTrimmed = false
-        thread { initLocalModel() }
-        thread { initStreamingModel() }
+        if (transcribersTrimmed) {
+            transcribersTrimmed = false
+            batchTranscriberReleasedForCleanup = false
+            thread { initLocalModel() }
+            thread { initStreamingModel() }
+        } else if (batchTranscriberReleasedForCleanup) {
+            batchTranscriberReleasedForCleanup = false
+            thread { initLocalModel() }
+        }
     }
 
     /**
@@ -1495,6 +1511,33 @@ class DictationRuntime internal constructor(
         attempt(0)
     }
 
+    /**
+     * On constrained devices, discard batch ASR before entering a waterfall that can load the
+     * ~1 GB local cleanup model. The F-Droid Redmi Note 8T review measured their simultaneous
+     * residency as a 1.58 GB VmRSS peak; serializing them turns that component of the peak into
+     * max(ASR, cleanup). [TranscriberSlot.replace] can wait on a read-locked transcription, so
+     * this is always dispatched off main. The lifecycle remains live (no shutdown/invalidation),
+     * preserving its generation-gated initialization behavior for the recording-start reload.
+     */
+    private fun releaseBatchTranscriberBeforeLocalCleanupIfNeeded(
+        cleanupWaterfall: CleanupWaterfall,
+        afterRelease: () -> Unit,
+    ) {
+        if (!LocalCleanupPrewarmDecision.shouldReleaseBatchTranscriberBeforeCleanup(
+                tier = deviceMemoryTier,
+                cleanupUsesLocalLlm = cleanupWaterfall.usesLocalLlm(),
+            )
+        ) {
+            afterRelease()
+            return
+        }
+        thread {
+            transcriberSlot.replace(null)
+            batchTranscriberReleasedForCleanup = true
+            afterRelease()
+        }
+    }
+
     /** Test seam retaining the existing token-only API; stale tokens never borrow a newer lease. */
     internal fun handleTranscriptionResult(text: String?, token: Int) {
         val lease = sessionLease ?: return
@@ -1599,49 +1642,51 @@ class DictationRuntime internal constructor(
             if (!guard.isCurrent(token)) return
             handler.post { if (guard.isCurrent(token)) listener.onCleaningStarted() }
             Log.i(TAG, "Cleanup via ProviderChain entries=${providerChain.entries.map { it.kind }} executableSteps=${cleanupWaterfall.steps.map { it.group }}")
-            PostProcessor.processProviderChain(
-                text = text,
-                prompt = prompt,
-                chain = providerChain,
-                cursor = cleanupCursor,
-                cancelHolder = inFlightCall,
-                credentialLookup = { kind -> ProviderCredentialStore.get(context, kind) },
-                localModelPath = { ModelDownloader.localCleanupModelFile(context, LocalCleanupProvider.selectedModel(context))?.absolutePath },
-                localPrompt = LocalCleanupProvider.selectedSystemPrompt(context),
-                // #182 option 2: local cleanup applies the same terms as a deterministic
-                // post-pass over its output instead of in its prompt (which broke LFM2.5).
-                localVocabulary = vocabulary,
-                benchmarkContext = context.takeIf { listener.allowsTranscriptRetention() },
-                benchmarkCorrelationId = correlationIdFor(token),
-            ) { result ->
-                handler.post {
-                    if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
-                    if (result.text != null && result.text.isNotBlank()) {
-                        val servingGroup = recordProviderChainCleanupSuccess(cleanupWaterfall)
-                        val paidFallbackGroup = servingGroup?.takeIf { it.isPaidFallback() }
-                        // #248: Snippets expand AFTER cleanup and AFTER vocabulary correction
-                        // (VocabularyPostCorrector already ran inside processProviderChain's
-                        // LOCAL step), on the text actually about to be delivered -- never on
-                        // rawText, which exists only as the "tap to undo cleanup" raw transcript
-                        // and must stay the literal, unexpanded ASR output.
-                        listener.deliverText(finalizeForDelivery(result.text), rawText = text, paidFallbackGroup = paidFallbackGroup, cleanupError = null, feedbackDurationMs = 2000)
-                    } else {
-                        // Log + surface the real failure reason (bad/missing key, HTTP status,
-                        // network error, etc.) instead of a generic "cleanup failed" that gives
-                        // the user and any future debugging nothing to go on (#98, Trevor hit
-                        // this directly: OpenAI key rejected/failed with zero visible reason).
-                        // result.error already carries this from PostProcessor.Result/
-                        // CleanupStepOutcome -- it was just being discarded here.
-                        val reason = result.error?.takeIf { it.isNotBlank() } ?: "unknown error"
-                        Log.w(TAG, "Cleanup failed, injecting raw text: $reason")
-                        // #175: pass the raw error, not a finished message -- the host's
-                        // injectText() builds the user-facing notice once the injection method is
-                        // known, so it can state the truth about the clipboard and keep executor
-                        // diagnostics (nested prefixes, provider error bodies) out of a floating
-                        // overlay.
-                        listener.deliverText(finalizeForDelivery(text), rawText = null, paidFallbackGroup = null, cleanupError = reason, feedbackDurationMs = 4000)
+            releaseBatchTranscriberBeforeLocalCleanupIfNeeded(cleanupWaterfall) {
+                PostProcessor.processProviderChain(
+                    text = text,
+                    prompt = prompt,
+                    chain = providerChain,
+                    cursor = cleanupCursor,
+                    cancelHolder = inFlightCall,
+                    credentialLookup = { kind -> ProviderCredentialStore.get(context, kind) },
+                    localModelPath = { ModelDownloader.localCleanupModelFile(context, LocalCleanupProvider.selectedModel(context))?.absolutePath },
+                    localPrompt = LocalCleanupProvider.selectedSystemPrompt(context),
+                    // #182 option 2: local cleanup applies the same terms as a deterministic
+                    // post-pass over its output instead of in its prompt (which broke LFM2.5).
+                    localVocabulary = vocabulary,
+                    benchmarkContext = context.takeIf { listener.allowsTranscriptRetention() },
+                    benchmarkCorrelationId = correlationIdFor(token),
+                ) { result ->
+                    handler.post {
+                        if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
+                        if (result.text != null && result.text.isNotBlank()) {
+                            val servingGroup = recordProviderChainCleanupSuccess(cleanupWaterfall)
+                            val paidFallbackGroup = servingGroup?.takeIf { it.isPaidFallback() }
+                            // #248: Snippets expand AFTER cleanup and AFTER vocabulary correction
+                            // (VocabularyPostCorrector already ran inside processProviderChain's
+                            // LOCAL step), on the text actually about to be delivered -- never on
+                            // rawText, which exists only as the "tap to undo cleanup" raw transcript
+                            // and must stay the literal, unexpanded ASR output.
+                            listener.deliverText(finalizeForDelivery(result.text), rawText = text, paidFallbackGroup = paidFallbackGroup, cleanupError = null, feedbackDurationMs = 2000)
+                        } else {
+                            // Log + surface the real failure reason (bad/missing key, HTTP status,
+                            // network error, etc.) instead of a generic "cleanup failed" that gives
+                            // the user and any future debugging nothing to go on (#98, Trevor hit
+                            // this directly: OpenAI key rejected/failed with zero visible reason).
+                            // result.error already carries this from PostProcessor.Result/
+                            // CleanupStepOutcome -- it was just being discarded here.
+                            val reason = result.error?.takeIf { it.isNotBlank() } ?: "unknown error"
+                            Log.w(TAG, "Cleanup failed, injecting raw text: $reason")
+                            // #175: pass the raw error, not a finished message -- the host's
+                            // injectText() builds the user-facing notice once the injection method is
+                            // known, so it can state the truth about the clipboard and keep executor
+                            // diagnostics (nested prefixes, provider error bodies) out of a floating
+                            // overlay.
+                            listener.deliverText(finalizeForDelivery(text), rawText = null, paidFallbackGroup = null, cleanupError = reason, feedbackDurationMs = 4000)
+                        }
+                        resetToIdle(lease)
                     }
-                    resetToIdle(lease)
                 }
             }
         } else {
