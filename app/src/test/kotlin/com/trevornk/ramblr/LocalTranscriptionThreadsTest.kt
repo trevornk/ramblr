@@ -4,18 +4,37 @@ import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** Covers #107's settings-backed local-transcription thread count. The single most important
- *  case here is [`defaults to 2 when never set`] -- the whole point of this issue is shipping
- *  zero behavior change out of the box, so a regression there would silently change everyone's
- *  decode thread count on upgrade. */
+/** Covers #107's settings-backed local-transcription thread count. The runtime default is now
+ *  deliberately hardware-aware for the F-Droid Redmi Note 8T review: it uses spare CPU capacity
+ *  without taking every core, while a stored user choice remains authoritative. */
 class LocalTranscriptionThreadsTest {
 
-    @Test fun `defaults to 2 when never set`() {
-        assertEquals(2, LocalTranscriptionThreads.threadsOrDefault(FakeSharedPreferences()))
+    @Test fun `derived default leaves two cores free on an eight-core device`() {
+        assertEquals(6, LocalTranscriptionThreads.defaultForAvailableProcessors(8))
     }
 
-    @Test fun `default constant is exactly the pre-existing hardcoded value`() {
-        assertEquals(2, LocalTranscriptionThreads.DEFAULT_THREADS)
+    @Test fun `derived default clamps at the minimum on a single-core device`() {
+        assertEquals(LocalTranscriptionThreads.MIN_THREADS, LocalTranscriptionThreads.defaultForAvailableProcessors(1))
+    }
+
+    @Test fun `derived default clamps at the sensible ceiling on a many-core device`() {
+        assertEquals(LocalTranscriptionThreads.DEFAULT_MAX_THREADS, LocalTranscriptionThreads.defaultForAvailableProcessors(64))
+    }
+
+    @Test fun `never-set preference derives from available processors`() {
+        assertEquals(6, LocalTranscriptionThreads.threadsOrDefault(FakeSharedPreferences(), availableProcessors = 8))
+    }
+
+    @Test fun `stored user choice wins over hardware-derived default`() {
+        val prefs = FakeSharedPreferences(mutableMapOf(LocalTranscriptionThreads.KEY to 2))
+        assertEquals(2, LocalTranscriptionThreads.threadsOrDefault(prefs, availableProcessors = 8))
+    }
+
+    @Test fun `runtime default delegates to the pure derivation`() {
+        assertEquals(
+            LocalTranscriptionThreads.defaultForAvailableProcessors(Runtime.getRuntime().availableProcessors()),
+            LocalTranscriptionThreads.DEFAULT_THREADS,
+        )
     }
 
     @Test fun `presets are exactly 2, 4, 6 in that order`() {

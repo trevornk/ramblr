@@ -101,10 +101,11 @@ class LocalTranscriber private constructor(private val recognizer: OfflineRecogn
         }
 
         /** Auto-detect model type from files present in the directory. [numThreads] defaults to
-         *  [LocalTranscriptionThreads.DEFAULT_THREADS] (2, unchanged shipped behavior) so every
-         *  existing direct caller -- notably the detectModelConfig-only unit tests, which have no
-         *  [Context] to read a setting from -- keeps working without change; [create] passes the
-         *  user-configured value explicitly (#107). [canaryLanguage] follows the same pattern
+         *  [LocalTranscriptionThreads.DEFAULT_THREADS], derived from available processors while
+         *  leaving audio/UI headroom after the F-Droid Redmi Note 8T review. Existing direct
+         *  callers -- notably the detectModelConfig-only unit tests, which have no [Context] to
+         *  read a user setting from -- keep using that process default; [create] passes the user's
+         *  explicitly stored value when present (#107). [canaryLanguage] follows the same pattern
          *  (#177): defaults to [CanaryLanguage.DEFAULT] ("en", the previously hardcoded value),
          *  with [create] passing the user's setting; only the canary branch consumes it. */
         fun detectModelConfig(
