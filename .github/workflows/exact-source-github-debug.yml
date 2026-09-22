@@ -1,6 +1,8 @@
 name: Exact-source GitHub debug
 
 on:
+  push:
+    branches: [ci/github-debug-1.0.32]
   workflow_dispatch:
 
 permissions:
