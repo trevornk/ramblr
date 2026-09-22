@@ -18,7 +18,6 @@ class DeviceMemoryTierDecisionTest {
             DeviceMemoryTier.CONSTRAINED,
             DeviceMemoryTierDecision.tier(
                 isLowRamDevice = true,
-                memoryClassMb = 512,
                 totalMemoryBytes = 12L * DeviceMemoryTierDecision.BYTES_PER_GIB,
             ),
         )
@@ -29,7 +28,6 @@ class DeviceMemoryTierDecisionTest {
             DeviceMemoryTier.CONSTRAINED,
             DeviceMemoryTierDecision.tier(
                 isLowRamDevice = false,
-                memoryClassMb = 512,
                 totalMemoryBytes = DeviceMemoryTierDecision.CONSTRAINED_TOTAL_MEMORY_BYTES - 1,
             ),
         )
@@ -40,19 +38,36 @@ class DeviceMemoryTierDecisionTest {
             DeviceMemoryTier.CAPABLE,
             DeviceMemoryTierDecision.tier(
                 isLowRamDevice = false,
-                memoryClassMb = 512,
                 totalMemoryBytes = DeviceMemoryTierDecision.CONSTRAINED_TOTAL_MEMORY_BYTES,
             ),
         )
     }
 
-    @Test fun `small per-app memory class constrains despite total RAM`() {
+    /**
+     * Regression guard for the real hardware this gate ships to. `MemoryInfo.totalMem` values are
+     * the measured `/proc/meminfo` MemTotal of the maintainer's devices, both of which report a
+     * `getMemoryClass()` of exactly 256 MiB. An earlier revision treated that heap ceiling as a
+     * constrained signal and classified both flagships as CONSTRAINED, disabling the capable-device
+     * pre-warm on essentially every modern phone. These must stay CAPABLE.
+     */
+    @Test fun `modern flagships with a 256 MiB heap class remain capable`() {
+        val pixel10ProFoldTotalMem = 15_948_932L * 1024L
+        val pixel10aTotalMem = 7_752_904L * 1024L
+        listOf(pixel10ProFoldTotalMem, pixel10aTotalMem).forEach { totalMem ->
+            assertEquals(
+                DeviceMemoryTier.CAPABLE,
+                DeviceMemoryTierDecision.tier(isLowRamDevice = false, totalMemoryBytes = totalMem),
+            )
+        }
+    }
+
+    /** The device from the review: 3.6 GB must classify as constrained. */
+    @Test fun `the reviewer's 3_6 GB device is constrained`() {
         assertEquals(
             DeviceMemoryTier.CONSTRAINED,
             DeviceMemoryTierDecision.tier(
                 isLowRamDevice = false,
-                memoryClassMb = DeviceMemoryTierDecision.CONSTRAINED_MEMORY_CLASS_MB,
-                totalMemoryBytes = 8L * DeviceMemoryTierDecision.BYTES_PER_GIB,
+                totalMemoryBytes = (3.6 * DeviceMemoryTierDecision.BYTES_PER_GIB).toLong(),
             ),
         )
     }
@@ -63,7 +78,6 @@ class DeviceMemoryTierDecisionTest {
                 DeviceMemoryTier.CAPABLE,
                 DeviceMemoryTierDecision.tier(
                     isLowRamDevice = false,
-                    memoryClassMb = 512,
                     totalMemoryBytes = gib * DeviceMemoryTierDecision.BYTES_PER_GIB,
                 ),
             )

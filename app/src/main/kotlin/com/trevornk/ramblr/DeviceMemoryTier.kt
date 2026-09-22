@@ -14,25 +14,31 @@ enum class DeviceMemoryTier { CONSTRAINED, CAPABLE }
 /**
  * Pure device-memory classification split from [DeviceMemoryTierDetector] so the thresholds stay
  * JVM-testable without an Android [ActivityManager]. Android's low-RAM flag is authoritative;
- * otherwise a device is constrained when either the process memory class is at most 256 MiB or
- * total physical RAM is below 6 GiB. The latter safely includes the reviewer's 3.6 GB device,
- * while 8-12 GiB flagships remain capable. The per-process limit catches OEM profiles whose total
- * RAM would otherwise hide that this app cannot safely retain both large native models.
+ * otherwise a device is constrained when total physical RAM is below 6 GiB. That safely includes
+ * the reviewer's 3.6 GB device, while 8-12 GiB flagships remain capable.
+ *
+ * Deliberately NOT considered: [android.app.ActivityManager.getMemoryClass]. It returns
+ * `dalvik.vm.heapgrowthlimit`, which AOSP leaves at 256 MiB on current flagships -- a Pixel 10 Pro
+ * Fold with 15.2 GiB of RAM and a Pixel 10a with 7.4 GiB both report exactly 256. Treating that as
+ * a constrained signal classified every modern device as constrained and silently disabled the
+ * capable-device pre-warm everywhere. It is also the wrong metric in principle: the allocations
+ * this gate protects (the mmap'd cleanup GGUF and the sherpa-onnx recognizers) are native, so the
+ * Java heap ceiling does not bound them.
+ *
+ * Note [totalMemoryBytes] is `MemoryInfo.totalMem`, which reports a few percent below nominal
+ * capacity because the kernel reserves memory before userspace sees it. A nominally 6 GB device
+ * therefore lands just under the boundary and is treated as constrained -- intended, since 6 GB is
+ * genuinely tight for a ~1 GB cleanup model resident alongside batch ASR.
  */
 object DeviceMemoryTierDecision {
     const val BYTES_PER_GIB = 1024L * 1024L * 1024L
     const val CONSTRAINED_TOTAL_MEMORY_BYTES = 6L * BYTES_PER_GIB
-    const val CONSTRAINED_MEMORY_CLASS_MB = 256
 
     fun tier(
         isLowRamDevice: Boolean,
-        memoryClassMb: Int,
         totalMemoryBytes: Long,
     ): DeviceMemoryTier =
-        if (isLowRamDevice ||
-            memoryClassMb <= CONSTRAINED_MEMORY_CLASS_MB ||
-            totalMemoryBytes < CONSTRAINED_TOTAL_MEMORY_BYTES
-        ) {
+        if (isLowRamDevice || totalMemoryBytes < CONSTRAINED_TOTAL_MEMORY_BYTES) {
             DeviceMemoryTier.CONSTRAINED
         } else {
             DeviceMemoryTier.CAPABLE
@@ -50,7 +56,6 @@ object DeviceMemoryTierDetector {
         activityManager.getMemoryInfo(memoryInfo)
         return DeviceMemoryTierDecision.tier(
             isLowRamDevice = activityManager.isLowRamDevice,
-            memoryClassMb = activityManager.memoryClass,
             totalMemoryBytes = memoryInfo.totalMem,
         )
     }
