@@ -24,8 +24,11 @@ class TranscriptionActivity : BaseSettingsActivity() {
 
     private lateinit var cloudSwitch: MaterialSwitch
     private lateinit var modelContainer: View
+    private lateinit var localModelsHeader: TextView
     private lateinit var cloudLinkGroup: View
+    private lateinit var cloudSectionHeader: TextView
     private lateinit var cloudLinkRowSub: TextView
+    private lateinit var routingSummaryRowSub: TextView
 
     private data class ModelRowViews(
         val radio: MaterialRadioButton,
@@ -76,17 +79,26 @@ class TranscriptionActivity : BaseSettingsActivity() {
         }
         root.addView(cloudRow)
 
-        // Local models -- a SUBSECTION of Transcription (#49), shown only while Local is selected.
+        // Local models -- a SUBSECTION of Transcription (#49), shown while Local is selected OR
+        // (#276) while Cloud is selected with "fall back to on-device if cloud fails" on, so
+        // setting up the fallback model doesn't require flipping the switch back and forth. The
+        // header text itself says which case this is -- see [refresh].
         val localModelsGroup = nestedGroup()
-        localModelsGroup.content.addView(subsectionHeader("Local models", indent = 0))
+        localModelsHeader = subsectionHeader("Local models", indent = 0)
+        localModelsGroup.content.addView(localModelsHeader)
         for (m in MODEL_CATALOG) localModelsGroup.content.addView(buildModelRow(m))
         modelContainer = localModelsGroup.outer
         root.addView(modelContainer)
 
         // #95 Phase 3: link into the unified CloudProviderActivity instead of a contextual
         // OpenAI-only key row -- provider/credential management for transcription is now shared
-        // with cleanup on one screen.
+        // with cleanup on one screen. #276: also shown while Local is selected when "fall back to
+        // cloud if on-device fails" is on, labeled via [cloudSectionHeader].
         val cloudLinkGroupNested = nestedGroup()
+        cloudSectionHeader = subsectionHeader("Fallback: cloud providers", indent = 0).apply {
+            visibility = View.GONE
+        }
+        cloudLinkGroupNested.content.addView(cloudSectionHeader)
         val cloudLinkRow = settingsRow("Cloud provider chain", CloudProviderActivity.subtitle(this), indent = 0) {
             startActivity(Intent(this, CloudProviderActivity::class.java))
         }
@@ -94,6 +106,14 @@ class TranscriptionActivity : BaseSettingsActivity() {
         cloudLinkGroupNested.content.addView(cloudLinkRow)
         cloudLinkGroup = cloudLinkGroupNested.outer
         root.addView(cloudLinkGroup)
+
+        // #276: read-only "what will actually happen" line, since the mode presets + per-feature
+        // overrides + two fallback toggles on the Cloud screen can otherwise leave it unclear
+        // which provider (if any) actually wins.
+        root.addView(sectionHeader("Effective routing"))
+        val routingSummaryRow = settingsRow("Transcription", effectiveTranscriptionRouting(), indent = 0)
+        routingSummaryRowSub = routingSummaryRow.findViewWithTag("subtitle")
+        root.addView(routingSummaryRow)
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -112,10 +132,24 @@ class TranscriptionActivity : BaseSettingsActivity() {
         val useLocal = prefs().getBoolean("use_local", true)
         prefetchVadModel(useLocal)
         cloudSwitch.isChecked = !useLocal
-        modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
 
+        // #276: don't hide the inactive side outright -- a fallback toggle can still route to it
+        // at runtime, so keep it visible (labeled "Fallback") whenever that toggle is on.
+        val localState = fallbackSectionState(
+            isActiveSide = useLocal,
+            fallbackAllowed = DictationModeToggle.allowLocalFallback(this),
+        )
+        modelContainer.visibility = if (localState == FallbackSectionState.HIDDEN) View.GONE else View.VISIBLE
+        localModelsHeader.text = if (localState == FallbackSectionState.FALLBACK) "Fallback: on-device model" else "Local models"
+
+        val allowCloudFallback = DictationModeToggle.allowCloudFallback(this)
         cloudLinkRowSub.text = CloudProviderActivity.subtitle(this)
-        cloudLinkGroup.visibility = if (shouldShowOpenAiKeyRowForTranscription(useLocal)) View.VISIBLE else View.GONE
+        val showCloud = shouldShowOpenAiKeyRowForTranscription(useLocal, allowCloudFallback)
+        cloudLinkGroup.visibility = if (showCloud) View.VISIBLE else View.GONE
+        val cloudState = fallbackSectionState(isActiveSide = !useLocal, fallbackAllowed = allowCloudFallback)
+        cloudSectionHeader.visibility = if (cloudState == FallbackSectionState.FALLBACK) View.VISIBLE else View.GONE
+
+        routingSummaryRowSub.text = effectiveTranscriptionRouting()
 
         val cur = prefs().getString("model_name", "") ?: ""
         val curModel = MODEL_CATALOG.firstOrNull { it.archive == cur }
@@ -125,6 +159,17 @@ class TranscriptionActivity : BaseSettingsActivity() {
         }
         refreshAllCards()
     }
+
+    /** "Transcription: ..." routing summary (#276), delegating to the pure [EffectiveRouting]
+     *  formatter so this row can never disagree with what [WhisperAccessibilityService] would
+     *  actually do. */
+    private fun effectiveTranscriptionRouting(): String = "Transcription: " + EffectiveRouting.transcription(
+        chain = ProviderChainStore.load(this),
+        useLocalTranscription = prefs().getBoolean("use_local", true),
+        allowLocalFallback = DictationModeToggle.allowLocalFallback(this),
+        allowCloudFallback = DictationModeToggle.allowCloudFallback(this),
+        isConfigured = { ProviderCredentialStore.isConfigured(this, it) },
+    )
 
     /**
      * Provisions the Silero VAD model whenever this screen shows on-device transcription as the

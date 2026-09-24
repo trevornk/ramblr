@@ -38,9 +38,11 @@ class CleanupActivity : BaseSettingsActivity() {
     private lateinit var cleanupLocalRadio: MaterialRadioButton
     private lateinit var cleanupCloudRadio: MaterialRadioButton
     private lateinit var cleanupLocalGroup: View
+    private lateinit var cleanupLocalHeader: TextView
     private lateinit var cleanupCloudGroup: View
     private lateinit var cloudLinkRowSub: TextView
     private lateinit var previewBeforeInjectSwitch: MaterialSwitch
+    private lateinit var routingSummaryRowSub: TextView
 
     private var pendingLocalCleanupSelection = false
     private val cleanupModelRows = mutableMapOf<String, ModelRowViews>()
@@ -106,6 +108,10 @@ class CleanupActivity : BaseSettingsActivity() {
             }
         )
         val cleanupLocalNested = nestedGroup()
+        cleanupLocalHeader = subsectionHeader("Local cleanup models", indent = 0).apply {
+            visibility = View.GONE
+        }
+        cleanupLocalNested.content.addView(cleanupLocalHeader)
         for (m in LOCAL_CLEANUP_MODEL_CATALOG) cleanupLocalNested.content.addView(buildCleanupModelRow(m))
         cleanupLocalGroup = cleanupLocalNested.outer
         cleanupDetailContainer.addView(cleanupLocalGroup)
@@ -149,6 +155,14 @@ class CleanupActivity : BaseSettingsActivity() {
         }
         cleanupDetailContainer.addView(previewBeforeInjectRow)
         root.addView(cleanupDetailContainer)
+
+        // #276: read-only "what will actually happen" line, matching TranscriptionActivity's.
+        // Placed outside cleanupDetailContainer so it's visible even while cleanup itself is off
+        // (in which case it just reads "Cleanup: Off").
+        root.addView(sectionHeader("Effective routing"))
+        val routingSummaryRow = settingsRow("Cleanup", "", indent = 0)
+        routingSummaryRowSub = routingSummaryRow.findViewWithTag("subtitle")
+        root.addView(routingSummaryRow)
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -196,9 +210,34 @@ class CleanupActivity : BaseSettingsActivity() {
         val choice = displayedCleanupChoice(persistedChoice, pendingLocalCleanupSelection)
         cleanupLocalRadio.isChecked = choice == SimpleCleanupChoice.LOCAL
         cleanupCloudRadio.isChecked = choice == SimpleCleanupChoice.CLOUD
-        cleanupLocalGroup.visibility = if (choice == SimpleCleanupChoice.LOCAL) View.VISIBLE else View.GONE
+
+        // #276: cleanup's resolver only has one runtime fallback direction -- a Cloud choice
+        // falls through to the LOCAL floor entry when "fall back to on-device if cloud fails"
+        // is on (see ProviderChainRuntime.effectiveChainForCleanup's allowLocalFallback gate).
+        // There is no matching Local-active-with-cloud-fallback case (a failed on-device cleanup
+        // never retries in the cloud), so the cloud group's fallbackAllowed is always false --
+        // it stays exactly as hidden as before whenever Local is the active choice.
+        val localState = fallbackSectionState(
+            isActiveSide = choice == SimpleCleanupChoice.LOCAL,
+            fallbackAllowed = DictationModeToggle.allowLocalFallback(this),
+        )
+        cleanupLocalGroup.visibility = if (localState == FallbackSectionState.HIDDEN) View.GONE else View.VISIBLE
+        cleanupLocalHeader.visibility = if (localState == FallbackSectionState.FALLBACK) View.VISIBLE else View.GONE
         cleanupCloudGroup.visibility = if (choice == SimpleCleanupChoice.CLOUD) View.VISIBLE else View.GONE
+
+        routingSummaryRowSub.text = effectiveCleanupRouting()
     }
+
+    /** "Cleanup: ..." routing summary (#276), delegating to the pure [EffectiveRouting]
+     *  formatter so this row can never disagree with what the cleanup executor would actually
+     *  do. */
+    private fun effectiveCleanupRouting(): String = "Cleanup: " + EffectiveRouting.cleanup(
+        chain = ProviderChainStore.load(this),
+        postProcessingEnabled = prefs().getBoolean("use_post_processing", false),
+        cloudCleanupEnabled = CloudFeatureToggle.cleanupEnabled(this),
+        allowLocalFallback = DictationModeToggle.allowLocalFallback(this),
+        isConfigured = { ProviderCredentialStore.isConfigured(this, it) },
+    )
 
     /** Applies a change to the local/cleanup toggles, inserting the one-time consent dialog from
      *  #23 when the change would first combine local transcription with cleanup. */
