@@ -43,13 +43,13 @@ class AccessibilityCloudLiveWiringTest {
     @Before fun setUp() {
         app = RuntimeEnvironment.getApplication()
         prefs().edit().clear().apply()
-        ProviderKind.values().forEach { ProviderCredentialStore.clear(app, it) }
+        ProviderKind.values().forEach { ProviderCredentialStore.clearLegacyByKind(app, it) }
         PreviewBeforeInjectToggle.setEnabled(app, false)
     }
 
     @After fun tearDown() {
         prefs().edit().clear().apply()
-        ProviderKind.values().forEach { ProviderCredentialStore.clear(app, it) }
+        ProviderKind.values().forEach { ProviderCredentialStore.clearLegacyByKind(app, it) }
     }
 
     private fun prefs() = app.getSharedPreferences("ramblr", Context.MODE_PRIVATE)
@@ -57,7 +57,7 @@ class AccessibilityCloudLiveWiringTest {
     private fun configureFullyEnabledCloudLive() {
         CloudLiveToggle.setEnabled(app, true)
         prefs().edit().putBoolean("use_local", false).apply()
-        ProviderCredentialStore.set(app, ProviderKind.GEMINI, "test-gemini-key")
+        ProviderCredentialStore.setLegacyByKind(app, ProviderKind.GEMINI, "test-gemini-key")
     }
 
     private fun build(): TestService = Robolectric.buildService(TestService::class.java, null).create().get()
@@ -94,7 +94,7 @@ class AccessibilityCloudLiveWiringTest {
     fun `toggle on but transcription still on-device builds no factory`() {
         CloudLiveToggle.setEnabled(app, true)
         prefs().edit().putBoolean("use_local", true).apply()
-        ProviderCredentialStore.set(app, ProviderKind.GEMINI, "test-gemini-key")
+        ProviderCredentialStore.setLegacyByKind(app, ProviderKind.GEMINI, "test-gemini-key")
         val service = build()
 
         assertNull(cloudLiveFactoryOf(runtimeField(service)))

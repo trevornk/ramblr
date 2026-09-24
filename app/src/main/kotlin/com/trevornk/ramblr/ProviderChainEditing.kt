@@ -66,13 +66,21 @@ object ProviderChainEditing {
     }
 
     /**
-     * Formats the live capability badge text for [kind] shown next to each chain row (approved
-     * brainstorm doc's "Cleanup ✓ · Transcription runs on-device" mock). Every [ProviderKind]
-     * supports cleanup (see [supportsCleanup]), so the cleanup half never varies; only the
-     * transcription half depends on the specific kind.
+     * Formats the live capability badge text for [entry] shown next to each chain row (approved
+     * brainstorm doc's "Cleanup ✓ · Transcription runs on-device" mock). #274: reflects actual
+     * per-entry participation ([ProviderChainEntry.useForCleanup] /
+     * [ProviderChainEntry.useForTranscription]), not just kind-level capability -- an entry that
+     * CAN transcribe but has opted out shows "Transcription off", distinct from a kind that can
+     * never transcribe at all ("Transcription runs on-device" -- i.e. falls through to the LOCAL
+     * floor for that task).
      */
-    fun capabilityBadgeText(kind: ProviderKind): String {
-        val transcription = if (kind.supportsTranscription()) "Transcription \u2713" else "Transcription runs on-device"
-        return "Cleanup \u2713 \u00b7 $transcription"
+    fun capabilityBadgeText(entry: ProviderChainEntry): String {
+        val cleanup = if (entry.useForCleanup) "Cleanup \u2713" else "Cleanup off"
+        val transcription = when {
+            !entry.kind.supportsTranscription() -> "Transcription runs on-device"
+            entry.useForTranscription -> "Transcription \u2713"
+            else -> "Transcription off"
+        }
+        return "$cleanup \u00b7 $transcription"
     }
 }

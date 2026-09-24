@@ -92,7 +92,7 @@ class CanFallBackToCloudCleanupTest {
             ProviderChainEntry(ProviderKind.LOCAL, "m"),
             ProviderChainEntry(ProviderKind.GEMINI, "gemini-2.5-flash"),
         )
-        assertEquals(true, canFallBackToCloudCleanup(c) { it == ProviderKind.GEMINI })
+        assertEquals(true, canFallBackToCloudCleanup(c) { it.kind == ProviderKind.GEMINI })
     }
 
     @Test fun `false when the only cloud entry is unconfigured (M14)`() {
@@ -102,7 +102,7 @@ class CanFallBackToCloudCleanupTest {
 
     @Test fun `a local-only chain falls back on the OpenAI default the Cloud switch would seed`() {
         val local = chain(ProviderChainEntry(ProviderKind.LOCAL, "m"))
-        assertEquals(true, canFallBackToCloudCleanup(local) { it == ProviderKind.OPENAI })
+        assertEquals(true, canFallBackToCloudCleanup(local) { it.kind == ProviderKind.OPENAI })
         assertEquals(false, canFallBackToCloudCleanup(local) { false })
     }
 }

@@ -32,7 +32,7 @@ class CloudLiveWiringTest {
         // so a credential written by an earlier test survives Robolectric's per-test app reset.
         // Clear both stores explicitly rather than relying on a fresh-install starting state.
         prefs().edit().clear().apply()
-        ProviderKind.values().forEach { ProviderCredentialStore.clear(app, it) }
+        ProviderKind.values().forEach { ProviderCredentialStore.clearLegacyByKind(app, it) }
     }
 
     private fun prefs() = app.getSharedPreferences("ramblr", Context.MODE_PRIVATE)
@@ -45,7 +45,7 @@ class CloudLiveWiringTest {
     private fun configureFullyEnabled() {
         CloudLiveToggle.setEnabled(app, true)
         setUseLocal(false)
-        ProviderCredentialStore.set(app, ProviderKind.GEMINI, "test-gemini-key")
+        ProviderCredentialStore.setLegacyByKind(app, ProviderKind.GEMINI, "test-gemini-key")
     }
 
     // --- factoryOrNull: the three gating conditions ---
@@ -69,20 +69,20 @@ class CloudLiveWiringTest {
     /** use_local is absent, not false, on a fresh install -- the default must read as local. */
     @Test fun `null when the toggle is on and use_local has never been written`() {
         CloudLiveToggle.setEnabled(app, true)
-        ProviderCredentialStore.set(app, ProviderKind.GEMINI, "test-gemini-key")
+        ProviderCredentialStore.setLegacyByKind(app, ProviderKind.GEMINI, "test-gemini-key")
         prefs().edit().remove("use_local").apply()
         assertNull(CloudLiveWiring.factoryOrNull(app))
     }
 
     @Test fun `null when opted in and cloud selected but the Gemini credential is blank`() {
         configureFullyEnabled()
-        ProviderCredentialStore.set(app, ProviderKind.GEMINI, "")
+        ProviderCredentialStore.setLegacyByKind(app, ProviderKind.GEMINI, "")
         assertNull(CloudLiveWiring.factoryOrNull(app))
     }
 
     @Test fun `null when opted in and cloud selected but the Gemini credential was cleared`() {
         configureFullyEnabled()
-        ProviderCredentialStore.clear(app, ProviderKind.GEMINI)
+        ProviderCredentialStore.clearLegacyByKind(app, ProviderKind.GEMINI)
         assertNull(CloudLiveWiring.factoryOrNull(app))
     }
 
@@ -90,7 +90,7 @@ class CloudLiveWiringTest {
     @Test fun `null when only a non-Gemini credential is configured`() {
         CloudLiveToggle.setEnabled(app, true)
         setUseLocal(false)
-        ProviderCredentialStore.set(app, ProviderKind.OPENAI, "test-openai-key")
+        ProviderCredentialStore.setLegacyByKind(app, ProviderKind.OPENAI, "test-openai-key")
         assertNull(CloudLiveWiring.factoryOrNull(app))
     }
 

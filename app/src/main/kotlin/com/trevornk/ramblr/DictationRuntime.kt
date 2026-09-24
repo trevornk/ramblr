@@ -668,8 +668,8 @@ class DictationRuntime internal constructor(
         val chain = ProviderChainStore.load(context)
         val transcriptionCandidates = ProviderChainRuntime.transcriptionCandidates(chain)
         val cleanupChain = ProviderChainRuntime.effectiveChainForCleanup(chain, CloudFeatureToggle.cleanupEnabled(context))
-        val hosts = NetworkWarmup.hostsToWarm(transcriptionCandidates, cleanupChain) { kind ->
-            ProviderCredentialStore.isConfigured(context, kind)
+        val hosts = NetworkWarmup.hostsToWarm(transcriptionCandidates, cleanupChain) { entry ->
+            ProviderCredentialStore.isConfiguredOrLegacy(context, entry)
         }
         NetworkWarmup.warmUpAsync(hosts)
     }
@@ -1332,8 +1332,8 @@ class DictationRuntime internal constructor(
 
             val localLoaded = transcriberSlot.get() != null
             val hasCredential = when (entry.kind) {
-                ProviderKind.OPENAI -> ProviderCredentialStore.get(context, ProviderKind.OPENAI).isNotBlank()
-                ProviderKind.GEMINI -> ProviderCredentialStore.get(context, ProviderKind.GEMINI).isNotBlank()
+                ProviderKind.OPENAI -> ProviderCredentialStore.getOrLegacy(context, entry).isNotBlank()
+                ProviderKind.GEMINI -> ProviderCredentialStore.getOrLegacy(context, entry).isNotBlank()
                 else -> false
             }
             if (TranscriptionChain.precheck(entry.kind, hasCredential, localLoaded) == TranscriptionChain.Precheck.SKIP) {
@@ -1352,7 +1352,7 @@ class DictationRuntime internal constructor(
 
             when (entry.kind) {
                 ProviderKind.OPENAI -> {
-                    val apiKey = ProviderCredentialStore.get(context, ProviderKind.OPENAI)
+                    val apiKey = ProviderCredentialStore.getOrLegacy(context, entry)
                     Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (OpenAI audio/transcriptions)")
                     val transcribeStartMs = System.currentTimeMillis()
                     // Honor the entry's base-URL override and TRANSCRIPTION model (#101/#102: a
@@ -1430,7 +1430,7 @@ class DictationRuntime internal constructor(
                     transcribeLocal(file, token, lease, onChainFailure = { error -> advanceOrGiveUp(error) })
                 }
                 ProviderKind.GEMINI -> {
-                    val apiKey = ProviderCredentialStore.get(context, ProviderKind.GEMINI)
+                    val apiKey = ProviderCredentialStore.getOrLegacy(context, entry)
                     // Gemini's inline-audio path buffers the recording ~4x in memory, so gate it by
                     // size: above the threshold, fall through to the next candidate rather than risk
                     // an OOM stacked on the resident STT/cleanup models (M6). The compressed .m4a
@@ -1573,8 +1573,9 @@ class DictationRuntime internal constructor(
             // CleanupWaterfallExecutor and can fall through past an unconfigured cloud step to
             // another provider (including LOCAL). Note this is only a pre-flight check -- since
             // #105 every chain, this one included, is executed by CleanupWaterfallExecutor.
+            val cleanupCapableEntries = providerChain.capableEntriesFor(needsTranscription = false)
             if (!ProviderChainRuntime.shouldUseCleanupExecutor(providerChain) &&
-                ProviderCredentialStore.get(context, ProviderKind.OPENAI).isBlank()) {
+                cleanupCapableEntries.firstOrNull()?.let { ProviderCredentialStore.getOrLegacy(context, it) }.isNullOrBlank()) {
                 handler.post {
                     if (!guard.isCurrent(token)) return@post
                     toast("Post-processing needs API key. Using raw text.")
@@ -1605,7 +1606,8 @@ class DictationRuntime internal constructor(
                 chain = providerChain,
                 cursor = cleanupCursor,
                 cancelHolder = inFlightCall,
-                credentialLookup = { kind -> ProviderCredentialStore.get(context, kind) },
+                credentialLookup = { kind -> ProviderCredentialStore.getLegacyByKind(context, kind) },
+                entryCredentialLookup = { entryId -> ProviderCredentialStore.get(context, entryId) },
                 localModelPath = { ModelDownloader.localCleanupModelFile(context, LocalCleanupProvider.selectedModel(context))?.absolutePath },
                 localPrompt = LocalCleanupProvider.selectedSystemPrompt(context),
                 // #182 option 2: local cleanup applies the same terms as a deterministic

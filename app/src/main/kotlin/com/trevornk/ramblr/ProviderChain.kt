@@ -44,10 +44,15 @@ fun ProviderKind.supportsCleanup(): Boolean = true
  * configured -- i.e. cloud transcription is actually usable, regardless of which provider. Setup
  * readiness previously hardcoded OpenAI, so a fully-supported Gemini-only cloud-transcription user
  * was stuck on "Setup required" forever (M8). [isConfigured] is the caller's seam onto the
- * credential store, keeping this pure and testable.
+ * credential store, keyed per entry (#274) rather than per kind, so two same-kind entries with
+ * different credentials are told apart correctly. Also requires the entry be [ProviderChainEntry
+ * .enabled] and opted in to transcription via [ProviderChainEntry.useForTranscription] (#274).
  */
-fun hasConfiguredCloudTranscription(chain: ProviderChain, isConfigured: (ProviderKind) -> Boolean): Boolean =
-    chain.entries.any { it.kind != ProviderKind.LOCAL && it.kind.supportsTranscription() && isConfigured(it.kind) }
+fun hasConfiguredCloudTranscription(chain: ProviderChain, isConfigured: (ProviderChainEntry) -> Boolean): Boolean =
+    chain.entries.any {
+        it.kind != ProviderKind.LOCAL && it.enabled && it.useForTranscription &&
+            it.kind.supportsTranscription() && isConfigured(it)
+    }
 
 /**
  * True when switching cleanup to Cloud would land on a configured credential: any non-LOCAL entry in
@@ -55,11 +60,17 @@ fun hasConfiguredCloudTranscription(chain: ProviderChain, isConfigured: (Provide
  * switch would seed is configured. Used so deleting the active local cleanup model falls back to
  * Cloud only when it would actually work, else turns cleanup off instead of seeding a config that
  * fails at call time (M14).
+ *
+ * [isConfigured] is entry-based (#274, per-entry credentials); for the "no cloud entry yet" branch
+ * this is called with [ProviderChain.DEFAULT_SINGLE_OPENAI_ENTRY]'s single (unsaved, blank-id)
+ * entry as a stand-in for "the OpenAI entry the Cloud switch would seed" -- see
+ * [ProviderCredentialStore.isConfiguredOrLegacy] for the production caller that resolves a
+ * blank-id entry like this one against the legacy per-kind slot instead of a per-entry one.
  */
-fun canFallBackToCloudCleanup(chain: ProviderChain, isConfigured: (ProviderKind) -> Boolean): Boolean {
+fun canFallBackToCloudCleanup(chain: ProviderChain, isConfigured: (ProviderChainEntry) -> Boolean): Boolean {
     val cloudEntries = chain.entries.filter { it.kind != ProviderKind.LOCAL }
-    return if (cloudEntries.isEmpty()) isConfigured(ProviderKind.OPENAI)
-    else cloudEntries.any { isConfigured(it.kind) }
+    return if (cloudEntries.isEmpty()) isConfigured(ProviderChain.DEFAULT_SINGLE_OPENAI_ENTRY.entries.first())
+    else cloudEntries.any { isConfigured(it) }
 }
 
 /**
@@ -91,6 +102,38 @@ data class ProviderChainEntry(
     val model: String,
     val baseUrlOverride: String? = null,
     val transcriptionModel: String? = null,
+    /**
+     * Stable identity for this entry (#274), used to key its own credential slot in
+     * [ProviderCredentialStore] so two entries of the same [kind] never share one secret (#273).
+     * Blank ("") means "not yet assigned" -- every entry saved before #274 has no `id` in its
+     * persisted JSON, and [ProviderChainStore.deserialize] leaves it blank rather than fabricate
+     * one at parse time (parsing must stay pure); assigning a real one is
+     * [ProviderAccountMigration]'s job, run once (and safely re-run) at service startup. A
+     * freshly-added entry (Add provider dialog) is given a real UUID immediately instead of
+     * waiting for the next migration pass.
+     */
+    val id: String = "",
+    /**
+     * Per-entry on/off switch (#274): lets a user isolate/disable one provider without deleting
+     * its configuration (model, base URL, credential). Filtered out by
+     * [ProviderChain.capableEntriesFor] regardless of kind capability when false. Defaults true
+     * so every entry saved before this field existed -- and every entry a user adds without
+     * touching the switch -- behaves exactly as it did before this field existed.
+     */
+    val enabled: Boolean = true,
+    /**
+     * Whether this entry participates in TRANSCRIPTION routing (#274) -- independent of
+     * [ProviderKind.supportsTranscription], which remains a hard capability ceiling: a kind that
+     * cannot transcribe at all (ANTHROPIC, OMNIROUTE) can never be flipped true for this in the
+     * UI (validation, not user override), but a kind that CAN transcribe may still be excluded
+     * here by user choice (e.g. "this OpenAI-compatible account is for cleanup only"). Defaults
+     * to the kind's own capability so every entry saved before this field existed keeps routing
+     * exactly as it did before -- zero behavior change on upgrade.
+     */
+    val useForTranscription: Boolean = kind.supportsTranscription(),
+    /** Cleanup counterpart to [useForTranscription]. Defaults to [ProviderKind.supportsCleanup],
+     *  which is true for every kind today, so this is also a zero-behavior-change default. */
+    val useForCleanup: Boolean = kind.supportsCleanup(),
 )
 
 /**
@@ -114,6 +157,12 @@ data class ProviderChain(val entries: List<ProviderChainEntry>) {
      * (Phase 2's resolver/executor) take `.firstOrNull()` of the result to find the actual entry
      * to use for a given call, or fall through to the LOCAL floor if the result is empty.
      *
+     * #274: an entry must also be [ProviderChainEntry.enabled] and opted in to the requested task
+     * ([ProviderChainEntry.useForTranscription] / [ProviderChainEntry.useForCleanup]) -- on top of
+     * the kind-level capability check this already did. Both gates default true/to-capability, so
+     * this is a strict narrowing of the old kind-only filter, not a behavior change for anyone who
+     * has never touched the new per-entry controls.
+     *
      * Contract: this function does NOT itself append or guarantee a LOCAL entry. If none of
      * [entries] support the requested feature, it returns an empty list -- it is the caller's
      * responsibility to have a LOCAL floor present (by construction, since LOCAL is meant to be
@@ -122,7 +171,9 @@ data class ProviderChain(val entries: List<ProviderChainEntry>) {
      */
     fun capableEntriesFor(needsTranscription: Boolean): List<ProviderChainEntry> =
         entries.filter { entry ->
-            if (needsTranscription) entry.kind.supportsTranscription() else entry.kind.supportsCleanup()
+            if (!entry.enabled) return@filter false
+            if (needsTranscription) entry.useForTranscription && entry.kind.supportsTranscription()
+            else entry.useForCleanup && entry.kind.supportsCleanup()
         }
 
     /**

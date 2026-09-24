@@ -558,6 +558,14 @@ object CleanupWaterfallExecutor {
         cursor: CleanupWaterfallCursor,
         cancelHolder: InFlightCall,
         credentialLookup: (CleanupCredentialSlot) -> String,
+        // #274: entry-based credential lookup, keyed by CleanupStep.entryId -- the actual fix for
+        // #273 on the cleanup path. Preferred over [credentialLookup] whenever a step carries a
+        // non-blank entryId AND this lookup has something configured for it; falls back to
+        // [credentialLookup]'s slot-based value otherwise, so a step with no entryId (every
+        // pre-#274 test fixture, and any defensive fallback path) behaves exactly as before this
+        // parameter existed. Defaulted to "always miss" so no existing call site/test needs to
+        // change to keep its current behavior.
+        entryCredentialLookup: (String) -> String = { "" },
         transport: CleanupHttpTransport = RealCleanupHttpTransport,
         localInference: LocalInferenceEngine = RealLocalInferenceEngine,
         localModelPath: () -> String? = { null },
@@ -634,7 +642,7 @@ object CleanupWaterfallExecutor {
                 return
             }
 
-            performStep(steps[index], text, prompt, localPrompt, localVocabulary, credentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
+            performStep(steps[index], text, prompt, localPrompt, localVocabulary, credentialLookup, entryCredentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, isLastStep = index == steps.lastIndex) { outcome ->
                 logStepOutcome(steps[index], startedAtMs, outcome, benchmarkContext, benchmarkCorrelationId)
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
@@ -725,6 +733,7 @@ object CleanupWaterfallExecutor {
         localPrompt: String,
         localVocabulary: List<String>,
         credentialLookup: (CleanupCredentialSlot) -> String,
+        entryCredentialLookup: (String) -> String,
         transport: CleanupHttpTransport,
         localInference: LocalInferenceEngine,
         localModelPath: () -> String?,
@@ -786,7 +795,11 @@ object CleanupWaterfallExecutor {
             return
         }
 
-        val apiKey = step.credentialSlot()?.let(credentialLookup) ?: ""
+        val apiKey = if (step.entryId.isNotBlank()) {
+            entryCredentialLookup(step.entryId).ifBlank { step.credentialSlot()?.let(credentialLookup) ?: "" }
+        } else {
+            step.credentialSlot()?.let(credentialLookup) ?: ""
+        }
         if (apiKey.isBlank()) {
             // No live host was ever contacted, so this is a step-level (not connection-level)
             // failure: it only skips this one step, not the rest of its group.
