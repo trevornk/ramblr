@@ -69,6 +69,7 @@ class RamblrImeService : InputMethodService() {
         super.onCreate()
         CustomPersonaStore.ensureLegacySeeded(this)
         ProviderChainMigration.runIfNeeded(this)
+        ProviderAccountMigration.runIfNeeded(this)
         registerNetworkCallback()
         thread { ProcessRecordingOrphanCleaner.cleanupOnce(cacheDir) }
         thread { ModelDownloader.pruneOrphanedModelDirs(this) }

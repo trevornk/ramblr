@@ -97,4 +97,61 @@ class ProviderChainStoreTest {
         val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "a")))
         assertEquals(chain, ProviderChainStore.normalizeLocalPosition(chain))
     }
+
+    // --- #274: id/enabled/useFor* fields ---
+
+    @Test fun `deserialize accepts old JSON with no id, enabled, or useFor fields at all`() {
+        // The exact shape every chain persisted before #274 has on disk.
+        val parsed = ProviderChainStore.deserialize(
+            """[{"kind":"OPENAI","model":"gpt-5.4-mini","baseUrlOverride":null}]"""
+        )
+        val entry = parsed?.entries?.get(0)
+        assertEquals("", entry?.id)
+        assertEquals(true, entry?.enabled)
+        assertEquals(true, entry?.useForTranscription) // OPENAI supports transcription
+        assertEquals(true, entry?.useForCleanup)
+    }
+
+    @Test fun `deserialize defaults useForTranscription to false for a kind that cannot transcribe (old JSON)`() {
+        val parsed = ProviderChainStore.deserialize(
+            """[{"kind":"ANTHROPIC","model":"claude-haiku-4-5","baseUrlOverride":null}]"""
+        )
+        assertEquals(false, parsed?.entries?.get(0)?.useForTranscription)
+        assertEquals(true, parsed?.entries?.get(0)?.useForCleanup)
+    }
+
+    @Test fun `round trips id, enabled, and useFor fields through serialize and deserialize`() {
+        val chain = ProviderChain(
+            listOf(
+                ProviderChainEntry(
+                    ProviderKind.OPENAI,
+                    "gpt-5.4-mini",
+                    id = "stable-id-123",
+                    enabled = false,
+                    useForTranscription = false,
+                    useForCleanup = true,
+                ),
+            )
+        )
+        val parsed = ProviderChainStore.deserialize(ProviderChainStore.serialize(chain))
+        assertEquals(chain, parsed)
+    }
+
+    @Test fun `two same-kind entries keep distinct ids through a round trip (#273-274)`() {
+        val chain = ProviderChain(
+            listOf(
+                ProviderChainEntry(ProviderKind.OPENAI, "whisper-large-v3", id = "groq-entry", baseUrlOverride = "https://api.groq.com/openai/v1"),
+                ProviderChainEntry(ProviderKind.OPENAI, "gpt-oss-120b", id = "openrouter-entry", baseUrlOverride = "https://openrouter.ai/api/v1"),
+            )
+        )
+        val parsed = ProviderChainStore.deserialize(ProviderChainStore.serialize(chain))
+        assertEquals(listOf("groq-entry", "openrouter-entry"), parsed?.entries?.map { it.id })
+        assertEquals(chain, parsed)
+    }
+
+    @Test fun `an explicit false enabled value round trips as false, not the true default`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "m", id = "x", enabled = false)))
+        val parsed = ProviderChainStore.deserialize(ProviderChainStore.serialize(chain))
+        assertEquals(false, parsed?.entries?.get(0)?.enabled)
+    }
 }

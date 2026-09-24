@@ -171,7 +171,7 @@ class SnippetRuntimeWiringTest {
             app,
             ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-mini", baseUrlOverride = base))),
         )
-        ProviderCredentialStore.set(app, ProviderKind.OPENAI, "test-key")
+        ProviderCredentialStore.setLegacyByKind(app, ProviderKind.OPENAI, "test-key")
         app.getSharedPreferences("ramblr", android.content.Context.MODE_PRIVATE).edit()
             .putBoolean("use_post_processing", true)
             .apply()

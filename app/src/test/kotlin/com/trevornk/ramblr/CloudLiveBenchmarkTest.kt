@@ -115,7 +115,7 @@ class CloudLiveBenchmarkTest {
             app,
             ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-mini", baseUrlOverride = base, transcriptionModel = "gpt-transcribe"))),
         )
-        ProviderCredentialStore.set(app, ProviderKind.OPENAI, "test-batch-key")
+        ProviderCredentialStore.setLegacyByKind(app, ProviderKind.OPENAI, "test-batch-key")
         app.getSharedPreferences("ramblr", Context.MODE_PRIVATE).edit().putBoolean("use_local", false).apply()
         PostProcessingToggle.setEnabled(app, false)
     }

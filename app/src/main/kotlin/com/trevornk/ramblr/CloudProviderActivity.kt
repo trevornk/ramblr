@@ -340,18 +340,38 @@ class CloudProviderActivity : BaseSettingsActivity() {
         row.addView(topLine)
 
         row.addView(TextView(this).apply {
-            text = "key: ${credentialSummary(entry.kind)}"
+            text = "key: ${credentialSummary(entry)}"
             textSize = 13f
             setTextColor(attrColor(android.R.attr.textColorSecondary))
             setPadding(0, dp(2), 0, dp(2))
         })
 
         row.addView(TextView(this).apply {
-            text = ProviderChainEditing.capabilityBadgeText(entry.kind)
+            text = ProviderChainEditing.capabilityBadgeText(entry)
             textSize = 13f
             setTextColor(attrColor(android.R.attr.textColorSecondary))
             setPadding(0, 0, 0, dp(4))
         })
+
+        // #274: per-row enable switch. LOCAL never appears as a row here (see refreshChainRows'
+        // kdoc), so this can never disable the undeletable floor -- the invariant the fallback
+        // toggles above already guarantee stays intact.
+        val enabledRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        enabledRow.addView(TextView(this).apply {
+            text = "Enabled"
+            textSize = 13f
+            layoutParams = LinearLayout.LayoutParams(0, LP_WRAP, 1f)
+        })
+        enabledRow.addView(MaterialSwitch(this).apply {
+            isChecked = entry.enabled
+            setOnCheckedChangeListener { _, checked ->
+                saveChain(ProviderChainEditing.replace(currentChain().entries, index, entry.copy(enabled = checked)))
+            }
+        })
+        row.addView(enabledRow)
 
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -388,16 +408,22 @@ class CloudProviderActivity : BaseSettingsActivity() {
     private fun confirmRemoveEntry(entry: ProviderChainEntry, index: Int) {
         android.app.AlertDialog.Builder(this)
             .setTitle("Remove ${providerLabel(entry.kind)}?")
-            .setMessage("This removes it from the provider chain. Its saved key is kept in case you add it back.")
+            .setMessage("This removes it from the provider chain and clears its saved key.")
             .setPositiveButton("Remove") { _, _ ->
+                // #274: an entry's key now lives in its own per-entry slot, so "keep the key in
+                // case you add it back" (the old per-kind-slot behavior) is no longer a
+                // meaningful safety net -- a NEW entry gets a fresh id/slot regardless, so the
+                // old key would just become permanently orphaned, encrypted storage nobody can
+                // ever reach again. Clearing it here is the honest behavior the dialog now states.
+                ProviderCredentialStore.clear(this, entry)
                 saveChain(ProviderChainEditing.remove(currentChain().entries, index))
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun credentialSummary(kind: ProviderKind): String {
-        val value = ProviderCredentialStore.get(this, kind)
+    private fun credentialSummary(entry: ProviderChainEntry): String {
+        val value = ProviderCredentialStore.getOrLegacy(this, entry)
         return if (value.isBlank()) "not set" else ProviderCredentialStore.maskForDisplay(value)
     }
 
@@ -446,8 +472,12 @@ class CloudProviderActivity : BaseSettingsActivity() {
             }
         }
         radioButtons.forEach { radioGroup.addView(it) }
-        // Editing an existing entry can't change its kind (the credential slot is per-kind) --
-        // only "Add provider" offers a live picker.
+        // Editing an existing entry can't change its kind -- capability facts (which task
+        // checkboxes are even offered) and the model catalog are both kind-specific; only "Add
+        // provider" offers a live picker. (#274: credentials are now per-entry, not per-kind, so
+        // that particular old reason no longer applies, but changing an existing entry's kind
+        // out from under its already-chosen models/participation would need a bigger redesign
+        // than this dialog does today.)
         if (existing != null) radioButtons.forEach { it.isEnabled = false }
         container.addView(radioGroup)
 
@@ -621,18 +651,6 @@ class CloudProviderActivity : BaseSettingsActivity() {
         }
 
         rebuildTranscriptionPicker(existing?.kind ?: selectedKind())
-        if (existing == null) {
-            radioButtons.forEachIndexed { i, rb ->
-                rb.setOnClickListener {
-                    advancedModelInput.setText("")
-                    advancedSection.visibility = View.GONE
-                    rebuildModelPicker(addableKinds[i])
-                    advancedTranscriptionModelInput.setText("")
-                    advancedTranscriptionSection.visibility = View.GONE
-                    rebuildTranscriptionPicker(addableKinds[i])
-                }
-            }
-        }
 
         val baseUrlInput = EditText(this).apply {
             hint = "Base URL override (optional)"
@@ -647,6 +665,53 @@ class CloudProviderActivity : BaseSettingsActivity() {
         })
         container.addView(baseUrlInput)
 
+        // --- Per-task participation (#274): lets the user say "this account is for
+        // transcription only" / "cleanup only" instead of every kind-capable account always
+        // participating in both chains. The transcription checkbox is force-unchecked and
+        // disabled for a kind that cannot transcribe at all (ANTHROPIC, OMNIROUTE) -- a hard
+        // capability ceiling, validation rather than a user override (see
+        // ProviderChainEntry.useForTranscription's kdoc). Cleanup has no such ceiling today
+        // (every ProviderKind.supportsCleanup()), so its checkbox is always enabled.
+        container.addView(TextView(this).apply {
+            text = "Use for"
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, dp(16), 0, dp(4))
+        })
+        val useForTranscriptionCheckbox = android.widget.CheckBox(this).apply {
+            text = "Transcription"
+        }
+        val useForCleanupCheckbox = android.widget.CheckBox(this).apply {
+            text = "Cleanup"
+            isChecked = existing?.useForCleanup ?: true
+        }
+        container.addView(useForTranscriptionCheckbox)
+        container.addView(useForCleanupCheckbox)
+
+        fun refreshParticipationCheckboxes(kind: ProviderKind) {
+            if (kind.supportsTranscription()) {
+                useForTranscriptionCheckbox.isEnabled = true
+                useForTranscriptionCheckbox.isChecked =
+                    existing?.takeIf { it.kind == kind }?.useForTranscription ?: true
+            } else {
+                useForTranscriptionCheckbox.isEnabled = false
+                useForTranscriptionCheckbox.isChecked = false
+            }
+        }
+        refreshParticipationCheckboxes(existing?.kind ?: selectedKind())
+        if (existing == null) {
+            radioButtons.forEachIndexed { i, rb ->
+                rb.setOnClickListener {
+                    advancedModelInput.setText("")
+                    advancedSection.visibility = View.GONE
+                    rebuildModelPicker(addableKinds[i])
+                    advancedTranscriptionModelInput.setText("")
+                    advancedTranscriptionSection.visibility = View.GONE
+                    rebuildTranscriptionPicker(addableKinds[i])
+                    refreshParticipationCheckboxes(addableKinds[i])
+                }
+            }
+        }
+
         container.addView(TextView(this).apply {
             text = "Credential"
             setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -654,7 +719,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         })
         val keyInput = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            val existingKey = existing?.let { ProviderCredentialStore.get(this@CloudProviderActivity, it.kind) } ?: ""
+            val existingKey = existing?.let { ProviderCredentialStore.getOrLegacy(this@CloudProviderActivity, it) } ?: ""
             hint = if (existingKey.isBlank()) "Paste key" else ProviderCredentialStore.maskForDisplay(existingKey)
         }
         container.addView(keyInput)
@@ -665,13 +730,18 @@ class CloudProviderActivity : BaseSettingsActivity() {
             .setPositiveButton("Save", null) // real handler wired below so a validation failure doesn't dismiss (#125)
             .setNegativeButton("Cancel", null)
         // Give the user a way to actually delete a stored key from the device (M10): a blank Save
-        // deliberately keeps the old key, and removing a chain entry keeps the credential too, so
-        // without this there was no removal path anywhere. Only offered when editing an entry whose
-        // key is actually set.
-        if (existing != null && ProviderCredentialStore.isConfigured(this, existing.kind)) {
+        // deliberately keeps the old key. Removing a chain entry now clears its credential too
+        // (#274, see confirmRemoveEntry), so this remains the only way to clear a key while
+        // KEEPING the entry. Only offered when editing an entry whose key is actually set.
+        if (existing != null && ProviderCredentialStore.isConfiguredOrLegacy(this, existing)) {
             builder.setNeutralButton("Remove key") { _, _ ->
                 confirmRemoveSecret("${providerLabel(existing.kind)} API key") {
-                    ProviderCredentialStore.clear(this, existing.kind)
+                    ProviderCredentialStore.clear(this, existing)
+                    // Also clear the legacy per-kind slot if that's where this credential was
+                    // actually still living (a blank-id entry, or one whose migration copy hasn't
+                    // run yet) -- otherwise "Remove key" would appear to work but the value would
+                    // reappear from the legacy slot on the next getOrLegacy() read.
+                    ProviderCredentialStore.clearLegacyByKind(this, existing.kind)
                     toast("${providerLabel(existing.kind)} key removed")
                     refresh()
                 }
@@ -707,9 +777,25 @@ class CloudProviderActivity : BaseSettingsActivity() {
                         pickedTranscriptionModelId
                     }
                     val baseUrlOverride = baseUrlInput.text.toString().trim().takeIf { it.isNotBlank() }
+                    // #274: a new entry gets a stable id immediately, not deferred to the next
+                    // ProviderAccountMigration pass, so its just-entered key can be written to a
+                    // real per-entry slot right now instead of the legacy per-kind one.
+                    val entryId = existing?.id?.takeIf { it.isNotBlank() } ?: java.util.UUID.randomUUID().toString()
                     val enteredKey = keyInput.text.toString().trim()
-                    if (enteredKey.isNotBlank()) ProviderCredentialStore.set(this, kind, enteredKey)
-                    onSave(ProviderChainEntry(kind, model, baseUrlOverride, transcriptionModel))
+                    if (enteredKey.isNotBlank()) ProviderCredentialStore.set(this, entryId, enteredKey)
+                    val useForTranscription = kind.supportsTranscription() && useForTranscriptionCheckbox.isChecked
+                    onSave(
+                        ProviderChainEntry(
+                            kind = kind,
+                            model = model,
+                            baseUrlOverride = baseUrlOverride,
+                            transcriptionModel = transcriptionModel,
+                            id = entryId,
+                            enabled = existing?.enabled ?: true,
+                            useForTranscription = useForTranscription,
+                            useForCleanup = useForCleanupCheckbox.isChecked,
+                        )
+                    )
                     dialog.dismiss()
                 }
             }
@@ -725,7 +811,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         val chain = currentChain()
         val hasCandidate = ProviderChainRuntime.transcriptionCandidates(chain).any { it.kind != ProviderKind.LOCAL }
         // Capability alone isn't enough -- a provider with no key set won't actually work (L17).
-        val hasConfigured = hasConfiguredCloudTranscription(chain) { ProviderCredentialStore.isConfigured(this, it) }
+        val hasConfigured = hasConfiguredCloudTranscription(chain) { ProviderCredentialStore.isConfiguredOrLegacy(this, it) }
         return when {
             hasConfigured -> "On — uses the chain above"
             hasCandidate -> "On, but no key is set for a transcription provider yet — falls back to on-device"
@@ -738,7 +824,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         val chain = currentChain()
         val cloudEntries = chain.capableEntriesFor(needsTranscription = false).filter { it.kind != ProviderKind.LOCAL }
         // Capability alone isn't enough -- a provider with no key set won't actually work (L17).
-        val hasConfigured = cloudEntries.any { ProviderCredentialStore.isConfigured(this, it.kind) }
+        val hasConfigured = cloudEntries.any { ProviderCredentialStore.isConfiguredOrLegacy(this, it) }
         return when {
             hasConfigured -> "On — uses the chain above"
             cloudEntries.isNotEmpty() -> "On, but no key is set for a cloud cleanup provider yet"
@@ -787,7 +873,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
     private fun cloudLiveSubtitle(): String = cloudLiveSubtitleText(
         enabled = CloudLiveToggle.isEnabled(this),
         useLocalTranscription = prefs().getBoolean("use_local", true),
-        hasGeminiKey = ProviderCredentialStore.isConfigured(this, ProviderKind.GEMINI),
+        hasGeminiKey = ProviderCredentialStore.isConfiguredForKind(this, currentChain(), ProviderKind.GEMINI),
     )
 
     /** Persists intent only. The switch never edits `use_local`, the chain, or any credential --

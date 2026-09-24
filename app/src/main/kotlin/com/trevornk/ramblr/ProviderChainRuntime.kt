@@ -17,16 +17,18 @@ object ProviderChainRuntime {
 
     /**
      * Converts cleanup-capable provider entries to the [CleanupWaterfall] shape expected by the
-     * existing executor.
+     * existing executor. Threads [ProviderChainEntry.id] onto each [CleanupStep] (#274) so the
+     * executor's credential lookup resolves this entry's own per-entry credential rather than a
+     * shared per-kind slot -- see [CleanupStep.entryId]'s kdoc.
      */
     fun cleanupWaterfallFor(chain: ProviderChain): CleanupWaterfall = CleanupWaterfall(
         chain.capableEntriesFor(needsTranscription = false).mapNotNull { entry ->
             when (entry.kind) {
-                ProviderKind.OPENAI -> CleanupStep(CleanupStepGroup.OPENAI_DIRECT, entry.model, entry.baseUrlOverride)
-                ProviderKind.ANTHROPIC -> CleanupStep(CleanupStepGroup.ANTHROPIC_DIRECT, entry.model, entry.baseUrlOverride)
-                ProviderKind.GEMINI -> CleanupStep(CleanupStepGroup.GEMINI_DIRECT, entry.model, entry.baseUrlOverride)
-                ProviderKind.OMNIROUTE -> CleanupStep(CleanupStepGroup.OMNIROUTE, entry.model, entry.baseUrlOverride)
-                ProviderKind.LOCAL -> CleanupStep(CleanupStepGroup.LOCAL_LLM, entry.model, entry.baseUrlOverride)
+                ProviderKind.OPENAI -> CleanupStep(CleanupStepGroup.OPENAI_DIRECT, entry.model, entry.baseUrlOverride, entry.id)
+                ProviderKind.ANTHROPIC -> CleanupStep(CleanupStepGroup.ANTHROPIC_DIRECT, entry.model, entry.baseUrlOverride, entry.id)
+                ProviderKind.GEMINI -> CleanupStep(CleanupStepGroup.GEMINI_DIRECT, entry.model, entry.baseUrlOverride, entry.id)
+                ProviderKind.OMNIROUTE -> CleanupStep(CleanupStepGroup.OMNIROUTE, entry.model, entry.baseUrlOverride, entry.id)
+                ProviderKind.LOCAL -> CleanupStep(CleanupStepGroup.LOCAL_LLM, entry.model, entry.baseUrlOverride, entry.id)
             }
         }
     )

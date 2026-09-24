@@ -389,7 +389,7 @@ class CleanupActivity : BaseSettingsActivity() {
     }
 
     private fun canFallBackToCloud(): Boolean =
-        canFallBackToCloudCleanup(ProviderChainStore.load(this)) { ProviderCredentialStore.isConfigured(this, it) }
+        canFallBackToCloudCleanup(ProviderChainStore.load(this)) { ProviderCredentialStore.isConfiguredOrLegacy(this, it) }
 
     private fun observeCleanupModelDownload(model: Model) {
         WorkManager.getInstance(this)

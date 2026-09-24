@@ -21,6 +21,13 @@ object ProviderChainStore {
                 put("model", entry.model)
                 put("baseUrlOverride", entry.baseUrlOverride ?: JSONObject.NULL)
                 put("transcriptionModel", entry.transcriptionModel ?: JSONObject.NULL)
+                // #274: id/enabled/useFor* are new fields. id is written even when blank (an
+                // entry that has never been through ProviderAccountMigration) so a round trip
+                // through serialize/deserialize is lossless either way.
+                put("id", entry.id)
+                put("enabled", entry.enabled)
+                put("useForTranscription", entry.useForTranscription)
+                put("useForCleanup", entry.useForCleanup)
             })
         }
         return array.toString()
@@ -37,8 +44,9 @@ object ProviderChainStore {
             val array = JSONArray(raw)
             val entries = (0 until array.length()).map { i ->
                 val obj = array.getJSONObject(i)
+                val kind = ProviderKind.valueOf(obj.getString("kind"))
                 ProviderChainEntry(
-                    kind = ProviderKind.valueOf(obj.getString("kind")),
+                    kind = kind,
                     model = obj.getString("model"),
                     baseUrlOverride = if (obj.isNull("baseUrlOverride")) null else obj.getString("baseUrlOverride"),
                     // Missing key (every chain saved before #101) and an explicit JSON null both
@@ -46,6 +54,16 @@ object ProviderChainStore {
                     // genuinely absent key would collide with a real user-typed empty string, so
                     // this checks key presence first via `has`, not just nullness.
                     transcriptionModel = if (!obj.has("transcriptionModel") || obj.isNull("transcriptionModel")) null else obj.getString("transcriptionModel"),
+                    // #274: a chain saved before these fields existed has none of these keys at
+                    // all -- `optString`/`optBoolean` fall back to the constructor's own
+                    // zero-behavior-change defaults (blank id; enabled=true;
+                    // useForTranscription/useForCleanup = the kind's capability) rather than a
+                    // literal `false`/`""` baked in here, so this stays correct if those defaults
+                    // ever change without needing a second edit here.
+                    id = obj.optString("id", ""),
+                    enabled = obj.optBoolean("enabled", true),
+                    useForTranscription = if (obj.has("useForTranscription")) obj.optBoolean("useForTranscription") else kind.supportsTranscription(),
+                    useForCleanup = if (obj.has("useForCleanup")) obj.optBoolean("useForCleanup") else kind.supportsCleanup(),
                 )
             }
             ProviderChain(entries)

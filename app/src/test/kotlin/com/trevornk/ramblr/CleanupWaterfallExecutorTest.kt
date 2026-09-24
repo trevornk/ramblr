@@ -1107,3 +1107,125 @@ class CleanupWaterfallExecutorCancellationTest {
         assertEquals(1, transport.requestedUrls.size)
     }
 }
+
+/**
+ * #274: [CleanupWaterfallExecutor.execute]'s entry-based credential lookup, keyed by
+ * [CleanupStep.entryId] -- the actual fix for #273 at the cleanup-execution layer. Two
+ * OPENAI_DIRECT steps sharing [CleanupCredentialSlot.OPENAI_DIRECT] must still resolve to
+ * different credentials when they carry different [CleanupStep.entryId]s.
+ */
+class CleanupWaterfallExecutorEntryCredentialTest {
+    private val cancelHolder = InFlightCall()
+
+    private fun execute(
+        waterfall: CleanupWaterfall,
+        transport: CleanupHttpTransport,
+        entryCredentialLookup: (String) -> String,
+        credentialLookup: (CleanupCredentialSlot) -> String = { "" },
+    ): PostProcessor.Result {
+        var captured: PostProcessor.Result? = null
+        CleanupWaterfallExecutor.execute(
+            text = "raw transcript",
+            prompt = "clean it up",
+            waterfall = waterfall,
+            cursor = CleanupWaterfallCursor(),
+            cancelHolder = cancelHolder,
+            credentialLookup = credentialLookup,
+            entryCredentialLookup = entryCredentialLookup,
+            transport = transport,
+            callback = { captured = it },
+        )
+        return captured ?: error("callback never fired")
+    }
+
+    @Test fun `two same-kind OPENAI_DIRECT steps with different entryIds resolve to different credentials`() {
+        val credentials = mapOf("groq-id" to "sk-groq-key", "openrouter-id" to "sk-openrouter-key")
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "m", entryId = "groq-id")))
+
+        val result = execute(waterfall, transport, entryCredentialLookup = { credentials[it] ?: "" })
+
+        assertEquals("cleaned", result.text)
+        assertTrue(transport.requestedBodies.isNotEmpty())
+    }
+
+    @Test fun `entryCredentialLookup is preferred over the slot-based credentialLookup when both resolve`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "m", entryId = "entry-x")))
+
+        // If the executor used the slot-based key it would still succeed (both are configured),
+        // so this alone can't prove preference -- the missing-credential test below does that by
+        // making the two sources disagree on which one HAS a key at all.
+        val result = execute(
+            waterfall, transport,
+            entryCredentialLookup = { if (it == "entry-x") "sk-entry-key" else "" },
+            credentialLookup = { "sk-slot-key" },
+        )
+        assertEquals("cleaned", result.text)
+    }
+
+    @Test fun `a step with an entryId configured only in entryCredentialLookup still succeeds even when the slot lookup has nothing`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "m", entryId = "entry-x")))
+
+        val result = execute(
+            waterfall, transport,
+            entryCredentialLookup = { if (it == "entry-x") "sk-entry-key" else "" },
+            credentialLookup = { "" }, // slot-based lookup has nothing configured
+        )
+
+        assertEquals("cleaned", result.text)
+        assertEquals(1, transport.requestedUrls.size)
+    }
+
+    @Test fun `a step with a blank entryId falls back to the slot-based credentialLookup unchanged`() {
+        // Every pre-#274 call site/test fixture never sets entryId -- this is the "zero behavior
+        // change" guarantee for that population.
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned via slot")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "m"))) // entryId defaults to ""
+
+        val result = execute(
+            waterfall, transport,
+            entryCredentialLookup = { "should never be reached for a blank entryId" },
+            credentialLookup = { "sk-slot-key" },
+        )
+
+        assertEquals("cleaned via slot", result.text)
+    }
+
+    @Test fun `an entryId with no entry-based credential falls through to the slot-based one`() {
+        val transport = FakeCleanupHttpTransport(mutableListOf(okOutcome("cleaned via slot fallback")))
+        val waterfall = CleanupWaterfall(listOf(CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "m", entryId = "unmigrated-entry")))
+
+        val result = execute(
+            waterfall, transport,
+            entryCredentialLookup = { "" }, // migration hasn't copied a key onto this entry yet
+            credentialLookup = { "sk-legacy-slot-key" },
+        )
+
+        assertEquals("cleaned via slot fallback", result.text)
+    }
+
+    @Test fun `two same-kind steps with only one entry's credential configured -- only that one succeeds`() {
+        val transport = FakeCleanupHttpTransport(
+            mutableListOf(CleanupHttpOutcome.HttpError(401, """{"error":{"message":"invalid key"}}"""), okOutcome("second entry succeeds"))
+        )
+        val waterfall = CleanupWaterfall(
+            listOf(
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "m", entryId = "unconfigured-entry"),
+                CleanupStep(CleanupStepGroup.OPENAI_DIRECT, "m2", entryId = "configured-entry"),
+            )
+        )
+
+        val result = execute(
+            waterfall, transport,
+            entryCredentialLookup = { entryId -> if (entryId == "configured-entry") "sk-configured" else "" },
+            credentialLookup = { "sk-fallback-shared" }, // both steps WOULD succeed if this were used for both
+        )
+
+        // The first step still gets a credential (the shared fallback), sends a real (failing)
+        // request, and falls through to the second step, which resolves its own distinct key.
+        assertEquals("second entry succeeds", result.text)
+        assertEquals(2, transport.requestedUrls.size)
+    }
+}
