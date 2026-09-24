@@ -326,7 +326,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         topLine.addView(TextView(this).apply {
-            text = "${displayPosition + 1}. ${providerLabel(entry.kind)} \u00b7 ${entry.model}" +
+            text = "${displayPosition + 1}. ${entryLabel(entry)} \u00b7 ${entry.model}" +
                 if (entry.kind.supportsTranscription()) " \u00b7 STT: ${entry.transcriptionModel ?: transcriptionDefaultFor(entry.kind)}" else ""
             textSize = 16f
             setTextColor(attrColor(android.R.attr.textColorPrimary))
@@ -407,7 +407,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
 
     private fun confirmRemoveEntry(entry: ProviderChainEntry, index: Int) {
         android.app.AlertDialog.Builder(this)
-            .setTitle("Remove ${providerLabel(entry.kind)}?")
+            .setTitle("Remove ${entryLabel(entry)}?")
             .setMessage("This removes it from the provider chain and clears its saved key.")
             .setPositiveButton("Remove") { _, _ ->
                 // #274: an entry's key now lives in its own per-entry slot, so "keep the key in
@@ -440,6 +440,11 @@ class CloudProviderActivity : BaseSettingsActivity() {
         ProviderKind.LOCAL -> "Local (on-device)"
     }
 
+    /** Display label for a chain row/dialog title (#275): a preset entry (Groq/OpenRouter) shows
+     *  its preset label instead of the generic kind label its [ProviderChainEntry.kind] would
+     *  otherwise give (both presets are plain OPENAI-kind entries under the hood). */
+    private fun entryLabel(entry: ProviderChainEntry): String = ProviderPresets.displayLabel(entry, ::providerLabel)
+
     /** Shipped transcription default for [kind], for display when an entry's
      *  [ProviderChainEntry.transcriptionModel] is null (#101/#102: mirrors
      *  [CleanupDestination]'s private `defaultTranscriptionModelFor` -- duplicated rather than
@@ -463,11 +468,21 @@ class CloudProviderActivity : BaseSettingsActivity() {
         val container = vertical(dp(24), dp(8))
 
         val radioGroup = RadioGroup(this).apply { orientation = LinearLayout.VERTICAL }
-        val radioButtons = addableKinds.map { kind ->
+        // #275: "Add provider" offers plain kinds AND curated presets (Groq/OpenRouter) in one
+        // mutually-exclusive list. A preset selection is still a plain ProviderKind.OPENAI entry
+        // under the hood (see ProviderPresets' kdoc) -- it's distinguished by presetId, not kind,
+        // so both plain-OpenAI and preset options share addableKinds[0]'s existing OPENAI slot
+        // without duplicating it.
+        data class DialogSelection(val label: String, val kind: ProviderKind, val presetId: String?)
+        val selections = addableKinds.map { kind -> DialogSelection(providerLabel(kind), kind, null) } +
+            ProviderPresets.ALL.map { preset -> DialogSelection(preset.displayLabel, preset.kind, preset.id) }
+        val initialSelectionIndex = existing?.let { e -> selections.indexOfFirst { it.kind == e.kind && it.presetId == e.presetId } }
+            ?.takeIf { it >= 0 } ?: 0
+        val radioButtons = selections.mapIndexed { i, selection ->
             MaterialRadioButton(this).apply {
-                text = providerLabel(kind)
+                text = selection.label
                 id = View.generateViewId()
-                isChecked = (existing?.kind ?: addableKinds[0]) == kind
+                isChecked = i == initialSelectionIndex
                 buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
             }
         }
@@ -481,7 +496,9 @@ class CloudProviderActivity : BaseSettingsActivity() {
         if (existing != null) radioButtons.forEach { it.isEnabled = false }
         container.addView(radioGroup)
 
-        fun selectedKind() = addableKinds.getOrElse(radioButtons.indexOfFirst { it.isChecked }) { addableKinds[0] }
+        fun selectedIndex() = radioButtons.indexOfFirst { it.isChecked }.takeIf { it >= 0 } ?: 0
+        fun selectedKind() = selections.getOrElse(selectedIndex()) { selections[0] }.kind
+        fun selectedPresetId() = selections.getOrElse(selectedIndex()) { selections[0] }.presetId
 
         // --- Model picker (#98): replaces the old free-text model EditText with catalog radio
         // options (tier badge + description), reusing existing curated data instead of a blind
@@ -526,7 +543,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         var pickedModelId: String? = null
         val modelRadioGroup = RadioGroup(this).apply { orientation = LinearLayout.VERTICAL }
 
-        fun rebuildModelPicker(kind: ProviderKind) {
+        fun rebuildModelPicker(kind: ProviderKind, presetId: String?) {
             modelPickerContainer.removeAllViews()
             modelRadioGroup.removeAllViews()
             // ModelUseCase.CLEANUP filter (#104): entriesFor(catalog, kind) alone returns EVERY
@@ -536,8 +553,9 @@ class CloudProviderActivity : BaseSettingsActivity() {
             // an ASR-only model here saves it as entry.model (the cleanup model), which then gets
             // POSTed to /v1/chat/completions and fails at call time. Matches the same
             // ModelUseCase.TRANSCRIPTION filtering already applied to the transcription picker
-            // below (rebuildTranscriptionPicker).
-            val entries = ModelCatalogResolver.entriesFor(catalog, kind, ModelUseCase.CLEANUP)
+            // below (rebuildTranscriptionPicker). [presetId] (#275) scopes to a preset's own
+            // curated models (Groq/OpenRouter), never direct OpenAI's, when set.
+            val entries = ModelCatalogResolver.entriesFor(catalog, kind, ModelUseCase.CLEANUP, presetId)
             val existingModel = existing?.model
             val existingIsCatalogModel = existingModel != null && entries.any { it.modelId == existingModel }
             pickedModelId = existingModel?.takeIf { existingIsCatalogModel }
@@ -566,7 +584,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
             }
         }
 
-        rebuildModelPicker(existing?.kind ?: selectedKind())
+        rebuildModelPicker(existing?.kind ?: selectedKind(), existing?.presetId ?: selectedPresetId())
 
         // --- Transcription model picker (#101/#102): a SEPARATE model choice from the cleanup
         // picker above, only shown for kinds where ProviderKind.supportsTranscription() is
@@ -611,7 +629,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         container.addView(advancedTranscriptionToggle)
         container.addView(advancedTranscriptionSection)
 
-        fun rebuildTranscriptionPicker(kind: ProviderKind) {
+        fun rebuildTranscriptionPicker(kind: ProviderKind, presetId: String?) {
             transcriptionPickerContainer.removeAllViews()
             transcriptionRadioGroup.removeAllViews()
             val supportsTranscription = kind.supportsTranscription() && kind != ProviderKind.LOCAL
@@ -623,7 +641,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
                 return
             }
 
-            val entries = ModelCatalogResolver.entriesFor(catalog, kind, ModelUseCase.TRANSCRIPTION)
+            val entries = ModelCatalogResolver.entriesFor(catalog, kind, ModelUseCase.TRANSCRIPTION, presetId)
             val existingModel = existing?.takeIf { it.kind == kind }?.transcriptionModel
             val existingIsCatalogModel = existingModel != null && entries.any { it.modelId == existingModel }
             pickedTranscriptionModelId = existingModel?.takeIf { existingIsCatalogModel }
@@ -650,12 +668,18 @@ class CloudProviderActivity : BaseSettingsActivity() {
             }
         }
 
-        rebuildTranscriptionPicker(existing?.kind ?: selectedKind())
+        rebuildTranscriptionPicker(existing?.kind ?: selectedKind(), existing?.presetId ?: selectedPresetId())
 
+        // #275: a preset selection prefills its base URL. The field stays visible/editable so a
+        // user can still override it (e.g. a self-hosted OpenRouter-compatible mirror), but the
+        // common case (adding Groq/OpenRouter) needs no manual typing at all -- the actual #273
+        // reporter's complaint was having to discover and hand-type this through the hidden
+        // advanced field on a plain OpenAI entry.
+        val initialPreset = ProviderPresets.forId(existing?.presetId ?: selectedPresetId())
         val baseUrlInput = EditText(this).apply {
             hint = "Base URL override (optional)"
-            setText(existing?.baseUrlOverride ?: "")
-            visibility = if (existing?.baseUrlOverride.isNullOrBlank()) View.GONE else View.VISIBLE
+            setText(existing?.baseUrlOverride ?: initialPreset?.baseUrl ?: "")
+            visibility = if ((existing?.baseUrlOverride ?: initialPreset?.baseUrl).isNullOrBlank()) View.GONE else View.VISIBLE
         }
         container.addView(TextView(this).apply {
             text = "Advanced: base URL override"
@@ -701,13 +725,20 @@ class CloudProviderActivity : BaseSettingsActivity() {
         if (existing == null) {
             radioButtons.forEachIndexed { i, rb ->
                 rb.setOnClickListener {
+                    val selection = selections[i]
                     advancedModelInput.setText("")
                     advancedSection.visibility = View.GONE
-                    rebuildModelPicker(addableKinds[i])
+                    rebuildModelPicker(selection.kind, selection.presetId)
                     advancedTranscriptionModelInput.setText("")
                     advancedTranscriptionSection.visibility = View.GONE
-                    rebuildTranscriptionPicker(addableKinds[i])
-                    refreshParticipationCheckboxes(addableKinds[i])
+                    rebuildTranscriptionPicker(selection.kind, selection.presetId)
+                    refreshParticipationCheckboxes(selection.kind)
+                    // #275: switching to a preset prefills its base URL and reveals the field;
+                    // switching to a plain kind clears any preset URL that was showing so a user
+                    // who tried a preset and switched away doesn't silently keep pointing at it.
+                    val preset = ProviderPresets.forId(selection.presetId)
+                    baseUrlInput.setText(preset?.baseUrl ?: "")
+                    baseUrlInput.visibility = if (preset != null) View.VISIBLE else View.GONE
                 }
             }
         }
@@ -725,7 +756,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         container.addView(keyInput)
 
         val builder = android.app.AlertDialog.Builder(this)
-            .setTitle(if (existing == null) "Add provider" else "Edit ${providerLabel(existing.kind)}")
+            .setTitle(if (existing == null) "Add provider" else "Edit ${entryLabel(existing)}")
             .setView(ScrollView(this).apply { addView(container) })
             .setPositiveButton("Save", null) // real handler wired below so a validation failure doesn't dismiss (#125)
             .setNegativeButton("Cancel", null)
@@ -735,14 +766,14 @@ class CloudProviderActivity : BaseSettingsActivity() {
         // KEEPING the entry. Only offered when editing an entry whose key is actually set.
         if (existing != null && ProviderCredentialStore.isConfiguredOrLegacy(this, existing)) {
             builder.setNeutralButton("Remove key") { _, _ ->
-                confirmRemoveSecret("${providerLabel(existing.kind)} API key") {
+                confirmRemoveSecret("${entryLabel(existing)} API key") {
                     ProviderCredentialStore.clear(this, existing)
                     // Also clear the legacy per-kind slot if that's where this credential was
                     // actually still living (a blank-id entry, or one whose migration copy hasn't
                     // run yet) -- otherwise "Remove key" would appear to work but the value would
                     // reappear from the legacy slot on the next getOrLegacy() read.
                     ProviderCredentialStore.clearLegacyByKind(this, existing.kind)
-                    toast("${providerLabel(existing.kind)} key removed")
+                    toast("${entryLabel(existing)} key removed")
                     refresh()
                 }
             }
@@ -754,6 +785,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         dialog.setOnShowListener {
             dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val kind = existing?.kind ?: selectedKind()
+                val presetId = existing?.presetId ?: selectedPresetId()
                 val customModel = advancedModelInput.text.toString().trim()
                 val model = if (advancedSection.visibility == View.VISIBLE && customModel.isNotBlank()) {
                     customModel
@@ -794,6 +826,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
                             enabled = existing?.enabled ?: true,
                             useForTranscription = useForTranscription,
                             useForCleanup = useForCleanupCheckbox.isChecked,
+                            presetId = presetId,
                         )
                     )
                     dialog.dismiss()

@@ -28,6 +28,8 @@ object ProviderChainStore {
                 put("enabled", entry.enabled)
                 put("useForTranscription", entry.useForTranscription)
                 put("useForCleanup", entry.useForCleanup)
+                // #275: preset marker, null for every entry saved before #275 shipped.
+                put("presetId", entry.presetId ?: JSONObject.NULL)
             })
         }
         return array.toString()
@@ -64,6 +66,10 @@ object ProviderChainStore {
                     enabled = obj.optBoolean("enabled", true),
                     useForTranscription = if (obj.has("useForTranscription")) obj.optBoolean("useForTranscription") else kind.supportsTranscription(),
                     useForCleanup = if (obj.has("useForCleanup")) obj.optBoolean("useForCleanup") else kind.supportsCleanup(),
+                    // #275: missing key (every chain saved before #275) and an explicit JSON
+                    // null both mean "no preset" -- same has()-first convention as
+                    // transcriptionModel above.
+                    presetId = if (!obj.has("presetId") || obj.isNull("presetId")) null else obj.getString("presetId"),
                 )
             }
             ProviderChain(entries)

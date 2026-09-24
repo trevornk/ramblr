@@ -134,6 +134,17 @@ data class ProviderChainEntry(
     /** Cleanup counterpart to [useForTranscription]. Defaults to [ProviderKind.supportsCleanup],
      *  which is true for every kind today, so this is also a zero-behavior-change default. */
     val useForCleanup: Boolean = kind.supportsCleanup(),
+    /**
+     * Preset marker (#275, e.g. "groq"/"openrouter"), or null for a plain kind-labeled entry.
+     * A preset is a curated third-party OpenAI-compatible host: [kind] stays [ProviderKind.OPENAI]
+     * under the hood (the account really does speak the OpenAI wire format via
+     * [baseUrlOverride]), but [presetId] lets the UI show "Groq"/"OpenRouter" instead of the
+     * generic "OpenAI" label ([ProviderPresets.displayLabel]) and lets the model catalog
+     * ([ModelCatalogEntry.presetId]) offer curated, preset-specific models instead of direct
+     * OpenAI's. Null for every entry saved before #275 and for any entry added as a plain kind
+     * (OpenAI/Anthropic/Gemini/OmniRoute) -- those keep resolving exactly as before.
+     */
+    val presetId: String? = null,
 )
 
 /**

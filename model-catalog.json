@@ -7,7 +7,8 @@
     "modelId": "gpt-5.6-luna",
     "displayName": "GPT-5.6 Luna",
     "costPer1MOutputUsd": 1.2,
-    "description": "OpenAI's current cheapest tier (successor of GPT-5.4 Nano) \u2014 fastest and cheapest for cleanup."
+    "description": "OpenAI's current cheapest tier (successor of GPT-5.4 Nano) \u2014 fastest and cheapest for cleanup.",
+    "presetId": null
   },
   {
     "useCase": "CLEANUP",
@@ -17,7 +18,8 @@
     "modelId": "gpt-5.4-mini",
     "displayName": "GPT-5.4 Mini",
     "costPer1MOutputUsd": 4.5,
-    "description": "Previous-generation mid tier \u2014 same real-world cleanup quality, costs more."
+    "description": "Previous-generation mid tier \u2014 same real-world cleanup quality, costs more.",
+    "presetId": null
   },
   {
     "useCase": "TRANSCRIPTION",
@@ -27,7 +29,8 @@
     "modelId": "gpt-transcribe",
     "displayName": "GPT-Transcribe",
     "costPer1MOutputUsd": 0,
-    "description": "OpenAI's newest ASR model (2026-07) \u2014 more accurate than GPT-4o Transcribe on OpenAI's and independent benchmarks, and 25% cheaper per minute."
+    "description": "OpenAI's newest ASR model (2026-07) \u2014 more accurate than GPT-4o Transcribe on OpenAI's and independent benchmarks, and 25% cheaper per minute.",
+    "presetId": null
   },
   {
     "useCase": "TRANSCRIPTION",
@@ -37,7 +40,8 @@
     "modelId": "gpt-4o-transcribe",
     "displayName": "GPT-4o Transcribe",
     "costPer1MOutputUsd": 0,
-    "description": "Previous default \u2014 solid and Ramblr-benchmark-proven, but GPT-Transcribe measures more accurate and costs less."
+    "description": "Previous default \u2014 solid and Ramblr-benchmark-proven, but GPT-Transcribe measures more accurate and costs less.",
+    "presetId": null
   },
   {
     "useCase": "TRANSCRIPTION",
@@ -47,7 +51,8 @@
     "modelId": "whisper-1",
     "displayName": "Whisper-1",
     "costPer1MOutputUsd": 0,
-    "description": "OpenAI's original ASR model \u2014 highest error rate of the three; only pick it if you specifically need its legacy output formats."
+    "description": "OpenAI's original ASR model \u2014 highest error rate of the three; only pick it if you specifically need its legacy output formats.",
+    "presetId": null
   },
   {
     "useCase": "CLEANUP",
@@ -57,7 +62,8 @@
     "modelId": "gemini-3.5-flash-lite",
     "displayName": "Gemini 3.5 Flash-Lite",
     "costPer1MOutputUsd": 2.5,
-    "description": "Current-generation lite tier (GA July 2026) \u2014 current cleanup pick. Deliberately not used for transcription: it's ~3x slower than 3.1 Flash-Lite on audio input."
+    "description": "Current-generation lite tier (GA July 2026) \u2014 current cleanup pick. Deliberately not used for transcription: it's ~3x slower than 3.1 Flash-Lite on audio input.",
+    "presetId": null
   },
   {
     "useCase": "BOTH",
@@ -67,7 +73,8 @@
     "modelId": "gemini-3.1-flash-lite",
     "displayName": "Gemini 3.1 Flash-Lite",
     "costPer1MOutputUsd": 1.5,
-    "description": "Recommended for transcription \u2014 much faster than 3.5 Flash-Lite on audio input; improved audio input for ASR. Still fine for cleanup too."
+    "description": "Recommended for transcription \u2014 much faster than 3.5 Flash-Lite on audio input; improved audio input for ASR. Still fine for cleanup too.",
+    "presetId": null
   },
   {
     "useCase": "BOTH",
@@ -77,7 +84,8 @@
     "modelId": "gemini-3.5-flash",
     "displayName": "Gemini 3.5 Flash",
     "costPer1MOutputUsd": 9,
-    "description": "Google's documented replacement for 2.5 Flash (which is deprecating) \u2014 meaningfully pricier than Flash-Lite (~4-5x), not a small step up; pick deliberately, not as a default."
+    "description": "Google's documented replacement for 2.5 Flash (which is deprecating) \u2014 meaningfully pricier than Flash-Lite (~4-5x), not a small step up; pick deliberately, not as a default.",
+    "presetId": null
   },
   {
     "useCase": "CLEANUP",
@@ -87,7 +95,8 @@
     "modelId": "claude-haiku-4-5-20251001",
     "displayName": "Claude Haiku 4.5",
     "costPer1MOutputUsd": 5,
-    "description": "Legitimate power-user option if you already have Claude credits \u2014 not defaulted: no transcription capability, and cleanup quality doesn't clearly beat OpenAI/Gemini's cheap tiers."
+    "description": "Legitimate power-user option if you already have Claude credits \u2014 not defaulted: no transcription capability, and cleanup quality doesn't clearly beat OpenAI/Gemini's cheap tiers.",
+    "presetId": null
   },
   {
     "useCase": "CLEANUP",
@@ -97,7 +106,8 @@
     "modelId": "gemini/gemini-flash-lite-latest",
     "displayName": "OmniRoute: Gemini Flash-Lite (auto-upgrading)",
     "costPer1MOutputUsd": 2.5,
-    "description": "Cheapest, auto-upgrading \u2014 mirrors direct Gemini's own recommended flash-lite tier so you don't overpay just because you're using OmniRoute. Recommended default cleanup path."
+    "description": "Cheapest, auto-upgrading \u2014 mirrors direct Gemini's own recommended flash-lite tier so you don't overpay just because you're using OmniRoute. Recommended default cleanup path.",
+    "presetId": null
   },
   {
     "useCase": "CLEANUP",
@@ -107,7 +117,8 @@
     "modelId": "cx/gpt-5.4-mini",
     "displayName": "OmniRoute: GPT-5.4 Mini",
     "costPer1MOutputUsd": 4.5,
-    "description": "OmniRoute's cheapest available OpenAI-family model (no nano-tier route exists through OmniRoute today). Pinned, not an auto-upgrading alias."
+    "description": "OmniRoute's cheapest available OpenAI-family model (no nano-tier route exists through OmniRoute today). Pinned, not an auto-upgrading alias.",
+    "presetId": null
   },
   {
     "useCase": "CLEANUP",
@@ -117,7 +128,8 @@
     "modelId": "cc/claude-haiku-4-5-20251001",
     "displayName": "OmniRoute: Claude Haiku 4.5",
     "costPer1MOutputUsd": 5,
-    "description": "Mirrors direct Anthropic's Haiku entry \u2014 good cleanup quality, cheap. Pinned, not an auto-upgrading alias (no Haiku-specific \"-latest\"/\"auto/\" route exists on OmniRoute today)."
+    "description": "Mirrors direct Anthropic's Haiku entry \u2014 good cleanup quality, cheap. Pinned, not an auto-upgrading alias (no Haiku-specific \"-latest\"/\"auto/\" route exists on OmniRoute today).",
+    "presetId": null
   },
   {
     "useCase": "CLEANUP",
@@ -127,7 +139,8 @@
     "modelId": "gemini/gemini-pro-latest",
     "displayName": "OmniRoute: Gemini Pro (auto-upgrading)",
     "costPer1MOutputUsd": 12,
-    "description": "Always resolves to Google's current Pro-tier model server-side \u2014 higher cost, for when you deliberately want the strongest available cleanup quality over the cheap default."
+    "description": "Always resolves to Google's current Pro-tier model server-side \u2014 higher cost, for when you deliberately want the strongest available cleanup quality over the cheap default.",
+    "presetId": null
   },
   {
     "useCase": "CLEANUP",
@@ -137,7 +150,8 @@
     "modelId": "auto/claude-sonnet",
     "displayName": "OmniRoute: Claude Sonnet (auto-upgrading)",
     "costPer1MOutputUsd": 10,
-    "description": "Always resolves to Anthropic's current Sonnet-tier model server-side \u2014 premium, not the cost-efficient default."
+    "description": "Always resolves to Anthropic's current Sonnet-tier model server-side \u2014 premium, not the cost-efficient default.",
+    "presetId": null
   },
   {
     "useCase": "CLEANUP",
@@ -147,6 +161,73 @@
     "modelId": "auto/claude-opus",
     "displayName": "OmniRoute: Claude Opus (auto-upgrading)",
     "costPer1MOutputUsd": 25,
-    "description": "Always resolves to Anthropic's current Opus-tier model server-side \u2014 the priciest OmniRoute option."
+    "description": "Always resolves to Anthropic's current Opus-tier model server-side \u2014 the priciest OmniRoute option.",
+    "presetId": null
+  },
+  {
+    "useCase": "TRANSCRIPTION",
+    "tier": "RECOMMENDED",
+    "costPer1MInputUsd": 0,
+    "provider": "OPENAI",
+    "modelId": "whisper-large-v3-turbo",
+    "displayName": "Groq: Whisper Large v3 Turbo",
+    "costPer1MOutputUsd": 0,
+    "description": "Groq's fast, free-tier ASR model \u2014 verified live against Ramblr's real upload (WAV and compressed .m4a) and the prompt vocabulary-biasing param. Default transcription pick for the Groq preset.",
+    "presetId": "groq"
+  },
+  {
+    "useCase": "TRANSCRIPTION",
+    "tier": "GOOD",
+    "costPer1MInputUsd": 0,
+    "provider": "OPENAI",
+    "modelId": "whisper-large-v3",
+    "displayName": "Groq: Whisper Large v3",
+    "costPer1MOutputUsd": 0,
+    "description": "Groq's full (non-turbo) Whisper Large v3 \u2014 slightly slower than Turbo, same underlying model family.",
+    "presetId": "groq"
+  },
+  {
+    "useCase": "CLEANUP",
+    "tier": "RECOMMENDED",
+    "costPer1MInputUsd": 0,
+    "provider": "OPENAI",
+    "modelId": "openai/gpt-oss-20b",
+    "displayName": "Groq: GPT-OSS 20B",
+    "costPer1MOutputUsd": 0,
+    "description": "Groq's cheapest current chat model \u2014 verified live for cleanup via /chat/completions with Ramblr's exact request shape. Default cleanup pick for the Groq preset.",
+    "presetId": "groq"
+  },
+  {
+    "useCase": "CLEANUP",
+    "tier": "GOOD",
+    "costPer1MInputUsd": 0,
+    "provider": "OPENAI",
+    "modelId": "openai/gpt-oss-120b",
+    "displayName": "Groq: GPT-OSS 120B",
+    "costPer1MOutputUsd": 0,
+    "description": "Groq's larger chat model \u2014 verified live; pick for higher cleanup quality than the 20B default.",
+    "presetId": "groq"
+  },
+  {
+    "useCase": "TRANSCRIPTION",
+    "tier": "RECOMMENDED",
+    "costPer1MInputUsd": 0,
+    "provider": "OPENAI",
+    "modelId": "openai/whisper-1",
+    "displayName": "OpenRouter: Whisper-1",
+    "costPer1MOutputUsd": 0,
+    "description": "OpenRouter's OpenAI-compatible transcription endpoint routed to Whisper-1 \u2014 verified live against Ramblr's real upload (WAV and compressed .m4a) and the prompt vocabulary-biasing param. Default transcription pick for the OpenRouter preset.",
+    "presetId": "openrouter"
+  },
+  {
+    "useCase": "CLEANUP",
+    "tier": "RECOMMENDED",
+    "costPer1MInputUsd": 0.05,
+    "provider": "OPENAI",
+    "modelId": "openai/gpt-oss-120b",
+    "displayName": "OpenRouter: GPT-OSS 120B",
+    "costPer1MOutputUsd": 0.25,
+    "description": "Verified live for cleanup via /chat/completions with Ramblr's exact request shape. Default cleanup pick for the OpenRouter preset -- one key routes to many chat models through OpenRouter, this is a solid inexpensive default.",
+    "presetId": "openrouter"
   }
 ]
