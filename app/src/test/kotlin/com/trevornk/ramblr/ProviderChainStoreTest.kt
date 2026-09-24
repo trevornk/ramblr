@@ -154,4 +154,22 @@ class ProviderChainStoreTest {
         val parsed = ProviderChainStore.deserialize(ProviderChainStore.serialize(chain))
         assertEquals(false, parsed?.entries?.get(0)?.enabled)
     }
+
+    // --- #275: presetId field ---
+
+    @Test fun `deserialize accepts old JSON with no presetId field, defaulting to null`() {
+        val parsed = ProviderChainStore.deserialize(
+            """[{"kind":"OPENAI","model":"gpt-5.4-mini","baseUrlOverride":"https://api.groq.com/openai/v1"}]"""
+        )
+        assertEquals(null, parsed?.entries?.get(0)?.presetId)
+    }
+
+    @Test fun `presetId round trips through serialize and deserialize`() {
+        val chain = ProviderChain(
+            listOf(ProviderChainEntry(ProviderKind.OPENAI, "whisper-large-v3-turbo", id = "x", baseUrlOverride = "https://api.groq.com/openai/v1", presetId = "groq"))
+        )
+        val parsed = ProviderChainStore.deserialize(ProviderChainStore.serialize(chain))
+        assertEquals("groq", parsed?.entries?.get(0)?.presetId)
+        assertEquals(chain, parsed)
+    }
 }

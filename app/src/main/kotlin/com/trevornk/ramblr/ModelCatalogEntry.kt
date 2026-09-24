@@ -41,6 +41,14 @@ data class ModelCatalogEntry(
     val useCase: ModelUseCase,
     val costPer1MInputUsd: Double,
     val costPer1MOutputUsd: Double,
+    /**
+     * Preset marker (#275, e.g. "groq"/"openrouter"), or null for a plain-kind catalog entry.
+     * [ModelCatalogResolver.entriesFor] filters by this so the "Add provider" model picker for a
+     * Groq/OpenRouter entry shows only that preset's curated models, not every OPENAI-kind entry
+     * in the catalog (which would otherwise include direct OpenAI's own models -- wrong host,
+     * wrong pricing, wrong capability set for a third-party account).
+     */
+    val presetId: String? = null,
 ) {
     companion object {
         /**
@@ -293,5 +301,85 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         // 15/75 was Opus 4.1's price -- Anthropic cut the Opus tier 3x with 4.5/5.
         costPer1MInputUsd = 5.00,
         costPer1MOutputUsd = 25.00,
+    ),
+
+    // --- Groq preset (#275): OpenAI-compatible host (ProviderKind.OPENAI under the hood, see
+    // ProviderPresets.GROQ), verified live 2026-09-23 -- see the #275 PR body for the full
+    // request/response verification (WAV upload, Ramblr's real compressed .m4a upload, `prompt`
+    // vocabulary-biasing param, and chat completions). Free tier is rate-limited (20 req/min,
+    // 2,000 req/day per Groq's docs) -- a real 429 surfaces through the existing HTTP-error path
+    // and the chain falls through exactly like any other provider failure. ---
+    ModelCatalogEntry(
+        provider = ProviderKind.OPENAI,
+        modelId = "whisper-large-v3-turbo",
+        displayName = "Groq: Whisper Large v3 Turbo",
+        description = "Groq's fast, free-tier ASR model — verified live against Ramblr's real upload (WAV and compressed .m4a) and the prompt vocabulary-biasing param. Default transcription pick for the Groq preset.",
+        tier = ModelTier.RECOMMENDED,
+        useCase = ModelUseCase.TRANSCRIPTION,
+        costPer1MInputUsd = 0.0, // priced per-minute of audio on Groq's paid tier; free tier has no per-token cost
+        costPer1MOutputUsd = 0.0,
+        presetId = "groq",
+    ),
+    ModelCatalogEntry(
+        provider = ProviderKind.OPENAI,
+        modelId = "whisper-large-v3",
+        displayName = "Groq: Whisper Large v3",
+        description = "Groq's full (non-turbo) Whisper Large v3 — slightly slower than Turbo, same underlying model family.",
+        tier = ModelTier.GOOD,
+        useCase = ModelUseCase.TRANSCRIPTION,
+        costPer1MInputUsd = 0.0,
+        costPer1MOutputUsd = 0.0,
+        presetId = "groq",
+    ),
+    ModelCatalogEntry(
+        provider = ProviderKind.OPENAI,
+        modelId = "openai/gpt-oss-20b",
+        displayName = "Groq: GPT-OSS 20B",
+        description = "Groq's cheapest current chat model — verified live for cleanup via /chat/completions with Ramblr's exact request shape. Default cleanup pick for the Groq preset.",
+        tier = ModelTier.RECOMMENDED,
+        useCase = ModelUseCase.CLEANUP,
+        costPer1MInputUsd = 0.0, // Groq's free tier has no per-token cost for this benchmark run
+        costPer1MOutputUsd = 0.0,
+        presetId = "groq",
+    ),
+    ModelCatalogEntry(
+        provider = ProviderKind.OPENAI,
+        modelId = "openai/gpt-oss-120b",
+        displayName = "Groq: GPT-OSS 120B",
+        description = "Groq's larger chat model — verified live; pick for higher cleanup quality than the 20B default.",
+        tier = ModelTier.GOOD,
+        useCase = ModelUseCase.CLEANUP,
+        costPer1MInputUsd = 0.0,
+        costPer1MOutputUsd = 0.0,
+        presetId = "groq",
+    ),
+
+    // --- OpenRouter preset (#275): OpenAI-compatible multi-model gateway (ProviderKind.OPENAI
+    // under the hood, see ProviderPresets.OPENROUTER), verified live 2026-09-23 -- WAV upload,
+    // Ramblr's real compressed .m4a upload, the prompt vocabulary-biasing param, and chat
+    // completions all confirmed working against the exact request shape TranscriberClient/
+    // PostProcessor send. ---
+    ModelCatalogEntry(
+        provider = ProviderKind.OPENAI,
+        modelId = "openai/whisper-1",
+        displayName = "OpenRouter: Whisper-1",
+        description = "OpenRouter's OpenAI-compatible transcription endpoint routed to Whisper-1 — verified live against Ramblr's real upload (WAV and compressed .m4a) and the prompt vocabulary-biasing param. Default transcription pick for the OpenRouter preset.",
+        tier = ModelTier.RECOMMENDED,
+        useCase = ModelUseCase.TRANSCRIPTION,
+        costPer1MInputUsd = 0.0, // billed per-minute of audio through OpenRouter's usage-based pricing
+        costPer1MOutputUsd = 0.0,
+        presetId = "openrouter",
+    ),
+    ModelCatalogEntry(
+        provider = ProviderKind.OPENAI,
+        modelId = "openai/gpt-oss-120b",
+        displayName = "OpenRouter: GPT-OSS 120B",
+        description = "Verified live for cleanup via /chat/completions with Ramblr's exact request shape. Default cleanup pick for the OpenRouter preset -- one key routes to many chat models through OpenRouter, this is a solid inexpensive default.",
+        tier = ModelTier.RECOMMENDED,
+        useCase = ModelUseCase.CLEANUP,
+        // 2026-09-23 live pricing per openrouter.ai/models: $0.05/$0.25 for this route.
+        costPer1MInputUsd = 0.05,
+        costPer1MOutputUsd = 0.25,
+        presetId = "openrouter",
     ),
 )
