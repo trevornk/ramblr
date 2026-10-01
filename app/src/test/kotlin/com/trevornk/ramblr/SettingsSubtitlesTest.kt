@@ -147,6 +147,30 @@ class SettingsSubtitlesTest {
         assertTrue("expected 'No terms yet' in: $subtitle", subtitle.startsWith("No terms yet"))
     }
 
+    // --- main History row (#283) ------------------------------------------------------------
+
+    @Test fun `history row says it is off and never claims a count when disabled`() {
+        val subtitle = historyMainRowSubtitleText(historyEnabled = false, entryCount = 12)
+        assertTrue("expected off state in: $subtitle", subtitle.startsWith("History is off"))
+        assertFalse(subtitle.contains("12"))
+    }
+
+    @Test fun `history row empty state does not claim zero dictations`() {
+        val subtitle = historyMainRowSubtitleText(historyEnabled = true, entryCount = 0)
+        assertTrue(subtitle.startsWith("No dictations saved yet"))
+        assertFalse(subtitle.startsWith("0"))
+    }
+
+    @Test fun `history row singularizes one dictation`() {
+        assertTrue(historyMainRowSubtitleText(true, 1).startsWith("1 saved dictation "))
+    }
+
+    @Test fun `history row pluralizes and mentions copy`() {
+        val subtitle = historyMainRowSubtitleText(true, DictationHistoryStore.DEFAULT_MAX_ENTRIES)
+        assertTrue(subtitle.startsWith("50 saved dictations"))
+        assertTrue(subtitle.contains("copy"))
+    }
+
     @Test fun `default vocabulary seed count formats without surprises`() {
         // The subtitle a fresh install actually shows: the #26 seed list, pluralized.
         val subtitle = vocabularyMainRowSubtitleText(VocabularyTerms.DEFAULTS.size)

@@ -117,6 +117,16 @@ class DataLogsActivity : BaseSettingsActivity() {
         })
 
         refresh()
+
+        // Launched from MainActivity's top-level History row (#283): open the viewer straight
+        // away. Only when history is on -- if it's off the user lands here on the toggle, and
+        // nothing is read or shown. Cleared so a rotation doesn't re-pop the dialog.
+        if (savedInstanceState == null &&
+            intent.getBooleanExtra(EXTRA_SHOW_HISTORY, false) &&
+            prefs().getBoolean(KEY_HISTORY_ENABLED, true)
+        ) {
+            showHistory()
+        }
     }
 
     override fun onResume() {
@@ -406,6 +416,18 @@ class DataLogsActivity : BaseSettingsActivity() {
 
     companion object {
         private const val KEY_HISTORY_ENABLED = "dictation_history_enabled"
+
+        /** Boolean extra: open the dictation history viewer on launch (#283). */
+        const val EXTRA_SHOW_HISTORY = "show_history"
+
+        /** Subtitle for MainActivity's top-level History row (#283). */
+        fun historyRowSubtitle(context: android.content.Context): String {
+            val enabled = context.getSharedPreferences("ramblr", MODE_PRIVATE)
+                .getBoolean(KEY_HISTORY_ENABLED, true)
+            // Don't touch the history file at all when the feature is off.
+            val count = if (enabled) DictationHistoryStore.forContext(context).all().size else 0
+            return historyMainRowSubtitleText(enabled, count)
+        }
 
         /** Category subtitle for AdvancedActivity's Data & Logs row (#104). */
         fun subtitle(context: android.content.Context): String {

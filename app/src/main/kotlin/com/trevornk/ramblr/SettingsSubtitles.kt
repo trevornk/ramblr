@@ -62,6 +62,21 @@ fun vocabularyMainRowSubtitleText(termCount: Int): String {
 }
 
 /**
+ * The main screen's top-level "History" row subtitle (#283). History already existed under
+ * Settings > Data & Logs, but users didn't find it, so the row leads with live state: how many
+ * dictations are saved, or that the feature is off (privacy: nothing is shown or counted then,
+ * and the row leads to the toggle instead of the viewer).
+ */
+fun historyMainRowSubtitleText(historyEnabled: Boolean, entryCount: Int): String {
+    if (!historyEnabled) return "History is off — tap to turn it on in Data & Logs"
+    return when (entryCount) {
+        0 -> "No dictations saved yet — recent ones appear here"
+        1 -> "1 saved dictation — tap one to copy it"
+        else -> "$entryCount saved dictations — tap one to copy it"
+    }
+}
+
+/**
  * The Cloud screen's experimental "Live cloud transcription" row subtitle (#233 Phase 1).
  *
  * Mirrors [CloudLiveWiring.isLiveAllowed]'s three conditions so the row can never claim the

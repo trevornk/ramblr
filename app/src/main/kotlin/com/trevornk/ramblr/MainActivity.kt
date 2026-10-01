@@ -39,6 +39,7 @@ class MainActivity : BaseSettingsActivity() {
     private lateinit var vocabularyRowSub: TextView
     private lateinit var invocationRowSub: TextView
     private lateinit var voiceKeyboardRowSub: TextView
+    private lateinit var historyRowSub: TextView
     private lateinit var serviceKilledBanner: View
     private lateinit var staleComponentBanner: View
 
@@ -168,6 +169,15 @@ class MainActivity : BaseSettingsActivity() {
         }
         voiceKeyboardRowSub = voiceKeyboardRow.findViewWithTag("subtitle")
         root.addView(voiceKeyboardRow)
+
+        // Top-level History entry (#283): the viewer (tap an entry to copy it) already lived under
+        // Advanced > Data & Logs, where users didn't find it. This opens it directly; with
+        // history off it lands on the Data & Logs toggle instead of showing anything.
+        val historyRow = settingsRow("History", "Checking...") {
+            startActivity(Intent(this, DataLogsActivity::class.java).putExtra(DataLogsActivity.EXTRA_SHOW_HISTORY, true))
+        }
+        historyRowSub = historyRow.findViewWithTag("subtitle")
+        root.addView(historyRow)
 
         root.addView(settingsRow("Advanced", AdvancedActivity.subtitle(this)) {
             startActivity(Intent(this, AdvancedActivity::class.java))
@@ -314,6 +324,7 @@ class MainActivity : BaseSettingsActivity() {
         vocabularyRowSub.text = vocabularyMainRowSubtitleText(VocabularyEditor.terms(this).size)
         invocationRowSub.text = InvocationActivity.subtitle(this)
         voiceKeyboardRowSub.text = invocationVoiceKeyboardSubtitleText(voiceKeyboardStatus())
+        historyRowSub.text = DataLogsActivity.historyRowSubtitle(this)
         serviceKilledBanner.visibility =
             if (InvocationGuardRail.shouldShowBanner(this)) View.VISIBLE else View.GONE
 
