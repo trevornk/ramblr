@@ -27,6 +27,7 @@ object ModelCatalogJson {
                 put("useCase", entry.useCase.name)
                 put("costPer1MInputUsd", entry.costPer1MInputUsd)
                 put("costPer1MOutputUsd", entry.costPer1MOutputUsd)
+                put("presetId", entry.presetId ?: JSONObject.NULL)
             })
         }
         return array.toString()
@@ -58,6 +59,10 @@ object ModelCatalogJson {
                     useCase = ModelUseCase.valueOf(obj.getString("useCase")),
                     costPer1MInputUsd = obj.getDouble("costPer1MInputUsd"),
                     costPer1MOutputUsd = obj.getDouble("costPer1MOutputUsd"),
+                    // #275: missing key (every catalog cached before #275) and an explicit JSON
+                    // null both mean "no preset" -- same has()-first convention already used for
+                    // ProviderChainEntry.transcriptionModel in ProviderChainStore.deserialize.
+                    presetId = if (!obj.has("presetId") || obj.isNull("presetId")) null else obj.getString("presetId"),
                 )
             }
         } catch (e: JSONException) {
@@ -98,6 +103,13 @@ object ModelCatalogResolver {
      * source DOES provide for a combination -- a remote entry always takes precedence over its
      * bundled equivalent when both exist for the same (provider, use case), preserving the
      * remote source's ability to genuinely update tiers/pricing/descriptions.
+     *
+     * #275: coverage is checked per (provider, [ModelCatalogEntry.presetId]), not just provider.
+     * Groq/OpenRouter presets share [ProviderKind.OPENAI] with plain direct-OpenAI entries, but a
+     * remote catalog fetched before #275 shipped has no preset-tagged entries at all -- without
+     * this, a chosen source that DOES cover plain OPENAI (direct OpenAI's own bundled models)
+     * would be treated as "covering" Groq/OpenRouter too under the old provider-only check,
+     * silently erasing both presets' entire model list the moment a remote fetch succeeds.
      */
     fun resolve(
         bundled: List<ModelCatalogEntry>,
@@ -108,12 +120,14 @@ object ModelCatalogResolver {
         if (chosen === bundled) return chosen // nothing to gap-fill against itself
 
         val missingBundledEntries = bundled.filter { bundledEntry ->
-            val chosenCoversProvider = chosen.any { it.provider == bundledEntry.provider }
-            if (!chosenCoversProvider) return@filter true // whole provider missing from chosen -- keep every bundled entry for it
+            val chosenCoversProviderPreset = chosen.any {
+                it.provider == bundledEntry.provider && it.presetId == bundledEntry.presetId
+            }
+            if (!chosenCoversProviderPreset) return@filter true // whole (provider, preset) missing from chosen -- keep every bundled entry for it
             val needsCleanupGap = bundledEntry.useCase.supportsCleanup() &&
-                chosen.none { it.provider == bundledEntry.provider && it.useCase.supportsCleanup() }
+                chosen.none { it.provider == bundledEntry.provider && it.presetId == bundledEntry.presetId && it.useCase.supportsCleanup() }
             val needsTranscriptionGap = bundledEntry.useCase.supportsTranscription() &&
-                chosen.none { it.provider == bundledEntry.provider && it.useCase.supportsTranscription() }
+                chosen.none { it.provider == bundledEntry.provider && it.presetId == bundledEntry.presetId && it.useCase.supportsTranscription() }
             needsCleanupGap || needsTranscriptionGap
         }
         return if (missingBundledEntries.isEmpty()) chosen else chosen + missingBundledEntries
@@ -125,15 +139,21 @@ object ModelCatalogResolver {
         lastFetchedAtMs == null || nowMs - lastFetchedAtMs >= ttlMs
 
     /** Entries curated for [kind], ordered [ModelTier.RECOMMENDED] first, then [ModelTier.GOOD],
-     *  then [ModelTier.ADVANCED] -- the picker's natural "best choice first" reading order. */
-    fun entriesFor(catalog: List<ModelCatalogEntry>, kind: ProviderKind): List<ModelCatalogEntry> =
-        catalog.filter { it.provider == kind }.sortedBy { it.tier.ordinal }
+     *  then [ModelTier.ADVANCED] -- the picker's natural "best choice first" reading order.
+     *  [presetId] (#275) additionally scopes to a specific preset's entries when non-null (e.g.
+     *  Groq/OpenRouter, which share [ProviderKind.OPENAI] with plain direct-OpenAI entries but
+     *  must never show OpenAI's own models, or each other's, in their pickers); passing null
+     *  (the default, and every pre-#275 call site) returns only plain-kind entries -- i.e. ones
+     *  with no [ModelCatalogEntry.presetId] at all -- so a plain OpenAI entry's picker is
+     *  likewise never polluted by preset-specific entries added for #275. */
+    fun entriesFor(catalog: List<ModelCatalogEntry>, kind: ProviderKind, presetId: String? = null): List<ModelCatalogEntry> =
+        catalog.filter { it.provider == kind && it.presetId == presetId }.sortedBy { it.tier.ordinal }
 
-    /** Entries curated for [kind] that are actually usable for [useCase] -- e.g. the
-     *  Transcription picker for GEMINI should exclude a hypothetical Gemini entry tagged
-     *  cleanup-only. */
-    fun entriesFor(catalog: List<ModelCatalogEntry>, kind: ProviderKind, useCase: ModelUseCase): List<ModelCatalogEntry> =
-        entriesFor(catalog, kind).filter { entry ->
+    /** Entries curated for [kind] (optionally scoped to [presetId], see the other overload) that
+     *  are actually usable for [useCase] -- e.g. the Transcription picker for GEMINI should
+     *  exclude a hypothetical Gemini entry tagged cleanup-only. */
+    fun entriesFor(catalog: List<ModelCatalogEntry>, kind: ProviderKind, useCase: ModelUseCase, presetId: String? = null): List<ModelCatalogEntry> =
+        entriesFor(catalog, kind, presetId).filter { entry ->
             when (useCase) {
                 ModelUseCase.CLEANUP -> entry.useCase.supportsCleanup()
                 ModelUseCase.TRANSCRIPTION -> entry.useCase.supportsTranscription()
@@ -142,18 +162,19 @@ object ModelCatalogResolver {
         }
 
     /** The catalog's top (first RECOMMENDED, else first GOOD, else first at all) entry for
-     *  [kind], or null if [kind] has no curated entries at all -- used to prefill a sane default
-     *  model id when a user adds a new chain entry of this kind (#98), e.g. defaulting a fresh
-     *  OmniRoute entry to its "-latest" alias instead of a blank field. */
-    fun recommendedEntryFor(catalog: List<ModelCatalogEntry>, kind: ProviderKind): ModelCatalogEntry? =
-        entriesFor(catalog, kind).firstOrNull()
+     *  [kind] (optionally scoped to [presetId]), or null if none are curated -- used to prefill a
+     *  sane default model id when a user adds a new chain entry of this kind (#98), e.g.
+     *  defaulting a fresh OmniRoute entry to its "-latest" alias instead of a blank field. */
+    fun recommendedEntryFor(catalog: List<ModelCatalogEntry>, kind: ProviderKind, presetId: String? = null): ModelCatalogEntry? =
+        entriesFor(catalog, kind, presetId).firstOrNull()
 
-    /** True when [modelId] matches a curated entry for [kind] -- false means it's either blank
-     *  or a value only reachable through the hidden advanced escape hatch (a retired id, a typo,
-     *  or a deliberately off-catalog choice). Used by the picker to decide whether to
-     *  pre-select a catalog radio option or fall back to showing the advanced field expanded. */
-    fun isCatalogModel(catalog: List<ModelCatalogEntry>, kind: ProviderKind, modelId: String): Boolean =
-        entriesFor(catalog, kind).any { it.modelId == modelId }
+    /** True when [modelId] matches a curated entry for [kind] (optionally scoped to [presetId])
+     *  -- false means it's either blank or a value only reachable through the hidden advanced
+     *  escape hatch (a retired id, a typo, or a deliberately off-catalog choice). Used by the
+     *  picker to decide whether to pre-select a catalog radio option or fall back to showing the
+     *  advanced field expanded. */
+    fun isCatalogModel(catalog: List<ModelCatalogEntry>, kind: ProviderKind, modelId: String, presetId: String? = null): Boolean =
+        entriesFor(catalog, kind, presetId).any { it.modelId == modelId }
 
     /** Short human label for [tier], used as the picker's tier badge text. */
     fun tierBadge(tier: ModelTier): String = when (tier) {

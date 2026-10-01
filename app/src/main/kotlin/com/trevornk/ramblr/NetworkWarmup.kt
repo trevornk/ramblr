@@ -45,19 +45,21 @@ object NetworkWarmup {
      * this stays correct for anyone pointed at a proxy/self-hosted endpoint. LOCAL entries never
      * produce a host -- there's no network call to warm for on-device inference.
      *
-     * [hasCredential] is the caller's seam onto [ProviderCredentialStore]; an entry whose kind
-     * has no credential contributes no host (#168). This applies to `baseUrlOverride` entries
-     * too: a self-hosted proxy still carries the provider's Authorization header, so the real
-     * call is skipped for exactly the same reason and its host must not be warmed either.
+     * [hasCredential] is the caller's seam onto [ProviderCredentialStore], now entry-based (#274:
+     * per-entry credentials) rather than kind-based -- an entry whose OWN credential is unset
+     * contributes no host (#168), which also correctly distinguishes two same-kind entries where
+     * only one has a key configured. This applies to `baseUrlOverride` entries too: a self-hosted
+     * proxy still carries the provider's Authorization header, so the real call is skipped for
+     * exactly the same reason and its host must not be warmed either.
      */
     fun hostsToWarm(
         transcriptionCandidates: List<ProviderChainEntry>,
         cleanupChain: ProviderChain,
-        hasCredential: (ProviderKind) -> Boolean,
+        hasCredential: (ProviderChainEntry) -> Boolean,
     ): Set<String> {
         val entries = transcriptionCandidates + cleanupChain.entries
         return entries
-            .filter { entry -> entry.kind == ProviderKind.LOCAL || hasCredential(entry.kind) }
+            .filter { entry -> entry.kind == ProviderKind.LOCAL || hasCredential(entry) }
             .mapNotNull { entry -> hostFor(entry) }
             .toSet()
     }

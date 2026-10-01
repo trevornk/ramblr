@@ -615,6 +615,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         ServiceRecoveryWorker.schedule(this)
         CustomPersonaStore.ensureLegacySeeded(this)
         ProviderChainMigration.runIfNeeded(this)
+        ProviderAccountMigration.runIfNeeded(this)
         showOverlay()
         // Self-heal the recovery notification (#135): if the icon is hidden but the notification
         // was swiped away, this is the first moment we can put the way back on screen again.

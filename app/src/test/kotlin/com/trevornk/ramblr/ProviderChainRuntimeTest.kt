@@ -87,6 +87,16 @@ class ProviderChainRuntimeCleanupAdapterTest {
         assertEquals(ProviderKind.ANTHROPIC, ProviderChainRuntime.providerKindForCleanupSlot(CleanupCredentialSlot.ANTHROPIC_DIRECT))
         assertEquals(ProviderKind.GEMINI, ProviderChainRuntime.providerKindForCleanupSlot(CleanupCredentialSlot.GEMINI_DIRECT))
     }
+
+    @Test fun `cleanupWaterfallFor threads each entry's id onto its CleanupStep (#274)`() {
+        val groq = ProviderChainEntry(ProviderKind.OPENAI, "m", id = "groq-id")
+        val openRouter = ProviderChainEntry(ProviderKind.OPENAI, "m2", id = "openrouter-id")
+        val chain = ProviderChain(listOf(groq, openRouter))
+
+        val waterfall = ProviderChainRuntime.cleanupWaterfallFor(chain)
+
+        assertEquals(listOf("groq-id", "openrouter-id"), waterfall.steps.map { it.entryId })
+    }
 }
 
 class ProviderChainRuntimeTranscriptionResolverTest {

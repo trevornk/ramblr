@@ -82,6 +82,52 @@ class ProviderChainCapableEntriesForTest {
         assertEquals(gemini, chain.capableEntriesFor(needsTranscription = true).first())
         assertEquals(anthropic, chain.capableEntriesFor(needsTranscription = false).first())
     }
+
+    // --- #274: enabled / per-task participation gates ---
+
+    @Test fun `a disabled entry is excluded from both transcription and cleanup regardless of capability`() {
+        val disabledOpenai = ProviderChainEntry(ProviderKind.OPENAI, "m", enabled = false)
+        val chain = ProviderChain(listOf(disabledOpenai))
+
+        assertEquals(emptyList<ProviderChainEntry>(), chain.capableEntriesFor(needsTranscription = true))
+        assertEquals(emptyList<ProviderChainEntry>(), chain.capableEntriesFor(needsTranscription = false))
+    }
+
+    @Test fun `an entry opted out of transcription is excluded from transcription but not cleanup`() {
+        val cleanupOnly = ProviderChainEntry(ProviderKind.OPENAI, "m", useForTranscription = false)
+        val chain = ProviderChain(listOf(cleanupOnly))
+
+        assertEquals(emptyList<ProviderChainEntry>(), chain.capableEntriesFor(needsTranscription = true))
+        assertEquals(listOf(cleanupOnly), chain.capableEntriesFor(needsTranscription = false))
+    }
+
+    @Test fun `an entry opted out of cleanup is excluded from cleanup but not transcription`() {
+        val transcriptionOnly = ProviderChainEntry(ProviderKind.OPENAI, "m", useForCleanup = false)
+        val chain = ProviderChain(listOf(transcriptionOnly))
+
+        assertEquals(listOf(transcriptionOnly), chain.capableEntriesFor(needsTranscription = true))
+        assertEquals(emptyList<ProviderChainEntry>(), chain.capableEntriesFor(needsTranscription = false))
+    }
+
+    @Test fun `a kind that cannot transcribe stays excluded from transcription even if useForTranscription is somehow true`() {
+        // Defensive: the UI never lets this happen (checkbox is disabled/unchecked for a
+        // non-transcribing kind), but capableEntriesFor must not trust a stray true value to
+        // override the hard kind-level capability ceiling.
+        val anthropicForcedOn = ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5", useForTranscription = true)
+        val chain = ProviderChain(listOf(anthropicForcedOn))
+
+        assertEquals(emptyList<ProviderChainEntry>(), chain.capableEntriesFor(needsTranscription = true))
+    }
+
+    @Test fun `default participation for a fresh entry equals its kind capability (zero behavior change)`() {
+        ProviderKind.values().forEach { kind ->
+            val entry = ProviderChainEntry(kind, "m")
+            assertEquals(kind.supportsTranscription(), entry.useForTranscription)
+            assertEquals(kind.supportsCleanup(), entry.useForCleanup)
+            assertTrue(entry.enabled)
+            assertEquals("", entry.id)
+        }
+    }
 }
 
 class ProviderChainUsesLocalLlmTest {
@@ -163,8 +209,8 @@ class ProviderChainWithLocalFloorTest {
 }
 
 class HasConfiguredCloudTranscriptionTest {
-    private val allConfigured: (ProviderKind) -> Boolean = { true }
-    private val noneConfigured: (ProviderKind) -> Boolean = { false }
+    private val allConfigured: (ProviderChainEntry) -> Boolean = { true }
+    private val noneConfigured: (ProviderChainEntry) -> Boolean = { false }
 
     @Test fun `true when a configured non-LOCAL transcription provider is present (M8)`() {
         val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.GEMINI, "gemini-2.5-flash")))
@@ -173,7 +219,7 @@ class HasConfiguredCloudTranscriptionTest {
 
     @Test fun `a Gemini-only chain counts, not just OpenAI (M8)`() {
         val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.GEMINI, "gemini-2.5-flash")))
-        assertTrue(hasConfiguredCloudTranscription(chain) { it == ProviderKind.GEMINI })
+        assertTrue(hasConfiguredCloudTranscription(chain) { it.kind == ProviderKind.GEMINI })
     }
 
     @Test fun `false when the only transcription provider is LOCAL`() {
@@ -188,6 +234,16 @@ class HasConfiguredCloudTranscriptionTest {
 
     @Test fun `false when the only cloud entry is cleanup-only (Anthropic cannot transcribe)`() {
         val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.ANTHROPIC, "claude-haiku-4-5")))
+        assertFalse(hasConfiguredCloudTranscription(chain, allConfigured))
+    }
+
+    @Test fun `false when a transcription-capable entry is disabled (#274)`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "gpt-transcribe", enabled = false)))
+        assertFalse(hasConfiguredCloudTranscription(chain, allConfigured))
+    }
+
+    @Test fun `false when an entry opted out of transcription participation (#274)`() {
+        val chain = ProviderChain(listOf(ProviderChainEntry(ProviderKind.OPENAI, "gpt-transcribe", useForTranscription = false)))
         assertFalse(hasConfiguredCloudTranscription(chain, allConfigured))
     }
 }

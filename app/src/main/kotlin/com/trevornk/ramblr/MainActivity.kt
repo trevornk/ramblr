@@ -290,8 +290,8 @@ class MainActivity : BaseSettingsActivity() {
         val useLocal = prefs().getBoolean("use_local", true)
         // Any configured non-LOCAL transcription-capable provider counts as "has a cloud key", not
         // just OpenAI, so a Gemini-only cloud-transcription user isn't stuck on "Setup required" (M8).
-        val hasKey = hasConfiguredCloudTranscription(ProviderChainStore.load(this)) {
-            ProviderCredentialStore.isConfigured(this, it)
+        val hasKey = hasConfiguredCloudTranscription(ProviderChainStore.load(this)) { entry ->
+            ProviderCredentialStore.isConfiguredOrLegacy(this, entry)
         }
         val hasModel = transcriptionModelReady()
         val setupMode = onboardingSetupMode()
@@ -594,8 +594,8 @@ class MainActivity : BaseSettingsActivity() {
             accessibilityEnabled = WhisperAccessibilityService.instance != null,
             transcriptionLocal = prefs().getBoolean("use_local", true),
             hasLocalModel = transcriptionModelReady(),
-            hasApiKey = hasConfiguredCloudTranscription(ProviderChainStore.load(this)) {
-                ProviderCredentialStore.isConfigured(this, it)
+            hasApiKey = hasConfiguredCloudTranscription(ProviderChainStore.load(this)) { entry ->
+                ProviderCredentialStore.isConfiguredOrLegacy(this, entry)
             },
             setupMode = onboardingSetupMode(),
             imeEnabled = isVoiceKeyboardEnabled(),
@@ -827,12 +827,13 @@ class MainActivity : BaseSettingsActivity() {
 
     /** Cloud-credential entry point for [showOnboardingCloudProviderChoiceStep] (#98 revision,
      *  unified post-spaghetti-cleanup): one path for every addable [ProviderKind], including
-     *  OpenAI. Reads/writes [ProviderCredentialStore] exclusively -- the same store
-     *  [CloudProviderActivity] and the live provider chain read at runtime. The legacy split
-     *  store this replaced (and the one-time migration that seeded from it) have since been
-     *  deleted as dead code. */
+     *  OpenAI. Writes to [ProviderCredentialStore]'s legacy per-kind slot (#274: onboarding runs
+     *  before any chain entry has a stable id, so there is no per-entry slot to write yet --
+     *  [ProviderAccountMigration] copies this value onto the entry [enableOnboardingCleanupCloud]
+     *  / the mode step below seed once it gets an id on the next migration pass). Reads via
+     *  [ProviderCredentialStore.isConfiguredLegacyByKind] for the same reason. */
     private fun promptOnboardingProviderKey(kind: ProviderKind, onDone: () -> Unit) {
-        if (ProviderCredentialStore.isConfigured(this, kind)) {
+        if (ProviderCredentialStore.isConfiguredLegacyByKind(this, kind)) {
             onDone()
             return
         }
@@ -864,7 +865,7 @@ class MainActivity : BaseSettingsActivity() {
                 if (entered.isBlank()) {
                     input.error = "Enter a key, or tap Skip"
                 } else {
-                    ProviderCredentialStore.set(this, kind, entered)
+                    ProviderCredentialStore.setLegacyByKind(this, kind, entered)
                     dismissOnboarding()
                     dialog.dismiss()
                     refresh()

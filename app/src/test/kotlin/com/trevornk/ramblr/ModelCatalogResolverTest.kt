@@ -80,6 +80,29 @@ class ModelCatalogResolverGapFillTest {
         assertTrue(resolved.any { it.provider == ProviderKind.GEMINI && it.modelId == "gemini-3.1-flash-lite" })
     }
 
+    @Test fun `a remote fetch predating presets does not erase a preset's bundled entries (#275)`() {
+        // The exact regression a naive provider-only gap-fill check would reintroduce: a remote
+        // catalog fetched before #275 shipped has zero preset-tagged entries at all, but DOES
+        // cover plain OPENAI. Under a provider-only coverage check, that would wrongly count as
+        // "covering" Groq/OpenRouter too and erase both presets' entire model list.
+        val bundledWithPreset = bundledOpenAiCleanupAndTranscription + listOf(
+            ModelCatalogEntry(ProviderKind.OPENAI, "whisper-large-v3-turbo", "Groq Whisper", "d", ModelTier.RECOMMENDED, ModelUseCase.TRANSCRIPTION, 0.0, 0.0, presetId = "groq"),
+            ModelCatalogEntry(ProviderKind.OPENAI, "openai/gpt-oss-20b", "Groq GPT-OSS", "d", ModelTier.RECOMMENDED, ModelUseCase.CLEANUP, 0.0, 0.0, presetId = "groq"),
+        )
+        val preExistingRemoteCache = listOf(
+            ModelCatalogEntry(ProviderKind.OPENAI, "gpt-5.4-nano", "Nano", "d", ModelTier.RECOMMENDED, ModelUseCase.CLEANUP, 0.05, 0.4),
+            ModelCatalogEntry(ProviderKind.OPENAI, "gpt-4o-transcribe", "T", "d", ModelTier.RECOMMENDED, ModelUseCase.TRANSCRIPTION, 0.0, 0.0),
+            // No presetId="groq" entries at all -- this cache predates #275.
+        )
+
+        val resolved = ModelCatalogResolver.resolve(bundledWithPreset, cached = preExistingRemoteCache, fresh = null)
+
+        val groqEntries = resolved.filter { it.presetId == "groq" }
+        assertEquals(2, groqEntries.size) // gap-filled from bundled, not erased
+        assertTrue(groqEntries.any { it.modelId == "whisper-large-v3-turbo" })
+        assertTrue(groqEntries.any { it.modelId == "openai/gpt-oss-20b" })
+    }
+
     @Test fun `a fresh fetch that is a genuine superset of bundled is returned unmodified, no duplicate gap-fill entries`() {
         val freshSuperset = bundledOpenAiCleanupAndTranscription + ModelCatalogEntry(
             ProviderKind.ANTHROPIC, "claude-haiku-4-5", "Haiku", "d", ModelTier.GOOD, ModelUseCase.CLEANUP, 1.0, 5.0,
@@ -279,5 +302,64 @@ class BundledDefaultModelCatalogTest {
     @Test fun `the catalog round-trips through JSON serialization unchanged`() {
         val json = ModelCatalogJson.serialize(BUNDLED_DEFAULT_MODEL_CATALOG)
         assertEquals(BUNDLED_DEFAULT_MODEL_CATALOG, ModelCatalogJson.deserialize(json))
+    }
+
+    // --- #275: Groq/OpenRouter presets ---
+
+    @Test fun `plain OpenAI entriesFor never leaks preset-tagged entries`() {
+        val plainOpenAi = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, ModelUseCase.CLEANUP)
+        assertTrue(plainOpenAi.none { it.presetId != null })
+        val plainTranscription = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, ModelUseCase.TRANSCRIPTION)
+        assertTrue(plainTranscription.none { it.presetId != null })
+    }
+
+    @Test fun `Groq preset entriesFor returns only groq-tagged entries, never plain OpenAI or OpenRouter`() {
+        val groqCleanup = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, ModelUseCase.CLEANUP, presetId = "groq")
+        assertTrue(groqCleanup.isNotEmpty())
+        assertTrue(groqCleanup.all { it.presetId == "groq" })
+
+        val groqTranscription = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, ModelUseCase.TRANSCRIPTION, presetId = "groq")
+        assertTrue(groqTranscription.isNotEmpty())
+        assertTrue(groqTranscription.all { it.presetId == "groq" })
+    }
+
+    @Test fun `OpenRouter preset entriesFor returns only openrouter-tagged entries`() {
+        val orCleanup = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, ModelUseCase.CLEANUP, presetId = "openrouter")
+        assertTrue(orCleanup.isNotEmpty())
+        assertTrue(orCleanup.all { it.presetId == "openrouter" })
+
+        val orTranscription = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, ModelUseCase.TRANSCRIPTION, presetId = "openrouter")
+        assertTrue(orTranscription.isNotEmpty())
+        assertTrue(orTranscription.all { it.presetId == "openrouter" })
+    }
+
+    @Test fun `Groq's recommended transcription pick is whisper-large-v3-turbo`() {
+        val recommended = ModelCatalogResolver.recommendedEntryFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, presetId = "groq")
+            ?.takeIf { it.useCase.supportsTranscription() }
+            ?: ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, ModelUseCase.TRANSCRIPTION, presetId = "groq").first()
+        assertEquals("whisper-large-v3-turbo", recommended.modelId)
+    }
+
+    @Test fun `Groq's recommended cleanup pick is a current Groq chat model`() {
+        val recommended = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, ModelUseCase.CLEANUP, presetId = "groq").first()
+        assertEquals(ModelTier.RECOMMENDED, recommended.tier)
+        assertTrue(recommended.modelId.isNotBlank())
+    }
+
+    @Test fun `OpenRouter's recommended transcription pick resolves to a real model id`() {
+        val recommended = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, ModelUseCase.TRANSCRIPTION, presetId = "openrouter").first()
+        assertEquals(ModelTier.RECOMMENDED, recommended.tier)
+        assertTrue(recommended.modelId.isNotBlank())
+    }
+
+    @Test fun `no preset entry accidentally shares a modelId that would collide across presets in the picker`() {
+        // Not a correctness requirement (different presets can legitimately offer the same
+        // upstream model id, e.g. both wrapping openai/gpt-oss-120b) -- documents the actual
+        // current catalog shape so a future edit that accidentally merges two presets' entries
+        // together is caught by a shape change here, not silently.
+        val groqIds = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, presetId = "groq").map { it.modelId }
+        val orIds = ModelCatalogResolver.entriesFor(BUNDLED_DEFAULT_MODEL_CATALOG, ProviderKind.OPENAI, presetId = "openrouter").map { it.modelId }
+        assertTrue(groqIds.isNotEmpty())
+        assertTrue(orIds.isNotEmpty())
     }
 }

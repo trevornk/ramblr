@@ -57,7 +57,10 @@ object CloudLiveWiring {
         if (!enabled) return null
         // Read the existing cloud-vs-local gate exactly as DictationRuntime does; no new pref.
         val useLocal = prefs.getBoolean("use_local", true)
-        val apiKey = ProviderCredentialStore.get(context, ProviderKind.GEMINI)
+        // #274: entry-based credential lookup via getForKind -- the Gemini key may now live on a
+        // specific chain entry's per-entry slot rather than (or in addition to) the legacy
+        // per-kind slot; getForKind checks both so this stays correct either way.
+        val apiKey = ProviderCredentialStore.getForKind(context, ProviderChainStore.load(context), ProviderKind.GEMINI)
         if (!isLiveAllowed(enabled, useLocal, apiKey)) return null
 
         // Same terms the batch transcription path biases on (#26/#114), read from the same key.
