@@ -236,7 +236,7 @@ class CleanupActivity : BaseSettingsActivity() {
         postProcessingEnabled = prefs().getBoolean("use_post_processing", false),
         cloudCleanupEnabled = CloudFeatureToggle.cleanupEnabled(this),
         allowLocalFallback = DictationModeToggle.allowLocalFallback(this),
-        isConfigured = { ProviderCredentialStore.isConfigured(this, it) },
+        isConfigured = { ProviderCredentialStore.isConfiguredOrLegacy(this, it) },
     )
 
     /** Applies a change to the local/cleanup toggles, inserting the one-time consent dialog from

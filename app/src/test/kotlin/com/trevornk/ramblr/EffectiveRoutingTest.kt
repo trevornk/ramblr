@@ -18,7 +18,7 @@ class EffectiveRoutingTest {
                 useLocalTranscription = false,
                 allowLocalFallback = true,
                 allowCloudFallback = false,
-                isConfigured = { it == ProviderKind.OPENAI },
+                isConfigured = { it.kind == ProviderKind.OPENAI },
             )
         )
     }
@@ -31,7 +31,7 @@ class EffectiveRoutingTest {
                 useLocalTranscription = false,
                 allowLocalFallback = false,
                 allowCloudFallback = false,
-                isConfigured = { it == ProviderKind.OPENAI },
+                isConfigured = { it.kind == ProviderKind.OPENAI },
             )
         )
     }
@@ -57,7 +57,7 @@ class EffectiveRoutingTest {
                 useLocalTranscription = true,
                 allowLocalFallback = true,
                 allowCloudFallback = true,
-                isConfigured = { it == ProviderKind.OPENAI },
+                isConfigured = { it.kind == ProviderKind.OPENAI },
             )
         )
     }
@@ -70,7 +70,7 @@ class EffectiveRoutingTest {
                 useLocalTranscription = true,
                 allowLocalFallback = true,
                 allowCloudFallback = false,
-                isConfigured = { it == ProviderKind.OPENAI },
+                isConfigured = { it.kind == ProviderKind.OPENAI },
             )
         )
     }
@@ -124,7 +124,7 @@ class EffectiveRoutingTest {
                 postProcessingEnabled = true,
                 cloudCleanupEnabled = true,
                 allowLocalFallback = true,
-                isConfigured = { it == ProviderKind.OPENAI },
+                isConfigured = { it.kind == ProviderKind.OPENAI },
             )
         )
     }
@@ -137,7 +137,7 @@ class EffectiveRoutingTest {
                 postProcessingEnabled = true,
                 cloudCleanupEnabled = true,
                 allowLocalFallback = false,
-                isConfigured = { it == ProviderKind.OPENAI },
+                isConfigured = { it.kind == ProviderKind.OPENAI },
             )
         )
     }
@@ -153,5 +153,37 @@ class EffectiveRoutingTest {
                 isConfigured = { false },
             )
         )
+    }
+
+    // --- #274 integration: routing summary follows per-entry state, not ProviderKind ---
+
+    @Test fun `transcription summary skips a disabled entry and names the routed one`() {
+        assertEquals(
+            "Cloud (Gemini) \u2192 on-device fallback",
+            EffectiveRouting.transcription(
+                chain = chain(
+                    ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-mini", enabled = false),
+                    ProviderChainEntry(ProviderKind.GEMINI, "gemini-2.5-flash"),
+                ),
+                useLocalTranscription = false,
+                allowLocalFallback = true,
+                allowCloudFallback = false,
+                isConfigured = { it.kind == ProviderKind.GEMINI },
+            )
+        )
+    }
+
+    @Test fun `cleanup configured state is per entry, not per kind`() {
+        val unkeyed = ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-mini", id = "a")
+        val keyed = ProviderChainEntry(ProviderKind.OPENAI, "llama-3.1-8b-instant", id = "b")
+        fun summary(configured: Set<String>) = EffectiveRouting.cleanup(
+            chain = chain(unkeyed, keyed),
+            postProcessingEnabled = true,
+            cloudCleanupEnabled = true,
+            allowLocalFallback = false,
+            isConfigured = { it.id in configured },
+        )
+        assertEquals("Cloud (OpenAI) only", summary(setOf("b")))
+        assertEquals("Cloud (not configured) only", summary(emptySet()))
     }
 }

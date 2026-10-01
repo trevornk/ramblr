@@ -27,7 +27,7 @@ object EffectiveRouting {
         useLocalTranscription: Boolean,
         allowLocalFallback: Boolean,
         allowCloudFallback: Boolean,
-        isConfigured: (ProviderKind) -> Boolean,
+        isConfigured: (ProviderChainEntry) -> Boolean,
     ): String {
         val cloudEntry = CleanupDestination.firstCloudTranscription(chain)
         val cloudConfigured = hasConfiguredCloudTranscription(chain, isConfigured)
@@ -56,13 +56,13 @@ object EffectiveRouting {
         postProcessingEnabled: Boolean,
         cloudCleanupEnabled: Boolean,
         allowLocalFallback: Boolean,
-        isConfigured: (ProviderKind) -> Boolean,
+        isConfigured: (ProviderChainEntry) -> Boolean,
     ): String {
         if (!postProcessingEnabled) return "Off"
         if (!cloudCleanupEnabled) return "On-device only"
 
         val cloudEntries = chain.capableEntriesFor(needsTranscription = false).filter { it.kind != ProviderKind.LOCAL }
-        val cloudConfigured = cloudEntries.any { isConfigured(it.kind) }
+        val cloudConfigured = cloudEntries.any { isConfigured(it) }
         val cloudLabel = cloudEntries.firstOrNull()?.let { CleanupDestination.label(it.kind) }
         val cloudDescription = if (cloudConfigured && cloudLabel != null) "Cloud ($cloudLabel)" else "Cloud (not configured)"
 

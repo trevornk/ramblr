@@ -168,7 +168,7 @@ class TranscriptionActivity : BaseSettingsActivity() {
         useLocalTranscription = prefs().getBoolean("use_local", true),
         allowLocalFallback = DictationModeToggle.allowLocalFallback(this),
         allowCloudFallback = DictationModeToggle.allowCloudFallback(this),
-        isConfigured = { ProviderCredentialStore.isConfigured(this, it) },
+        isConfigured = { ProviderCredentialStore.isConfiguredOrLegacy(this, it) },
     )
 
     /**
