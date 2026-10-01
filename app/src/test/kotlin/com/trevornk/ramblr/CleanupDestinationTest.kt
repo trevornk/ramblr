@@ -105,4 +105,34 @@ class CanFallBackToCloudCleanupTest {
         assertEquals(true, canFallBackToCloudCleanup(local) { it.kind == ProviderKind.OPENAI })
         assertEquals(false, canFallBackToCloudCleanup(local) { false })
     }
+
+    // --- #274: subtitles/consent must name the entry the resolver would actually use ---
+
+    @Test fun `disabled entries are skipped for both cleanup and transcription destinations`() {
+        val c = chain(
+            ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-mini", enabled = false),
+            ProviderChainEntry(ProviderKind.GEMINI, "gemini-2.5-flash"),
+        )
+        assertEquals(ProviderKind.GEMINI, CleanupDestination.firstCloudEntry(c)?.kind)
+        assertEquals(ProviderKind.GEMINI, CleanupDestination.firstCloudTranscription(c)?.kind)
+        assertEquals("generativelanguage.googleapis.com", CleanupDestination.consentHost(c))
+    }
+
+    @Test fun `per-task opt-outs pick different destinations per task`() {
+        val c = chain(
+            ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-mini", useForCleanup = false),
+            ProviderChainEntry(ProviderKind.GEMINI, "gemini-2.5-flash", useForTranscription = false),
+        )
+        assertEquals(ProviderKind.GEMINI, CleanupDestination.firstCloudEntry(c)?.kind)
+        assertEquals(ProviderKind.OPENAI, CleanupDestination.firstCloudTranscription(c)?.kind)
+    }
+
+    @Test fun `a chain whose cloud entries are all disabled has no cloud destination`() {
+        val c = chain(
+            ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.4-mini", enabled = false),
+            ProviderChainEntry(ProviderKind.LOCAL, "m"),
+        )
+        assertNull(CleanupDestination.firstCloudEntry(c))
+        assertNull(CleanupDestination.firstCloudTranscription(c))
+    }
 }
