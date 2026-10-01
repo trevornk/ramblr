@@ -504,6 +504,42 @@ class DictationRuntimeTest {
         assertTrue("the #90 reset walks the ring back to idle", listener.events.contains("idleUi"))
     }
 
+    // --- #280: installed-but-unloaded local model is not "still downloading" ---
+
+    @Test
+    fun `no installed model reports not installed instead of downloading`() {
+        val pcm = realSizedPcm()
+        runtime.onTap()
+        runtime.onTap()
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        awaitIdle()
+
+        assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
+        assertEquals(LocalModelUnavailability.NOT_INSTALLED, ShadowToast.getTextOfLatestToast())
+    }
+
+    @Test
+    fun `installed model that cannot load is retried on demand and reported as a load failure`() {
+        // An installed (marker present) model whose slot is empty -- the #280 state after a
+        // trim or a still-running reload. The dispatch must attempt the load itself and, if it
+        // genuinely fails, say so rather than blaming a download that already finished.
+        val dir = java.io.File(app.filesDir, "models/fake-installed-model").apply { mkdirs() }
+        ModelDownloader.completeMarker(dir).writeText("")
+        try {
+            val pcm = realSizedPcm()
+            runtime.onTap()
+            runtime.onTap()
+            engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+            awaitIdle()
+
+            assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
+            assertFalse(pcm.exists())
+            assertEquals(LocalModelUnavailability.FAILED_TO_LOAD, ShadowToast.getTextOfLatestToast())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     // --- max-duration auto-stop mints its own token (#115) ---
 
     @Test
