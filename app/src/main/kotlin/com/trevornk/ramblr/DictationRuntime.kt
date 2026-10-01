@@ -334,7 +334,14 @@ class DictationRuntime internal constructor(
         cleanupCursor.reset()
     }
 
-    internal fun initLocalModel() {
+    // #280: serializes batch-model loads so a dictation that stops while a load is still in
+    // progress (the recording-start reload after a trim, a settings-change reload, or the
+    // service-connect load) waits for that load instead of seeing an empty slot.
+    private val localModelLoadLock = Any()
+
+    internal fun initLocalModel() = synchronized(localModelLoadLock) { initLocalModelLocked() }
+
+    private fun initLocalModelLocked() {
         val initialization = transcriberLifecycle.beginInitialization() ?: return
         val modelName = prefs().getString("model_name", "") ?: ""
         val newTranscriber = if (modelName.isBlank()) {
@@ -398,6 +405,13 @@ class DictationRuntime internal constructor(
     fun onTrimMemory(level: Int) {
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             LocalCleanupModelHolder.releaseAsync()
+            // #280: UI_HIDDEN is not memory pressure -- Android sends it every time this
+            // process's activities leave the screen (e.g. closing Ramblr's settings), and on
+            // API 34+ it is one of only two levels still delivered at all. Dropping the batch/
+            // streaming recognizers on it meant almost every first dictation after visiting
+            // settings started with an empty slot. Keep the (much larger) cleanup-model release
+            // above as-is; only the transcribers are exempt.
+            if (!TranscriberTrimPolicy.shouldReleaseTranscribers(level)) return
             transcribersTrimmed = true
             // replace(null) takes the slot's write lock, which blocks until any in-flight
             // transcription (a full batch on a background thread, up to a 10-minute recording)
@@ -684,8 +698,8 @@ class DictationRuntime internal constructor(
         val chain = ProviderChainStore.load(context)
         val transcriptionCandidates = ProviderChainRuntime.transcriptionCandidates(chain)
         val cleanupChain = ProviderChainRuntime.effectiveChainForCleanup(chain, CloudFeatureToggle.cleanupEnabled(context))
-        val hosts = NetworkWarmup.hostsToWarm(transcriptionCandidates, cleanupChain) { kind ->
-            ProviderCredentialStore.isConfigured(context, kind)
+        val hosts = NetworkWarmup.hostsToWarm(transcriptionCandidates, cleanupChain) { entry ->
+            ProviderCredentialStore.isConfiguredOrLegacy(context, entry)
         }
         NetworkWarmup.warmUpAsync(hosts)
     }
@@ -1058,8 +1072,13 @@ class DictationRuntime internal constructor(
         // samples directly, never a file upload, so it's discarded (never uploaded) on that path.
         val compressedFile = result.compressedFile
 
+        // #280: wait for an in-progress (or needed) load of an installed model before deciding
+        // the local model is unavailable. Safe to block: continueTranscription always runs on
+        // a background thread.
+        val localReady = useLocal && awaitLocalTranscriber()
+
         when {
-            useLocal && transcriberSlot.get() != null -> {
+            localReady -> {
                 compressedFile?.delete()
                 transcribeLocal(file, token, lease)
             }
@@ -1078,10 +1097,42 @@ class DictationRuntime internal constructor(
             useLocal -> {
                 compressedFile?.delete()
                 file.delete()
-                reset("Local model still downloading — try again once it finishes", token, lease)
+                reset(localUnavailableMessage(), token, lease)
             }
             else -> transcribeApi(file, token, compressedFile, lease)
         }
+    }
+
+    /**
+     * Returns true once the batch transcriber is loaded, loading it first if a model is
+     * installed but the slot is empty (trimmed, failed earlier, or a load is still running --
+     * in which case this blocks on [localModelLoadLock] until that load finishes). Never call
+     * from the main thread: a cold load of a 0.6B model takes seconds.
+     */
+    private fun awaitLocalTranscriber(): Boolean {
+        if (transcriberSlot.get() != null) return true
+        synchronized(localModelLoadLock) {
+            if (transcriberSlot.get() != null) return true
+            if (LocalTranscriber.availableModels(context).isEmpty()) return false
+            initLocalModelLocked()
+        }
+        return transcriberSlot.get() != null
+    }
+
+    /** #280: user-facing reason the local model can't run, instead of always blaming a download. */
+    private fun localUnavailableMessage(): String = LocalModelUnavailability.message(
+        installed = LocalTranscriber.availableModels(context).isNotEmpty(),
+        downloadInFlight = MODEL_CATALOG.any { transcriptionDownloadInFlight(it) },
+    )
+
+    private fun transcriptionDownloadInFlight(model: Model): Boolean = try {
+        WorkManager.getInstance(context)
+            .getWorkInfosForUniqueWork(ModelDownloadWorker.workName(model.archive))
+            .get()
+            .any { !it.state.isFinished }
+    } catch (e: Exception) {
+        Log.w(TAG, "Couldn't read model download state for ${model.archive}", e)
+        false
     }
 
     /**
@@ -1346,10 +1397,13 @@ class DictationRuntime internal constructor(
                 }
             }
 
-            val localLoaded = transcriberSlot.get() != null
+            // #280: like the direct path, a LOCAL candidate waits for an in-progress load of an
+            // installed model rather than skipping it. attempt() runs off-main (see thread{}
+            // handoffs below), so blocking here is safe.
+            val localLoaded = if (entry.kind == ProviderKind.LOCAL) awaitLocalTranscriber() else transcriberSlot.get() != null
             val hasCredential = when (entry.kind) {
-                ProviderKind.OPENAI -> ProviderCredentialStore.get(context, ProviderKind.OPENAI).isNotBlank()
-                ProviderKind.GEMINI -> ProviderCredentialStore.get(context, ProviderKind.GEMINI).isNotBlank()
+                ProviderKind.OPENAI -> ProviderCredentialStore.getOrLegacy(context, entry).isNotBlank()
+                ProviderKind.GEMINI -> ProviderCredentialStore.getOrLegacy(context, entry).isNotBlank()
                 else -> false
             }
             if (TranscriptionChain.precheck(entry.kind, hasCredential, localLoaded) == TranscriptionChain.Precheck.SKIP) {
@@ -1357,7 +1411,7 @@ class DictationRuntime internal constructor(
                     ProviderKind.LOCAL ->
                         // A LOCAL entry whose model hasn't loaded advances to the next candidate;
                         // only if it's the last one do we surface "still downloading" (#H1).
-                        advanceOrGiveUp("Local model still downloading — try again once it finishes")
+                        advanceOrGiveUp(localUnavailableMessage())
                     else -> {
                         Log.w(TAG, "Skipping transcription provider ${entry.kind}: not usable (no credential / not implemented)")
                         attempt(index + 1)
@@ -1368,7 +1422,7 @@ class DictationRuntime internal constructor(
 
             when (entry.kind) {
                 ProviderKind.OPENAI -> {
-                    val apiKey = ProviderCredentialStore.get(context, ProviderKind.OPENAI)
+                    val apiKey = ProviderCredentialStore.getOrLegacy(context, entry)
                     Log.i(TAG, "Cloud transcription via ProviderChain provider=${entry.kind} (OpenAI audio/transcriptions)")
                     val transcribeStartMs = System.currentTimeMillis()
                     // Honor the entry's base-URL override and TRANSCRIPTION model (#101/#102: a
@@ -1446,7 +1500,7 @@ class DictationRuntime internal constructor(
                     transcribeLocal(file, token, lease, onChainFailure = { error -> advanceOrGiveUp(error) })
                 }
                 ProviderKind.GEMINI -> {
-                    val apiKey = ProviderCredentialStore.get(context, ProviderKind.GEMINI)
+                    val apiKey = ProviderCredentialStore.getOrLegacy(context, entry)
                     // Gemini's inline-audio path buffers the recording ~4x in memory, so gate it by
                     // size: above the threshold, fall through to the next candidate rather than risk
                     // an OOM stacked on the resident STT/cleanup models (M6). The compressed .m4a
@@ -1616,8 +1670,9 @@ class DictationRuntime internal constructor(
             // CleanupWaterfallExecutor and can fall through past an unconfigured cloud step to
             // another provider (including LOCAL). Note this is only a pre-flight check -- since
             // #105 every chain, this one included, is executed by CleanupWaterfallExecutor.
+            val cleanupCapableEntries = providerChain.capableEntriesFor(needsTranscription = false)
             if (!ProviderChainRuntime.shouldUseCleanupExecutor(providerChain) &&
-                ProviderCredentialStore.get(context, ProviderKind.OPENAI).isBlank()) {
+                cleanupCapableEntries.firstOrNull()?.let { ProviderCredentialStore.getOrLegacy(context, it) }.isNullOrBlank()) {
                 handler.post {
                     if (!guard.isCurrent(token)) return@post
                     toast("Post-processing needs API key. Using raw text.")
@@ -1649,7 +1704,8 @@ class DictationRuntime internal constructor(
                     chain = providerChain,
                     cursor = cleanupCursor,
                     cancelHolder = inFlightCall,
-                    credentialLookup = { kind -> ProviderCredentialStore.get(context, kind) },
+                    credentialLookup = { kind -> ProviderCredentialStore.getLegacyByKind(context, kind) },
+                    entryCredentialLookup = { entryId -> ProviderCredentialStore.get(context, entryId) },
                     localModelPath = { ModelDownloader.localCleanupModelFile(context, LocalCleanupProvider.selectedModel(context))?.absolutePath },
                     localPrompt = LocalCleanupProvider.selectedSystemPrompt(context),
                     // #182 option 2: local cleanup applies the same terms as a deterministic

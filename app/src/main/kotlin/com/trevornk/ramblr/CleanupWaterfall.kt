@@ -44,11 +44,23 @@ fun CleanupStepGroup.isPaidFallback(): Boolean =
  * [baseUrlOverride] is only meaningful for OPENAI_DIRECT (OmniRoute's URL is fixed;
  * ANTHROPIC_DIRECT always targets Anthropic's real API) and lets a user point the direct-OpenAI
  * step at a third OpenAI-compatible host if they want a fourth provider without touching code.
+ *
+ * [entryId] (#274) is the originating [ProviderChainEntry.id], threaded through so
+ * [CleanupWaterfallExecutor]'s credential lookup can resolve THIS entry's own credential rather
+ * than a shared per-kind slot -- the actual fix for #273 on the cleanup path: two OPENAI_DIRECT
+ * steps from two different chain entries (e.g. Groq and OpenRouter, both OPENAI-kind with
+ * different base URLs) now carry distinct [entryId]s and therefore resolve to distinct
+ * credentials, instead of both mapping to the one [CleanupCredentialSlot.OPENAI_DIRECT] slot.
+ * Blank for a step with no originating entry (defensive default, and every pre-#274 test
+ * fixture) -- [credentialSlot] and [CleanupCredentialSlot] remain as the [group]'s conceptual
+ * credential *kind* (used by tests and [ProviderChainRuntime.providerKindForCleanupSlot]), but
+ * are no longer how production code resolves which literal secret to send.
  */
 data class CleanupStep(
     val group: CleanupStepGroup,
     val model: String,
     val baseUrlOverride: String? = null,
+    val entryId: String = "",
 ) {
     /** Null for LOCAL_LLM steps, which run on-device and have nothing to authenticate against (#37). */
     fun credentialSlot(): CleanupCredentialSlot? = when (group) {

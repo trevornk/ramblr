@@ -8,15 +8,18 @@ package com.trevornk.ramblr
  * Pure -- takes the chain, no Context.
  */
 object CleanupDestination {
-    /** The entry that would actually serve cloud cleanup: the first non-LOCAL entry in [chain]
-     *  (every non-LOCAL kind supports cleanup), or null when the chain is local-only / empty. */
+    /** The entry that would actually serve cloud cleanup: the first non-LOCAL entry the cleanup
+     *  resolver would use, or null when the chain is local-only / empty. Goes through
+     *  [ProviderChain.capableEntriesFor] so a disabled entry, or one opted out of cleanup (#274),
+     *  is never named as the destination in the consent dialog or Settings subtitle. */
     fun firstCloudEntry(chain: ProviderChain): ProviderChainEntry? =
-        chain.entries.firstOrNull { it.kind != ProviderKind.LOCAL }
+        chain.capableEntriesFor(needsTranscription = false).firstOrNull { it.kind != ProviderKind.LOCAL }
 
-    /** The entry that would actually serve cloud transcription: the first non-LOCAL,
-     *  transcription-capable entry (M9), or null when none is configured. */
+    /** The entry that would actually serve cloud transcription: the first non-LOCAL entry the
+     *  transcription resolver would use (M9; #274 enabled/opt-in gates included), or null when
+     *  none is configured. */
     fun firstCloudTranscription(chain: ProviderChain): ProviderChainEntry? =
-        chain.entries.firstOrNull { it.kind != ProviderKind.LOCAL && it.kind.supportsTranscription() }
+        chain.capableEntriesFor(needsTranscription = true).firstOrNull { it.kind != ProviderKind.LOCAL }
 
     /** Network host cloud cleanup would contact for [entry], e.g. "api.openai.com". */
     fun hostFor(entry: ProviderChainEntry): String = when (entry.kind) {

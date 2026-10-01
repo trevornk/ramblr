@@ -87,7 +87,7 @@ class ProcessTextActivity : Activity() {
             chain = ProviderChainStore.load(this),
             cloudCleanupEnabled = CloudFeatureToggle.cleanupEnabled(this),
             allowLocalFallback = DictationModeToggle.allowLocalFallback(this),
-            isCredentialConfigured = { kind -> ProviderCredentialStore.get(this, kind).isNotBlank() },
+            isCredentialConfigured = { kind -> ProviderCredentialStore.isConfiguredForKind(this, ProviderChainStore.load(this), kind) },
         )
         val ready = when (plan) {
             is ProcessTextCleanupPlan.Unavailable -> {
@@ -172,7 +172,8 @@ class ProcessTextActivity : Activity() {
                     chain = plan.chain,
                     cursor = cursor,
                     cancelHolder = inFlightCall,
-                    credentialLookup = { kind -> ProviderCredentialStore.get(this, kind) },
+                    credentialLookup = { kind -> ProviderCredentialStore.getLegacyByKind(this, kind) },
+                    entryCredentialLookup = { entryId -> ProviderCredentialStore.get(this, entryId) },
                     localModelPath = { localModelPath },
                     localPrompt = localPrompt,
                     // #182 option 2: local cleanup applies the same terms as a deterministic

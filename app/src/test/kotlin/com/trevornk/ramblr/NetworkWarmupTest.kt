@@ -17,7 +17,7 @@ class NetworkWarmupTest {
         ProviderChainEntry(kind, model, baseUrlOverride)
 
     /** Default for the pre-#168 cases: every provider has a key, so gating changes nothing. */
-    private val allKeysPresent: (ProviderKind) -> Boolean = { true }
+    private val allKeysPresent: (ProviderChainEntry) -> Boolean = { true }
 
     @Test fun `maps each cloud provider kind to its default host`() {
         val hosts = NetworkWarmup.hostsToWarm(
@@ -115,17 +115,17 @@ class NetworkWarmupTest {
         val hosts = NetworkWarmup.hostsToWarm(
             transcriptionCandidates = listOf(entry(ProviderKind.OPENAI)),
             cleanupChain = ProviderChain(emptyList()),
-            hasCredential = { it == ProviderKind.OPENAI },
+            hasCredential = { it.kind == ProviderKind.OPENAI },
         )
         assertEquals(setOf("api.openai.com"), hosts)
     }
 
-    /** Gating is per-kind, not all-or-nothing: the keyed provider warms, the keyless one doesn't. */
+    /** Gating is per-entry, not all-or-nothing: the keyed provider warms, the keyless one doesn't. */
     @Test fun `only the credentialed provider is warmed in a mixed chain`() {
         val hosts = NetworkWarmup.hostsToWarm(
             transcriptionCandidates = listOf(entry(ProviderKind.OPENAI)),
             cleanupChain = ProviderChain(listOf(entry(ProviderKind.GEMINI), entry(ProviderKind.ANTHROPIC))),
-            hasCredential = { it == ProviderKind.GEMINI },
+            hasCredential = { it.kind == ProviderKind.GEMINI },
         )
         assertEquals(setOf("generativelanguage.googleapis.com"), hosts)
     }
@@ -152,5 +152,19 @@ class NetworkWarmupTest {
             hasCredential = { false },
         )
         assertEquals(emptySet<String>(), hosts)
+    }
+
+    /** Two same-kind entries with different credential state (#274) are told apart: only the
+     *  configured one's host is warmed, proven by giving them different base URLs so their hosts
+     *  are distinguishable. */
+    @Test fun `two same-kind entries with different credential state are told apart`() {
+        val configured = entry(ProviderKind.OPENAI, baseUrlOverride = "https://configured.example.com/v1")
+        val unconfigured = entry(ProviderKind.OPENAI, baseUrlOverride = "https://unconfigured.example.com/v1")
+        val hosts = NetworkWarmup.hostsToWarm(
+            transcriptionCandidates = emptyList(),
+            cleanupChain = ProviderChain(listOf(configured, unconfigured)),
+            hasCredential = { it === configured },
+        )
+        assertEquals(setOf("configured.example.com"), hosts)
     }
 }

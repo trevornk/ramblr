@@ -78,4 +78,33 @@ class ModelCatalogJsonTest {
         assertEquals(ProviderKind.OMNIROUTE, parsed!![1].provider)
         assertEquals("gemini/gemini-flash-latest", parsed[1].modelId)
     }
+
+    // --- #275: presetId field ---
+
+    @Test fun `deserialize accepts old JSON with no presetId field at all`() {
+        val parsed = ModelCatalogJson.deserialize(
+            """[{"provider":"OPENAI","modelId":"m","displayName":"d","description":"desc",""" +
+                """"tier":"RECOMMENDED","useCase":"CLEANUP","costPer1MInputUsd":0.1,"costPer1MOutputUsd":0.2}]"""
+        )
+        assertEquals(null, parsed?.get(0)?.presetId)
+    }
+
+    @Test fun `presetId round trips through serialize and deserialize`() {
+        val entries = listOf(
+            ModelCatalogEntry(
+                provider = ProviderKind.OPENAI,
+                modelId = "whisper-large-v3-turbo",
+                displayName = "Groq: Whisper Large v3 Turbo",
+                description = "d",
+                tier = ModelTier.RECOMMENDED,
+                useCase = ModelUseCase.TRANSCRIPTION,
+                costPer1MInputUsd = 0.0,
+                costPer1MOutputUsd = 0.0,
+                presetId = "groq",
+            )
+        )
+        val parsed = ModelCatalogJson.deserialize(ModelCatalogJson.serialize(entries))
+        assertEquals("groq", parsed?.get(0)?.presetId)
+        assertEquals(entries, parsed)
+    }
 }

@@ -319,6 +319,11 @@ explanations, headers, or comments about your edits.
         cursor: CleanupWaterfallCursor,
         cancelHolder: InFlightCall,
         credentialLookup: (ProviderKind) -> String,
+        // #274: entry-based credential lookup (ProviderCredentialStore.get(context, entryId) in
+        // production) -- the real fix for #273 on the cleanup path. Defaulted to "always miss" so
+        // every pre-#274 call site/test keeps resolving purely off [credentialLookup]'s per-kind
+        // value until it's updated to pass this too.
+        entryCredentialLookup: (String) -> String = { "" },
         localModelPath: () -> String? = { null },
         // See [CleanupWaterfallExecutor.execute]'s localPrompt param -- passed straight through so
         // a fine-tuned local model (e.g. mumble-cleanup-2stage) can override SIMPLE_PROMPT with its
@@ -353,6 +358,7 @@ explanations, headers, or comments about your edits.
             cursor = cursor,
             cancelHolder = cancelHolder,
             credentialLookup = { slot -> credentialLookup(ProviderChainRuntime.providerKindForCleanupSlot(slot)) },
+            entryCredentialLookup = entryCredentialLookup,
             transport = transport,
             localModelPath = localModelPath,
             localPrompt = localPrompt,
