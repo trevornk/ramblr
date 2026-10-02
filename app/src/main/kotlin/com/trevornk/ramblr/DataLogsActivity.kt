@@ -125,6 +125,9 @@ class DataLogsActivity : BaseSettingsActivity() {
             intent.getBooleanExtra(EXTRA_SHOW_HISTORY, false) &&
             prefs().getBoolean(KEY_HISTORY_ENABLED, true)
         ) {
+            // Opened as a destination from the main screen: closing the viewer returns
+            // there instead of stranding the user on Data & Logs.
+            finishOnHistoryClose = true
             showHistory()
         }
     }
@@ -280,6 +283,9 @@ class DataLogsActivity : BaseSettingsActivity() {
             .show()
     }
 
+    /** True when launched straight into history from MainActivity's History row (#283). */
+    private var finishOnHistoryClose = false
+
     private fun showHistory() {
         val store = DictationHistoryStore.forContext(this)
         val entries = store.all()
@@ -301,7 +307,8 @@ class DataLogsActivity : BaseSettingsActivity() {
         val builder = android.app.AlertDialog.Builder(this)
             .setTitle("Dictation history")
             .setView(ScrollView(this).apply { addView(list) })
-            .setNegativeButton("Close", null)
+            .setNegativeButton("Close") { _, _ -> if (finishOnHistoryClose) finish() }
+            .setOnCancelListener { if (finishOnHistoryClose) finish() }
         if (entries.isNotEmpty()) {
             builder.setNeutralButton("Clear all") { _, _ -> confirmClearAllHistory(store, onChanged) }
         }
@@ -317,7 +324,10 @@ class DataLogsActivity : BaseSettingsActivity() {
                 toast("History cleared")
                 onCleared()
             }
-            .setNegativeButton("Cancel", null)
+            // "Clear all" already dismissed the viewer; backing out returns to it rather
+            // than leaving the user on Data & Logs.
+            .setNegativeButton("Cancel") { _, _ -> showHistory() }
+            .setOnCancelListener { showHistory() }
             .show()
     }
 
