@@ -88,6 +88,15 @@ internal class ImeDestinationGuard {
         latestTicket = null
     }
 
+    /** Non-consuming: is [ticket]'s editor still the bound one? Same test [commitIfCurrent] applies,
+     *  without spending the ticket. Null/unbound is "not current". (#284) */
+    fun isCurrent(ticket: ImeDestinationTicket?): Boolean {
+        val bound = ticket ?: return false
+        val now = current ?: return false
+        return now.generation == bound.generation && now.identity == bound.identity &&
+            now.connection === bound.connection
+    }
+
     /** One fail-closed delivery attempt. False/throw are terminal and never redirected or retried. */
     fun commitIfCurrent(
         ticket: ImeDestinationTicket?,
@@ -149,6 +158,10 @@ internal class ImePanelController(
      *  (mirrors [ExclusionGating.shouldBlockNewRecording]) and never the stop tap of one already
      *  in flight. */
     private val isRecording: () -> Boolean = { false },
+    /** #284: where a finished dictation goes when its editor is gone (clipboard + notification),
+     *  and where a failed one reports. Null in tests that don't exercise it: the fallback is then
+     *  exactly the pre-#284 "history + in-panel message". */
+    private val backgroundSink: BackgroundResultSink? = null,
 ) {
     private var active = true
     private var deliveryTerminal = false
@@ -197,6 +210,7 @@ internal class ImePanelController(
             if (!active || deliveryTerminal) return
             deliveryTerminal = true
             val ticket = deliveryTicket
+            val retention = sessionAllowsRetention
             val entry = DictationHistoryEntry(
                 timestamp = nowMs(),
                 rawText = rawText ?: text,
@@ -209,14 +223,32 @@ internal class ImePanelController(
             // commit itself never reaches the field. Retention policy still wins: a no-retention
             // editor is never written to history, excluded or not.
             if (isPackageExcluded(cachedPackageName)) {
-                if (sessionAllowsRetention) {
-                    runCatching { runHistoryWrite { runCatching { recordHistory(entry) } } }
-                }
                 val ownsUi = latestUiTicket === ticket
                 if (ownsUi) latestUiTicket = null
                 if (ownsUi && active) {
                     renderState(ImeUiState.IDLE)
                     userMessage("Ramblr is excluded in this app — nothing inserted")
+                }
+                // #284: when the user has since left that editor an in-panel message nobody sees
+                // isn't enough. Nothing is copied (excluded); the notice states what was saved.
+                fun noticeIfGone(historySaved: Boolean) {
+                    if (!destination.isCurrent(ticket)) {
+                        backgroundSink?.deliverTargetGone(
+                            text, historySaved = historySaved, cleanupFailed = cleanupError != null,
+                            excluded = true,
+                        )
+                    }
+                }
+                if (sessionAllowsRetention) {
+                    val accepted = runCatching {
+                        runHistoryWrite {
+                            val saved = runCatching { recordHistory(entry) }.getOrDefault(false)
+                            postToMain { if (active) noticeIfGone(saved) }
+                        }
+                    }.isSuccess
+                    if (!accepted) noticeIfGone(false)
+                } else {
+                    noticeIfGone(false)
                 }
                 return
             }
@@ -227,17 +259,26 @@ internal class ImePanelController(
                 val accepted = runCatching {
                     runHistoryWrite {
                         val historySaved = runCatching { recordHistory(entry) }.getOrDefault(false)
-                        postToMain { completeDelivery(ticket, text, cleanupError, historySaved) }
+                        postToMain { completeDelivery(ticket, text, cleanupError, historySaved, retention) }
                     }
                 }.isSuccess
-                if (!accepted) completeDelivery(ticket, text, cleanupError, historySaved = false)
+                if (!accepted) completeDelivery(ticket, text, cleanupError, historySaved = false, retention)
             } else {
-                completeDelivery(ticket, text, cleanupError, historySaved = false)
+                completeDelivery(ticket, text, cleanupError, historySaved = false, retention)
             }
         }
 
         override fun foregroundPackageName(): String? = cachedPackageName
         override fun allowsTranscriptRetention(): Boolean = sessionAllowsRetention
+
+        // #284: only a notification when the editor this dictation was for is gone; while it is
+        // still bound the runtime's own toast + the panel's ERROR state already say everything.
+        override fun onDictationFailed(failure: BackgroundFailure) {
+            if (!active) return
+            // No ticket means nothing was ever bound for this dictation: nothing to report on.
+            if (deliveryTicket == null || !shouldNotifyBackgroundFailure(destination.isCurrent(deliveryTicket))) return
+            backgroundSink?.failed(failure)
+        }
     }
 
     private fun completeDelivery(
@@ -245,6 +286,7 @@ internal class ImePanelController(
         text: String,
         cleanupError: String?,
         historySaved: Boolean,
+        retentionAllowed: Boolean,
     ) {
         if (!active) return
         val result = if (commitText != null) {
@@ -253,6 +295,22 @@ internal class ImePanelController(
             ImeCommitResult.STALE
         }
         if (result == ImeCommitResult.DUPLICATE) return
+        // #284: STALE means the editor this dictation was for is gone (the user switched apps or
+        // fields). The text was never typed anywhere; make sure it isn't only in history.
+        val sink = backgroundSink
+        if (result == ImeCommitResult.STALE && sink != null) {
+            sink.deliverTargetGone(
+                text, historySaved = historySaved, cleanupFailed = cleanupError != null,
+                excluded = isPackageExcluded(cachedPackageName), retentionAllowed = retentionAllowed,
+            )
+            // The notification is the message; an ERROR state painted on whatever editor the panel
+            // is bound to now would just be noise about a field the user already left.
+            if (latestUiTicket === ticket) {
+                latestUiTicket = null
+                renderState(ImeUiState.IDLE)
+            }
+            return
+        }
         val ownsUi = latestUiTicket === ticket
         if (ownsUi) latestUiTicket = null
         if (!ownsUi) return
