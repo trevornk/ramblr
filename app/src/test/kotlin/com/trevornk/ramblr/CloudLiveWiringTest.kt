@@ -136,6 +136,28 @@ class CloudLiveWiringTest {
         assertNotNull(CloudLiveWiring.factoryOrNull(app))
     }
 
+    // --- #290: dictation language ---
+
+    @Test fun `auto-detect sends no language code, same as before the setting existed`() {
+        configureFullyEnabled()
+        val client = CloudLiveWiring.factoryOrNull(app) as GeminiCloudLiveTranscriptionClient
+        assertEquals(emptyList<String>(), client.languageCodes)
+    }
+
+    @Test fun `a chosen dictation language reaches the live client`() {
+        configureFullyEnabled()
+        DictationLanguage.setLanguage(app, "de")
+        val client = CloudLiveWiring.factoryOrNull(app) as GeminiCloudLiveTranscriptionClient
+        assertEquals(listOf("de"), client.languageCodes)
+    }
+
+    @Test fun `live gets its own spelling where it differs from the setting code`() {
+        configureFullyEnabled()
+        DictationLanguage.setLanguage(app, "pt")
+        val client = CloudLiveWiring.factoryOrNull(app) as GeminiCloudLiveTranscriptionClient
+        assertEquals(listOf("pt-BR"), client.languageCodes)
+    }
+
     // --- isLiveAllowed: the pure policy ---
 
     @Test fun `isLiveAllowed requires all three inputs`() {

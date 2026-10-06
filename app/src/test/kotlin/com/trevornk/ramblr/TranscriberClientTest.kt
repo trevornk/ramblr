@@ -109,4 +109,15 @@ class TranscriberClientTest {
         assertEquals(emptyList<Pair<String, String>>(), TranscriberClient.vocabularyFormParts("gpt-transcribe", emptyList()))
         assertEquals(emptyList<Pair<String, String>>(), TranscriberClient.vocabularyFormParts("whisper-1", emptyList()))
     }
+
+    // --- #290: dictation language ---
+
+    @Test fun `auto-detect sends no language part, same as every pre-290 build`() {
+        assertEquals(emptyList<Pair<String, String>>(), TranscriberClient.languageFormParts(null))
+        assertEquals(emptyList<Pair<String, String>>(), TranscriberClient.languageFormParts(""))
+    }
+
+    @Test fun `a chosen language is sent as the ISO-639-1 language field`() {
+        assertEquals(listOf("language" to "de"), TranscriberClient.languageFormParts("de"))
+    }
 }

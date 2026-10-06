@@ -1447,6 +1447,8 @@ class DictationRuntime internal constructor(
                         model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
                         vocabularyTerms = vocabularyTerms(),
                         compressedFile = uploadCompressedFile,
+                        // #290: skip auto-detection when the user set their dictation language.
+                        language = DictationLanguage.languageOrNull(context),
                     ) { result ->
                         val roundTripMs = System.currentTimeMillis() - transcribeStartMs
                         Log.i(TAG, "OpenAI transcription HTTP round-trip took ${roundTripMs}ms")
@@ -1522,6 +1524,7 @@ class DictationRuntime internal constructor(
                             file, apiKey, geminiModel, inFlightCall,
                             vocabularyTerms = vocabularyTerms(),
                             compressedFile = uploadCompressedFile,
+                            language = DictationLanguage.languageOrNull(context),
                         ) { result ->
                             val success = result.text != null && result.text.isNotBlank()
                             BenchmarkLogger.log(
@@ -1692,7 +1695,8 @@ class DictationRuntime internal constructor(
                 ?.let { CleanupPersonas.promptForExplicitSelection(PersonaRegistry.resolve(context, it)) }
                 ?: savedPrompt
             val vocabulary = vocabularyTerms()
-            val prompt = PostProcessor.interpolateVocabulary(rawPrompt, vocabulary)
+            // #290: keep cleanup in the transcript's language (see KEEP_LANGUAGE_CLAUSE).
+            val prompt = PostProcessor.withKeepLanguage(PostProcessor.interpolateVocabulary(rawPrompt, vocabulary))
 
             if (!guard.isCurrent(token)) return
             handler.post { if (guard.isCurrent(token)) listener.onCleaningStarted() }

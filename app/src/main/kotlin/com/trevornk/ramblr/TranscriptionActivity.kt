@@ -29,6 +29,7 @@ class TranscriptionActivity : BaseSettingsActivity() {
     private lateinit var cloudSectionHeader: TextView
     private lateinit var cloudLinkRowSub: TextView
     private lateinit var routingSummaryRowSub: TextView
+    private lateinit var dictationLanguageRowSub: TextView
 
     private data class ModelRowViews(
         val radio: MaterialRadioButton,
@@ -107,6 +108,16 @@ class TranscriptionActivity : BaseSettingsActivity() {
         cloudLinkGroup = cloudLinkGroupNested.outer
         root.addView(cloudLinkGroup)
 
+        // #290: spoken-language hint for cloud transcription. Lives here, next to the
+        // local/cloud choice, because a wrong-language transcript is a transcription problem;
+        // the local-only Canary token stays under Behavior > Advanced tuning.
+        root.addView(sectionHeader("Language"))
+        val languageRow = settingsRow("Dictation language", dictationLanguageSummary(), indent = 0) {
+            promptDictationLanguage()
+        }
+        dictationLanguageRowSub = languageRow.findViewWithTag("subtitle")
+        root.addView(languageRow)
+
         // #276: read-only "what will actually happen" line, since the mode presets + per-feature
         // overrides + two fallback toggles on the Cloud screen can otherwise leave it unclear
         // which provider (if any) actually wins.
@@ -150,6 +161,7 @@ class TranscriptionActivity : BaseSettingsActivity() {
         cloudSectionHeader.visibility = if (cloudState == FallbackSectionState.FALLBACK) View.VISIBLE else View.GONE
 
         routingSummaryRowSub.text = effectiveTranscriptionRouting()
+        dictationLanguageRowSub.text = dictationLanguageSummary()
 
         val cur = prefs().getString("model_name", "") ?: ""
         val curModel = MODEL_CATALOG.firstOrNull { it.archive == cur }
@@ -158,6 +170,51 @@ class TranscriptionActivity : BaseSettingsActivity() {
                 ?.let { selectModel(it.archive) }
         }
         refreshAllCards()
+    }
+
+    // --- Dictation language (#290) ---
+
+    private fun dictationLanguageSummary(): String {
+        val lang = DictationLanguage.languageOrNull(this)
+        return if (lang == null) {
+            "Auto-detect. Set this if your speech comes back in the wrong language"
+        } else {
+            "${DictationLanguage.label(lang)}. Sent to cloud transcription so it doesn't guess"
+        }
+    }
+
+    /** Fixed-list picker, Auto-detect first. Same custom-title pattern as
+     *  BehaviorActivity.promptCanaryLanguage: setMessage() and setSingleChoiceItems() share the
+     *  content area, so the explanation has to ride in the title view or the list never shows. */
+    private fun promptDictationLanguage() {
+        val codes: List<String?> = listOf<String?>(null) + DictationLanguage.pickerOrder()
+        val labels = codes.map { DictationLanguage.label(it) }.toTypedArray()
+        val checkedIndex = codes.indexOf(DictationLanguage.languageOrNull(this)).coerceAtLeast(0)
+        val titleView = vertical(dp(20), dp(20)).apply {
+            addView(TextView(this@TranscriptionActivity).apply {
+                text = "Dictation language"
+                textSize = 20f
+                setTextColor(attrColor(android.R.attr.textColorPrimary))
+            })
+            addView(TextView(this@TranscriptionActivity).apply {
+                text = "The language you speak. Cloud transcription normally guesses it from the " +
+                    "audio and can guess English, which makes your speech come back in English. " +
+                    "Choosing your language stops the guessing. On-device models aren't affected " +
+                    "(Canary has its own setting under Behavior)."
+                textSize = 14f
+                setTextColor(attrColor(android.R.attr.textColorSecondary))
+                setPadding(0, dp(8), 0, 0)
+            })
+        }
+        android.app.AlertDialog.Builder(this)
+            .setCustomTitle(titleView)
+            .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
+                DictationLanguage.setLanguage(this, codes[which])
+                refresh()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     /** "Transcription: ..." routing summary (#276), delegating to the pure [EffectiveRouting]

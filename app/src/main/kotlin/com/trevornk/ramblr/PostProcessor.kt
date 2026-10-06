@@ -228,6 +228,24 @@ explanations, headers, or comments about your edits.
     fun interpolateVocabulary(prompt: String, terms: List<String>): String =
         prompt.replace(VOCABULARY_PLACEHOLDER, vocabularyClause(terms))
 
+    /**
+     * Appended to every cloud cleanup prompt (#290). The built-in prompts are English, and with a
+     * non-English transcript some models answer in English, which looks like Ramblr translated
+     * the user's speech. Measured 2026-10-05 on Gemini 3.5 Flash-Lite with 5 German transcripts
+     * x 4 runs per built-in prompt: Email translated 1/20 and Smart 5/20 without this, and every
+     * built-in translated 0/20 with it. The carve-out keeps a user's own "translate to English"
+     * style working; that was checked against the same model.
+     *
+     * Not applied to on-device cleanup: those prompts are tuned to small models that echo or
+     * drift on extra prompt text (see [LocalCleanupProvider.systemPromptFor]).
+     */
+    const val KEEP_LANGUAGE_CLAUSE =
+        "Write your output in the same language as the transcript; do not translate it unless " +
+            "the instructions above explicitly ask for a translation."
+
+    /** [prompt] with [KEEP_LANGUAGE_CLAUSE] appended as its own final paragraph. */
+    fun withKeepLanguage(prompt: String): String = "${prompt.trimEnd()}\n\n$KEEP_LANGUAGE_CLAUSE"
+
     fun parseResponse(json: String): Result {
         return try {
             val obj = JSONObject(json)

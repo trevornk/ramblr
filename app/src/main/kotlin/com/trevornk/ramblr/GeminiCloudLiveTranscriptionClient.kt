@@ -30,7 +30,7 @@ class GeminiCloudLiveTranscriptionClient(
     private val endpoint: HttpUrl = DEFAULT_HTTP_ENDPOINT.toHttpUrl(),
     private val apiKey: String,
     private val model: String = DEFAULT_MODEL,
-    private val languageCodes: List<String> = emptyList(),
+    internal val languageCodes: List<String> = emptyList(),
     private val customVocabulary: List<String> = emptyList(),
     callbackExecutor: Executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "GeminiLive-callback").apply { isDaemon = true }

@@ -305,4 +305,31 @@ class PostProcessorTest {
             assertTrue(!active.contains("{{"))
         }
     }
+
+    // --- #290: keep cleanup in the transcript's language ---
+
+    @Test fun `withKeepLanguage appends the clause as the final paragraph`() {
+        val out = PostProcessor.withKeepLanguage(PostProcessor.SIMPLE_PROMPT)
+        assertTrue(out.startsWith(PostProcessor.SIMPLE_PROMPT))
+        assertTrue(out.endsWith("\n\n" + PostProcessor.KEEP_LANGUAGE_CLAUSE))
+    }
+
+    @Test fun `withKeepLanguage trims trailing whitespace so a user prompt doesn't grow blank lines`() {
+        assertEquals("Fix it.\n\n" + PostProcessor.KEEP_LANGUAGE_CLAUSE, PostProcessor.withKeepLanguage("Fix it.\n\n  "))
+    }
+
+    @Test fun `the clause forbids translation but leaves room for a translate style`() {
+        val clause = PostProcessor.KEEP_LANGUAGE_CLAUSE
+        assertTrue(clause.contains("same language as the transcript"))
+        assertTrue(clause.contains("do not translate"))
+        assertTrue(clause.contains("unless the instructions above explicitly ask for a translation"))
+    }
+
+    @Test fun `every built-in persona prompt gets the clause after vocabulary interpolation`() {
+        for (persona in CleanupPersonas.BUILT_IN + CleanupPersonas.LEGACY_RETIRED) {
+            val out = PostProcessor.withKeepLanguage(PostProcessor.interpolateVocabulary(persona.prompt, listOf("Ramblr")))
+            assertTrue(persona.key, out.endsWith(PostProcessor.KEEP_LANGUAGE_CLAUSE))
+            assertFalse(persona.key, out.contains(PostProcessor.VOCABULARY_PLACEHOLDER))
+        }
+    }
 }

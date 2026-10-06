@@ -70,12 +70,15 @@ object CloudLiveWiring {
             .parse(prefs.getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED))
             .take(GeminiCloudLiveTranscriptionClient.MAX_CUSTOM_VOCABULARY)
 
-        // languageCodes is left at the client default: the codebase has no configured language
-        // source anywhere (the batch Gemini client defaults it the same way), and inventing one
-        // here would be a new user-facing setting this phase does not own.
+        // #290: the user's dictation language, when Live documents it; otherwise the client
+        // default (empty = auto-detect), which is what every pre-#290 build sent.
+        val languageCodes = listOfNotNull(
+            DictationLanguage.geminiLiveCode(DictationLanguage.languageOrNull(prefs))
+        )
         return try {
             GeminiCloudLiveTranscriptionClient(
                 apiKey = apiKey,
+                languageCodes = languageCodes,
                 customVocabulary = vocabulary,
             )
         } catch (e: IllegalArgumentException) {

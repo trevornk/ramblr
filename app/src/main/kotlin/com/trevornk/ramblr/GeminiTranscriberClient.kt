@@ -41,9 +41,21 @@ object GeminiTranscriberClient {
      * appended as a short clause so Gemini's transcription decoding is nudged toward them too.
      * Always on when [terms] is non-empty; [TRANSCRIBE_PROMPT] is returned unchanged otherwise.
      */
-    fun transcribePrompt(terms: List<String>): String =
-        if (terms.isEmpty()) TRANSCRIBE_PROMPT
-        else "$TRANSCRIBE_PROMPT Watch for these project names and personal vocabulary terms, which speech-to-text often mishears: ${terms.joinToString(", ")}."
+    fun transcribePrompt(terms: List<String>, language: String? = null): String {
+        val base = if (language.isNullOrBlank()) TRANSCRIBE_PROMPT else "$TRANSCRIBE_PROMPT ${languageClause(language)}"
+        return if (terms.isEmpty()) base
+        else "$base Watch for these project names and personal vocabulary terms, which speech-to-text often mishears: ${terms.joinToString(", ")}."
+    }
+
+    /**
+     * The spoken-language hint (#290). Gemini has no language field on generateContent, so the
+     * language rides in the prompt. Measured 2026-10-05: on a German clip that Gemini 3.1
+     * Flash-Lite rendered as English-phonetic text on 9 of 9 runs, with or without a "never
+     * translate" instruction, adding this clause got German back on 3 of 3 runs.
+     */
+    fun languageClause(language: String): String =
+        "The speaker is speaking ${DictationLanguage.englishName(language)} ($language). " +
+            "Write the transcript in ${DictationLanguage.englishName(language)}; never translate it."
 
     /** Max PCM file size this inline-audio path will accept (M6): base64 + JSON string + request
      *  body copy buffers the recording ~4x in memory (a max-length 19.2MB PCM ≈ ~100MB transient),
@@ -130,6 +142,7 @@ object GeminiTranscriberClient {
         cancelHolder: InFlightCall,
         vocabularyTerms: List<String> = emptyList(),
         compressedFile: File? = null,
+        language: String? = null,
         callback: (Result) -> Unit,
     ) {
         val (audioBytes, mimeType) = try {
@@ -145,7 +158,7 @@ object GeminiTranscriberClient {
 
         // #114 part 2: interpolate the user's vocabulary into the transcription prompt itself
         // (previously only cleanup-stage prompts got it), always on when terms exist.
-        val body = buildRequestBody(audioBytes, prompt = transcribePrompt(vocabularyTerms), mimeType = mimeType)
+        val body = buildRequestBody(audioBytes, prompt = transcribePrompt(vocabularyTerms, language), mimeType = mimeType)
             .toString().toRequestBody("application/json".toMediaType())
 
         // A malformed key/model (or one OkHttp otherwise rejects) throws IllegalArgumentException

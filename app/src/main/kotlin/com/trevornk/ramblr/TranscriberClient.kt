@@ -104,6 +104,16 @@ object TranscriberClient {
     }
 
     /**
+     * The `language` form part for [language] (#290): the ISO-639-1 field OpenAI, Groq, Open
+     * WebUI and Whisper-based servers all accept to skip auto-detection. Without it, detection
+     * can settle on English for non-English speech, and the model returns English or
+     * English-phonetic text. Null ([DictationLanguage.AUTO]) sends nothing, matching every
+     * pre-#290 build.
+     */
+    fun languageFormParts(language: String?): List<Pair<String, String>> =
+        if (language.isNullOrBlank()) emptyList() else listOf("language" to language)
+
+    /**
      * Streams [pcmFile]'s bytes into the multipart upload as a WAV file without ever holding the
      * full audio as one contiguous byte array: [PcmWavRequestBody] writes the 44-byte header
      * directly to the sink, then streams the PCM file's bytes straight through. When
@@ -123,11 +133,15 @@ object TranscriberClient {
         model: String = DEFAULT_MODEL,
         vocabularyTerms: List<String> = emptyList(),
         compressedFile: File? = null,
+        language: String? = null,
         callback: (Result) -> Unit,
     ) {
         val bodyBuilder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("model", model.ifBlank { DEFAULT_MODEL })
+        for ((name, value) in languageFormParts(language)) {
+            bodyBuilder.addFormDataPart(name, value)
+        }
         // #114 part 1: bias decoding toward vocabulary the user has taught Ramblr (project
         // names/jargon), the same terms already interpolated into cleanup-stage prompts (see
         // PostProcessor.vocabularyClause). Sent as structured `keywords[]` parts on models that

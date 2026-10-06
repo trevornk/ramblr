@@ -143,9 +143,11 @@ class ProcessTextActivity : Activity() {
         )
         // An explicit pick in the dialog above is an explicit selection, so the persona's own
         // prompt is used verbatim -- the same contract as the overlay's quick style menu.
-        val prompt = PostProcessor.interpolateVocabulary(
-            CleanupPersonas.promptForExplicitSelection(persona),
-            vocabulary,
+        val prompt = PostProcessor.withKeepLanguage(
+            PostProcessor.interpolateVocabulary(
+                CleanupPersonas.promptForExplicitSelection(persona),
+                vocabulary,
+            )
         )
         val localModel = LocalCleanupProvider.selectedModel(this)
         val localPrompt = LocalCleanupProvider.selectedSystemPrompt(this)
