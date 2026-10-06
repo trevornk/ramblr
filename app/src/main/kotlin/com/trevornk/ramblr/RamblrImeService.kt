@@ -339,6 +339,12 @@ class RamblrImeService : InputMethodService() {
         // where the text may go: the same field if it is still bound, else clipboard + history +
         // notification. Recording is still torn down (the mic must be released), as is DESTROYED.
         val transcribing = runtime?.currentState() == RecordingStateMachine.State.TRANSCRIBING
+        // A service torn down mid-transcription loses the result. If the user had already left the
+        // field (detached) nothing else will ever tell them; the controller only posts the notice
+        // when its destination is gone, so a still-bound field gets nothing new.
+        if (reason == ImeLifecycleLoss.DESTROYED && transcribing) {
+            runCatching { controller.listener.onDictationFailed(BackgroundFailure.FAILED) }
+        }
         if (lifecycleLossActionFor(reason, transcribing) == LifecycleLossAction.DETACH_AND_FINISH) {
             Log.i(TAG, "Keeping in-flight transcription alive across $reason")
             return
