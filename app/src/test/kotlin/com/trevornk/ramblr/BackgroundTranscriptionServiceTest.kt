@@ -66,11 +66,11 @@ class BackgroundTranscriptionServiceTest {
 
         svc.stopNow() // hard cap / platform timeout while A's hold is still counted
         assertEquals("A's hold is still counted, not stranded", 1, BackgroundTranscriptionService.heldCount())
-        svc.onDestroy() // platform destroy afterwards must not clear a later pending request
 
         work.begin() // dictation B arrives
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals("B must get a fresh start", 1, startedServices().size)
+        svc.onDestroy() // the platform's late destroy of the OLD instance must not clear B's pending request
         work.begin() // dictation C while B's start is still pending
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals("no duplicate start while one is pending", 0, startedServices().size)
