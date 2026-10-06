@@ -287,6 +287,16 @@ internal object BackgroundDictationNotifications {
             .setContentIntent(contentIntent(ctx, notice.opensHistory))
             .build()
 
+    /** App-level notifications on AND the result channel itself not switched off. The channel
+     *  check matters because muting only "Dictation results" leaves areNotificationsEnabled() true
+     *  while every notify() to it silently vanishes. A missing channel (not created yet / read
+     *  failure) fails open to "can show", which is the pre-existing behavior. */
+    private fun canShowResult(nm: NotificationManagerCompat): Boolean {
+        if (!nm.areNotificationsEnabled()) return false
+        val channel = nm.getNotificationChannelCompat(RESULT_CHANNEL_ID) ?: return true
+        return channel.importance != NotificationManagerCompat.IMPORTANCE_NONE
+    }
+
     /** Never allowed to fail the caller: a missing POST_NOTIFICATIONS grant must not affect the
      *  dictation, which has already finished or failed on its own terms. A single fixed id means a
      *  second background result replaces the first instead of stacking. */
@@ -294,7 +304,7 @@ internal object BackgroundDictationNotifications {
         try {
             ensureChannels(ctx)
             val nm = NotificationManagerCompat.from(ctx)
-            if (!nm.areNotificationsEnabled()) {
+            if (!canShowResult(nm)) {
                 // POST_NOTIFICATIONS denied, or the result channel muted on its own: the user must
                 // still not be left guessing, so fall back to a toast, the one surface that needs
                 // no grant. (A muted channel makes notify() a silent no-op.)

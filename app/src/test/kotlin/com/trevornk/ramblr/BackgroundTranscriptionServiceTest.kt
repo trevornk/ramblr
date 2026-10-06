@@ -2,6 +2,7 @@ package com.trevornk.ramblr
 
 import android.app.Application
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
@@ -149,6 +150,22 @@ class BackgroundTranscriptionServiceTest {
 
     @Test fun `notifications disabled falls back to a toast instead of silence`() {
         shadowOf(nm()).setNotificationsEnabled(false)
+        BackgroundDictationNotifications.postResult(app, failureNoticeFor(BackgroundFailure.FAILED))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(shadowOf(nm()).allNotifications.isEmpty())
+        assertEquals(
+            "${failureNoticeFor(BackgroundFailure.FAILED).title}. ${failureNoticeFor(BackgroundFailure.FAILED).text}",
+            org.robolectric.shadows.ShadowToast.getTextOfLatestToast(),
+        )
+    }
+
+    @Test fun `a muted result channel falls back to a toast even with app notifications enabled`() {
+        shadowOf(nm()).setNotificationsEnabled(true)
+        BackgroundDictationNotifications.ensureChannels(app)
+        val muted = NotificationChannel(
+            BackgroundDictationNotifications.RESULT_CHANNEL_ID, "Dictation results", NotificationManager.IMPORTANCE_NONE,
+        )
+        nm().createNotificationChannel(muted)
         BackgroundDictationNotifications.postResult(app, failureNoticeFor(BackgroundFailure.FAILED))
         shadowOf(Looper.getMainLooper()).idle()
         assertTrue(shadowOf(nm()).allNotifications.isEmpty())
