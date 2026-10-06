@@ -95,6 +95,16 @@ interface RuntimeListener {
 
     /** Whether this host/session permits retention of transcript-bearing diagnostics. */
     fun allowsTranscriptRetention(): Boolean = true
+
+    /**
+     * #284: a dictation ended without any text to deliver (nothing heard, provider/chain error,
+     * timeout). Invoked on the main thread immediately BEFORE the [onIdleUi] funnel for that
+     * dictation, so a host can still tell whether the user could see it. Never invoked for a
+     * user-initiated cancel. The runtime has already shown its own toast; a host adds a
+     * notification only when the user can no longer see the field the dictation was for.
+     * Carries a coarse [BackgroundFailure], never the raw error (those can echo provider bodies).
+     */
+    fun onDictationFailed(failure: BackgroundFailure) {}
 }
 
 /**
@@ -152,6 +162,9 @@ class DictationRuntime internal constructor(
     /** Captured once per runtime: capacity is stable during a process, while this keeps Android's
      *  ActivityManager calls out of the pure sequencing decisions and test seams. */
     private val deviceMemoryTier: DeviceMemoryTier = DeviceMemoryTierDetector.tier(context),
+    /** #284: asked to keep the process at foreground priority from transcription start until the
+     *  pipeline is terminal. [BackgroundWork.None] (the default) changes nothing. */
+    private val backgroundWork: BackgroundWork = BackgroundWork.None,
     /** Test seam: lets host-side unit tests substitute a fake engine at the capture boundary.
      *  The default is exactly the pre-extraction construction. */
     private val engineFactory: (File, RecordingStateMachine) -> RecordingEngine =
@@ -162,6 +175,7 @@ class DictationRuntime internal constructor(
         private const val TAG = "PhoneWhisper"
         private const val SAMPLE_RATE = 16000
         const val BUSY_MESSAGE = "Ramblr is already dictating from another input surface"
+        private const val NO_SPEECH_MESSAGE = "No speech detected"
 
         /** Backstop if no transcription/cleanup callback ever fires; covers transcription + cleanup callTimeouts. */
         private const val WATCHDOG_TIMEOUT_MS = 400_000L
@@ -198,6 +212,9 @@ class DictationRuntime internal constructor(
             if (sessionLease !== lease) return
             sessionLease = null
         }
+        // #284: the session is over on every path (including discarded handoffs that never reach
+        // resetToIdle), so the process-hold ends with it. Idempotent.
+        endBackgroundHold()
         leaseRegistry.release(lease)
     }
 
@@ -257,6 +274,30 @@ class DictationRuntime internal constructor(
         runCatching {
             transcriptionWakeLock?.takeIf { it.isHeld }?.release()
         }.onFailure { Log.w(TAG, "Couldn't release transcription wakelock", it) }
+    }
+
+    /** #284: true between [beginBackgroundHold] and [endBackgroundHold]. One flag per runtime keeps
+     *  begin/end balanced however many terminal paths fire (resetToIdle, shutdown, cancel). */
+    private val backgroundHeld = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Called when transcription starts -- the user has just tapped stop, so the app is still
+     *  visible and starting a foreground service is allowed (ADR-0002). Failure is swallowed: an
+     *  unprotected dictation is exactly what shipped before #284, never worth failing over. */
+    private fun beginBackgroundHold() {
+        if (!backgroundHeld.compareAndSet(false, true)) return
+        runCatching { backgroundWork.begin() }.onFailure { Log.w(TAG, "Couldn't begin background hold", it) }
+    }
+
+    /** Idempotent: safe from every terminal path. */
+    private fun endBackgroundHold() {
+        if (!backgroundHeld.compareAndSet(true, false)) return
+        runCatching { backgroundWork.end() }.onFailure { Log.w(TAG, "Couldn't end background hold", it) }
+    }
+
+    /** Reports a no-text terminal outcome to the host, if this dictation is still the live one. */
+    private fun reportFailure(failure: BackgroundFailure) {
+        runCatching { listener.onDictationFailed(failure) }
+            .onFailure { Log.w(TAG, "onDictationFailed threw", it) }
     }
 
     /** Per-process-launch unique prefix for [correlationIdFor] (real bug fix, 2026-07-17):
@@ -635,6 +676,7 @@ class DictationRuntime internal constructor(
         }
         pipelineTiming.start(PipelineTiming(stopTapAtMs = System.currentTimeMillis(), correlationId = correlationIdFor(activeToken)))
         armWatchdog(activeToken, lease)
+        beginBackgroundHold()
         listener.onEnterTranscribingUi()
     }
 
@@ -730,6 +772,7 @@ class DictationRuntime internal constructor(
                 // H2 (#192): a timed-out dictation never reaches finishInjection; drop its
                 // timeline so a later unrelated injection can't consume it.
                 pipelineTiming.abandon()
+                reportFailure(BackgroundFailure.TIMED_OUT)
                 resetToIdle(lease)
                 toast("Transcription timed out")
             }
@@ -757,6 +800,8 @@ class DictationRuntime internal constructor(
             // (e.g. preview-before-inject's early resetToIdle) are harmless no-ops or early releases
             // that the next startRecording() re-acquires.
             releaseTranscriptionWakeLock()
+            // #284: the pipeline is terminal, so the foreground-service hold ends with the wakelock.
+            endBackgroundHold()
             // #115: deliberately NOT abandoned here. resetToIdle runs immediately after beginPreview()
             // too (preview-before-inject, #40) -- well before the real injectText() call that resolves
             // the preview, possibly seconds later on a timeout. Abandoning here would silently drop
@@ -901,6 +946,7 @@ class DictationRuntime internal constructor(
             val nowMs = System.currentTimeMillis()
             pipelineTiming.start(PipelineTiming(stopTapAtMs = nowMs, correlationId = correlationIdFor(token), drainAtMs = nowMs))
             armWatchdog(token, lease)
+            beginBackgroundHold()
             listener.onEnterTranscribingUi()
             toast("Recording limit reached (10 min) — transcribing…")
             thread { continueWithCloudLiveOrBatch(result, token, lease) }
@@ -1061,7 +1107,7 @@ class DictationRuntime internal constructor(
             Log.i(TAG, "Recording below ${MIN_RECORDING_DURATION_MS}ms floor (${file.length()} bytes); discarding")
             file.delete()
             result.compressedFile?.delete()
-            reset("No speech detected", token, lease)
+            reset(NO_SPEECH_MESSAGE, token, lease)
             return
         }
 
@@ -1290,6 +1336,7 @@ class DictationRuntime internal constructor(
                     handler.post {
                         if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                         toast("Local error: ${e.message}")
+                        reportFailure(BackgroundFailure.FAILED)
                         resetToIdle(lease)
                     }
                 }
@@ -1615,6 +1662,7 @@ class DictationRuntime internal constructor(
             handler.post {
                 if (!guard.isCurrent(token)) return@post
                 toast("No speech detected")
+                reportFailure(BackgroundFailure.NO_SPEECH)
                 resetToIdle(lease)
             }
             return
@@ -1787,6 +1835,7 @@ class DictationRuntime internal constructor(
         pipelineTiming.abandon()
         handler.post {
             if (!guard.isCurrent(token) || sessionLease !== expectedLease) return@post
+            reportFailure(if (msg == NO_SPEECH_MESSAGE) BackgroundFailure.NO_SPEECH else BackgroundFailure.FAILED)
             resetToIdle(expectedLease)
         }
     }
@@ -1798,6 +1847,7 @@ class DictationRuntime internal constructor(
         pipelineTiming.abandon()
         handler.post {
             if (sessionLease !== expectedLease) return@post
+            reportFailure(BackgroundFailure.FAILED)
             resetToIdle(expectedLease)
         }
     }
@@ -1841,6 +1891,7 @@ class DictationRuntime internal constructor(
         guard.cancel()
         activeToken = 0
         pipelineTiming.abandon()
+        endBackgroundHold()
     }
 
     /** Compatibility path for the accessibility host; IME uses the split async path below. */
