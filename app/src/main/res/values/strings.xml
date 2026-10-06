@@ -19,6 +19,7 @@
     <string name="overlay_button_idle_description">Ramblr dictation button. Double-tap to start recording.</string>
     <string name="overlay_button_recording_description">Ramblr dictation button. Recording. Double-tap to stop and transcribe.</string>
     <string name="overlay_button_transcribing_description">Ramblr dictation button. Transcribing. Double-tap and hold to cancel.</string>
+    <string name="overlay_button_cleaning_description">Ramblr dictation button. Cleaning up. Double-tap and hold to cancel.</string>
 
     <!-- Quick Settings tile (#127): an alternative dictation trigger for users who hide the
          floating ring entirely. -->

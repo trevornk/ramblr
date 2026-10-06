@@ -316,6 +316,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
          *  from a routine success bubble instead of looking identical. */
         private const val COLOR_FEEDBACK_FALLBACK_BG = 0xEEB45309.toInt()
         private const val COLOR_RING = 0xFFE8EAED.toInt()
+        /** Busy-ring tint while cleanup runs (#294) -- the same emerald as [COLOR_CLEANUP_ON], so the
+         *  ring matches the style menu's "Cleanup: On" row. */
+        private const val COLOR_RING_CLEANING = 0xFF34D399.toInt()
         /** Style menu's cleanup row icon (#34, #53): emerald when cleanup will run, neutral grey
          *  when it's off -- the same colors the old always-visible badge used. */
         private const val COLOR_CLEANUP_ON = 0xFF34D399.toInt()
@@ -387,6 +390,14 @@ open class WhisperAccessibilityService : AccessibilityService() {
             handler.post { stopPulse() }
             setAppearance(COLOR_BUSY)
             setBusy(true)
+        }
+
+        override fun onCleaningStarted() {
+            // #294: transcription is done and cleanup has begun. Tint the busy ring so the user can
+            // tell the two phases apart. The ring (not the button fill) carries the signal because a
+            // custom overlay icon (#43) replaces the fill entirely, but the ring always draws on top.
+            setBusy(true, cleaning = true)
+            setAppearance(COLOR_BUSY)
         }
 
         override fun onIdleUi() {
@@ -642,6 +653,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private var overlayView: FrameLayout? = null
     private var button: ImageView? = null
     private var spinner: ProgressBar? = null
+    /** True while the busy ring shows the cleanup phase (#294). Main thread only. */
+    private var cleaningUi = false
     private var feedbackView: TextView? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var feedbackLayoutParams: WindowManager.LayoutParams? = null
@@ -1737,7 +1750,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
         btn.contentDescription = when (runtime.currentState()) {
             RecordingStateMachine.State.IDLE -> getString(R.string.overlay_button_idle_description)
             RecordingStateMachine.State.RECORDING -> getString(R.string.overlay_button_recording_description)
-            RecordingStateMachine.State.TRANSCRIBING -> getString(R.string.overlay_button_transcribing_description)
+            RecordingStateMachine.State.TRANSCRIBING -> getString(
+                if (cleaningUi) R.string.overlay_button_cleaning_description
+                else R.string.overlay_button_transcribing_description
+            )
         }
 
         if (appearance.hasCustomIcon) {
@@ -1817,8 +1833,14 @@ open class WhisperAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun setBusy(visible: Boolean) {
+    /** Shows/hides the busy ring. [cleaning] (#294) tints it [COLOR_RING_CLEANING] for the cleanup
+     *  phase; every other call resets it to the neutral [COLOR_RING], so a stale cleanup tint can
+     *  never leak into the next dictation's transcribing phase. */
+    private fun setBusy(visible: Boolean, cleaning: Boolean = false) {
         handler.post {
+            cleaningUi = visible && cleaning
+            spinner?.indeterminateTintList =
+                ColorStateList.valueOf(if (cleaningUi) COLOR_RING_CLEANING else COLOR_RING)
             spinner?.visibility = if (visible) View.VISIBLE else View.GONE
         }
     }
