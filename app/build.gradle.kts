@@ -210,6 +210,15 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             all {
+                // CI only surfaced the top frame of a failure (#289: "NullPointerException at
+                // ShadowImpl.java:12"), which is useless for diagnosing a Robolectric setup flake.
+                // Print the full trace, causes included, for every failed test.
+                it.testLogging {
+                    events("failed")
+                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    showCauses = true
+                    showStackTraces = true
+                }
                 // Forward the opt-in regeneration flag through to the test JVM. Without this,
                 // `-Dramblr.writeModelCatalog=true` only reaches the Gradle daemon and
                 // ModelCatalogFileSyncTest's regeneration branch silently never fires, leaving
