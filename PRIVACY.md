@@ -132,6 +132,18 @@ accessibility service, so it checks the same exclusion list independently, again
 whatever field it's currently bound to — matching the accessibility-service behavior (no new
 recording, no final commit) rather than adding a second, different rule set.
 
+### Finishing a dictation in the background
+
+If you switch apps while Ramblr is still transcribing, Ramblr keeps working (a short-lived
+foreground service with a notification, only while a dictation is actually in flight) and does
+**not** type the result into whichever app or field you are in now. Instead it copies the text to
+the clipboard and keeps it in dictation history, and tells you with a notification. If it fails
+while you are elsewhere, you get a notification saying so. These notifications never contain your
+dictated text or provider error details. Apps on your exclusion list still never receive the text
+or a clipboard copy, and a keyboard field that asked for no retention is neither copied nor saved.
+Deciding whether you have left the field uses the same on-demand foreground-app read described
+above; no new accessibility-event subscription or polling is added.
+
 ## Optional Ramblr Voice keyboard
 
 Ramblr Voice is an opt-in Android input method. Ramblr only opens Android's supported input-method
