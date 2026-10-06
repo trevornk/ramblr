@@ -533,8 +533,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
     /** True unless there is a positive signal the user left the field this dictation started in.
      *  Any failure to read the world answers true (pre-#284 behavior). */
-    internal fun deliveryTargetIsCurrent(): Boolean {
-        val target = dictationTarget ?: return true
+    internal fun deliveryTargetIsCurrent(target: DictationTarget? = dictationTarget): Boolean {
+        target ?: return true
         return try {
             isDeliveryTargetCurrent(readDeliveryProbe(target.packageName, target.node))
         } catch (e: Exception) {
@@ -549,18 +549,26 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * unless the app now in front is excluded (#256), reverts any streaming leftover in the old
      * field, and posts one notification. Nothing is ever written into the now-focused field.
      */
-    internal fun deliverToBackground(
+    private fun deliverToBackground(
         text: String,
         rawText: String?,
         paidFallbackGroup: CleanupStepGroup?,
         cleanupError: String?,
+        // A dictation that already has a history row (a resolved preview #73, or an injection
+        // whose empty-scan retry found the user gone) updates it in place instead of duplicating.
+        existingHistoryTimestamp: Long? = null,
+        // A streaming session (#29) injectText already claimed before handing off to its retry.
+        claimedStreamingHandoff: StreamingPreviewSession? = null,
     ) {
-        recordHistory(rawText ?: text, cleanedText = if (rawText != null) text else null, paidFallbackGroup = paidFallbackGroup)
+        recordHistory(
+            rawText ?: text, cleanedText = if (rawText != null) text else null,
+            paidFallbackGroup = paidFallbackGroup, existingTimestamp = existingHistoryTimestamp,
+        )
         val historySaved = prefs().getBoolean("dictation_history_enabled", true)
 
         // Same claim-and-revert the exclusion path does, so a streaming partial typed into the old
         // field before the user left isn't orphaned there.
-        val streamingHandoff = streamingSession ?: pendingStreamingHandoff
+        val streamingHandoff = claimedStreamingHandoff ?: streamingSession ?: pendingStreamingHandoff
         streamingSession = null
         pendingStreamingHandoff = null
         if (streamingHandoff != null) {
@@ -691,6 +699,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
     // Preview-before-inject (#40) — the cleaned-up candidate awaiting an explicit commit tap,
     // null whenever no preview is in flight. Only touched on the main thread.
     private var pendingPreview: CleanupPreviewState? = null
+    // #284: where the pending preview's dictation was started; owns its node. Null whenever no
+    // preview is pending (or nothing was captured, which fails open to the pre-#284 behavior).
+    private var pendingPreviewTarget: DictationTarget? = null
     private val previewTimeoutRunnable = Runnable { resolvePreview { it.timeout() } }
 
     // Empty-scan retry (#5) — at most one in flight, cancelled if the service tears down first.
@@ -947,6 +958,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // there's nothing left to persist here. Just drop the in-memory state; the history row
         // survives with the raw+candidate text exactly as it was when the preview began.
         pendingPreview = null
+        pendingPreviewTarget?.node?.recycle()
+        pendingPreviewTarget = null
         dismissStyleMenu()
         removeOverlay()
         super.onDestroy()
@@ -2413,6 +2426,12 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // updates this exact row in place instead of adding a duplicate once the preview resolves.
         val historyTimestamp = recordHistory(rawText, cleanedText = candidateText, paidFallbackGroup = paidFallbackGroup)
         pendingPreview = CleanupPreviewState(rawText, candidateText, paidFallbackGroup, historyTimestamp)
+        // #284: the runtime goes idle right after deliverText() returns and onIdleUi forgets the
+        // shared dictationTarget, but this preview resolves up to PREVIEW_TIMEOUT_MS later. Move the
+        // target (and ownership of its node) into the preview so the user-left check still has
+        // something to compare against when the tap/timeout finally arrives.
+        pendingPreviewTarget = dictationTarget
+        dictationTarget = null
         handler.postDelayed(previewTimeoutRunnable, PREVIEW_TIMEOUT_MS)
 
         val truncated = candidateText.take(PREVIEW_PREVIEW_CHARS)
@@ -2424,14 +2443,38 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun resolvePreview(action: (CleanupPreviewState) -> PreviewResolution) {
         val preview = pendingPreview ?: return
         pendingPreview = null
+        val previewTarget = pendingPreviewTarget
+        pendingPreviewTarget = null
         handler.removeCallbacks(previewTimeoutRunnable)
         val resolution = action(preview)
+        try {
+            // #284: the user may have left the field during the preview window. Same rule as the
+            // immediate branch of deliverText: never type into whatever is focused now. The
+            // preview's history row (#73) is updated in place, not duplicated.
+            if (!deliveryTargetIsCurrent(previewTarget)) {
+                if (resolution.committed) {
+                    deliverToBackground(
+                        resolution.textToInject, preview.rawText, preview.paidFallbackGroup, null,
+                        existingHistoryTimestamp = preview.historyTimestamp,
+                    )
+                } else {
+                    deliverToBackground(
+                        resolution.textToInject, null, preview.paidFallbackGroup, null,
+                        existingHistoryTimestamp = preview.historyTimestamp,
+                    )
+                }
+                return
+            }
+        } finally {
+            previewTarget?.node?.recycle()
+        }
         if (resolution.committed) {
             injectText(
                 resolution.textToInject,
                 rawText = preview.rawText,
                 paidFallbackGroup = preview.paidFallbackGroup,
                 existingHistoryTimestamp = preview.historyTimestamp,
+                deliveryTargetPackage = previewTarget?.packageName,
             )
         } else {
             // Discard/timeout falls back to raw text (see CleanupPreviewState) -- update the
@@ -2445,6 +2488,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 // immediately, so "raw copied to clipboard" sent the user to an empty clipboard.
                 feedback = "Cleanup skipped — inserted raw text",
                 existingHistoryTimestamp = preview.historyTimestamp,
+                deliveryTargetPackage = previewTarget?.packageName,
             )
         }
     }
@@ -2595,6 +2639,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // string from the call site is what made the old message claim a clipboard copy that
         // DIRECT injections wipe immediately (see [CleanupFailureNotice]).
         cleanupError: String? = null,
+        // #284: package the dictation was started in, for re-checking inside the empty-scan retry
+        // (by then onIdleUi has cleared the shared target). Defaults to the live target; null =
+        // unknown = fail open. A user-initiated raw retry has no live target, so it is unguarded.
+        deliveryTargetPackage: String? = dictationTarget?.packageName,
     ) {
         // Smart vocabulary suggestions (#216): every accepted dictation funnels through this
         // method -- direct injection, cleanup results, and preview-accepts alike (discarded
@@ -2667,8 +2715,18 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // real delay to the common case where a candidate is already there.
         if (shouldRetryEmptyScan(candidates.size)) {
             Log.i(TAG, "No injection candidates on first scan; retrying in ${INJECTION_RETRY_DELAY_MS}ms")
+            val retryTarget = deliveryTargetPackage?.let { DictationTarget(it, null) }
             val retry = Runnable {
                 pendingInjectionRetry = null
+                // #284: the 200 ms rescan reads the *active window* again; if the user left in the
+                // meantime, hand over to the background path instead of typing into the new app.
+                if (!deliveryTargetIsCurrent(retryTarget)) {
+                    deliverToBackground(
+                        text, rawText, paidFallbackGroup, cleanupError,
+                        existingHistoryTimestamp = historyTimestamp, claimedStreamingHandoff = streamingHandoff,
+                    )
+                    return@Runnable
+                }
                 finishInjection(findInjectionCandidates(), text, rawText, priorClipboard, feedback, feedbackDurationMs, streamingHandoff, historyTimestamp, cleanupError)
             }
             pendingInjectionRetry = retry

@@ -201,4 +201,111 @@ class AccessibilityBackgroundDeliveryTest {
         listener.onIdleUi()
         assertNull(service.dictationTarget)
     }
+
+    // --- preview-before-inject must not outlive the field (review finding 1) ---
+
+    private fun tapFeedback(service: WhisperAccessibilityService) {
+        WhisperAccessibilityService::class.java.getDeclaredMethod("onFeedbackTapped")
+            .apply { isAccessible = true }.invoke(service)
+    }
+
+    private fun retryScheduled(service: WhisperAccessibilityService): Boolean =
+        WhisperAccessibilityService::class.java.getDeclaredField("pendingInjectionRetry")
+            .apply { isAccessible = true }.get(service) != null
+
+    /** The runtime's real sequence: deliverText (which begins the preview) then resetToIdle. */
+    private fun startPreviewThenGoIdle(service: TestService, listener: RuntimeListener) {
+        PreviewBeforeInjectToggle.setEnabled(app, true)
+        listener.onEnterTranscribingUi()
+        listener.deliverText("clean candidate", "raw words", null, null, 2000)
+        listener.onIdleUi()
+        idle()
+    }
+
+    @Test fun `preview tapped after the user left the field goes to background, never into the new app`() {
+        val service = build()
+        val listener = listenerOf(service)
+        startPreviewThenGoIdle(service, listener)
+        assertNull("the shared target is cleared by onIdleUi; the preview must hold its own", service.dictationTarget)
+
+        service.probe = gone()
+        tapFeedback(service)
+        idle()
+
+        assertEquals("clean candidate", clipboardText())
+        assertEquals(1, notifications().size)
+        assertFalse("insertion path (empty-scan retry) must not run", retryScheduled(service))
+    }
+
+    @Test fun `preview timing out after the user left the field goes to background with the raw text`() {
+        val service = build()
+        val listener = listenerOf(service)
+        startPreviewThenGoIdle(service, listener)
+
+        service.probe = gone()
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(9))
+
+        assertEquals("raw words", clipboardText())
+        assertEquals(1, notifications().size)
+        assertFalse(retryScheduled(service))
+    }
+
+    @Test fun `a preview resolved in the original field takes the normal injection path`() {
+        val service = build()
+        val listener = listenerOf(service)
+        startPreviewThenGoIdle(service, listener)
+
+        tapFeedback(service)
+        idle()
+
+        assertTrue("injectText() must still be the path taken", retryScheduled(service))
+        assertTrue("no new notification on the protected path", notifications().isEmpty())
+    }
+
+    @Test fun `a gone preview updates the preview's history row instead of adding a second`() {
+        val service = build()
+        val listener = listenerOf(service)
+        startPreviewThenGoIdle(service, listener)
+        Thread.sleep(300) // beginPreview's history write is on a worker thread
+        assertEquals(1, DictationHistoryStore.forContext(app).all().size)
+
+        service.probe = gone()
+        tapFeedback(service)
+        Thread.sleep(300)
+        idle()
+
+        val entries = DictationHistoryStore.forContext(app).all()
+        assertEquals(entries.toString(), 1, entries.size)
+        assertEquals("raw words", entries.single().rawText)
+        assertEquals("clean candidate", entries.single().cleanedText)
+    }
+
+    // --- empty-scan retry re-checks the target (review finding 3) ---
+
+    @Test fun `the empty-scan retry hands over to background when the user left during the 200ms`() {
+        val service = build()
+        val listener = listenerOf(service)
+        listener.onEnterTranscribingUi()
+        listener.deliverText("late leaver", null, null, null, 2000) // still current: schedules the retry
+        listener.onIdleUi()
+        assertTrue(retryScheduled(service))
+
+        service.probe = gone()
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(400))
+
+        assertEquals("late leaver", clipboardText())
+        assertEquals(1, notifications().size)
+    }
+
+    @Test fun `the empty-scan retry still runs the normal path when the user stayed`() {
+        val service = build()
+        val listener = listenerOf(service)
+        listener.onEnterTranscribingUi()
+        listener.deliverText("stayed", null, null, null, 2000)
+        listener.onIdleUi()
+
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(400))
+
+        assertTrue(notifications().isEmpty())
+    }
 }
