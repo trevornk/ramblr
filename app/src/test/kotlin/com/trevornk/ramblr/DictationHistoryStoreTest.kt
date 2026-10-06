@@ -174,6 +174,13 @@ class DictationHistoryStoreTest {
         assertEquals("final injected text", all.single().cleanedText)
     }
 
+    @Test fun `upsert of a byte-identical entry updates in place instead of duplicating`() {
+        val store = DictationHistoryStore(tempFile())
+        store.upsert(entry(1, "raw", "candidate"))
+        store.upsert(entry(1, "raw", "candidate"))
+        assertEquals(1, store.all().size)
+    }
+
     @Test fun `upsert preserves original entry position rather than moving it to the end`() {
         val store = DictationHistoryStore(tempFile())
         store.add(entry(1, "first"))

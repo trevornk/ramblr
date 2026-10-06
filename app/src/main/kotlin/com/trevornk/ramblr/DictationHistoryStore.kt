@@ -74,9 +74,11 @@ class DictationHistoryStore(private val file: File, private val maxEntries: Int 
     @Synchronized
     fun upsert(entry: DictationHistoryEntry) {
         val existing = readAll()
-        val replaced = existing.map { if (it.timestamp == entry.timestamp) entry else it }
-        val entries = if (replaced != existing) {
-            replaced
+        // Match on identity (timestamp), not on "the list changed": re-upserting an entry that is
+        // byte-identical to the stored one (a preview committed unedited) must stay a no-op
+        // update, not fall through to add() and duplicate the row.
+        val entries = if (existing.any { it.timestamp == entry.timestamp }) {
+            existing.map { if (it.timestamp == entry.timestamp) entry else it }
         } else {
             (existing + entry).takeLast(maxEntries)
         }
