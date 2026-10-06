@@ -196,12 +196,14 @@ class BackgroundDictationTest {
 
     // --- hold counter ---
 
-    @Test fun `holds start on first acquire and stop on last release`() {
+    @Test fun `every acquire re-evaluates the start and only the last release stops`() {
         var starts = 0
         var stops = 0
         val holds = BackgroundWorkHolds({ starts++ }, { stops++ })
         holds.acquire(); holds.acquire()
-        assertEquals(1, starts)
+        // The start callback is idempotent; calling it on every acquire is what lets a second
+        // dictation revive a service the hard cap/platform timeout stopped under a live hold.
+        assertEquals(2, starts)
         holds.release()
         assertEquals(0, stops)
         holds.release()

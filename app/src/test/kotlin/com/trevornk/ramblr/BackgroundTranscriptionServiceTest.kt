@@ -33,9 +33,61 @@ class BackgroundTranscriptionServiceTest {
 
     private lateinit var app: Application
 
-    @Before fun setUp() { app = RuntimeEnvironment.getApplication() }
+    @Before fun setUp() {
+        app = RuntimeEnvironment.getApplication()
+        BackgroundTranscriptionService.resetForTest()
+    }
+
+    private fun startedServices(): List<Intent> {
+        val out = mutableListOf<Intent>()
+        while (true) out += shadowOf(app).nextStartedService ?: break
+        return out
+    }
 
     private fun nm() = app.getSystemService(NotificationManager::class.java)
+
+    @Test fun `acquiring a hold requests exactly one service start, repeats do not duplicate it`() {
+        val work = BackgroundTranscriptionService.work(app)
+        work.begin(); work.begin()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, startedServices().size)
+        work.end(); work.end()
+    }
+
+    @Test fun `stopping under a live hold lets the next acquire start a fresh service, with no duplicate`() {
+        val work = BackgroundTranscriptionService.work(app)
+        work.begin() // dictation A
+        shadowOf(Looper.getMainLooper()).idle()
+        val a = Robolectric.buildService(BackgroundTranscriptionService::class.java, Intent(app, BackgroundTranscriptionService::class.java))
+        val svc = a.create().startCommand(0, 1).get()
+        startedServices() // drain A's start
+        assertFalse(shadowOf(svc).isStoppedBySelf)
+
+        svc.stopNow() // hard cap / platform timeout while A's hold is still counted
+        assertEquals("A's hold is still counted, not stranded", 1, BackgroundTranscriptionService.heldCount())
+        svc.onDestroy() // platform destroy afterwards must not clear a later pending request
+
+        work.begin() // dictation B arrives
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("B must get a fresh start", 1, startedServices().size)
+        work.begin() // dictation C while B's start is still pending
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("no duplicate start while one is pending", 0, startedServices().size)
+
+        work.end(); work.end(); work.end()
+    }
+
+    @Test fun `a hold taken on a live instance refreshes its hard cap instead of starting a second service`() {
+        val work = BackgroundTranscriptionService.work(app)
+        work.begin()
+        val ctrl = Robolectric.buildService(BackgroundTranscriptionService::class.java, Intent(app, BackgroundTranscriptionService::class.java))
+        ctrl.create().startCommand(0, 1)
+        startedServices()
+        work.begin()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(0, startedServices().size)
+        work.end(); work.end()
+    }
 
     @Test fun `manifest declares the service non-exported with the dataSync type and its permission`() {
         val info = app.packageManager.getServiceInfo(

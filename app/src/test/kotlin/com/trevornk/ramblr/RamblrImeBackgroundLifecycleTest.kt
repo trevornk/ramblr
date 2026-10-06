@@ -107,4 +107,89 @@ class RamblrImeBackgroundLifecycleTest {
 
         assertEquals(ImeUiState.IDLE, s.lastRenderedStateForTest())
     }
+
+    // --- lazy foreground-service hold (ADR-0002) ---
+
+    /** Robolectric never binds a real InputConnection; give the service one so tickets exist. */
+    private fun bindFakeConnection(s: RamblrImeService) {
+        val f = android.inputmethodservice.InputMethodService::class.java.getDeclaredField("mInputConnection")
+        f.isAccessible = true
+        f.set(s, android.view.inputmethod.BaseInputConnection(android.view.View(s), true))
+    }
+
+    private fun app() = org.robolectric.RuntimeEnvironment.getApplication()
+
+    private fun startedService() = org.robolectric.Shadows.shadowOf(app()).peekNextStartedService()
+
+    private fun idleLooper() = org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+    @org.junit.Before fun resetService() {
+        BackgroundTranscriptionService.resetForTest()
+        while (org.robolectric.Shadows.shadowOf(app()).nextStartedService != null) { /* drain */ }
+    }
+
+    @Test fun `transcribing while the user stays in the field never starts the service`() {
+        val s = service()
+        transcribing(s)
+        // Everything a stay-in-field dictation does around the stop tap: panel callbacks, restart
+        // of the same editor, repaint. None of it is a leave signal.
+        s.panelControllerForTest()!!.listener.onEnterTranscribingUi()
+        s.onStartInput(editor("com.chat"), true)
+        idleLooper()
+        assertNull("no foreground service on the stay-in-field path", startedService())
+    }
+
+    @Test fun `leaving the field while transcribing starts the hold exactly once across both leave signals`() {
+        val s = service()
+        transcribing(s)
+
+        s.onFinishInput()
+        s.onWindowHidden()
+        idleLooper()
+
+        assertNotNull("leaving while transcribing must hold the process", startedService())
+        assertEquals(BackgroundTranscriptionService::class.java.name, startedService()!!.component!!.className)
+        org.robolectric.Shadows.shadowOf(app()).nextStartedService
+        assertNull("a second leave signal must not start a second service", startedService())
+    }
+
+    @Test fun `leaving the field while recording or idle never starts the service`() {
+        val s = service()
+        s.onFinishInput(); s.onWindowHidden()
+        val r = service()
+        assertTrue(stateMachineOf(runtimeOf(r)).tryStartRecording())
+        r.onFinishInput(); r.onWindowHidden()
+        idleLooper()
+        assertNull(startedService())
+    }
+
+    @Test fun `destroying the service while detached and transcribing posts the failure notice`() {
+        val nm = app().getSystemService(android.app.NotificationManager::class.java)
+        org.robolectric.Shadows.shadowOf(nm).setNotificationsEnabled(true)
+        val s = service()
+        bindFakeConnection(s)
+        s.onStartInput(editor("com.chat"), false) // re-bind now that a connection exists
+        s.panelControllerForTest()!!.listener.onRecordingStartRequested() // binds the dictation's ticket
+        transcribing(s)
+        s.onFinishInput() // user left; editor ticket no longer current
+        s.onDestroy()
+        idleLooper()
+        // The notice goes through the normal poster; either a notification or the toast fallback.
+        val posted = org.robolectric.Shadows.shadowOf(nm).allNotifications.size +
+            (if (org.robolectric.shadows.ShadowToast.getLatestToast() != null) 1 else 0)
+        assertTrue("a result lost to onDestroy must not be silent", posted >= 1)
+    }
+
+    @Test fun `destroying the service while still in the field posts nothing extra`() {
+        val s = service()
+        bindFakeConnection(s)
+        s.onStartInput(editor("com.chat"), false)
+        s.panelControllerForTest()!!.listener.onRecordingStartRequested()
+        transcribing(s)
+        s.onDestroy() // never left: the in-panel state is the whole story, as before
+        idleLooper()
+        val nm = app().getSystemService(android.app.NotificationManager::class.java)
+        assertTrue(org.robolectric.Shadows.shadowOf(nm).allNotifications.isEmpty())
+        assertNull(org.robolectric.shadows.ShadowToast.getLatestToast())
+    }
 }

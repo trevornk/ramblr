@@ -206,6 +206,7 @@ class RamblrImeService : InputMethodService() {
 
     override fun onFinishInput() {
         loseLifecycle(ImeLifecycleLoss.INPUT_FINISHED)
+        holdProcessForDetachedTranscription()
         editorGeneration++
         editorIdentity = ImeEditorIdentity(null, 0, 0)
         editorPolicy = ImeEditorPolicy(allowsDictation = false, allowsRetention = false)
@@ -216,6 +217,7 @@ class RamblrImeService : InputMethodService() {
 
     override fun onWindowHidden() {
         loseLifecycle(ImeLifecycleLoss.HIDDEN)
+        holdProcessForDetachedTranscription()
         super.onWindowHidden()
     }
 
@@ -315,6 +317,19 @@ class RamblrImeService : InputMethodService() {
         )
         this.modelReadyReload = modelReadyReload
         ProcessActiveImeModelReadyReload.register(modelReadyReload)
+    }
+
+    /**
+     * #284 lazy hold: the user is leaving the field and a transcription is still in flight, so
+     * ask for the foreground-service hold NOW. Starting a foreground service from the background
+     * is allowed here because this app is still the device's current input method (ADR-0002); a
+     * refused start is swallowed inside the service and the dictation carries on unprotected.
+     * Only on these two real leave signals, not on an onStartInput restart of the same field,
+     * which is not the user leaving. No-op when nothing is transcribing (including after a
+     * teardown, when the runtime reference is already gone).
+     */
+    private fun holdProcessForDetachedTranscription() {
+        runtime?.holdForLeavingHost()
     }
 
     private fun loseLifecycle(reason: ImeLifecycleLoss) {

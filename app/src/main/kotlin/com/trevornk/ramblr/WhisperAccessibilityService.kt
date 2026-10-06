@@ -632,8 +632,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
     @Synchronized
     private fun obtainRuntime(): DictationRuntime =
         runtimeInstance ?: DictationRuntime(
+            // #284: no foreground-service hold here, deliberately. The system binds an enabled
+            // accessibility service with BIND_FOREGROUND_SERVICE_WHILE_AWAKE, which keeps this
+            // process at foreground-service importance while the device is awake; the existing
+            // "ramblr:transcription" wakelock covers screen-off CPU. See ADR-0002 for the evidence.
             this, runtimeListener, cloudLiveFactory = { CloudLiveWiring.factoryOrNull(this) },
-            backgroundWork = BackgroundTranscriptionService.work(this),
         ).also { runtimeInstance = it }
 
     private var overlayView: FrameLayout? = null

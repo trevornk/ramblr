@@ -18,7 +18,7 @@ import org.robolectric.annotation.Config
 
 /**
  * #284: the runtime half of background dictation -- when [DictationRuntime] asks for the
- * foreground-service hold, when it lets go, and which terminal outcomes it reports as failures.
+ * (lazy) foreground-service hold, when it lets go, and which terminal outcomes it reports as failures.
  * Drives the real runtime through the same fake capture boundary DictationRuntimeTest uses.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -102,10 +102,34 @@ class BackgroundDictationRuntimeTest {
         assertEquals(0, work.begins)
     }
 
-    @Test fun `stop tap begins exactly one hold and a delivered result ends it`() {
+    @Test fun `stay-in-field path never asks for the hold -- no service, notification or icon`() {
         runtime.onTap()
         runtime.onTap()
-        assertEquals("hold must start at stop-tap, while the app is still in front", 1, work.begins)
+        assertEquals("the stop tap must not start the hold (lazy hold, ADR-0002)", 0, work.begins)
+
+        runtime.handleTranscriptionResult("hello world", token = 1)
+        idle()
+
+        assertEquals("a dictation that never left the field never touches the service", 0, work.begins)
+        assertEquals(0, work.ends)
+        assertTrue("normal success is not a failure", listener.failures.isEmpty())
+    }
+
+    @Test fun `stay-in-field failures and the watchdog never ask for the hold either`() {
+        runtime.onTap(); runtime.onTap()
+        runtime.handleTranscriptionResult("  ", token = 1) // no speech
+        idle()
+        runtime.onTap(); runtime.onTap()
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(401))
+        assertEquals(0, work.begins)
+    }
+
+    @Test fun `leaving the host while transcribing begins exactly one hold and a delivered result ends it`() {
+        runtime.onTap()
+        runtime.onTap()
+        runtime.holdForLeavingHost()
+        runtime.holdForLeavingHost() // onFinishInput then onWindowHidden: still one hold
+        assertEquals(1, work.begins)
         assertEquals(0, work.ends)
 
         runtime.handleTranscriptionResult("hello world", token = 1)
@@ -114,12 +138,19 @@ class BackgroundDictationRuntimeTest {
         assertEquals(1, work.begins)
         assertEquals(1, work.ends)
         assertEquals(0, work.held)
-        assertTrue("normal success is not a failure", listener.failures.isEmpty())
+    }
+
+    @Test fun `leaving the host when nothing is transcribing is a no-op`() {
+        runtime.holdForLeavingHost() // idle
+        runtime.onTap()
+        runtime.holdForLeavingHost() // recording: the mic is torn down by the host, nothing to hold
+        assertEquals(0, work.begins)
     }
 
     @Test fun `cancel ends the hold and is not reported as a failure`() {
         runtime.onTap()
         runtime.onTap()
+        runtime.holdForLeavingHost()
         runtime.cancelTranscription()
         idle()
         assertEquals(0, work.held)
@@ -130,9 +161,11 @@ class BackgroundDictationRuntimeTest {
     @Test fun `repeated dictations each get a balanced hold`() {
         // Tokens: stop tap mints 1, the next 2, ... (guard.cancel in resetToIdle does not reset them).
         runtime.onTap(); runtime.onTap()
+        runtime.holdForLeavingHost()
         runtime.handleTranscriptionResult("first", token = 1)
         idle()
         runtime.onTap(); runtime.onTap()
+        runtime.holdForLeavingHost()
         runtime.handleTranscriptionResult("second", token = 3)
         idle()
         assertEquals(2, work.begins)
@@ -142,6 +175,7 @@ class BackgroundDictationRuntimeTest {
     @Test fun `shutdown mid-transcription releases the hold`() {
         runtime.onTap()
         runtime.onTap()
+        runtime.holdForLeavingHost()
         assertEquals(1, work.held)
         runtime.beginShutdown()
         assertEquals("a destroyed host must not leave the foreground service pinned", 0, work.held)
@@ -159,6 +193,7 @@ class BackgroundDictationRuntimeTest {
         )
         rt.onTap()
         rt.onTap()
+        rt.holdForLeavingHost()
         rt.handleTranscriptionResult("still delivered", token = 1)
         idle()
         assertTrue(listener.events.contains("deliver"))
@@ -170,6 +205,7 @@ class BackgroundDictationRuntimeTest {
     @Test fun `blank transcript reports NO_SPEECH before the idle callback, hold still live`() {
         runtime.onTap()
         runtime.onTap()
+        runtime.holdForLeavingHost()
         runtime.handleTranscriptionResult("  ", token = 1)
         idle()
         assertEquals(listOf(BackgroundFailure.NO_SPEECH), listener.failures)
@@ -182,6 +218,7 @@ class BackgroundDictationRuntimeTest {
         val tiny = File.createTempFile("rec_", ".pcm", app.cacheDir).apply { writeBytes(ByteArray(500)) }
         runtime.onTap()
         runtime.onTap()
+        runtime.holdForLeavingHost()
         engines.single().finish(tiny)
         idle()
         assertEquals(listOf(BackgroundFailure.NO_SPEECH), listener.failures)
@@ -192,6 +229,7 @@ class BackgroundDictationRuntimeTest {
         // Default prefs: local model not installed and cloud fallback off -> the dispatch gives up.
         runtime.onTap()
         runtime.onTap()
+        runtime.holdForLeavingHost()
         engines.single().finish(pcm())
         idle()
         assertEquals(listOf(BackgroundFailure.FAILED), listener.failures)
@@ -201,6 +239,7 @@ class BackgroundDictationRuntimeTest {
     @Test fun `the 400s watchdog reports TIMED_OUT and releases the hold`() {
         runtime.onTap()
         runtime.onTap()
+        runtime.holdForLeavingHost()
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(401))
         assertEquals(listOf(BackgroundFailure.TIMED_OUT), listener.failures)
         assertEquals(0, work.held)

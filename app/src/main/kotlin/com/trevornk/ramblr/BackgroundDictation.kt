@@ -218,17 +218,20 @@ internal fun lifecycleLossActionFor(reason: ImeLifecycleLoss, transcribing: Bool
     if (transcribing && reason != ImeLifecycleLoss.DESTROYED) LifecycleLossAction.DETACH_AND_FINISH
     else LifecycleLossAction.TEAR_DOWN
 
-/** Keeps a process-wide background-work hold balanced: [onFirstAcquire] on the 0 -> 1 edge,
- *  [onLastRelease] on 1 -> 0, and a release with nothing held is ignored (never goes negative).
- *  Callbacks run under the lock, so they must be quick and non-blocking. */
+/** Keeps a process-wide background-work hold balanced: [onAcquire] on EVERY acquire (not just the
+ *  0 -> 1 edge: if the service was force-stopped by its self-cap or the platform timeout while a
+ *  hold was still live, the next acquire must be able to ask for a fresh start, and the callback
+ *  is idempotent), [onLastRelease] on 1 -> 0, and a release with nothing held is ignored (never
+ *  goes negative). Callbacks run under the lock, so they must be quick and non-blocking. */
 internal class BackgroundWorkHolds(
-    private val onFirstAcquire: () -> Unit,
+    private val onAcquire: () -> Unit,
     private val onLastRelease: () -> Unit,
 ) {
     private var count = 0
 
     @Synchronized fun acquire() {
-        if (count++ == 0) onFirstAcquire()
+        count++
+        onAcquire()
     }
 
     @Synchronized fun release() {
@@ -241,11 +244,14 @@ internal class BackgroundWorkHolds(
 
 /**
  * Seam through which [DictationRuntime] asks its process to stay alive while a dictation is being
- * transcribed. The default does nothing (unit tests, and anything that opts out). The shipped
- * implementation is [BackgroundTranscriptionService.Companion.work].
+ * transcribed AFTER the user has left the field. The default does nothing (unit tests, the
+ * accessibility host, anything that opts out). The shipped implementation is
+ * [BackgroundTranscriptionService.Companion.work]. The hold is lazy (ADR-0002): the runtime calls
+ * [begin] only when its host reports the user is leaving ([DictationRuntime.holdForLeavingHost]),
+ * never on the stay-in-field path.
  */
 internal interface BackgroundWork {
-    /** Called on the main thread when transcription starts. Must never throw. */
+    /** Called on the main thread, at most once per dictation. Must never throw. */
     fun begin()
 
     /** Called when the pipeline reaches any terminal state. Idempotent per [begin]. Must never throw. */

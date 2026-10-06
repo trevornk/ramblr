@@ -134,8 +134,9 @@ recording, no final commit) rather than adding a second, different rule set.
 
 ### Finishing a dictation in the background
 
-If you switch apps while Ramblr is still transcribing, Ramblr keeps working (a short-lived
-foreground service with a notification, only while a dictation is actually in flight) and does
+If you switch apps while Ramblr is still transcribing, Ramblr keeps working (with the keyboard,
+it starts a short-lived foreground service, with a notification, only at the moment you leave the
+field while a dictation is still in flight; a dictation that stays in its field never does) and does
 **not** type the result into whichever app or field you are in now. Instead it copies the text to
 the clipboard and keeps it in dictation history, and tells you with a notification. If it fails
 while you are elsewhere, you get a notification saying so. These notifications never contain your

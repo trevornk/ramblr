@@ -162,8 +162,10 @@ class DictationRuntime internal constructor(
     /** Captured once per runtime: capacity is stable during a process, while this keeps Android's
      *  ActivityManager calls out of the pure sequencing decisions and test seams. */
     private val deviceMemoryTier: DeviceMemoryTier = DeviceMemoryTierDetector.tier(context),
-    /** #284: asked to keep the process at foreground priority from transcription start until the
-     *  pipeline is terminal. [BackgroundWork.None] (the default) changes nothing. */
+    /** #284: asked to keep the process at foreground priority from the moment the host reports the
+     *  user is leaving ([holdForLeavingHost]) until the pipeline is terminal. Lazy: a dictation
+     *  that stays in its field never touches it. [BackgroundWork.None] (the default) changes
+     *  nothing. */
     private val backgroundWork: BackgroundWork = BackgroundWork.None,
     /** Test seam: lets host-side unit tests substitute a fake engine at the capture boundary.
      *  The default is exactly the pre-extraction construction. */
@@ -276,14 +278,20 @@ class DictationRuntime internal constructor(
         }.onFailure { Log.w(TAG, "Couldn't release transcription wakelock", it) }
     }
 
-    /** #284: true between [beginBackgroundHold] and [endBackgroundHold]. One flag per runtime keeps
+    /** #284: true between [holdForLeavingHost] and [endBackgroundHold]. One flag per runtime keeps
      *  begin/end balanced however many terminal paths fire (resetToIdle, shutdown, cancel). */
     private val backgroundHeld = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** Called when transcription starts -- the user has just tapped stop, so the app is still
-     *  visible and starting a foreground service is allowed (ADR-0002). Failure is swallowed: an
-     *  unprotected dictation is exactly what shipped before #284, never worth failing over. */
-    private fun beginBackgroundHold() {
+    /**
+     * #284, lazy hold: the host calls this on the main thread at the instant it learns the user is
+     * leaving the field (the IME's onFinishInput / onWindowHidden), and only then does a
+     * transcription in flight ask for the foreground-service hold. The stay-in-field path never
+     * reaches here, so it shows no notification, status icon or active-apps entry. No-op unless a
+     * transcription is actually in flight. Failure is swallowed: an unprotected dictation is
+     * exactly what shipped before #284, never worth failing over.
+     */
+    fun holdForLeavingHost() {
+        if (stateMachine.current() != RecordingStateMachine.State.TRANSCRIBING) return
         if (!backgroundHeld.compareAndSet(false, true)) return
         runCatching { backgroundWork.begin() }.onFailure { Log.w(TAG, "Couldn't begin background hold", it) }
     }
@@ -676,7 +684,6 @@ class DictationRuntime internal constructor(
         }
         pipelineTiming.start(PipelineTiming(stopTapAtMs = System.currentTimeMillis(), correlationId = correlationIdFor(activeToken)))
         armWatchdog(activeToken, lease)
-        beginBackgroundHold()
         listener.onEnterTranscribingUi()
     }
 
@@ -946,7 +953,6 @@ class DictationRuntime internal constructor(
             val nowMs = System.currentTimeMillis()
             pipelineTiming.start(PipelineTiming(stopTapAtMs = nowMs, correlationId = correlationIdFor(token), drainAtMs = nowMs))
             armWatchdog(token, lease)
-            beginBackgroundHold()
             listener.onEnterTranscribingUi()
             toast("Recording limit reached (10 min) — transcribing…")
             thread { continueWithCloudLiveOrBatch(result, token, lease) }

@@ -24,10 +24,13 @@ import androidx.core.app.ServiceCompat
  * work. It owns no pipeline state: [DictationRuntime] keeps doing all the work, exactly as before,
  * and asks for this service through [BackgroundWork]. See docs/adr/0002-background-transcription.md.
  *
- * Lifecycle: started at stop-tap (transcription start) while the user is still in the app they
- * dictated into -- an allowed foreground-service start -- and stopped the moment the pipeline
- * reaches a terminal state. It also stops itself after [MAX_RUN_MS] (just past the runtime's own
- * 400 s watchdog) and when the OS fires [onTimeout], so it can never linger.
+ * Lifecycle (lazy, ADR-0002): started only when the IME host reports the user is LEAVING the field
+ * while a transcription is in flight (onFinishInput / onWindowHidden) -- an allowed background
+ * start because the app is still the current input method -- and stopped the moment the pipeline
+ * reaches a terminal state. A dictation that stays in its field never starts it, so the daily path
+ * has no notification, status icon or active-apps entry. It also stops itself [MAX_RUN_MS] after
+ * the latest hold was requested (just past the runtime's own 400 s watchdog) and when the OS fires
+ * [onTimeout], so it can never linger. The accessibility host does not use it at all.
  *
  * Type: `dataSync` (already declared for the model-download worker; the permission is already
  * held). It is the closest honest fit for "process/transfer a user-initiated payload" and, unlike
@@ -52,8 +55,7 @@ class BackgroundTranscriptionService : Service() {
             return START_NOT_STICKY
         }
         Companion.onServiceUp(this)
-        handler.removeCallbacks(selfTimeout)
-        handler.postDelayed(selfTimeout, MAX_RUN_MS)
+        armSelfCap()
         // Everything finished between the start request and now (very short dictation).
         if (Companion.heldCount() == 0) stopNow()
         // Never restart after process death: a restarted service would have no dictation to hold.
@@ -78,11 +80,20 @@ class BackgroundTranscriptionService : Service() {
         super.onDestroy()
     }
 
+    /** (Re)starts the hard cap. Called on start and again whenever another dictation takes a hold
+     *  on this live instance, so a hold taken late in an earlier hold's window still gets the full
+     *  window instead of being cut off by a cap that started for someone else. */
+    internal fun armSelfCap() {
+        handler.removeCallbacks(selfTimeout)
+        handler.postDelayed(selfTimeout, MAX_RUN_MS)
+    }
+
     internal fun stopNow() {
         handler.removeCallbacks(selfTimeout)
         // Forget ourselves immediately, not at onDestroy: a dictation that begins between this
         // stopSelf() and the platform destroying us must request a fresh start rather than assume
-        // this dying instance will protect it.
+        // this dying instance will protect it. (A hold still counted at this point -- hard cap or
+        // platform timeout -- is not stranded: every acquire re-evaluates, see startIfStillWanted.)
         Companion.onServiceGone(this)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -129,7 +140,7 @@ class BackgroundTranscriptionService : Service() {
         private const val START_GRACE_MS = 10_000L
 
         private val holds = BackgroundWorkHolds(
-            onFirstAcquire = { onMain { startIfStillWanted() } },
+            onAcquire = { onMain { startIfStillWanted() } },
             onLastRelease = { onMain { stopIfNotWanted() } },
         )
 
@@ -156,8 +167,12 @@ class BackgroundTranscriptionService : Service() {
             if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
         }
 
+        /** Runs on every acquire and is idempotent: with a live instance it just refreshes that
+         *  instance's cap; otherwise it requests exactly one start (a pending request suppresses
+         *  duplicates for [START_GRACE_MS]). */
         private fun startIfStillWanted() {
-            if (holds.held() == 0 || instance != null) return
+            if (holds.held() == 0) return
+            instance?.let { it.armSelfCap(); return }
             val now = android.os.SystemClock.elapsedRealtime()
             if (startRequestedAtMs != 0L && now - startRequestedAtMs < START_GRACE_MS) return
             val ctx = appContext ?: return
@@ -187,8 +202,16 @@ class BackgroundTranscriptionService : Service() {
             startRequestedAtMs = 0L
         }
 
+        /** Deliberately leaves [startRequestedAtMs] alone: a start for a NEW instance may already be
+         *  pending when an old one is torn down (stopNow, then the platform's later onDestroy), and
+         *  clearing it here would let a second start be requested for the same hold. */
         internal fun onServiceGone(service: BackgroundTranscriptionService) {
             if (instance === service) instance = null
+        }
+
+        /** Test seam: drop all process-wide state between tests. */
+        internal fun resetForTest() {
+            instance = null
             startRequestedAtMs = 0L
         }
     }
@@ -272,8 +295,9 @@ internal object BackgroundDictationNotifications {
             ensureChannels(ctx)
             val nm = NotificationManagerCompat.from(ctx)
             if (!nm.areNotificationsEnabled()) {
-                // POST_NOTIFICATIONS denied (or the channel/app muted): the user must still not be
-                // left guessing, so fall back to a toast, the one surface that needs no grant.
+                // POST_NOTIFICATIONS denied, or the result channel muted on its own: the user must
+                // still not be left guessing, so fall back to a toast, the one surface that needs
+                // no grant. (A muted channel makes notify() a silent no-op.)
                 Handler(Looper.getMainLooper()).post {
                     android.widget.Toast.makeText(ctx, "${notice.title}. ${notice.text}", android.widget.Toast.LENGTH_LONG).show()
                 }

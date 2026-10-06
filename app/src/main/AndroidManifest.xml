@@ -256,10 +256,13 @@
             tools:node="merge" />
 
         <!-- #284: short-lived foreground service that holds the process at foreground priority
-             while a dictation is being transcribed/cleaned, so switching apps mid-transcription
-             doesn't get the work reclaimed. Started by DictationRuntime at stop-tap (while Ramblr's
-             host is still in front, which is an allowed foreground-service start), stopped the
-             moment the pipeline is terminal, and self-limited by a hard cap and onTimeout.
+             while a dictation is still being transcribed/cleaned AFTER the user has left the
+             field, so switching apps mid-transcription doesn't get the work reclaimed. Started
+             lazily by DictationRuntime.holdForLeavingHost() from the IME's onFinishInput /
+             onWindowHidden (an allowed background start: Ramblr is still the current input
+             method), never on the stay-in-field path; stopped the moment the pipeline is
+             terminal, and self-limited by a hard cap and onTimeout. The accessibility host does
+             not use it.
              dataSync reuses the type + FOREGROUND_SERVICE_DATA_SYNC permission already declared
              for model downloads; `microphone` is deliberately NOT used (capture has ended, and it
              would be subject to the while-in-use background-start restriction).
