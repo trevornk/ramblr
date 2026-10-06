@@ -211,6 +211,7 @@ class BackgroundTranscriptionService : Service() {
 
         /** Test seam: drop all process-wide state between tests. */
         internal fun resetForTest() {
+            holds.resetForTest()
             instance = null
             startRequestedAtMs = 0L
         }

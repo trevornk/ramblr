@@ -240,6 +240,10 @@ internal class BackgroundWorkHolds(
     }
 
     @Synchronized fun held(): Int = count
+
+    /** Test seam: the shipped instance is process-wide, so tests that drive the real seam must
+     *  not inherit another test's un-ended holds. */
+    @Synchronized fun resetForTest() { count = 0 }
 }
 
 /**
