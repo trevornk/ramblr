@@ -664,4 +664,90 @@ class StreamingPreviewTest {
         val span = resolveReplacementSpan(selStart = 0, selEnd = 0, currentTextLength = 5)
         assertEquals(span.start, span.endExclusive)
     }
+
+    // --- composeFirstStreamingPartial: ranged selection (#300, live transcription) ---
+
+    @Test fun `first partial over a select-all replaces the whole field instead of prepending`() {
+        val write = composeFirstStreamingPartial("hello there friend", selStart = 0, selEnd = 18, displayText = "Replaced")
+        assertEquals("Replaced", write.updatedText)
+        assertEquals(StreamingSpan(insertionStart = 0, previousLength = 8, replacedText = "hello there friend"), write.span)
+    }
+
+    @Test fun `first partial over a partial selection replaces only that range`() {
+        val write = composeFirstStreamingPartial("hello there friend", selStart = 6, selEnd = 11, displayText = "Replaced")
+        // Separator rule (#144) still applies: the char before the range is a space, so none is added.
+        assertEquals("hello Replaced friend", write.updatedText)
+        assertEquals(6, write.span.insertionStart)
+        assertEquals("there", write.span.replacedText)
+    }
+
+    @Test fun `a reversed ranged selection replaces the same range`() {
+        val write = composeFirstStreamingPartial("hello there friend", selStart = 11, selEnd = 6, displayText = "X")
+        assertEquals("hello X friend", write.updatedText)
+    }
+
+    @Test fun `later partials replace only the tracked span and keep text around the selection`() {
+        val first = composeFirstStreamingPartial("keep this drop me end", selStart = 10, selEnd = 17, displayText = "Hi")
+        assertEquals("keep this Hi end", first.updatedText)
+        val second = composeStreamingPartial(first.updatedText, first.span.insertionStart, first.span.previousLength, "Hi there")
+        assertEquals("keep this Hi there end", second.updatedText)
+        val closed = reconcileStreamingSpan(
+            second.updatedText,
+            first.span.copy(previousLength = second.trackedLength),
+            "Hi there friend",
+            isFinalInjectionTarget = true,
+        )
+        assertEquals("keep this Hi there friend end", closed)
+    }
+
+    @Test fun `closing the span after a select-all leaves only the final text`() {
+        val first = composeFirstStreamingPartial("old draft", selStart = 0, selEnd = 9, displayText = "New")
+        val closed = reconcileStreamingSpan(first.updatedText, first.span, "New final text.", isFinalInjectionTarget = true)
+        assertEquals("New final text.", closed)
+    }
+
+    @Test fun `clearing a span that overwrote a selection restores the original text`() {
+        val first = composeFirstStreamingPartial("old draft", selStart = 0, selEnd = 9, displayText = "New")
+        val cleared = reconcileStreamingSpan(first.updatedText, first.span, "", isFinalInjectionTarget = false)
+        assertEquals("old draft", cleared)
+    }
+
+    @Test fun `clearing after several partials still restores a mid-field selection exactly`() {
+        val first = composeFirstStreamingPartial("one two three", selStart = 4, selEnd = 7, displayText = "A")
+        val second = composeStreamingPartial(first.updatedText, first.span.insertionStart, first.span.previousLength, "A longer partial")
+        val cleared = reconcileStreamingSpan(
+            second.updatedText,
+            first.span.copy(previousLength = second.trackedLength),
+            "",
+            isFinalInjectionTarget = false,
+        )
+        assertEquals("one two three", cleared)
+    }
+
+    @Test fun `a collapsed caret mid-field is a pure insertion with nothing to restore`() {
+        val write = composeFirstStreamingPartial("hello world", selStart = 5, selEnd = 5, displayText = "there")
+        assertEquals("hello there world", write.updatedText)
+        assertEquals("", write.span.replacedText)
+        val cleared = reconcileStreamingSpan(write.updatedText, write.span, "", isFinalInjectionTarget = false)
+        assertEquals("hello world", cleared)
+    }
+
+    @Test fun `a caret at the end appends with a separator`() {
+        val write = composeFirstStreamingPartial("hello", selStart = 5, selEnd = 5, displayText = "world")
+        assertEquals("hello world", write.updatedText)
+        assertEquals("", write.span.replacedText)
+    }
+
+    @Test fun `an unreported selection and a (0, 0) report against existing text both append at the end`() {
+        assertEquals("hello world", composeFirstStreamingPartial("hello", -1, -1, "world").updatedText)
+        val zero = composeFirstStreamingPartial("hello", 0, 0, "world")
+        assertEquals("hello world", zero.updatedText)
+        assertEquals("", zero.span.replacedText)
+    }
+
+    @Test fun `a stale selection past the end of the text is clamped instead of throwing`() {
+        val write = composeFirstStreamingPartial("abc", selStart = 1, selEnd = 99, displayText = "X")
+        assertEquals("aX", write.updatedText.replace(" ", ""))
+        assertEquals("bc", write.span.replacedText)
+    }
 }

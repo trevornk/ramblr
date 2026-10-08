@@ -418,6 +418,14 @@ open class WhisperAccessibilityService : AccessibilityService() {
             flushPendingStreamingHandoff()
             pendingStreamingHandoff = streamingSession
             streamingSession = null
+            // #300: a session that overwrote a selection and ended with nothing to deliver
+            // (cancelled, nothing heard, provider error) has no final injection coming to close its
+            // span, so put the selected text back now rather than leaving the partial where it was.
+            // A pending preview (#40) is the one case where a final injection is still on its way:
+            // that keeps the handoff. Sessions that overwrote nothing are untouched, as before.
+            if (pendingPreview == null && pendingStreamingHandoff?.replacedText?.isNotEmpty() == true) {
+                flushPendingStreamingHandoff()
+            }
         }
 
         override fun onStreamingPartial(text: String) {
@@ -738,6 +746,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
         val node: AccessibilityNodeInfo,
         val insertionStart: Int,
         var lastPartialLength: Int,
+        // #300: the selected text the first partial overwrote, so a dictation that never lands can
+        // restore it. Empty when the first partial was a pure insertion.
+        val replacedText: String,
         var lastInjectedText: String?,
         var lastInjectedAtMs: Long
     )
@@ -2537,8 +2548,12 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * [smartCapitalize] for display only — the raw model hypothesis is still what's compared/stored
      * for throttling purposes.
      */
-    private fun maybeInjectPartial(text: String) {
-        if (!runtime.isRecording()) return // stale post after stop/cancel raced this
+    private fun maybeInjectPartial(text: String) = maybeInjectPartial(text, requireRecording = true)
+
+    /** [requireRecording] is false only for the debug-build `DEBUG_PARTIAL` test seam, which drives
+     *  this path without a live recording; every production caller goes through the overload above. */
+    internal fun maybeInjectPartial(text: String, requireRecording: Boolean) {
+        if (requireRecording && !runtime.isRecording()) return // stale post after stop/cancel raced this
         if (text.isBlank()) return
         val now = System.currentTimeMillis()
 
@@ -2562,21 +2577,29 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 candidate.isEditable,
                 candidate.isFocused,
             )
-            val insertionStart = resolveInsertionStart(candidate.textSelectionStart, candidate.textSelectionEnd, current.length)
-                // The node's reported caret is relative to its raw text; once whitespace-only raw
-                // text resolves to "" (resolveRealText) a caret of 1 would point past the end.
-                .coerceIn(0, current.length)
             val displayText = smartCapitalize(text)
+            // #300: the first partial replaces the same range a one-shot injection would, so a
+            // ranged selection is overwritten instead of the partial landing in front of it. The
+            // selection comes off the destination, which applies the WebView select-all correction
+            // (Sable v2 reports select-all as 0/1). Text, tracked span and the overwritten text come
+            // back together from composeFirstStreamingPartial so they can't drift apart.
             // #144: the separator is folded into the partial *before* its length is tracked, so it
             // sits inside the session's span and gets replaced along with it on every later partial
-            // and by the final text -- never double-added, never left behind. Text and tracked
-            // length come back together from composeStreamingPartial so they can't drift apart.
-            val write = composeStreamingPartial(current, insertionStart, previousLength = 0, displayText = displayText)
+            // and by the final text -- never double-added, never left behind.
+            val destination = AccessibilityTextDestination(candidate)
+            val write = composeFirstStreamingPartial(
+                current,
+                destination.selectionStart(),
+                destination.selectionEnd(),
+                displayText,
+            )
             if (!setNodeText(candidate, write.updatedText)) {
                 candidate.recycle()
                 return
             }
-            streamingSession = StreamingPreviewSession(candidate, insertionStart, write.trackedLength, text, now)
+            streamingSession = StreamingPreviewSession(
+                candidate, write.span.insertionStart, write.span.previousLength, write.span.replacedText, text, now,
+            )
             return
         }
 
@@ -2640,15 +2663,25 @@ open class WhisperAccessibilityService : AccessibilityService() {
         AccessibilityTextDestination(node).refresh()
 
     private fun endStreamingSession() {
-        streamingSession?.node?.recycle()
+        streamingSession?.let { restoreReplacedSelection(it); it.node.recycle() }
         streamingSession = null
     }
 
-    /** Discards [pendingStreamingHandoff] without attempting to reconcile it against any field --
+    /** #300: a session whose first partial overwrote a selection is being dropped without its final
+     *  text ever landing (cancelled, empty transcript, recorder failure) -- put the selected text
+     *  back so the user doesn't lose it. A session that overwrote nothing is left exactly as it has
+     *  always been (the partial stays), so this only acts when text would otherwise be destroyed. */
+    private fun restoreReplacedSelection(session: StreamingPreviewSession) {
+        if (session.replacedText.isEmpty()) return
+        clearStreamingLeftover(session)
+    }
+
+    /** Discards [pendingStreamingHandoff] without reconciling it against a final text (only a
+     *  selection the session overwrote is restored, #300) --
      *  used when a new recording starts or the service is destroyed before any final injection
      *  consumed it (e.g. the recording was cancelled or hit the watchdog, so no text ever followed). */
     private fun flushPendingStreamingHandoff() {
-        pendingStreamingHandoff?.node?.recycle()
+        pendingStreamingHandoff?.let { restoreReplacedSelection(it); it.node.recycle() }
         pendingStreamingHandoff = null
     }
 
@@ -3191,7 +3224,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun tryCloseStreamingSpan(node: AccessibilityNodeInfo, session: StreamingPreviewSession, text: String): TextCommitResult =
         DictationTextWriter.commitClosingStreamingSpan(
             AccessibilityTextDestination(node),
-            StreamingSpan(session.insertionStart, session.lastPartialLength),
+            StreamingSpan(session.insertionStart, session.lastPartialLength, session.replacedText),
             text,
         )
 
@@ -3202,7 +3235,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun clearStreamingLeftover(session: StreamingPreviewSession) {
         DictationTextWriter.clearStreamingSpan(
             AccessibilityTextDestination(session.node),
-            StreamingSpan(session.insertionStart, session.lastPartialLength),
+            StreamingSpan(session.insertionStart, session.lastPartialLength, session.replacedText),
         )
     }
 
