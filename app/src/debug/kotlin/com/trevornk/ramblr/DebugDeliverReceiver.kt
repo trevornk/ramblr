@@ -9,7 +9,9 @@ import android.view.accessibility.AccessibilityNodeInfo
 /**
  * Debug-only test seam for on-device verification of insertion behaviour without speaking.
  * Lives in app/src/debug (see the manifest overlay), so it is compiled into debug builds only and
- * never reaches a release APK.
+ * never reaches a release APK. The receiver requires `android.permission.DUMP`, which only the
+ * shell (adb) and system hold, so no installed app can drive it -- debug builds are daily-driven,
+ * and an open receiver would let any app type into the focused field or log on-screen text.
  *
  * Deliver a canned transcript through the same path a finished dictation takes
  * ([DictationRuntime.finalizeForDelivery] then `RuntimeListener.deliverText`):
