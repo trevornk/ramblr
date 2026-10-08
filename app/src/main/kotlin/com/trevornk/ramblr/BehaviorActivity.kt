@@ -810,20 +810,27 @@ class BehaviorActivity : BaseSettingsActivity() {
     private fun canaryLanguageSummary(): String {
         val lang = CanaryLanguage.languageOrDefault(this)
         val label = canaryLanguageLabels[lang] ?: lang
-        return "$label -- the language you speak when dictating with the Canary local model. " +
+        val source = if (CanaryLanguage.followsDictationLanguage(this)) "follows Dictation language" else "set here"
+        return "$label ($source) -- the language you speak when dictating with the Canary local model. " +
             "Only affects Canary; other models ignore this"
     }
 
-    /** Fixed-list picker modeled on [promptLocalTranscriptionThreads]: exactly the four languages
-     *  the shipped canary-180m-flash model supports, no free-form entry. */
+    /** Fixed-list picker modeled on [promptLocalTranscriptionThreads]: "Follow Dictation language"
+     *  first (the default, #294), then exactly the four languages the shipped canary-180m-flash
+     *  model supports, no free-form entry. Applies immediately by reloading the running
+     *  recognizer: the language is baked in when it is created. */
     private fun promptCanaryLanguage() {
         // Same AlertDialog gotcha as promptLocalTranscriptionThreads: setMessage() and
         // setSingleChoiceItems() share the content area, so the explanatory copy must ride in a
         // custom title view or the language list silently never renders.
         val languages = CanaryLanguage.SUPPORTED
-        val labels = languages.map { canaryLanguageLabels[it] ?: it }.toTypedArray()
-        val current = CanaryLanguage.languageOrDefault(this)
-        val checkedIndex = languages.indexOf(current).let { if (it < 0) 0 else it }
+        val dictation = DictationLanguage.languageOrNull(this)
+        val followLabel = "Follow Dictation language (" +
+            (if (dictation != null && dictation in languages) canaryLanguageLabels[dictation] ?: dictation
+            else "English unless Dictation language is one of Canary's four") + ")"
+        val labels = (listOf(followLabel) + languages.map { canaryLanguageLabels[it] ?: it }).toTypedArray()
+        val explicit = CanaryLanguage.explicitOrNull(this)
+        val checkedIndex = if (explicit == null) 0 else languages.indexOf(explicit) + 1
         val titleView = vertical(dp(20), dp(20)).apply {
             addView(TextView(this@BehaviorActivity).apply {
                 text = "Canary language"
@@ -833,8 +840,9 @@ class BehaviorActivity : BaseSettingsActivity() {
             addView(TextView(this@BehaviorActivity).apply {
                 text = "The language you speak when dictating with the Canary local model. " +
                     "Canary needs to be told the source language -- with the wrong one it " +
-                    "produces garbage instead of text. Only affects the Canary model; other " +
-                    "local models detect or fix their language on their own."
+                    "answers in English or produces garbage instead of your words. By default " +
+                    "it follows Transcription > Dictation language. Only affects the Canary " +
+                    "model; other local models detect or fix their language on their own."
                 textSize = 14f
                 setTextColor(attrColor(android.R.attr.textColorSecondary))
                 setPadding(0, dp(8), 0, 0)
@@ -843,7 +851,9 @@ class BehaviorActivity : BaseSettingsActivity() {
         android.app.AlertDialog.Builder(this)
             .setCustomTitle(titleView)
             .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
-                CanaryLanguage.setLanguage(this, languages[which])
+                if (which == 0) CanaryLanguage.followDictationLanguage(this)
+                else CanaryLanguage.setLanguage(this, languages[which - 1])
+                LocalModelReload.reloadIfCanaryActive(this)
                 refresh()
                 dialog.dismiss()
             }

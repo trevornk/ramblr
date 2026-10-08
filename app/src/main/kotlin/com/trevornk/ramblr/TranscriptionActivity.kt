@@ -179,7 +179,7 @@ class TranscriptionActivity : BaseSettingsActivity() {
         return if (lang == null) {
             "Auto-detect. Set this if your speech comes back in the wrong language"
         } else {
-            "${DictationLanguage.label(lang)}. Sent to cloud transcription so it doesn't guess"
+            "${DictationLanguage.label(lang)}. Sent to cloud transcription so it doesn't guess, and used by the Canary local model"
         }
     }
 
@@ -199,8 +199,9 @@ class TranscriptionActivity : BaseSettingsActivity() {
             addView(TextView(this@TranscriptionActivity).apply {
                 text = "The language you speak. Cloud transcription normally guesses it from the " +
                     "audio and can guess English, which makes your speech come back in English. " +
-                    "Choosing your language stops the guessing. On-device models aren't affected " +
-                    "(Canary has its own setting under Behavior)."
+                    "Choosing your language stops the guessing. The Canary on-device model also " +
+                    "uses it when it is English, Spanish, German or French (you can override " +
+                    "that under Behavior). Other on-device models aren't affected."
                 textSize = 14f
                 setTextColor(attrColor(android.R.attr.textColorSecondary))
                 setPadding(0, dp(8), 0, 0)
@@ -210,6 +211,8 @@ class TranscriptionActivity : BaseSettingsActivity() {
             .setCustomTitle(titleView)
             .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
                 DictationLanguage.setLanguage(this, codes[which])
+                // Canary follows this language by default and bakes it in at load time (#294).
+                LocalModelReload.reloadIfCanaryActive(this)
                 refresh()
                 dialog.dismiss()
             }

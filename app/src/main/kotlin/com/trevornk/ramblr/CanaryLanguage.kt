@@ -15,11 +15,19 @@ import android.content.SharedPreferences
  * the previously hardcoded `srcLang = "en"`, while `en.wav` is perfect. So non-English speech was
  * simply broken until the token became configurable.
  *
- * Defaults to [DEFAULT] = "en", the value the config was hardcoded to before this setting
- * existed, so shipping this is purely additive: nobody who never opens the setting sees any
- * change in behavior. Both `srcLang` and `tgtLang` get the same value -- Canary treats matching
- * src/tgt as plain transcription; mismatched values mean *translation*, which is out of scope
- * for a dictation app (#177).
+ * Both `srcLang` and `tgtLang` get the same value -- Canary treats matching src/tgt as plain
+ * transcription; mismatched values mean *translation*, which is out of scope for a dictation
+ * app (#177).
+ *
+ * Which language is used (#294): an explicit Canary choice always wins, so nobody who already
+ * picked a language here sees a change. When the Canary setting was never made, Canary follows
+ * the main [DictationLanguage] if that names one of Canary's four languages, and otherwise falls
+ * back to [DEFAULT] = "en" (the value the config was hardcoded to before #177). Before this,
+ * Canary ignored Dictation language entirely: a user who set Dictation language = German (the
+ * obvious, discoverable setting) got Canary decoding with the English token, and Canary answered
+ * with an English translation of the German speech. Measured on a Pixel 10a with the same clip:
+ * src=en -> "Today is the weather in Berlin very nice, ..."; src=de -> "Heute ist das Wetter in
+ * Berlin sehr schön, ...".
  */
 object CanaryLanguage {
     private const val PREFS_NAME = "ramblr"
@@ -30,18 +38,38 @@ object CanaryLanguage {
      *  language list. A different Canary variant in the catalog would need its own set. */
     val SUPPORTED = listOf("en", "es", "de", "fr")
 
-    fun languageOrDefault(prefs: SharedPreferences): String {
-        val stored = prefs.getString(KEY, DEFAULT) ?: DEFAULT
-        // Coerce unknown values (corrupt pref, or a future model's language leaking back onto
-        // this one) to the safe default rather than handing sherpa-onnx a token it can't map.
-        return if (stored in SUPPORTED) stored else DEFAULT
-    }
+    /** The explicit Canary choice, or null when never made (or corrupt -- an unknown value, say
+     *  a future model's language leaking back onto this one, counts as "not chosen" rather than
+     *  being handed to sherpa-onnx as a token it can't map). */
+    fun explicitOrNull(prefs: SharedPreferences): String? =
+        prefs.getString(KEY, null)?.takeIf { it in SUPPORTED }
+
+    /** True when no explicit Canary language is stored, i.e. Canary follows [DictationLanguage]. */
+    fun followsDictationLanguage(prefs: SharedPreferences): Boolean = explicitOrNull(prefs) == null
+
+    /** The language Canary decodes with: the explicit choice, else the Dictation language when
+     *  Canary supports it, else [DEFAULT]. Always one of [SUPPORTED]. */
+    fun languageOrDefault(prefs: SharedPreferences): String =
+        explicitOrNull(prefs)
+            ?: DictationLanguage.languageOrNull(prefs)?.takeIf { it in SUPPORTED }
+            ?: DEFAULT
 
     fun setLanguage(prefs: SharedPreferences, language: String) {
         prefs.edit().putString(KEY, if (language in SUPPORTED) language else DEFAULT).apply()
     }
 
+    /** Drops the explicit choice so Canary follows [DictationLanguage] again. */
+    fun followDictationLanguage(prefs: SharedPreferences) {
+        prefs.edit().remove(KEY).apply()
+    }
+
+    fun explicitOrNull(context: Context): String? = explicitOrNull(prefs(context))
+
     fun languageOrDefault(context: Context): String = languageOrDefault(prefs(context))
+
+    fun followsDictationLanguage(context: Context): Boolean = followsDictationLanguage(prefs(context))
+
+    fun followDictationLanguage(context: Context) = followDictationLanguage(prefs(context))
 
     fun setLanguage(context: Context, language: String) = setLanguage(prefs(context), language)
 
