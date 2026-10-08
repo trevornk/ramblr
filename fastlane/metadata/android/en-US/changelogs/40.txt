@@ -1,0 +1,5 @@
+Transcribe audio files, and dictating over a selection replaces it.
+
+- Audio files: share an audio file to Ramblr, or pick one from the main screen, and it is transcribed in the background. The result appears in a notification with a Copy button and is saved in History.
+- Record now, transcribe later: save a voice note and transcribe it whenever you like.
+- Selecting text and dictating now replaces the selection, including with live transcription on and in web-based chat apps such as Sable.
