@@ -1,0 +1,5 @@
+Dictation lands where you expect it.
+
+- Web-based chat apps (such as Sable): dictation now goes into the message box without tapping it first.
+- Fields that report an invisible line break when empty no longer make every dictation start on a new line.
+- Short dictations of one to three words no longer end with a period, which suits search boxes and quick replies. Question marks, exclamation points and abbreviations like "Dr." are kept.
