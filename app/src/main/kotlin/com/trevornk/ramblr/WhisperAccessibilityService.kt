@@ -352,7 +352,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * host half of the pre-extraction pipeline, verbatim: each callback body is exactly the code
      * the corresponding call site ran inline before the extraction.
      */
-    private val runtimeListener = object : RuntimeListener {
+    internal val runtimeListener = object : RuntimeListener {
         override fun onRecordingStartRequested() {
             // A still-pending preview (#40) from the previous dictation shouldn't linger silently
             // while a new one starts -- resolve it the same safe way a timeout would.

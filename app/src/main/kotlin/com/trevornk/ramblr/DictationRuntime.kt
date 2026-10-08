@@ -1378,7 +1378,7 @@ class DictationRuntime internal constructor(
      * runtime method, so this one call site is the entire production integration; no per-host
      * duplication is possible.
      */
-    private fun finalizeForDelivery(text: String): String = SnippetRuntimeSupport.expand(context, text)
+    internal fun finalizeForDelivery(text: String): String = SnippetRuntimeSupport.expand(context, text)
 
     private fun transcribeApi(
         file: File,
