@@ -32,3 +32,31 @@ fun isNonFieldWebViewNode(className: CharSequence?, isEditable: Boolean, hasWebV
  * unfocused EditText (whose own score is at most 60 + 20).
  */
 const val BARE_WEBVIEW_SCORE_PENALTY = 200
+
+/**
+ * Corrects the selection end a Chromium WebView composer reports for "select all" (#300).
+ *
+ * Measured on a Pixel 10a in Sable v2: with the composer's whole draft selected (Ctrl+A or the
+ * long-press "Select all"), the `EditText` node reports `sel=0/1` whatever the text length -- 5, 26
+ * or 54 chars, one line or three. Chromium resolves the selection's focus to a DOM position on the
+ * editable root and surfaces its child offset (1) instead of a character offset (the text length).
+ * Ranges that do not end at the root, and the drag-selected word case (`14/16`), are reported
+ * correctly, as is a Shift+Right selection from the start (`0/5`).
+ *
+ * The consequence was that [resolveReplacementSpan] trusted `0..1` as a genuine ranged selection
+ * and the dictation replaced only the first character, leaving the rest of the old text in place
+ * (`"hello there friend"` + dictation `REPLACED` -> `"REPLACEDello there friend"`).
+ *
+ * The signature -- an anchor at 0 and an end of exactly 1 against longer text, inside a WebView --
+ * is returned as "everything selected" ([textLength]). Accepted collateral: a user who deliberately
+ * selected only the first character of a multi-character WebView field and dictates will have the
+ * field replaced rather than that one character (undo, #27, restores it). Native fields are never
+ * touched: [inWebView] is only consulted when the signature matches, and returns false for them.
+ */
+fun correctWebViewSelectAllEnd(
+    selStart: Int,
+    selEnd: Int,
+    textLength: Int,
+    inWebView: () -> Boolean,
+): Int =
+    if (selStart == 0 && selEnd == 1 && textLength > 1 && inWebView()) textLength else selEnd
