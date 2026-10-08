@@ -138,6 +138,25 @@ class SnippetRuntimeWiringTest {
     }
 
     @Test
+    fun `short utterance loses its trailing period in the real delivery path`() {
+        assertEquals("Sounds good", deliverTranscript("Sounds good.").single().text)
+    }
+
+    @Test
+    fun `longer utterance keeps its trailing period in the real delivery path`() {
+        assertEquals("That sounds good to me.", deliverTranscript("That sounds good to me.").single().text)
+    }
+
+    @Test
+    fun `snippet expansion output is exempt from trailing period stripping`() {
+        SnippetsStore.save(app, listOf(SnippetEntry("k", "my sig", "Best.")))
+        SnippetsToggle.setEnabled(app, true)
+        // Trigger still matches (the transcript's own period is stripped before expansion), and the
+        // user-authored expansion arrives verbatim, period included.
+        assertEquals("Best.", deliverTranscript("My sig.").single().text)
+    }
+
+    @Test
     fun `junk transcript path also runs through expansion (single call site covers every branch)`() {
         SnippetsStore.save(app, listOf(SnippetEntry("k", "hi", "hello there")))
         SnippetsToggle.setEnabled(app, true)

@@ -1372,13 +1372,20 @@ class DictationRuntime internal constructor(
      * actually produced -- see [SnippetExpander]'s kdoc for the explicit, tested limitation this
      * implies when cleanup rewrites a trigger phrase beyond case/punctuation.
      *
+     * Before expansion, [ShortUtterancePunctuation] drops the trailing period of a <=3-word
+     * transcript. It runs on the transcript only, never on a snippet's expansion: expanded text
+     * is the user's own authored content (an email address, a sign-off ending in a period) and
+     * must arrive verbatim. A snippet trigger still matches, since [SnippetExpander] already
+     * ignores trailing punctuation. History records the delivered (post-strip) text.
+     *
      * Deliberately NOT applied to `rawText` (the raw-transcript "tap to undo cleanup" side
      * channel) or to the no-speech/junk-gate early returns before this point -- those already
      * skip this call entirely by construction. Every dictation host funnels through this single
      * runtime method, so this one call site is the entire production integration; no per-host
      * duplication is possible.
      */
-    internal fun finalizeForDelivery(text: String): String = SnippetRuntimeSupport.expand(context, text)
+    internal fun finalizeForDelivery(text: String): String =
+        SnippetRuntimeSupport.expand(context, ShortUtterancePunctuation.stripTrailingPeriod(text))
 
     private fun transcribeApi(
         file: File,
