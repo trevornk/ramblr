@@ -16,6 +16,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- #285 record-now/transcribe-later: Android 14+ requires the matching typed permission for
+         AudioRecorderService's `microphone` foreground service. Normal (install-time, no prompt);
+         it adds no new user-visible capability beyond RECORD_AUDIO, which is already declared and
+         already granted by the user before a note can be recorded. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- #156 advanced tier: NEVER granted at install (signature|privileged|development), so this
          declaration is inert for every normal user. It exists so a power user can opt in once via
          `adb shell pm grant com.trevornk.ramblr android.permission.WRITE_SECURE_SETTINGS` (the
@@ -271,6 +276,58 @@
             android:name=".BackgroundTranscriptionService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- #285 audio files / record-later. The Audio files screen is internal-only like every
+             other Settings sub-screen (same fold/unfold configChanges handling). -->
+        <activity android:name=".AudioFilesActivity" android:exported="false"
+            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
+
+        <!-- #285 share target for audio. Necessarily exported (the share sheet launches it); it
+             accepts only content:// URIs, never this app's own providers, and does no work itself
+             beyond queuing. Invisible: transparent theme, no history, out of Recents, finishes in
+             onCreate. No storage permission is needed: the sharer's URI grant is the access. -->
+        <activity
+            android:name=".AudioShareActivity"
+            android:exported="true"
+            android:label="@string/audio_share_label"
+            android:theme="@style/Theme.PhoneWhisper.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- #285: works through queued audio jobs (decode, chunk, transcribe, clean up, History)
+             and posts a notification as each finishes. dataSync, like the model download and the
+             #284 dictation hold: it reuses the type + FOREGROUND_SERVICE_DATA_SYNC already
+             declared, adding no permission. Started only from a visible Activity (the share
+             target or the Audio files screen), so the background-start restriction never applies.
+             Not exported. See AudioTranscriptionService's kdoc for why not mediaProcessing. -->
+        <service
+            android:name=".AudioTranscriptionService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- #285: records a note for later transcription. `microphone` type + the typed permission
+             above (Android 14+). Started only from the visible Audio files screen, after the
+             user granted RECORD_AUDIO and tapped Record. Not exported. -->
+        <service
+            android:name=".AudioRecorderService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- #285: the Copy / Cancel buttons on the audio notifications. Only this app's own
+             PendingIntents reach it. -->
+        <receiver android:name=".AudioJobActionReceiver" android:exported="false" />
 
         <!-- No-UI trampoline reached only via the "icon hidden" notification's own explicit
              PendingIntent (Feature B, IconVisibilityNotifications); never invoked from outside
