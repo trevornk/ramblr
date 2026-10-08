@@ -40,6 +40,7 @@ class MainActivity : BaseSettingsActivity() {
     private lateinit var invocationRowSub: TextView
     private lateinit var voiceKeyboardRowSub: TextView
     private lateinit var historyRowSub: TextView
+    private lateinit var audioFilesRowSub: TextView
     private lateinit var serviceKilledBanner: View
     private lateinit var staleComponentBanner: View
 
@@ -178,6 +179,14 @@ class MainActivity : BaseSettingsActivity() {
         }
         historyRowSub = historyRow.findViewWithTag("subtitle")
         root.addView(historyRow)
+
+        // Audio files (#285): transcribe a recording from the phone or another app, or record a
+        // note now and transcribe it later.
+        val audioFilesRow = settingsRow(getString(R.string.audio_files_row_title), getString(R.string.audio_files_row_idle)) {
+            startActivity(Intent(this, AudioFilesActivity::class.java))
+        }
+        audioFilesRowSub = audioFilesRow.findViewWithTag("subtitle")
+        root.addView(audioFilesRow)
 
         root.addView(settingsRow("Advanced", AdvancedActivity.subtitle(this)) {
             startActivity(Intent(this, AdvancedActivity::class.java))
@@ -325,6 +334,7 @@ class MainActivity : BaseSettingsActivity() {
         invocationRowSub.text = InvocationActivity.subtitle(this)
         voiceKeyboardRowSub.text = invocationVoiceKeyboardSubtitleText(voiceKeyboardStatus())
         historyRowSub.text = DataLogsActivity.historyRowSubtitle(this)
+        audioFilesRowSub.text = AudioFilesActivity.rowSubtitle(this)
         serviceKilledBanner.visibility =
             if (InvocationGuardRail.shouldShowBanner(this)) View.VISIBLE else View.GONE
 
