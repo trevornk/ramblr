@@ -1,0 +1,4 @@
+Canary now uses your dictation language.
+
+- The Canary on-device model follows Settings > Transcription > Dictation language when it is English, Spanish, German or French, so German speech comes out in German instead of an English translation. A language chosen in Canary's own setting still takes priority.
+- Changing either language setting now takes effect immediately, without restarting Ramblr.
