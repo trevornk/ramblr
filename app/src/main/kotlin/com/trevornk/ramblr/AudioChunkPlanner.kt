@@ -148,6 +148,9 @@ object AudioChunkPlanner {
 object TranscriptChunker {
     const val DEFAULT_MAX_CHARS = 3_000
 
+    /** For the small on-device cleanup model: its output validator rejects long input and each step has a ~12 s budget. */
+    const val LOCAL_MAX_CHARS = 300
+
     fun split(text: String, maxChars: Int = DEFAULT_MAX_CHARS): List<String> {
         require(maxChars >= 100) { "maxChars too small" }
         val t = text.trim()

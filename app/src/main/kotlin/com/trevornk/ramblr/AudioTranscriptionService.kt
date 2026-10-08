@@ -92,22 +92,29 @@ internal object AudioJobs {
     }
 
     private fun startWorker(ctx: Context, grants: List<Uri>) {
-        val intent = Intent(ctx, AudioTranscriptionService::class.java)
-        if (grants.isNotEmpty()) {
-            // Forward the share/picker grant: the worker may import a file well after the
-            // originating Activity is gone.
-            intent.clipData = ClipData.newRawUri("audio", grants.first()).also { clip ->
-                grants.drop(1).forEach { clip.addItem(ClipData.Item(it)) }
-            }
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        try {
-            ContextCompat.startForegroundService(ctx, intent)
-        } catch (e: Exception) {
-            // E.g. ForegroundServiceStartNotAllowedException. The jobs stay QUEUED and are picked
-            // up the next time the Audio files screen opens.
-            Log.w(TAG, "Couldn't start audio worker: ${e.javaClass.simpleName}")
-        }
+        // Forward the share/picker grant with the start: the worker may import a file well after
+        // the originating Activity is gone. Granting on to the service requires this app to hold
+        // the grant itself; if it somehow doesn't, the start is retried bare (the process-wide
+        // grant the share already gave still applies, and an import that cannot read its file
+        // fails as UNREADABLE rather than crashing).
+        if (grants.isNotEmpty() && tryStart(ctx, Intent(ctx, AudioTranscriptionService::class.java).also { intent ->
+                intent.clipData = ClipData.newRawUri("audio", grants.first()).also { clip ->
+                    grants.drop(1).forEach { clip.addItem(ClipData.Item(it)) }
+                }
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        ) return
+        tryStart(ctx, Intent(ctx, AudioTranscriptionService::class.java))
+    }
+
+    private fun tryStart(ctx: Context, intent: Intent): Boolean = try {
+        ContextCompat.startForegroundService(ctx, intent)
+        true
+    } catch (e: Exception) {
+        // SecurityException (no grant to forward) or ForegroundServiceStartNotAllowedException.
+        // Queued jobs are picked up the next time the Audio files screen opens.
+        Log.w(TAG, "Couldn't start audio worker: ${e.javaClass.simpleName}")
+        false
     }
 }
 
@@ -183,6 +190,9 @@ class AudioTranscriptionService : Service() {
         // startId then differs from the one we stop with, so stopSelf(id) leaves it alone.
         if (running.get()) return
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        // Progress updates are posted with notify() under the foreground id; make sure none is left
+        // behind as a stale "transcribing" notification.
+        runCatching { NotificationManagerCompat.from(this).cancel(AudioJobNotifications.ONGOING_ID) }
         stopSelf(latestStartId)
     }
 
@@ -232,7 +242,11 @@ class AudioTranscriptionService : Service() {
             runner?.abortInFlight()
         }
         // The worker unwinds and stops the service itself; make sure it does even if it is stuck.
-        main.postDelayed({ ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE); stopSelf() }, 3_000)
+        main.postDelayed({
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            runCatching { NotificationManagerCompat.from(this).cancel(AudioJobNotifications.ONGOING_ID) }
+            stopSelf()
+        }, 3_000)
     }
 
     private fun acquireWakeLock() {

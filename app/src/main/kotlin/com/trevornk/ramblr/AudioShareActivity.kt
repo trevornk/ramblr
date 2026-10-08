@@ -53,6 +53,8 @@ internal object AudioShareUris {
             Intent.ACTION_SEND -> intent.streamExtra()?.let { out += it }
             Intent.ACTION_SEND_MULTIPLE -> out += intent.streamListExtra()
         }
+        // Some senders (and `am start -d`) carry the one file as the intent data instead.
+        if (intent.action == Intent.ACTION_SEND) intent.data?.let { out += it }
         intent.clipData?.let { clip ->
             for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { out += it }
         }

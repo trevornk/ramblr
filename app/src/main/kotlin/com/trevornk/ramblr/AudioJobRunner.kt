@@ -300,7 +300,10 @@ internal class AudioJobRunner(
         var anyFailed = false
         var anyCleaned = false
         val out = ArrayList<String>()
-        for (piece in TranscriptChunker.split(raw)) {
+        // A small on-device cleanup model collapses on multi-paragraph input (its output validator
+        // rejects it), so it gets short pieces; cloud models take whole paragraphs.
+        val pieceChars = if (waterfall.usesLocalLlm()) TranscriptChunker.LOCAL_MAX_CHARS else TranscriptChunker.DEFAULT_MAX_CHARS
+        for (piece in TranscriptChunker.split(raw, pieceChars)) {
             if (isCancelled(id)) throw Stop(null)
             val latch = CountDownLatch(1)
             var result: PostProcessor.Result? = null
