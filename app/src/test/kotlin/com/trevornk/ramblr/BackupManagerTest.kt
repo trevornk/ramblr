@@ -1,5 +1,7 @@
 package com.trevornk.ramblr
 
+import kotlin.io.path.createTempDirectory
+
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -219,7 +221,7 @@ class BackupManagerTest {
     // --- pruneOldBackups retention (GH #123) ---
 
     @Test fun `pruneOldBackups keeps only the N most recently modified files`() {
-        val dir = createTempDir(prefix = "backups").apply { deleteOnExit() }
+        val dir = createTempDirectory(prefix = "backups").toFile().apply { deleteOnExit() }
         val files = (1..8).map { i ->
             File(dir, "ramblr_backup_$i.zip").apply {
                 writeText("zip$i")
@@ -241,7 +243,7 @@ class BackupManagerTest {
     }
 
     @Test fun `pruneOldBackups deletes nothing when the count is at or under the limit`() {
-        val dir = createTempDir(prefix = "backups").apply { deleteOnExit() }
+        val dir = createTempDirectory(prefix = "backups").toFile().apply { deleteOnExit() }
         val files = (1..3).map { i -> File(dir, "b$i.zip").apply { writeText("x") } }
 
         val deleted = BackupManager.pruneOldBackups(files, keep = 5)
@@ -253,7 +255,7 @@ class BackupManagerTest {
     }
 
     @Test fun `pruneOldBackups directory overload only considers zip files and defaults to keeping 5`() {
-        val dir = createTempDir(prefix = "backups").apply { deleteOnExit() }
+        val dir = createTempDirectory(prefix = "backups").toFile().apply { deleteOnExit() }
         (1..7).forEach { i ->
             File(dir, "ramblr_backup_$i.zip").apply { writeText("z"); setLastModified(2_000_000L + i * 1000L) }
         }
@@ -270,7 +272,7 @@ class BackupManagerTest {
     }
 
     @Test fun `pruneOldBackups directory overload is a no-op when the directory does not exist`() {
-        val missingDir = File(createTempDir(prefix = "parent").apply { deleteOnExit() }, "does_not_exist")
+        val missingDir = File(createTempDirectory(prefix = "parent").toFile().apply { deleteOnExit() }, "does_not_exist")
 
         val deleted = BackupManager.pruneOldBackups(missingDir)
 

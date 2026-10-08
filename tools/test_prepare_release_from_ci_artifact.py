@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -16,6 +17,12 @@ SOURCE_SHA = subprocess.run(
     ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, check=True,
     capture_output=True).stdout.strip()
 EXPECTED_SIGNER = "ab" * 32
+VERSION_MATCH = re.search(
+    r'(?m)^\s*versionName = "([^"]+)"',
+    (ROOT / "app/build.gradle.kts").read_text(),
+)
+assert VERSION_MATCH is not None, "app versionName is missing"
+VERSION_NAME = VERSION_MATCH.group(1)
 
 
 def make_executable(path: Path, text: str) -> None:
@@ -118,8 +125,8 @@ class PrepareReleaseFromArtifactTest(unittest.TestCase):
         (self.artifact / "r8-unit-test-summary.txt").write_text(
             "github tests=1 failures=0 errors=0 skipped=0\n"
             "storefront tests=1 failures=0 errors=0 skipped=0\n")
-        make_apk(self.artifact / "Ramblr-1.0.32-github-release.apk", github=True)
-        make_apk(self.artifact / "Ramblr-1.0.32-storefront-release.apk", github=False)
+        make_apk(self.artifact / f"Ramblr-{VERSION_NAME}-github-release.apk", github=True)
+        make_apk(self.artifact / f"Ramblr-{VERSION_NAME}-storefront-release.apk", github=False)
         for flavor in ("github", "storefront"):
             target = self.artifact / f"mapping/{flavor}Release"
             target.mkdir(parents=True)
@@ -187,6 +194,8 @@ esac
     def run_script(self, *, expected_signer: str = EXPECTED_SIGNER,
                    extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         env = os.environ | {
+            # Keep SDK discovery hermetic: the checker also searches ~/Library/Android/sdk.
+            "HOME": str(self.base),
             "PATH": f"{self.bin}:{os.environ['PATH']}",
             "ANDROID_HOME": str(self.sdk),
             "APKSIGCOPIER": str(self.bin / "apksigcopier"),
@@ -216,16 +225,16 @@ esac
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(sorted(path.name for path in self.output.glob("*.apk")), [
-            "Ramblr-1.0.32-github-release.apk", "Ramblr-1.0.32-storefront-release.apk"])
+            f"Ramblr-{VERSION_NAME}-github-release.apk", f"Ramblr-{VERSION_NAME}-storefront-release.apk"])
         compare_records = [shlex.split(line) for line in (self.records / "compare").read_text().splitlines()]
         self.assertEqual(len(compare_records), 2)
         for record, flavor in zip(compare_records, ("github", "storefront")):
             self.assertEqual(record[:3], ["compare", "--unsigned",
-                                          str(self.output / f"Ramblr-1.0.32-{flavor}-release.apk")])
-            self.assertEqual(Path(record[3]).name, f"Ramblr-1.0.32-{flavor}-release.apk")
+                                          str(self.output / f"Ramblr-{VERSION_NAME}-{flavor}-release.apk")])
+            self.assertEqual(Path(record[3]).name, f"Ramblr-{VERSION_NAME}-{flavor}-release.apk")
         self.assertEqual((self.records / "zipalign").read_text().splitlines(), [
-            f"-c -p 4 {self.output}/Ramblr-1.0.32-github-release.apk",
-            f"-c -p 4 {self.output}/Ramblr-1.0.32-storefront-release.apk",
+            f"-c -p 4 {self.output}/Ramblr-{VERSION_NAME}-github-release.apk",
+            f"-c -p 4 {self.output}/Ramblr-{VERSION_NAME}-storefront-release.apk",
         ])
 
     def test_rejects_zero_test_counts(self):
@@ -252,7 +261,7 @@ esac
     def test_rejects_duplicate_github_apk_in_artifact(self):
         duplicate = self.artifact / "duplicate"
         duplicate.mkdir()
-        make_apk(duplicate / "Ramblr-1.0.32-github-release.apk", github=True)
+        make_apk(duplicate / f"Ramblr-{VERSION_NAME}-github-release.apk", github=True)
         self.assert_rejected_before_signing("expected exactly one github APK")
 
     def test_rejects_signed_input_with_nonrelease_certificate(self):

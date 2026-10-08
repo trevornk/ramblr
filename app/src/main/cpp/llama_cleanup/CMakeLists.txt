@@ -147,6 +147,10 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,max-page-size=16384
 # LTO inlining causing exactly this crash). A rejected variant is unloaded before any kernel runs.
 set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
+# sherpa's sibling configure caches BUILD_SHARED_LIBS=OFF. Override it in this
+# directory scope so reconfiguration still builds llama's dynamic backends,
+# without changing sherpa's intentionally static dependency graph.
+set(BUILD_SHARED_LIBS ON)
 
 add_subdirectory(../../../../../llama.cpp llama.cpp)
 

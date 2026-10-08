@@ -50,7 +50,7 @@ class GeminiCloudLiveTranscriptionClientTest {
             customVocabulary = listOf("Ramblr", "HitSnooze"),
         )
         val root = JSONObject(setup)
-        assertEquals(setOf("setup"), root.keySet())
+        assertEquals(setOf("setup"), root.keys().asSequence().toSet())
         val body = root.getJSONObject("setup")
         assertEquals("models/gemini-3.5-transcribe-live", body.getString("model"))
         assertEquals(listOf("TEXT"), body.getJSONObject("generationConfig").getJSONArray("responseModalities").toStringList())
@@ -100,7 +100,7 @@ class GeminiCloudLiveTranscriptionClientTest {
         assertEquals("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent", upgrade.path)
         assertEquals("test-key", upgrade.getHeader("x-goog-api-key"))
         assertFalse(upgrade.path!!.contains("test-key"))
-        assertEquals(setOf("setup"), JSONObject(received[0]).keySet())
+        assertEquals(setOf("setup"), JSONObject(received[0]).keys().asSequence().toSet())
         assertTrue(JSONObject(received[1]).getJSONObject("realtimeInput").has("activityStart"))
         val audio = JSONObject(received[2]).getJSONObject("realtimeInput").getJSONObject("audio")
         assertEquals("audio/pcm;rate=16000", audio.getString("mimeType"))
