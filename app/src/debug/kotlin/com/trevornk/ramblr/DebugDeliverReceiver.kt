@@ -19,6 +19,15 @@ import android.view.accessibility.AccessibilityNodeInfo
  *     adb shell am broadcast -n com.trevornk.ramblr/.DebugDeliverReceiver \
  *         -a com.trevornk.ramblr.DEBUG_DELIVER --es text "hello world"
  *
+ * Feed a streaming (live-preview) partial through the real [WhisperAccessibilityService]
+ * partial-injection path without a live recording, then finish with DEBUG_DELIVER (the real final
+ * path) or abandon with DEBUG_PARTIAL_CANCEL (the real teardown path, no final text):
+ *
+ *     adb shell am broadcast -n com.trevornk.ramblr/.DebugDeliverReceiver \
+ *         -a com.trevornk.ramblr.DEBUG_PARTIAL --es text "hello wor"
+ *     adb shell am broadcast -n com.trevornk.ramblr/.DebugDeliverReceiver \
+ *         -a com.trevornk.ramblr.DEBUG_PARTIAL_CANCEL
+ *
  * Log the editable nodes of the active window (class, focus, selection, hint flags, text length,
  * first 40 chars of text) under tag PhoneWhisper:
  *
@@ -42,6 +51,11 @@ class DebugDeliverReceiver : BroadcastReceiver() {
                     feedbackDurationMs = 2000,
                 )
             }
+            "com.trevornk.ramblr.DEBUG_PARTIAL" -> {
+                val text = intent.getStringExtra("text") ?: return
+                service.maybeInjectPartial(text, requireRecording = false)
+            }
+            "com.trevornk.ramblr.DEBUG_PARTIAL_CANCEL" -> service.runtimeListener.onStreamingTeardown()
             "com.trevornk.ramblr.DEBUG_DUMP" -> {
                 val root = service.rootInActiveWindow ?: return
                 walk(root)

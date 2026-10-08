@@ -42,7 +42,13 @@ class AccessibilityTextDestination(val node: AccessibilityNodeInfo) : TextDestin
 
     override fun selectionStart(): Int = node.textSelectionStart
 
-    override fun selectionEnd(): Int = node.textSelectionEnd
+    // #300: Chromium reports select-all in a WebView composer as 0/1 whatever the text length; see
+    // correctWebViewSelectAllEnd. The ancestor walk only runs when that exact signature matches.
+    override fun selectionEnd(): Int = correctWebViewSelectAllEnd(
+        node.textSelectionStart,
+        node.textSelectionEnd,
+        node.text?.length ?: 0,
+    ) { hasWebViewAncestor(node) }
 
     override fun prepareForWrite() {
         logNode("Trying node", node)
@@ -72,6 +78,27 @@ class AccessibilityTextDestination(val node: AccessibilityNodeInfo) : TextDestin
 
     companion object {
         private const val TAG = "PhoneWhisper"
+
+        /** Same bound the service uses to decide whether a node lives in a WebView page. */
+        private const val WEBVIEW_ANCESTOR_DEPTH = 40
+
+        /** True when [node] sits under an `android.webkit.WebView` container. Does not recycle [node]. */
+        private fun hasWebViewAncestor(node: AccessibilityNodeInfo): Boolean {
+            var current = node.parent
+            var depth = 0
+            while (current != null && depth < WEBVIEW_ANCESTOR_DEPTH) {
+                if (current.className?.contains("WebView") == true) {
+                    current.recycle()
+                    return true
+                }
+                val next = current.parent
+                current.recycle()
+                current = next
+                depth++
+            }
+            current?.recycle()
+            return false
+        }
 
         /**
          * Defensive, app-agnostic nudge after a successful ACTION_SET_TEXT (#quirk-compat): the

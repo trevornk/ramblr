@@ -141,6 +141,45 @@ fun composeStreamingPartial(
 }
 
 /**
+ * The first streaming partial of a session, resolved against the field's selection (#300).
+ *
+ * [updatedText] goes to the node and [span] is what the session tracks from then on. The first
+ * partial replaces the *same* range a one-shot injection would ([resolveReplacementSpan]), so a
+ * ranged selection (select-all, a highlighted word) is overwritten rather than the partial being
+ * inserted in front of it -- the original bug was that the streaming path only used the selection's
+ * start and left the selected text sitting after the dictation. The overwritten text is carried in
+ * [StreamingSpan.replacedText] so a dictation that never produces a final commit can put it back.
+ *
+ * The caller passes the *corrected* selection (see `correctWebViewSelectAllEnd`). A collapsed caret,
+ * an unfocused `-1/-1` and a `(0, 0)` against non-empty text all resolve to a pure insertion
+ * exactly as before ([StreamingSpan.replacedText] is empty).
+ */
+data class StreamingFirstPartialWrite(val updatedText: String, val span: StreamingSpan)
+
+fun composeFirstStreamingPartial(
+    current: String,
+    selStart: Int,
+    selEnd: Int,
+    displayText: String
+): StreamingFirstPartialWrite {
+    val replacement = resolveReplacementSpan(selStart, selEnd, current.length)
+    val write = composeStreamingPartial(
+        current,
+        replacement.start,
+        previousLength = replacement.endExclusive - replacement.start,
+        displayText = displayText,
+    )
+    return StreamingFirstPartialWrite(
+        updatedText = write.updatedText,
+        span = StreamingSpan(
+            insertionStart = replacement.start,
+            previousLength = write.trackedLength,
+            replacedText = current.substring(replacement.start, replacement.endExclusive),
+        ),
+    )
+}
+
+/**
  * Whether the streaming live-preview path should be active: both the explicit opt-in setting and
  * a fully-installed streaming model are required, checked fresh at load time so a model deleted
  * after being enabled just silently falls back to no preview (#29's "cleanly disabled" acceptance
@@ -197,7 +236,7 @@ fun smartCapitalize(text: String): String {
  * final-injection handoff decision (#45) can be unit tested in isolation. [WhisperAccessibilityService]
  * builds one of these from its own (node-holding) `StreamingPreviewSession` right before reconciling.
  */
-data class StreamingSpan(val insertionStart: Int, val previousLength: Int)
+data class StreamingSpan(val insertionStart: Int, val previousLength: Int, val replacedText: String = "")
 
 /**
  * What a field the streaming-preview session (#29) was tracking should become now that the final
@@ -213,7 +252,9 @@ data class StreamingSpan(val insertionStart: Int, val previousLength: Int)
  *
  * When false, the final injection is landing in a *different* node (focus moved after recording
  * stopped) -- so this node's tracked span is instead reverted (replaced with nothing) so it isn't
- * left silently orphaned in a field nobody is about to overwrite.
+ * left silently orphaned in a field nobody is about to overwrite. If the session's first partial
+ * overwrote a selection (#300), the span is put back to that original text instead of deleted, so
+ * a dictation that never lands can't cost the user what they had selected.
  */
 fun reconcileStreamingSpan(
     current: String,
@@ -222,12 +263,16 @@ fun reconcileStreamingSpan(
     isFinalInjectionTarget: Boolean
 ): String? {
     if (session == null) return null
+    // #300: reverting must hand back whatever the first partial overwrote. Applied verbatim, with
+    // no separator -- it is the user's own text, already correctly placed before it was replaced.
+    if (!isFinalInjectionTarget) {
+        return replacePartialInField(current, session.insertionStart, session.previousLength, session.replacedText)
+    }
     // #144: routed through composeStreamingPartial so closing the span applies the same separator
     // rule the partials inside it were built with -- otherwise closing strips it back off and the
     // final text re-glues itself to the preceding draft. The clear path passes "", which
     // leadingSeparatorFor never decorates, so it stays a pure deletion.
-    val replacement = if (isFinalInjectionTarget) finalText else ""
-    return composeStreamingPartial(current, session.insertionStart, session.previousLength, replacement).updatedText
+    return composeStreamingPartial(current, session.insertionStart, session.previousLength, finalText).updatedText
 }
 
 /**

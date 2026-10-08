@@ -245,4 +245,28 @@ class DictationTextWriterTest {
 
         assertNull(destination.writtenText)
     }
+
+    // --- selection overwritten by the first partial (#300) ---
+
+    @Test
+    fun `commitClosingStreamingSpan after a select-all leaves only the final text`() {
+        val destination = FakeTextDestination(text = "Partial")
+        val result = DictationTextWriter.commitClosingStreamingSpan(
+            destination,
+            StreamingSpan(insertionStart = 0, previousLength = 7, replacedText = "old draft"),
+            "Final text",
+        )
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals("Final text", destination.writtenText)
+    }
+
+    @Test
+    fun `clearStreamingSpan restores the selected text the first partial overwrote`() {
+        val destination = FakeTextDestination(text = "note Partial end")
+        DictationTextWriter.clearStreamingSpan(
+            destination,
+            StreamingSpan(insertionStart = 5, previousLength = 7, replacedText = "selected"),
+        )
+        assertEquals("note selected end", destination.writtenText)
+    }
 }
