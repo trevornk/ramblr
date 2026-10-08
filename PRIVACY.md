@@ -66,6 +66,20 @@ or a dead connection without retrying into a different field. A failed insertion
 as saved unless the history write succeeded. History remains subject to the user's history toggle,
 and is always suppressed for editors that request no personalized learning.
 
+## Audio files and recorded notes
+
+Ramblr can transcribe an audio file you pick or share to it, and can record a note on the device to
+transcribe later. A shared or picked file is copied into the app's private storage only for the
+duration of the job and deleted when the transcript is saved (a failed job keeps its copy so you can
+retry; you can delete it from the Audio files screen). A recorded note stays in private storage until
+you delete it or transcribe it. Audio follows the same routing as live dictation: with on-device
+transcription it never leaves the device (unless you have turned on the cloud fallback), and with
+cloud transcription it is sent, in pieces of at most five minutes, to the provider you configured.
+The finished text goes to the same local History as dictation. Notifications for these jobs never
+contain transcript text. These features use the system file picker and share sheet, so Ramblr needs
+no storage or media permission for them; recording uses the microphone permission you already grant
+for dictation.
+
 ## Quality log (off by default)
 
 Ramblr has an optional diagnostic "quality log" for comparing transcription/cleanup providers. When

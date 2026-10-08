@@ -39,4 +39,79 @@
     <string name="ime_mic_stop">Stop recording and transcribe</string>
     <string name="ime_switch_keyboard">Switch keyboard</string>
     <string name="ime_open_settings">Open Ramblr settings</string>
+
+    <!-- #285: audio-file transcription and record-now/transcribe-later. -->
+    <string name="audio_share_label">Transcribe with Ramblr</string>
+    <string name="audio_files_title">Audio files</string>
+    <string name="audio_files_row_title">Audio files</string>
+    <string name="audio_files_row_idle">Transcribe a recording, or record now and transcribe later</string>
+    <string name="audio_files_row_status">%1$d in progress · %2$d saved</string>
+    <string name="audio_files_intro">Transcribe an audio file from your phone or another app (use Share → Ramblr). It runs in the background and notifies you when the text is ready; the result is saved to History. Your Transcription, Cleanup and Dictation language settings apply.</string>
+    <string name="audio_files_pick">Transcribe an audio file</string>
+    <string name="audio_files_pick_sub">Choose m4a, mp3, ogg, wav, flac and more</string>
+    <string name="audio_files_record">Record a note</string>
+    <string name="audio_files_record_sub">Saves audio on this device so you can transcribe it later</string>
+    <string name="audio_files_recording_now">Recording… tap to stop and save</string>
+    <string name="audio_files_section_jobs">Recent</string>
+    <string name="audio_files_empty">Nothing yet</string>
+    <string name="audio_files_picker_none">No audio picker available on this device</string>
+    <string name="audio_files_added">Added to the transcription queue</string>
+    <string name="audio_files_mic_denied">Microphone permission is needed to record</string>
+    <string name="audio_files_record_failed">Couldn\'t start recording</string>
+    <string name="audio_files_saved">Recording saved</string>
+    <string name="audio_files_copied">Copied to clipboard</string>
+    <string name="audio_files_not_found">That text is no longer in History</string>
+    <string name="audio_files_history_off_notice">History is off, so the text was copied to your clipboard</string>
+    <string name="audio_files_recorded_name">Recorded note %1$s</string>
+    <string name="audio_files_shared_name">Shared audio</string>
+    <string name="audio_files_share_none">Ramblr couldn\'t find any audio in what was shared</string>
+    <string name="audio_files_share_too_many">Only the first %1$d files were added</string>
+
+    <string name="audio_status_saved">Saved · tap to transcribe</string>
+    <string name="audio_status_queued">Waiting…</string>
+    <string name="audio_status_importing">Copying the file…</string>
+    <string name="audio_status_decoding">Reading audio… %1$d%%</string>
+    <string name="audio_status_transcribing">Transcribing part %1$d of %2$d</string>
+    <string name="audio_status_cleaning">Cleaning up…</string>
+    <string name="audio_status_done">Done · in History</string>
+    <string name="audio_status_done_cleanup_failed">Done · cleanup failed, raw text in History</string>
+    <string name="audio_status_done_copied">Done · copied to clipboard (History is off)</string>
+    <string name="audio_status_failed">Failed · %1$s</string>
+    <string name="audio_status_cancelled">Cancelled</string>
+
+    <string name="audio_failure_unreadable">couldn\'t read this audio file</string>
+    <string name="audio_failure_no_speech">no speech detected</string>
+    <string name="audio_failure_no_provider">no transcription provider is set up</string>
+    <string name="audio_failure_local_unavailable">the on-device model isn\'t ready</string>
+    <string name="audio_failure_transcription_failed">transcription failed</string>
+    <string name="audio_failure_storage">not enough storage space</string>
+    <string name="audio_failure_interrupted">interrupted</string>
+    <string name="audio_failure_timed_out">ran out of background time</string>
+
+    <string name="audio_action_transcribe">Transcribe</string>
+    <string name="audio_action_retry">Try again</string>
+    <string name="audio_action_cancel">Cancel</string>
+    <string name="audio_action_copy">Copy</string>
+    <string name="audio_action_open_history">Open History</string>
+    <string name="audio_action_delete">Delete</string>
+    <string name="audio_action_stop">Stop</string>
+    <string name="audio_action_close">Close</string>
+    <string name="audio_delete_title">Delete this item?</string>
+    <string name="audio_delete_message">Removes it from this list and deletes any saved audio. Text already in History stays there.</string>
+
+    <string name="audio_channel_progress">Audio transcription in progress</string>
+    <string name="audio_channel_result">Audio transcription results</string>
+    <string name="audio_channel_recording">Audio recording</string>
+    <string name="audio_notif_working_title">Transcribing audio</string>
+    <string name="audio_notif_working_text_one">Ramblr is working on your audio file.</string>
+    <string name="audio_notif_working_text_many">Ramblr is working on your audio files (%1$d waiting).</string>
+    <string name="audio_notif_working_progress">Part %1$d of %2$d</string>
+    <string name="audio_notif_done_title">Transcription ready</string>
+    <string name="audio_notif_done_text">Your audio was transcribed. Tap to open it in History.</string>
+    <string name="audio_notif_done_text_copied">Your audio was transcribed and the text was copied to your clipboard.</string>
+    <string name="audio_notif_done_text_cleanup_failed">Your audio was transcribed, but cleanup failed, so this is the raw text.</string>
+    <string name="audio_notif_failed_title">Audio transcription failed</string>
+    <string name="audio_notif_failed_text">%1$s. Tap to see it in Ramblr.</string>
+    <string name="audio_notif_recording_title">Recording a note</string>
+    <string name="audio_notif_recording_text">Ramblr is recording. Tap Stop to save it for later.</string>
 </resources>
