@@ -1,0 +1,1 @@
+Improved build reliability with the upstream Gradle workspace-locking fix and an updated Android build toolchain. Fixed repeated native build configuration while preserving the existing app behavior, Android requirements, and native library set.
