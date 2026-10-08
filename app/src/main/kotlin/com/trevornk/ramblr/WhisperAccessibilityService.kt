@@ -2562,6 +2562,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 candidate.isFocused,
             )
             val insertionStart = resolveInsertionStart(candidate.textSelectionStart, candidate.textSelectionEnd, current.length)
+                // The node's reported caret is relative to its raw text; once whitespace-only raw
+                // text resolves to "" (resolveRealText) a caret of 1 would point past the end.
+                .coerceIn(0, current.length)
             val displayText = smartCapitalize(text)
             // #144: the separator is folded into the partial *before* its length is tracked, so it
             // sits inside the session's span and gets replaced along with it on every later partial
