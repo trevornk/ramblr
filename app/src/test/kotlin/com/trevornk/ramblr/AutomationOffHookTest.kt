@@ -1,5 +1,7 @@
 package com.trevornk.ramblr
 
+import kotlin.io.path.createTempDirectory
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -305,7 +307,7 @@ class AutomationOffHookTest {
         failRead: Boolean = false,
         failWrite: Boolean = false,
     ): ShellResult {
-        val dir = createTempDir(prefix = "ramblr-settings-harness")
+        val dir = createTempDirectory(prefix = "ramblr-settings-harness").toFile()
         try {
             val stateFile = java.io.File(dir, "enabled_accessibility_services.txt")
             if (initialList != null) stateFile.writeText(initialList)
@@ -396,7 +398,7 @@ class AutomationOffHookTest {
 
     @Test
     fun `harness -- running twice in a row is a no-op the second time`() {
-        val dir = createTempDir(prefix = "ramblr-settings-harness-idempotent")
+        val dir = createTempDirectory(prefix = "ramblr-settings-harness-idempotent").toFile()
         try {
             val stateFile = java.io.File(dir, "enabled_accessibility_services.txt")
             stateFile.writeText("com.tasker/.a11y.Service")
@@ -449,7 +451,7 @@ class AutomationOffHookTest {
 
     @Test
     fun `harness -- explicit numeric nonzero user id is passed through to settings`() {
-        val dir = createTempDir(prefix = "ramblr-settings-harness-user")
+        val dir = createTempDirectory(prefix = "ramblr-settings-harness-user").toFile()
         try {
             val fakeSettings = java.io.File(dir, "settings")
             fakeSettings.writeText(

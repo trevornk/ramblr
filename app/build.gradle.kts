@@ -1,8 +1,9 @@
 import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
+    // AGP 9 has built-in Kotlin: org.jetbrains.kotlin.android must NOT be applied.
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 // Optional self-hosted OmniRoute-style cleanup gateway (see OmniRoute.kt / ADR-0001). Never
@@ -26,7 +27,7 @@ val onnxRuntimeVersion = "1.24.3"
 // A separate resolvable configuration holding just the onnxruntime AAR, so the native
 // build can unzip its headers/ and arm64-v8a/libonnxruntime.so without disturbing the
 // normal `implementation` classpath.
-val onnxRuntimeAar: Configuration by configurations.creating {
+val onnxRuntimeAar: Configuration = configurations.create("onnxRuntimeAar") {
     isCanBeConsumed = false
     isCanBeResolved = true
 }
@@ -201,9 +202,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    @Suppress("DEPRECATION")
-    kotlinOptions { jvmTarget = "17" }
-
     buildFeatures { buildConfig = true }
 
     testOptions {
@@ -231,21 +229,6 @@ android {
         }
     }
 
-    // Names the built APK "Ramblr-<versionName>-<flavor>-<buildType>.apk" (e.g.
-    // Ramblr-1.0.10-github-debug.apk) instead of Gradle's generic default
-    // "app-github-debug.apk"/"app-storefront-release.apk", so a file downloaded from GitHub
-    // Releases or shared directly is recognizable by filename alone. The flavor name was added
-    // alongside the "distribution" flavor split (self-update mechanism) -- before that split
-    // there was only ever one flavor-less variant, so this used to just be
-    // "Ramblr-<versionName>-<buildType>.apk"; anything reading that old filename pattern (CI
-    // artifact globs, the release workflow) needs updating in lockstep with this rename.
-    applicationVariants.all {
-        outputs.all {
-            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "Ramblr-${versionName}-${flavorName}-${buildType.name}.apk"
-        }
-    }
-
     // F-Droid reproducible-build requirement (MR !42401): AGP's dependency metadata block
     // embeds the exact git revision the APK was built from (and the Play Store SDK/library
     // dependency list) into a signed block inside the APK. F-Droid's own from-source rebuild
@@ -263,6 +246,36 @@ android {
     dependenciesInfo {
         includeInApk = false
         includeInBundle = false
+    }
+}
+
+// Built-in Kotlin (AGP 9): replaces the old android { kotlinOptions { jvmTarget = "17" } }.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+    }
+}
+
+// Names the built APK "Ramblr-<versionName>-<flavor>-<buildType>.apk" (e.g.
+// Ramblr-1.0.10-github-debug.apk) instead of Gradle's generic default
+// "app-github-debug.apk"/"app-storefront-release.apk", so a file downloaded from GitHub
+// Releases or shared directly is recognizable by filename alone. The flavor name was added
+// alongside the "distribution" flavor split (self-update mechanism) -- before that split
+// there was only ever one flavor-less variant, so this used to just be
+// "Ramblr-<versionName>-<buildType>.apk"; anything reading that old filename pattern (CI
+// artifact globs, the release workflow, scripts/cut-release.sh, SelfUpdateResolver) needs
+// updating in lockstep with this rename.
+//
+// AGP 9 removed the legacy android.applicationVariants API this used to hang off; the
+// replacement is the androidComponents Variant API (VariantOutput.outputFileName).
+androidComponents {
+    onVariants { variant ->
+        variant.outputs.forEach { output ->
+            val versionName = output.versionName.get()
+            output.outputFileName.set(
+                "Ramblr-$versionName-${variant.flavorName}-${variant.buildType}.apk",
+            )
+        }
     }
 }
 
@@ -356,7 +369,8 @@ val ndkHostTag = when {
     org.gradle.internal.os.OperatingSystem.current().isLinux -> "linux-x86_64"
     else -> "windows-x86_64"
 }
-val ramblrLlvmStrip = android.sdkDirectory.resolve(
+// AGP 9 removed android.sdkDirectory; androidComponents.sdkComponents is the replacement.
+val ramblrLlvmStrip = androidComponents.sdkComponents.sdkDirectory.get().asFile.resolve(
     "ndk/${android.ndkVersion}/toolchains/llvm/prebuilt/$ndkHostTag/bin/llvm-strip"
 )
 tasks.matching { it.name.matches(Regex("merge.*ReleaseNativeLibs")) }.configureEach {
@@ -369,9 +383,12 @@ tasks.matching { it.name.matches(Regex("merge.*ReleaseNativeLibs")) }.configureE
             outDir.walkTopDown()
                 .filter { it.isFile && it.name.endsWith(".so") }
                 .forEach { soFile ->
-                    exec {
+                    // Project.exec was removed in Gradle 9; providers.exec is the replacement.
+                    // .result.get() runs the process and (default isIgnoreExitValue=false)
+                    // fails the build on a non-zero exit, same as exec{} did.
+                    providers.exec {
                         commandLine(ramblrLlvmStrip.absolutePath, "--strip-all", soFile.absolutePath)
-                    }
+                    }.result.get()
                 }
         }
 
