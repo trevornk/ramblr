@@ -14,6 +14,10 @@
             android:exported="true"
             android:label="IME field harness"
             android:windowSoftInputMode="stateHidden|adjustResize" />
+        <receiver
+            android:name=".DebugDeliverReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
     </application>
 
 </manifest>

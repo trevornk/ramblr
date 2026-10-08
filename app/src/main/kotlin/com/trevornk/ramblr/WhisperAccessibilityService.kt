@@ -292,6 +292,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         /** Delay before rescanning once if the first candidate scan comes up empty (#5) — long enough
          *  for a transient post-tap focus race to settle, short enough not to feel laggy. */
         private const val INJECTION_RETRY_DELAY_MS = 200L
+        private const val WEBVIEW_ANCESTOR_DEPTH = 40
         /** Minimum gap between two streaming-preview partial injections into the focused field
          *  (#29) — chunks arrive far more often than this; injecting on every one would hammer the
          *  target app's input and feel janky. The very first partial of a recording bypasses this
@@ -352,7 +353,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * host half of the pre-extraction pipeline, verbatim: each callback body is exactly the code
      * the corresponding call site ran inline before the extraction.
      */
-    private val runtimeListener = object : RuntimeListener {
+    internal val runtimeListener = object : RuntimeListener {
         override fun onRecordingStartRequested() {
             // A still-pending preview (#40) from the previous dictation shouldn't linger silently
             // while a new one starts -- resolve it the same safe way a timeout would.
@@ -2562,6 +2563,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 candidate.isFocused,
             )
             val insertionStart = resolveInsertionStart(candidate.textSelectionStart, candidate.textSelectionEnd, current.length)
+                // The node's reported caret is relative to its raw text; once whitespace-only raw
+                // text resolves to "" (resolveRealText) a caret of 1 would point past the end.
+                .coerceIn(0, current.length)
             val displayText = smartCapitalize(text)
             // #144: the separator is folded into the partial *before* its length is tracked, so it
             // sits inside the session's span and gets replaced along with it on every later partial
@@ -3100,7 +3104,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return null
         try {
             val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return null
-            if (isPotentialInjectionTarget(focused)) return focused
+            // A focused WebView page node (container or generic page View) is not the field the
+            // user means: the web input inside it is a separate EditText that may not have focus,
+            // and pasting into the page node is a silent no-op. Let the full walk find the field
+            // instead of settling for it (see WebViewInjectionRules). Native nodes are unaffected.
+            if (!isNonFieldWebViewNode(focused) && isPotentialInjectionTarget(focused)) return focused
             focused.recycle()
             return null
         } finally {
@@ -3144,6 +3152,25 @@ open class WhisperAccessibilityService : AccessibilityService() {
             findCustomPasteAction(node) != null
     }
 
+    /** [isNonFieldWebViewNode] for a live node: walks at most [WEBVIEW_ANCESTOR_DEPTH] parents,
+     *  and only for nodes that are neither editable nor EditText-classed, so the walk is never paid
+     *  on the ordinary native-field path. */
+    private fun isNonFieldWebViewNode(node: AccessibilityNodeInfo): Boolean =
+        isNonFieldWebViewNode(node.className, node.isEditable) {
+            var current = node.parent
+            var depth = 0
+            var found = false
+            while (current != null && depth < WEBVIEW_ANCESTOR_DEPTH) {
+                if (current.className?.contains("WebView") == true) { found = true; current.recycle(); break }
+                val next = current.parent
+                current.recycle()
+                current = next
+                depth++
+            }
+            current?.takeIf { !found }?.recycle()
+            found
+        }
+
     private fun candidateScore(node: AccessibilityNodeInfo): Int {
         val className = node.className?.toString().orEmpty()
         var score = 0
@@ -3152,6 +3179,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         if (node.isEditable) score += 60
         if (node.isFocused) score += 40
         if (className.contains("EditText")) score += 20
+        if (isNonFieldWebViewNode(node)) score -= BARE_WEBVIEW_SCORE_PENALTY
         return score
     }
 

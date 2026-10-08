@@ -513,21 +513,41 @@ class StreamingPreviewTest {
         )
     }
 
-    @Test fun `blank text is left untouched rather than treated as a placeholder`() {
-        // The placeholder branch deliberately requires non-blank text: a whitespace-only field is
-        // not a placeholder (no app draws one as spaces), and silently trimming the user's
-        // whitespace is not this function's job. It falls through and is returned verbatim.
-        assertEquals(
-            "   ",
-            resolveRealText(
-                rawText = "   ",
-                isShowingHintText = false,
-                selectionStart = -1,
-                selectionEnd = -1,
-                isEditable = true,
-                isFocused = true,
-            ),
+    // --- resolveRealText: whitespace-only content (Sable v2 empty composer reports "\n") ---
+
+    private fun resolved(raw: String?, focused: Boolean, selStart: Int = 0, selEnd: Int = 0, hint: Boolean = false) =
+        resolveRealText(
+            rawText = raw,
+            isShowingHintText = hint,
+            selectionStart = selStart,
+            selectionEnd = selEnd,
+            isEditable = true,
+            isFocused = focused,
         )
+
+    @Test fun `a lone newline from an empty WebView composer resolves to empty`() {
+        assertEquals("", resolved("\n", focused = false))
+        assertEquals("", resolved("\n", focused = true, selStart = 1, selEnd = 1))
+    }
+
+    @Test fun `whitespace-only text resolves to empty whatever the focus or selection`() {
+        for (blank in listOf("", " ", "   ", "\n", "\n\n", " \t\n ", "\u00A0")) {
+            assertEquals("blank=[$blank] unfocused", "", resolved(blank, focused = false))
+            assertEquals("blank=[$blank] focused", "", resolved(blank, focused = true))
+            assertEquals("blank=[$blank] no selection", "", resolved(blank, focused = true, selStart = -1, selEnd = -1))
+        }
+    }
+
+    @Test fun `text with real content around whitespace is not trimmed`() {
+        assertEquals("\nhello", resolved("\nhello", focused = false))
+        assertEquals("hello \n", resolved("hello \n", focused = true))
+    }
+
+    @Test fun `dictating into an empty WebView composer does not begin with a newline`() {
+        // End to end through the pure composition the writer uses: raw "\n", caret reported at 1.
+        val current = resolved("\n", focused = false, selStart = 1, selEnd = 1)
+        assertEquals("hello world", composeOneShotInjection(current, 1, 1, "hello world"))
+        assertEquals("hello world", composeOneShotInjection(resolved("\n", focused = false, selStart = -1, selEnd = -1), -1, -1, "hello world"))
     }
 
     @Test fun `a partially reported selection is not treated as a placeholder`() {

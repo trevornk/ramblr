@@ -265,6 +265,10 @@ fun reconcileStreamingSpan(
  * be destroyed by it. If a future app reports no selection for genuine content, the failure mode is
  * that the user's existing text is replaced rather than appended to -- hence the narrow guards.
  *
+ * A whitespace-only [rawText] (e.g. `"\n"`, which Chromium WebView composers such as Sable v2's
+ * report for an empty box) is likewise treated as empty regardless of focus or selection: it can
+ * never be content worth preserving, and keeping it made every dictation start with a newline.
+ *
  * Note for maintainers: every parameter is required on purpose. Defaults here would let a new call
  * site silently opt out of the #140 signals and quietly reinstate the bug; a compile error is the
  * cheaper failure. An earlier attempt at #140 compared `text == hintText` instead. That was
@@ -284,8 +288,12 @@ fun resolveRealText(
     isFocused: Boolean,
 ): String = when {
     isShowingHintText -> ""
-    !rawText.isNullOrBlank() &&
-        isEditable &&
+    // A whitespace-only value is never real content. Chromium WebView composers (Sable v2's
+    // message box) report an empty contenteditable/textarea as "\n", which would otherwise survive
+    // as "real" text and make every dictation open with a newline. The accepted collateral: a field
+    // the user deliberately filled with only spaces/newlines is treated as empty and replaced.
+    rawText.isNullOrBlank() -> ""
+    isEditable &&
         isFocused &&
         selectionStart < 0 &&
         selectionEnd < 0 -> ""
