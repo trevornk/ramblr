@@ -22,9 +22,10 @@ import java.util.Locale
  * Defaults to [AUTO] (no hint), which is exactly what every build before this setting sent, so
  * shipping this changes nothing for users who never open it.
  *
- * Separate from [CanaryLanguage]: Canary is a local model that needs a source-language token
- * from its own four-language set. This setting is for cloud providers and can be any
- * ISO-639-1 code in [SUPPORTED].
+ * Wider than [CanaryLanguage]: Canary is a local model that needs a source-language token from
+ * its own four-language set, while this can be any ISO-639-1 code in [SUPPORTED]. Canary follows
+ * this setting when it names one of its four languages and has no explicit choice of its own
+ * (#294), so one setting covers cloud and Canary.
  */
 object DictationLanguage {
     private const val PREFS_NAME = "ramblr"
