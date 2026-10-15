@@ -286,4 +286,58 @@ class TranscriberSlotTest {
         assertEquals(1, blockedResource.releaseCount)
         assertEquals(1, replacement.releaseCount)
     }
+
+    // --- #305: generation-guarded release ---
+
+    @Test fun `release with no newer initialization drops the installed resource`() {
+        val slot = TranscriberSlot<FakeResource> { it.release() }
+        val lifecycle = TranscriberLifecycle(slot)
+        val installed = FakeResource()
+        assertTrue(lifecycle.install(requireNotNull(lifecycle.beginInitialization()), installed))
+
+        val ticket = requireNotNull(lifecycle.beginRelease())
+
+        assertTrue(lifecycle.releaseIfCurrent(ticket))
+        assertNull(slot.get())
+        assertEquals(1, installed.releaseCount)
+    }
+
+    @Test fun `release claimed before a reload cannot drop the reloaded resource`() {
+        val slot = TranscriberSlot<FakeResource> { it.release() }
+        val lifecycle = TranscriberLifecycle(slot)
+        val old = FakeResource()
+        assertTrue(lifecycle.install(requireNotNull(lifecycle.beginInitialization()), old))
+
+        // The release is claimed, then a reload begins AND installs, and only then does the
+        // (off-main) release work run: the interleaving that reintroduced #280's empty slot.
+        val ticket = requireNotNull(lifecycle.beginRelease())
+        val fresh = FakeResource()
+        assertTrue(lifecycle.install(requireNotNull(lifecycle.beginInitialization()), fresh))
+
+        assertFalse(lifecycle.releaseIfCurrent(ticket))
+
+        assertEquals(fresh, slot.get())
+        assertFalse(fresh.released)
+        assertEquals(1, old.releaseCount)
+    }
+
+    @Test fun `initialization in flight when a release is claimed is rejected and released`() {
+        val slot = TranscriberSlot<FakeResource> { it.release() }
+        val lifecycle = TranscriberLifecycle(slot)
+        val inFlightGeneration = requireNotNull(lifecycle.beginInitialization())
+        val ticket = requireNotNull(lifecycle.beginRelease())
+        val late = FakeResource()
+
+        assertFalse(lifecycle.install(inFlightGeneration, late))
+        assertTrue(lifecycle.releaseIfCurrent(ticket))
+
+        assertNull(slot.get())
+        assertEquals(1, late.releaseCount)
+    }
+
+    @Test fun `release cannot be claimed after the lifecycle is closed`() {
+        val lifecycle = TranscriberLifecycle(TranscriberSlot<FakeResource> { it.release() })
+        lifecycle.beginShutdown()
+        assertNull(lifecycle.beginRelease())
+    }
 }

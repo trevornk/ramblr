@@ -96,4 +96,29 @@ class TranscriberLifecycle<T>(
     }
 
     fun releaseInstalled() = slot.replace(null)
+
+    /**
+     * #305: claims a release of whatever is installed *now*, returning a ticket for
+     * [releaseIfCurrent] (null once shut down). Takes a generation like [beginInitialization] does,
+     * so an initialization that was already in flight is rejected at [install] (its late result is
+     * released instead of resurrecting what the release dropped) and any initialization that
+     * begins later supersedes this ticket. Cheap and non-blocking: call it on the thread that
+     * decides to release (main), then do the blocking [releaseIfCurrent] elsewhere.
+     */
+    fun beginRelease(): Long? = beginInitialization()
+
+    /**
+     * Drops the installed resource unless a newer initialization or release has begun since
+     * [beginRelease] returned [releaseGeneration]. Blocks on in-flight use of the slot, so never
+     * call from main. Returns false when superseded -- the newer initialization owns the slot
+     * and will install over (and release) whatever is there, so a release that loses the race
+     * must not null a model it did not see.
+     */
+    fun releaseIfCurrent(releaseGeneration: Long): Boolean = slot.replaceIf(null) { publish ->
+        synchronized(lifecycleLock) {
+            if (state != releaseGeneration) return@synchronized false
+            publish()
+            true
+        }
+    }
 }
