@@ -945,8 +945,11 @@ class DictationRuntime internal constructor(
                 releaseSessionLease(expectedLease)
             }
         }
-        // #305: back to IDLE (only reached when the lease matched) -- start the idle window.
-        scheduleIdleUnloadIfIdle()
+        // #305: back to IDLE (only reached when the lease matched) -- start the idle window. Armed
+        // even when the lease is still held for a draining reader (cancel while recording): that
+        // lease is later released by onRecordingFinished's discarded path, which never arms the
+        // timer, and unloadTranscribersIfIdle re-arms itself while it still finds the lease held.
+        if (stateMachine.current() == RecordingStateMachine.State.IDLE) scheduleIdleUnload()
     }
 
     /** The runtime half of streaming teardown. Host/UI cleanup is always delivered on main; native

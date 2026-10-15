@@ -35,6 +35,7 @@ class DictationRuntimeIdleUnloadTest {
 
     private lateinit var app: Application
     private lateinit var runtime: DictationRuntime
+    private var lastEngine: FakeRecordingEngine? = null
     private val offMain = ArrayDeque<() -> Unit>()
     private val localCreated = Collections.synchronizedList(mutableListOf<LocalTranscriber>())
     private val localReleased = Collections.synchronizedList(mutableListOf<LocalTranscriber>())
@@ -64,10 +65,16 @@ class DictationRuntimeIdleUnloadTest {
         cacheDir: File,
         private val stateMachine: RecordingStateMachine,
     ) : RecordingEngine(cacheDir, stateMachine) {
-        override fun start(onFinished: (Result) -> Unit, onChunk: (ByteArray, Int) -> Unit): Boolean =
-            stateMachine.tryStartRecording()
+        /** Simulates an AudioRecord reader that is still draining after a cancel. */
+        var readerTeardownPending = false
+        var onFinished: ((Result) -> Unit)? = null
+
+        override fun start(onFinished: (Result) -> Unit, onChunk: (ByteArray, Int) -> Unit): Boolean {
+            this.onFinished = onFinished
+            return stateMachine.tryStartRecording()
+        }
         override fun awaitTeardown(timeoutMs: Long): Boolean = true
-        override fun isReaderTeardownPending(): Boolean = false
+        override fun isReaderTeardownPending(): Boolean = readerTeardownPending
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -103,7 +110,9 @@ class DictationRuntimeIdleUnloadTest {
             NoopListener(),
             InMemoryDictationSessionLeaseRegistry(),
             transcriberHooks = hooks,
-            engineFactory = { cacheDir, stateMachine -> FakeRecordingEngine(cacheDir, stateMachine) },
+            engineFactory = { cacheDir, stateMachine ->
+                FakeRecordingEngine(cacheDir, stateMachine).also { lastEngine = it }
+            },
         )
     }
 
@@ -348,5 +357,37 @@ class DictationRuntimeIdleUnloadTest {
         runtime.onTap()
         runOffMainInOrder()
         assertTrue("no spurious reload when nothing was ever released", localCreated.isEmpty())
+    }
+
+    @Test
+    fun `cancel while the reader is still draining still arms the unload once the lease is released`() {
+        loadBoth()
+        runtime.onTap()
+        runtime.onTap() // TRANSCRIBING
+        val engine = lastEngine!!
+        engine.readerTeardownPending = true // cancel lands while AudioRecord is still draining
+
+        runtime.cancelTranscription() // resetToIdle: IDLE, but the lease stays held for the reader
+        mainLooper.idle()
+        assertEquals(RecordingStateMachine.State.IDLE, runtime.currentState())
+
+        advance(1, TimeUnit.MINUTES) // reader finishes: discarded handoff releases the lease
+        engine.readerTeardownPending = false
+        engine.onFinished!!(
+            RecordingEngine.Result(
+                pcmFile = null,
+                bytesRecorded = 0,
+                discarded = true,
+                stopReason = RecordingEngine.StopReason.USER,
+            ),
+        )
+        mainLooper.idle()
+        runOffMainInOrder()
+        assertEquals("still inside the idle window", 1, loadedLocal().size)
+
+        advance(DictationRuntime.TRANSCRIBER_IDLE_UNLOAD_MS, TimeUnit.MILLISECONDS)
+        runOffMainInOrder()
+        assertTrue("recognizers must be released after the drained-cancel path", loadedLocal().isEmpty())
+        assertEquals(1, localReleased.size)
     }
 }
