@@ -38,6 +38,13 @@ data class CleanupPersona(
  * manager instead of silently vanishing (see [CustomPersonaStore.ensureLegacySeeded]).
  */
 object CleanupPersonas {
+    // Default since the 2026-10 cleanup-quality investigation (see PostProcessor.NATURAL_PROMPT).
+    val NATURAL = CleanupPersona(
+        key = "natural",
+        title = "Natural",
+        subtitle = "Reads like you typed it — fixes sentence breaks, fillers, and self-corrections, keeps your voice",
+        prompt = PostProcessor.NATURAL_PROMPT,
+    )
     val FORMAL = CleanupPersona(
         key = "formal",
         title = "Formal",
@@ -93,14 +100,14 @@ object CleanupPersonas {
         isBuiltIn = false,
     )
 
-    /** Every built-in persona, in the order shown in Settings (#103: 5, down from 6 -- see class doc). */
-    val BUILT_IN: List<CleanupPersona> = listOf(FORMAL, CASUAL, NOTES, EMAIL, CONCISE)
+    /** Every built-in persona, in the order shown in Settings (NATURAL first as the default). */
+    val BUILT_IN: List<CleanupPersona> = listOf(NATURAL, FORMAL, CASUAL, NOTES, EMAIL, CONCISE)
 
     /** Retired built-ins (#103): no longer shown as defaults, but still resolvable by key and
      *  seeded once into [CustomPersonaStore] so existing selections/quick-menu entries survive. */
     val LEGACY_RETIRED: List<CleanupPersona> = listOf(GANGSTER, SMART, TEACHER)
 
-    val DEFAULT = FORMAL
+    val DEFAULT = NATURAL
 
     /** Built-in-only lookup by key, falling back through [LEGACY_RETIRED] before [DEFAULT] --
      *  used directly by call sites and tests that only care about shipped personas. Custom

@@ -47,6 +47,7 @@ import kotlin.system.exitProcess
 private val PROMPT_REGISTRY: Map<String, String> = mapOf(
     "SIMPLE_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.SIMPLE_PROMPT, VocabularyTerms.DEFAULTS),
     "DEV_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.DEV_PROMPT, VocabularyTerms.DEFAULTS),
+    "NATURAL_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.NATURAL_PROMPT, VocabularyTerms.DEFAULTS),
     "STRUCTURED_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.STRUCTURED_PROMPT, VocabularyTerms.DEFAULTS),
     "GANGSTER_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.GANGSTER_PROMPT, VocabularyTerms.DEFAULTS),
     "SMART_PROMPT" to PostProcessor.interpolateVocabulary(PostProcessor.SMART_PROMPT, VocabularyTerms.DEFAULTS),

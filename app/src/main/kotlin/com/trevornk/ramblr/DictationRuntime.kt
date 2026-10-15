@@ -1746,7 +1746,7 @@ class DictationRuntime internal constructor(
                 return
             }
 
-            val savedPrompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+            val savedPrompt = PostProcessor.effectiveSavedPrompt(prefs().getString("post_processing_prompt", null), prefs().getString("cleanup_style", null))
             val perAppPersonaKey = if (PerAppPersonaToggle.isEnabled(context)) {
                 PerAppPersonaStore.personaKeyFor(context, listener.foregroundPackageName())
             } else {

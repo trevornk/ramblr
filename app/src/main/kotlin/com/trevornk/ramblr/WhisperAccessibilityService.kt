@@ -2136,7 +2136,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         val globalPersona = PersonaRegistry.currentPersona(
             this,
             prefs().getString("cleanup_style", null),
-            prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+            PostProcessor.effectiveSavedPrompt(prefs().getString("post_processing_prompt", null), prefs().getString("cleanup_style", null))
         )
         val current = if (PerAppPersonaToggle.isEnabled(this)) {
             PerAppPersonaStore.resolvePersona(this, currentForegroundPackageName(), globalPersona)

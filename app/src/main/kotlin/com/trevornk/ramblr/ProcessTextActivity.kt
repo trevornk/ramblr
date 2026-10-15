@@ -118,7 +118,7 @@ class ProcessTextActivity : Activity() {
         val current = PersonaRegistry.currentPersona(
             this,
             prefs().getString(KEY_CLEANUP_STYLE, null),
-            prefs().getString(KEY_POST_PROCESSING_PROMPT, PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT,
+            PostProcessor.effectiveSavedPrompt(prefs().getString(KEY_POST_PROCESSING_PROMPT, null), prefs().getString(KEY_CLEANUP_STYLE, null)),
         )
         val checked = personas.indexOfFirst { it.key == current.key }.takeIf { it >= 0 } ?: 0
 

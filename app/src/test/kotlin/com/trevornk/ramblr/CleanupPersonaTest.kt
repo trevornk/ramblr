@@ -67,10 +67,10 @@ class CleanupPersonaTest {
 
     // --- Persona list integrity ---
 
-    @Test fun `built-in list contains all five task-oriented personas`() {
-        assertEquals(5, CleanupPersonas.BUILT_IN.size)
+    @Test fun `built-in list contains all six task-oriented personas`() {
+        assertEquals(6, CleanupPersonas.BUILT_IN.size)
         assertEquals(
-            setOf("formal", "casual", "notes", "email", "concise"),
+            setOf("natural", "formal", "casual", "notes", "email", "concise"),
             CleanupPersonas.BUILT_IN.map { it.key }.toSet()
         )
     }
@@ -97,8 +97,13 @@ class CleanupPersonaTest {
 
     // --- Lookup / default / resolvePrompt logic (unchanged from the pre-#40 CleanupStyle) ---
 
-    @Test fun `default persona is formal`() {
-        assertSame(CleanupPersonas.FORMAL, CleanupPersonas.DEFAULT)
+    @Test fun `default persona is natural`() {
+        assertSame(CleanupPersonas.NATURAL, CleanupPersonas.DEFAULT)
+    }
+
+    @Test fun `natural maps to natural prompt byte for byte`() {
+        assertEquals(PostProcessor.NATURAL_PROMPT, CleanupPersonas.NATURAL.prompt)
+        assertEquals(PostProcessor.NATURAL_PROMPT, PostProcessor.DEFAULT_PROMPT)
     }
 
     @Test fun `fromKey resolves every built-in key to the same instance`() {

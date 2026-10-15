@@ -293,7 +293,7 @@ internal class AudioJobRunner(
         event(id, JobEvent.CleaningStarted)
         val prefs = context.getSharedPreferences("ramblr", Context.MODE_PRIVATE)
         val vocabulary = VocabularyTerms.parse(prefs.getString("custom_vocabulary_terms", VocabularyTerms.DEFAULT_SERIALIZED))
-        val savedPrompt = prefs.getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+        val savedPrompt = PostProcessor.effectiveSavedPrompt(prefs.getString("post_processing_prompt", null), prefs.getString("cleanup_style", null))
         val prompt = PostProcessor.withKeepLanguage(PostProcessor.interpolateVocabulary(savedPrompt, vocabulary))
         val cursor = CleanupWaterfallCursor()
 

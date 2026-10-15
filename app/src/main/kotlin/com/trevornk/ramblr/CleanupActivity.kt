@@ -308,7 +308,7 @@ class CleanupActivity : BaseSettingsActivity() {
      *  global-persona resolution so the Settings screen and the long-press quick menu never
      *  disagree about what's currently selected. */
     private fun currentPersonaSummary(): String {
-        val prompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+        val prompt = PostProcessor.effectiveSavedPrompt(prefs().getString("post_processing_prompt", null), prefs().getString("cleanup_style", null))
         val persona = PersonaRegistry.currentPersona(this, prefs().getString("cleanup_style", null), prompt)
         return "Style: ${persona.title}"
     }

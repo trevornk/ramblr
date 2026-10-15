@@ -27,6 +27,7 @@ class SimplePromptQuestionHandlingTest {
     /** Every user-facing cleanup prompt, paired with the name used in assertion failures. */
     private val allPrompts: List<Pair<String, String>> = listOf(
         "SIMPLE_PROMPT" to PostProcessor.SIMPLE_PROMPT,
+        "NATURAL_PROMPT" to PostProcessor.NATURAL_PROMPT,
         "DEV_PROMPT" to PostProcessor.DEV_PROMPT,
         "STRUCTURED_PROMPT" to PostProcessor.STRUCTURED_PROMPT,
         "GANGSTER_PROMPT" to PostProcessor.GANGSTER_PROMPT,
