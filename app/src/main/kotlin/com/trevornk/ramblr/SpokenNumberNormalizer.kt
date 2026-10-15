@@ -286,7 +286,7 @@ object SpokenNumberNormalizer {
         "fiftieth" to 50L, "sixtieth" to 60L, "seventieth" to 70L, "eightieth" to 80L,
         "ninetieth" to 90L, "hundredth" to 100L, "thousandth" to 1_000L,
     )
-    private val NUMBER_OR_ORDINAL_WORDS = VALUES.keys + ORDINALS.keys
+    internal val NUMBER_OR_ORDINAL_WORDS = VALUES.keys + ORDINALS.keys
     private val SCALE_ORDINALS = setOf("hundredth", "thousandth")
     private val ZERO_WORDS = setOf("oh", "zero")
     private val TENS_WORDS_VALUES = setOf(20L, 30L, 40L, 50L)

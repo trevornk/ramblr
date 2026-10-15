@@ -22,7 +22,7 @@ already typing in. No keyboard swap, no separate transcript window, no copy-past
   own API keys and no relay server in between.
 - **Fastest of both worlds.** Instant on-device transcription plus cloud-grade cleanup, so
   dictation feels immediate and still reads like you meant to write it.
-- **Cleanup styles that match how you talk.** Formal, Casual, Notes & lists, Email, Concise — or
+- **Cleanup styles that match how you talk.** Natural, Formal, Casual, Notes & lists, Email, Concise — or
   write your own. Ramblr strips the "ums," collapses your self-corrections, and keeps your meaning.
 - **It learns your vocabulary.** Feed it your project names and jargon once; cleanup stops mangling
   them. It can even notice the words it keeps fixing and offer to remember them.
@@ -210,16 +210,22 @@ alternative. A separate 57 MB streaming model powers Live Preview.
 
 | Built-in style | Behavior |
 |---|---|
-| **Formal** (default) | Fixes spelling, grammar, and punctuation, corrects known project/technical names, preserves sentence structure 1:1. Best for coding and short technical notes. |
+| **Natural** (default) | Reads like you typed it yourself: rejoins sentences the transcriber cut at your pauses, drops fillers, resolves self-corrections, and keeps your voice, names, and numbers exactly. |
+| **Formal** | Fixes spelling, grammar, and punctuation, corrects known project/technical names, preserves sentence structure 1:1. Best for coding and short technical notes. |
 | **Casual** | Minimal edit: punctuation, capitalization, and obvious speech-to-text errors only. |
 | **Notes & lists** | Strips filler and false starts, collapses self-corrections down to your final intended meaning, and reorganizes rambling into paragraphs or lists when you're clearly enumerating. |
 | **Email** | Rewrites as a polished email body. Won't invent a greeting or sign-off you didn't say. |
 | **Concise** | Tightens rambling into the shortest version that keeps every fact. |
 
-Beyond the five built-ins you can **write custom styles**, **fork a built-in** (editing one creates
+Beyond the six built-ins you can **write custom styles**, **fork a built-in** (editing one creates
 a copy rather than mutating the preset), **choose which styles appear in the long-press quick
 menu**, and **set a per-app style** — Email in Gmail, Notes & lists in your scratchpad. Ramblr
 remembers the style you pick in a given app and reuses it there next time (on by default).
+
+Natural, Formal, and Casual are meant to keep your wording, so for cloud cleanup Ramblr checks the
+model's answer against what you said (numbers, names, length, no invented phrases, no chatty
+replies). If the answer fails the check, it inserts your raw transcript and tells you cleanup was
+skipped instead of typing words you didn't say.
 
 **Personal vocabulary** teaches cleanup your project names and jargon. On the local cleanup path a
 deterministic post-pass fixes near-misses ("clawed code" → "Claude Code") — done *after* the model

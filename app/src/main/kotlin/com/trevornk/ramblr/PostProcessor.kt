@@ -321,6 +321,22 @@ Output: The meeting has been moved to Thursday at 2 PM. Please confirm whether y
     /** [prompt] with [KEEP_LANGUAGE_CLAUSE] appended as its own final paragraph. */
     fun withKeepLanguage(prompt: String): String = "${prompt.trimEnd()}\n\n$KEEP_LANGUAGE_CLAUSE"
 
+    // First line of each wording-preserving built-in prompt, up to its vocabulary placeholder.
+    // Prompts reach the executor after vocabulary interpolation and the keep-language clause, so
+    // identity is a prefix match, not equality.
+    private val WORDING_PRESERVING_HEADS: List<String> = listOf(NATURAL_PROMPT, DEV_PROMPT, SIMPLE_PROMPT)
+        .map { it.substringBefore(VOCABULARY_PLACEHOLDER).lineSequence().first().trim() }
+
+    /**
+     * True for the built-in prompts whose contract is "same words, cleaned up" (Natural, Formal,
+     * Casual): [CloudCleanupFidelityGuard] only makes sense for those. Notes, Email, Concise and
+     * user-authored prompts are meant to rewrite, so a length or wording check would reject them.
+     */
+    fun preservesWording(prompt: String): Boolean {
+        val head = prompt.trimStart()
+        return WORDING_PRESERVING_HEADS.any { head.startsWith(it) }
+    }
+
     fun parseResponse(json: String): Result {
         return try {
             val obj = JSONObject(json)

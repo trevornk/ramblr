@@ -240,6 +240,11 @@ sealed class CleanupStepOutcome {
      *  fall through to the next group; anything it produced would be discarded by the caller's
      *  guard token anyway, and a paid direct-provider step must never be billed for it (#63). */
     object Cancelled : CleanupStepOutcome()
+    /** The step answered, but [CloudCleanupFidelityGuard] rejected what it said. Terminal: the next
+     *  provider is slower and the raw transcript is already a good answer, so the waterfall stops
+     *  and the caller delivers raw text with its usual cleanup-failed notice. [reason] is a fixed
+     *  enum name, never transcript or model text. */
+    data class Rejected(val reason: FidelityViolation) : CleanupStepOutcome()
 }
 
 /**
@@ -612,6 +617,11 @@ object CleanupWaterfallExecutor {
         benchmarkContext: android.content.Context? = null,
         temperatureCacheContext: android.content.Context? = null,
         benchmarkCorrelationId: String? = null,
+        // Reject cloud output that fails [CloudCleanupFidelityGuard] and deliver the raw transcript
+        // instead. Defaults to on for the wording-preserving built-in prompts (Natural/Formal/
+        // Casual) and off for rewriting ones (Notes, Email, Concise, custom). LOCAL_LLM output has
+        // its own validator and is never checked here.
+        fidelityGuard: Boolean = PostProcessor.preservesWording(prompt),
         callback: (PostProcessor.Result) -> Unit,
     ) {
         val steps = waterfall.steps
@@ -656,12 +666,18 @@ object CleanupWaterfallExecutor {
                 return
             }
 
-            performStep(steps[index], text, prompt, localPrompt, localVocabulary, credentialLookup, entryCredentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, nowMs, temperatureCacheContext, isLastStep = index == steps.lastIndex) { outcome ->
+            performStep(steps[index], text, prompt, localPrompt, localVocabulary, credentialLookup, entryCredentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, nowMs, temperatureCacheContext, isLastStep = index == steps.lastIndex) { stepOutcome ->
+                val outcome = if (fidelityGuard) guardCloudOutput(steps[index], text, stepOutcome) else stepOutcome
                 logStepOutcome(steps[index], startedAtMs, outcome, benchmarkContext, benchmarkCorrelationId)
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
                         cursor.recordSuccess(index, nowMs())
                         callback(PostProcessor.Result(outcome.text, null))
+                    }
+                    is CleanupStepOutcome.Rejected -> {
+                        // The provider worked, so remember it; only its content was refused.
+                        cursor.recordSuccess(index, nowMs())
+                        callback(PostProcessor.Result(null, "Cloud cleanup output rejected (${outcome.reason.name})"))
                     }
                     is CleanupStepOutcome.StepFailed -> attempt(index + 1, outcome.message)
                     is CleanupStepOutcome.ConnectionFailed -> attempt(nextGroupStart(index), outcome.message)
@@ -671,6 +687,15 @@ object CleanupWaterfallExecutor {
         }
 
         attempt(startIndex, null)
+    }
+
+    /** Applies [CloudCleanupFidelityGuard] to a cloud step's successful output (never LOCAL_LLM). */
+    internal fun guardCloudOutput(step: CleanupStep, rawText: String, outcome: CleanupStepOutcome): CleanupStepOutcome {
+        if (outcome !is CleanupStepOutcome.Success || step.group == CleanupStepGroup.LOCAL_LLM) return outcome
+        return when (val verdict = CloudCleanupFidelityGuard.check(rawText, outcome.text)) {
+            is FidelityVerdict.Ok -> outcome
+            is FidelityVerdict.Rejected -> CleanupStepOutcome.Rejected(verdict.reason)
+        }
     }
 
     /**
@@ -691,6 +716,8 @@ object CleanupWaterfallExecutor {
                 is CleanupStepOutcome.StepFailed -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} failed at +${elapsedMs}ms: ${outcome.message}")
                 is CleanupStepOutcome.ConnectionFailed -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} connection failed at +${elapsedMs}ms: ${outcome.message}")
                 is CleanupStepOutcome.Cancelled -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} cancelled at +${elapsedMs}ms")
+                // Reason only: the enum name carries no transcript or model text.
+                is CleanupStepOutcome.Rejected -> android.util.Log.i("CleanupWaterfallExecutor", "Cleanup step ${step.group} output rejected at +${elapsedMs}ms: ${outcome.reason.name}")
             }
         }
         if (context != null && correlationId != null) {
@@ -711,6 +738,7 @@ object CleanupWaterfallExecutor {
                                 is CleanupStepOutcome.StepFailed -> outcome.message
                                 is CleanupStepOutcome.ConnectionFailed -> outcome.message
                                 is CleanupStepOutcome.Cancelled -> "Cancelled"
+                                is CleanupStepOutcome.Rejected -> "Output rejected (${outcome.reason.name})"
                                 is CleanupStepOutcome.Success -> null
                             }
                         ),
