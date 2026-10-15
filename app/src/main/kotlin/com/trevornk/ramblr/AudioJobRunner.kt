@@ -248,7 +248,12 @@ internal class AudioJobRunner(
             if (isCancelled(id)) return ChunkAttempt.Cancelled
             val latch = CountDownLatch(1)
             var text: String? = null
-            val cb: (String?) -> Unit = { text = it?.takeIf(String::isNotBlank); latch.countDown() }
+            var noSpeech = false
+            val cb: (String?, String?) -> Unit = { transcript, error ->
+                text = transcript?.takeIf(String::isNotBlank)
+                noSpeech = isNoSpeechTranscript(transcript, error)
+                latch.countDown()
+            }
             when (entry.kind) {
                 ProviderKind.OPENAI -> TranscriberClient.transcribe(
                     file, apiKey, inFlight,
@@ -256,19 +261,22 @@ internal class AudioJobRunner(
                     model = entry.transcriptionModel?.ifBlank { null } ?: TranscriberClient.DEFAULT_MODEL,
                     vocabularyTerms = vocabulary,
                     language = language,
-                ) { cb(it.text) }
+                ) { cb(it.text, it.error) }
                 ProviderKind.GEMINI -> GeminiTranscriberClient.transcribe(
                     file, apiKey,
                     entry.transcriptionModel?.ifBlank { null } ?: GeminiTranscriberClient.DEFAULT_MODEL,
                     inFlight,
                     vocabularyTerms = vocabulary,
                     language = language,
-                ) { cb(it.text) }
+                ) { cb(it.text, it.error) }
                 else -> return ChunkAttempt.Error()
             }
             if (!latch.await(NetworkClients.CALL_TIMEOUT_SECONDS + 30, TimeUnit.SECONDS)) inFlight.cancel()
             if (isCancelled(id)) return ChunkAttempt.Cancelled
             text?.let { return ChunkAttempt.Text(it) }
+            // #306: a silent chunk is empty text, not a failed call -- retrying (or walking to the
+            // next route) cannot find speech in it, and SegmentedTranscript.join drops it.
+            if (noSpeech) return ChunkAttempt.Text("")
             if (attempt == 0) {
                 try { Thread.sleep(3_000) } catch (_: InterruptedException) { return ChunkAttempt.Cancelled }
             }

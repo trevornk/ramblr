@@ -989,6 +989,93 @@ class DictationRuntimeTest {
         assertFalse(pcm.exists())
     }
 
+    // --- #306: the vocabulary list coming back instead of speech ---
+
+    private val echoVocabulary = listOf("Zorbex", "Quillfarm", "Nimbato", "Plinth", "Dunwick")
+
+    private fun useEchoVocabulary() {
+        app.getSharedPreferences("ramblr", android.content.Context.MODE_PRIVATE).edit()
+            .putString("custom_vocabulary_terms", VocabularyTerms.serialize(echoVocabulary)).apply()
+    }
+
+    private fun batchRuntime() {
+        runtime = DictationRuntime(app, listener, leaseRegistry) { cacheDir, stateMachine ->
+            FakeRecordingEngine(cacheDir, stateMachine).also { engines += it }
+        }
+    }
+
+    private fun awaitToast(expected: String) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline && ShadowToast.getTextOfLatestToast() != expected) {
+            idleMainLooper(); Thread.sleep(10)
+        }
+        assertEquals(expected, ShadowToast.getTextOfLatestToast())
+    }
+
+    @Test
+    fun `batch transcript that is the vocabulary list is reported as no speech and never delivered`() {
+        useEchoVocabulary()
+        stubBatchProvider(echoVocabulary.joinToString(", ") + ".")
+        batchRuntime()
+        val pcm = realSizedPcm()
+
+        runtime.onTap(); runtime.onTap()
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        awaitToast("No speech detected")
+        awaitIdle()
+
+        assertTrue("the vocabulary echo must not reach the text field", listener.delivered.isEmpty())
+        assertFalse(pcm.exists())
+    }
+
+    @Test
+    fun `batch transcript that merely mentions a vocabulary term is still delivered`() {
+        useEchoVocabulary()
+        stubBatchProvider("Zorbex")
+        batchRuntime()
+
+        runtime.onTap(); runtime.onTap()
+        engines.single().finishAs(realSizedPcm(), RecordingEngine.StopReason.USER)
+        awaitDelivery()
+        awaitIdle()
+
+        assertEquals(listOf("Zorbex"), listener.delivered.map { it.text })
+    }
+
+    @Test
+    fun `an empty batch transcript is no speech rather than a transcription failure`() {
+        stubBatchProvider("")
+        batchRuntime()
+
+        runtime.onTap(); runtime.onTap()
+        engines.single().finishAs(realSizedPcm(), RecordingEngine.StopReason.USER)
+        awaitToast("No speech detected")
+        awaitIdle()
+
+        assertTrue(listener.delivered.isEmpty())
+    }
+
+    @Test
+    fun `a live final that is the vocabulary list is rejected and the batch fallback delivers instead`() {
+        useEchoVocabulary()
+        stubBatchProvider("batch rescue")
+        val liveFactory = FakeCloudLiveFactory()
+        var fallbacks = 0
+        cloudLiveRuntime(liveFactory) { fallbacks++ }
+        val pcm = realSizedPcm()
+
+        runtime.onTap(); runtime.onTap()
+        engines.single().finishAs(pcm, RecordingEngine.StopReason.USER)
+        liveFactory.sessions.single().complete(
+            CloudLiveTerminal.Success(echoVocabulary.joinToString(", ") + ".", CloudLiveTiming(1, finalAtMs = 2)),
+        )
+        awaitDelivery()
+        awaitIdle()
+
+        assertEquals(1, fallbacks)
+        assertEquals(listOf("batch rescue"), listener.delivered.map { it.text })
+    }
+
     /** Points the batch pipeline at a MockWebServer returning [transcript], so the fallback's
      *  handover is proven by a real delivery instead of an empty-delivery tautology. */
     private fun stubBatchProvider(transcript: String) {

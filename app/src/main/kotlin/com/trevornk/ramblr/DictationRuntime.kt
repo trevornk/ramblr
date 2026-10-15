@@ -1011,8 +1011,11 @@ class DictationRuntime internal constructor(
         if (attempt.claimed || cloudLiveAttempt !== attempt || sessionLease !== attempt.lease) return
         when (terminal) {
             is CloudLiveTerminal.Success -> {
+                // #306: a live final that is just the vocabulary list is not a transcript --
+                // take the batch fallback, which re-checks the audio and its own output.
                 if (terminal.text.isBlank() || result.pcmFile == null ||
-                    isBelowMinimumDuration(result.pcmFile.length(), SAMPLE_RATE)) {
+                    isBelowMinimumDuration(result.pcmFile.length(), SAMPLE_RATE) ||
+                    VocabularyEchoGuard.isEcho(terminal.text, vocabularyTerms())) {
                     startCloudLiveBatchFallback(attempt, CloudLiveOutcome.BATCH_SERVED_UNUSABLE_FINAL)
                     return
                 }
@@ -1542,6 +1545,12 @@ class DictationRuntime internal constructor(
                             file.delete()
                             uploadCompressedFile?.delete()
                             handleTranscriptionResult(result.text, token, lease)
+                        } else if (isNoSpeechTranscript(result.text, result.error)) {
+                            // #306: an empty transcript is "no speech", not a provider failure --
+                            // the next candidate would be handed the same silence.
+                            file.delete()
+                            uploadCompressedFile?.delete()
+                            handleTranscriptionResult(null, token, lease)
                         } else {
                             advanceOrGiveUp(result.error ?: "empty transcript")
                         }
@@ -1615,6 +1624,11 @@ class DictationRuntime internal constructor(
                                 file.delete()
                                 uploadCompressedFile?.delete()
                                 handleTranscriptionResult(result.text, token, lease)
+                            } else if (isNoSpeechTranscript(result.text, result.error)) {
+                                // #306: see the OpenAI branch above.
+                                file.delete()
+                                uploadCompressedFile?.delete()
+                                handleTranscriptionResult(null, token, lease)
                             } else {
                                 advanceOrGiveUp(result.error ?: "empty transcript")
                             }

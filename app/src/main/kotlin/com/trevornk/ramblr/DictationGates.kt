@@ -40,3 +40,13 @@ fun isJunkTranscript(transcript: String): Boolean {
     val trimmed = transcript.trim()
     return trimmed.length < 2 || trimmed.none { it.isLetterOrDigit() }
 }
+
+/**
+ * True when a cloud transcription call succeeded but returned an empty transcript (blank text,
+ * no error) -- the model's answer for "there was no speech", including a prompt-echo the
+ * [VocabularyEchoGuard] blanked (#306). It ends the dictation as the normal "No speech detected"
+ * outcome; treating it as a provider failure instead walked the chain and surfaced
+ * "Error: empty transcript". A null text or any error is still a failure.
+ */
+fun isNoSpeechTranscript(text: String?, error: String?): Boolean =
+    error == null && text != null && text.isBlank()
