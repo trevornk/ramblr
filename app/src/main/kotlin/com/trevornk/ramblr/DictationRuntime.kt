@@ -108,6 +108,20 @@ interface RuntimeListener {
 }
 
 /**
+ * Test seams for the native recognizer slots (#305): creation, release, and the off-main hop.
+ * The defaults are exactly the production behavior (`LocalTranscriber.create`, `release()`, and
+ * a plain `thread {}`); tests substitute fakes and a manually drained executor so the
+ * release-vs-reload ordering is deterministic instead of a thread-scheduling coin flip.
+ */
+internal class TranscriberHooks(
+    val createLocal: (Context, String) -> LocalTranscriber? = { ctx, name -> LocalTranscriber.create(ctx, name) },
+    val releaseLocal: (LocalTranscriber) -> Unit = { it.release() },
+    val createStreaming: (Context, Model) -> StreamingTranscriber? = { ctx, model -> StreamingTranscriber.create(ctx, model) },
+    val releaseStreaming: (StreamingTranscriber) -> Unit = { it.release() },
+    val runOffMain: (() -> Unit) -> Unit = { work -> thread { work() } },
+)
+
+/**
  * The service-independent dictation engine (#143 Phase 1): record -> transcribe -> clean ->
  * deliver, extracted verbatim from [WhisperAccessibilityService] so a future IME host can drive
  * the same pipeline without an accessibility service. Pure refactor: every method body below was
@@ -167,6 +181,8 @@ class DictationRuntime internal constructor(
      *  that stays in its field never touches it. [BackgroundWork.None] (the default) changes
      *  nothing. */
     private val backgroundWork: BackgroundWork = BackgroundWork.None,
+    /** Test seam for the recognizer slots (#305); the default is the production behavior. */
+    private val transcriberHooks: TranscriberHooks = TranscriberHooks(),
     /** Test seam: lets host-side unit tests substitute a fake engine at the capture boundary.
      *  The default is exactly the pre-extraction construction. */
     private val engineFactory: (File, RecordingStateMachine) -> RecordingEngine =
@@ -182,6 +198,13 @@ class DictationRuntime internal constructor(
         /** Backstop if no transcription/cleanup callback ever fires; covers transcription + cleanup callTimeouts. */
         private const val WATCHDOG_TIMEOUT_MS = 400_000L
         private const val CLOUD_LIVE_FINAL_WAIT_MS = 2_500L
+
+        /**
+         * #305: how long the runtime may sit IDLE before the on-device recognizers are released.
+         * Mirrors [LocalCleanupModelSlot.IDLE_UNLOAD_MS]. Uniform across device tiers: the
+         * reporter's 8 GB phone is a CAPABLE-tier device, so gating by tier would not help.
+         */
+        internal const val TRANSCRIBER_IDLE_UNLOAD_MS = 5 * 60 * 1000L
     }
 
     private val stateMachine = RecordingStateMachine()
@@ -352,19 +375,22 @@ class DictationRuntime internal constructor(
     private var watchdogRunnable: Runnable? = null
 
     // Local transcription engine (loaded lazily)
-    private val transcriberSlot = TranscriberSlot<LocalTranscriber> { it.release() }
+    private val transcriberSlot = TranscriberSlot<LocalTranscriber> { transcriberHooks.releaseLocal(it) }
     private val transcriberLifecycle = TranscriberLifecycle(transcriberSlot)
 
     // Streaming live-preview engine (#29) — only loaded when the opt-in setting is on and the
     // streaming model is installed (see initStreamingModel/shouldUseStreamingPreview). Kept loaded
-    // across recordings like transcriberSlot; only its per-recording OnlineStream is torn down
+    // across back-to-back recordings like transcriberSlot (both are released after
+    // TRANSCRIBER_IDLE_UNLOAD_MS idle, #305); only its per-recording OnlineStream is torn down
     // between dictations (see StreamingTranscriber.beginSession/endSession).
-    private val streamingTranscriberSlot = TranscriberSlot<StreamingTranscriber> { it.release() }
+    private val streamingTranscriberSlot = TranscriberSlot<StreamingTranscriber> { transcriberHooks.releaseStreaming(it) }
     private val streamingTranscriberLifecycle = TranscriberLifecycle(streamingTranscriberSlot)
 
-    // Set by onTrimMemory (#98) when both transcriber slots were released under memory pressure;
+    // Set by onTrimMemory (#98) or the idle unload (#305) when both transcriber slots were released;
     // cleared once warmUpTranscribersIfTrimmed reloads them. Avoids reloading on every single
-    // recording start -- only after a real trim actually emptied the slots.
+    // recording start -- only after a real release actually emptied the slots. Always set on the
+    // main thread BEFORE the off-main release is dispatched, so a startRecording that follows is
+    // guaranteed to see it and reload.
     @Volatile private var transcribersTrimmed = false
 
     // Constrained devices release only the batch recognizer between local ASR and local cleanup.
@@ -398,16 +424,17 @@ class DictationRuntime internal constructor(
             val models = LocalTranscriber.availableModels(context)
             if (models.isNotEmpty()) {
                 Log.i(TAG, "Auto-detected model: ${models.first()}")
-                LocalTranscriber.create(context, models.first())
+                transcriberHooks.createLocal(context, models.first())
             } else null
         } else {
-            LocalTranscriber.create(context, modelName)
+            transcriberHooks.createLocal(context, modelName)
         }
         // Swap in the new transcriber, then release the old one — waiting for any transcription
         // still in flight on it — so switching models never holds more than one native recognizer.
         val installed = transcriberLifecycle.install(initialization, newTranscriber)
         if (installed && newTranscriber != null) {
             Log.i(TAG, "Local transcription ready")
+            armIdleUnloadAfterLoad()
         } else if (installed) {
             Log.i(TAG, "No local model found, will use API")
         }
@@ -429,10 +456,11 @@ class DictationRuntime internal constructor(
             settingEnabled = prefs().getBoolean("streaming_preview_enabled", false),
             streamingModelInstalled = StreamingTranscriber.isAvailable(context, model)
         )
-        val newTranscriber = if (enabled) StreamingTranscriber.create(context, model) else null
+        val newTranscriber = if (enabled) transcriberHooks.createStreaming(context, model) else null
         val installed = streamingTranscriberLifecycle.install(initialization, newTranscriber)
         if (installed) {
             Log.i(TAG, if (newTranscriber != null) "Streaming preview ready" else "Streaming preview unavailable")
+            if (newTranscriber != null) armIdleUnloadAfterLoad()
         }
     }
 
@@ -450,6 +478,11 @@ class DictationRuntime internal constructor(
      * override, which delegates the raw level here; the threshold check and slot release live
      * here exactly as they did in the service body. [warmUpTranscribersIfTrimmed] reloads them
      * the next time recording starts.
+     *
+     * This is NOT the only release trigger (#305): on API 34+ only UI_HIDDEN and BACKGROUND are
+     * delivered and a process held by a bound accessibility service never reaches BACKGROUND,
+     * so this path alone left ~800 MB of recognizers resident forever. The runtime therefore
+     * also releases them after [TRANSCRIBER_IDLE_UNLOAD_MS] idle -- see [unloadTranscribersIfIdle].
      */
     fun onTrimMemory(level: Int) {
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
@@ -462,15 +495,97 @@ class DictationRuntime internal constructor(
             // above as-is; only the transcribers are exempt.
             if (!TranscriberTrimPolicy.shouldReleaseTranscribers(level)) return
             transcribersTrimmed = true
-            // replace(null) takes the slot's write lock, which blocks until any in-flight
-            // transcription (a full batch on a background thread, up to a 10-minute recording)
-            // finishes. onTrimMemory runs on the main thread, so doing this inline would ANR the
-            // accessibility service exactly when memory pressure coincides with active
-            // transcription. Hop to a background thread, mirroring reloadModel() (H3).
-            thread {
-                transcriberSlot.replace(null)
-                streamingTranscriberSlot.replace(null)
-            }
+            releaseTranscribersOffMain()
+        }
+    }
+
+    /**
+     * Releases both recognizers off the main thread without being able to clobber a newer load.
+     *
+     * replace(null) takes the slot's write lock, which blocks until any in-flight transcription
+     * (a full batch on a background thread, up to a 10-minute recording) finishes, so doing it
+     * inline would ANR the accessibility service -- hence the hop (H3), mirroring reloadModel().
+     * The hop opens a window, though: the caller has already set [transcribersTrimmed], so a
+     * startRecording that lands before the hopped work runs spawns a reload, and an unconditional
+     * replace(null) running after that reload installs would null the fresh model and
+     * reintroduce #280's empty slot. So the release is *claimed* here, synchronously, via
+     * [TranscriberLifecycle.beginRelease] (a generation), and the hopped work only drops the slot
+     * if no newer initialization has begun since. A reload always begins after this claim (it is
+     * spawned by a startRecording that observes [transcribersTrimmed]), so it either supersedes
+     * the release or runs entirely after it -- never before it.
+     *
+     * [onReleased] runs off-main once at least one slot was actually released.
+     */
+    private fun releaseTranscribersOffMain(onReleased: () -> Unit = {}) {
+        val batch = transcriberLifecycle.beginRelease()
+        val streaming = streamingTranscriberLifecycle.beginRelease()
+        transcriberHooks.runOffMain {
+            val batchReleased = batch != null && transcriberLifecycle.releaseIfCurrent(batch)
+            val streamingReleased = streaming != null && streamingTranscriberLifecycle.releaseIfCurrent(streaming)
+            if (batchReleased || streamingReleased) onReleased()
+        }
+    }
+
+    // --- Idle unload (#305) ---
+
+    /** Pending idle-unload timer, or null. Mutated on the main thread (and by shutdown). */
+    @Volatile private var idleUnloadRunnable: Runnable? = null
+
+    /** (Re)starts the idle window. Main thread only. A shut-down runtime never arms it. */
+    private fun scheduleIdleUnload() {
+        cancelIdleUnload()
+        if (shuttingDown) return
+        val runnable = Runnable {
+            idleUnloadRunnable = null
+            unloadTranscribersIfIdle()
+        }
+        idleUnloadRunnable = runnable
+        handler.postDelayed(runnable, TRANSCRIBER_IDLE_UNLOAD_MS)
+    }
+
+    private fun cancelIdleUnload() {
+        idleUnloadRunnable?.let { handler.removeCallbacks(it) }
+        idleUnloadRunnable = null
+    }
+
+    /** Arms the idle window if the runtime is genuinely idle (no state, no session lease). Main only. */
+    private fun scheduleIdleUnloadIfIdle() {
+        if (stateMachine.current() == RecordingStateMachine.State.IDLE && sessionLease == null) {
+            scheduleIdleUnload()
+        }
+    }
+
+    /**
+     * A recognizer finished loading (service connect, settings reload, IME show, post-release
+     * reload). Called from the loading thread; hops to main because the state machine is main-
+     * owned. If the runtime is idle the load starts the idle window; if a dictation is already
+     * running, [resetToIdle] arms it when that dictation ends.
+     */
+    private fun armIdleUnloadAfterLoad() {
+        handler.post { scheduleIdleUnloadIfIdle() }
+    }
+
+    /**
+     * Idle-window expiry, main thread. Releases the recognizers only if the runtime is still
+     * IDLE with no session lease (never during RECORDING/TRANSCRIBING or while a background
+     * transcription holds the session). [transcribersTrimmed] is set here, on main, before the
+     * release is dispatched -- see [releaseTranscribersOffMain] for why that ordering matters.
+     * Both recognizers are released together and [warmUpTranscribersIfTrimmed] reloads both, so
+     * a [batchTranscriberReleasedForCleanup] pending from constrained-device sequencing is
+     * simply subsumed (warmUp clears both flags; no double reload, no skipped reload).
+     */
+    private fun unloadTranscribersIfIdle() {
+        if (shuttingDown) return
+        if (stateMachine.current() != RecordingStateMachine.State.IDLE) return
+        if (sessionLease != null) {
+            // IDLE but the session is still held (e.g. reader teardown pending): look again later.
+            scheduleIdleUnload()
+            return
+        }
+        if (transcriberSlot.get() == null && streamingTranscriberSlot.get() == null) return
+        transcribersTrimmed = true
+        releaseTranscribersOffMain {
+            Log.i(TAG, "Released on-device recognizers after ${TRANSCRIBER_IDLE_UNLOAD_MS / 60_000} idle minutes")
         }
     }
 
@@ -491,6 +606,9 @@ class DictationRuntime internal constructor(
             return
         }
         sessionLease = lease
+        // #305: activity -- the idle window is over. Cancelled BEFORE warmUpTranscribersIfTrimmed
+        // so a timer that already fired is the only release that can precede the reload.
+        cancelIdleUnload()
         var recordingStarted = false
         var liveAttempt: CloudLiveAttempt? = null
         try {
@@ -620,6 +738,8 @@ class DictationRuntime internal constructor(
             if (!recordingStarted) {
                 cancelCloudLiveAttempt(liveAttempt)
                 releaseSessionLease(lease)
+                // #305: a start that fails never reaches resetToIdle; the window must not stay cancelled.
+                scheduleIdleUnloadIfIdle()
             }
         }
     }
@@ -715,7 +835,7 @@ class DictationRuntime internal constructor(
 
     /**
      * Reloads the batch (and, if enabled, streaming) transcriber if [onTrimMemory] released them
-     * under memory pressure (#98), or reloads only batch ASR after constrained-device cleanup
+     * under memory pressure (#98) or [unloadTranscribersIfIdle] released them after idling (#305), or reloads only batch ASR after constrained-device cleanup
      * sequencing. Both paths run when recording starts so their smaller model loads overlap with
      * the user speaking rather than adding transcription-time latency.
      */
@@ -723,11 +843,11 @@ class DictationRuntime internal constructor(
         if (transcribersTrimmed) {
             transcribersTrimmed = false
             batchTranscriberReleasedForCleanup = false
-            thread { initLocalModel() }
-            thread { initStreamingModel() }
+            transcriberHooks.runOffMain { initLocalModel() }
+            transcriberHooks.runOffMain { initStreamingModel() }
         } else if (batchTranscriberReleasedForCleanup) {
             batchTranscriberReleasedForCleanup = false
-            thread { initLocalModel() }
+            transcriberHooks.runOffMain { initLocalModel() }
         }
     }
 
@@ -825,6 +945,8 @@ class DictationRuntime internal constructor(
                 releaseSessionLease(expectedLease)
             }
         }
+        // #305: back to IDLE (only reached when the lease matched) -- start the idle window.
+        scheduleIdleUnloadIfIdle()
     }
 
     /** The runtime half of streaming teardown. Host/UI cleanup is always delivered on main; native
@@ -1895,6 +2017,7 @@ class DictationRuntime internal constructor(
             transcriberLifecycle.beginShutdown()
             streamingTranscriberLifecycle.beginShutdown()
         }
+        cancelIdleUnload()
         val lease = sessionLease
         if (recordingEngine != null) shutdownLeaseAwaitingReader = lease
         cancelCloudLiveAttempt()
