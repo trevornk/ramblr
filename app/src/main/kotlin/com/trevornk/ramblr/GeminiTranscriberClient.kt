@@ -33,7 +33,9 @@ object GeminiTranscriberClient {
     // gemini-3.5-flash-lite alongside the 2026-08-25 cleanup-default refresh: 3.5-flash-lite
     // measures ~3x slower on audio input, so the transcription path keeps the faster model.
     const val DEFAULT_MODEL = "gemini-3.1-flash-lite"
-    const val TRANSCRIBE_PROMPT = "Transcribe this audio exactly as spoken. Return only the transcript text, with no commentary, labels, or extra formatting."
+    // "If the audio contains no speech, return an empty transcript" (#306): without an explicit
+    // empty answer, a model given silence fills the void with its prompt context.
+    const val TRANSCRIBE_PROMPT = "Transcribe this audio exactly as spoken. Return only the transcript text, with no commentary, labels, or extra formatting. If the audio contains no speech, return an empty transcript."
 
     /**
      * Interpolates the user's personal vocabulary into [TRANSCRIBE_PROMPT] (#114 part 2): the
@@ -44,7 +46,20 @@ object GeminiTranscriberClient {
     fun transcribePrompt(terms: List<String>, language: String? = null): String {
         val base = if (language.isNullOrBlank()) TRANSCRIBE_PROMPT else "$TRANSCRIBE_PROMPT ${languageClause(language)}"
         return if (terms.isEmpty()) base
-        else "$base Watch for these project names and personal vocabulary terms, which speech-to-text often mishears: ${terms.joinToString(", ")}."
+        // #306: framed as spelling hints that are NOT part of the audio. The earlier "watch for
+        // these terms" wording read as content to produce, and on near-silent audio the model
+        // returned the whole list as the transcript.
+        else "$base These are spelling hints only and are not part of the audio: if you hear one of these names or terms spoken, write it as spelled here. Never output a hint unless it was actually spoken, and never output the list itself: ${terms.joinToString(", ")}."
+    }
+
+    /**
+     * A parsed batch response with the prompt-echo guard applied (#306): a transcript that is
+     * just the vocabulary list or the prompt text coming back becomes an empty transcript, which
+     * callers treat as "no speech".
+     */
+    fun resultFor(responseBody: String, terms: List<String>, prompt: String): Result {
+        val parsed = parseResponse(responseBody)
+        return if (VocabularyEchoGuard.isEcho(parsed.text, terms, prompt)) Result("", null) else parsed
     }
 
     /**
@@ -103,7 +118,8 @@ object GeminiTranscriberClient {
             if (candidates.length() == 0) {
                 Result(null, "No candidates in response")
             } else {
-                val content = candidates.getJSONObject(0).optJSONObject("content")
+                val candidate = candidates.getJSONObject(0)
+                val content = candidate.optJSONObject("content")
                 val parts = content?.optJSONArray("parts")
                 val text = parts?.let { arr ->
                     (0 until arr.length())
@@ -111,7 +127,12 @@ object GeminiTranscriberClient {
                         .filter { it.has("text") }
                         .joinToString("") { it.getString("text") }
                 }
-                if (!text.isNullOrBlank()) Result(text.trim(), null) else Result(null, "No text content in response")
+                if (!text.isNullOrBlank()) Result(text.trim(), null)
+                // A model that finished normally with no text is answering "there was no speech"
+                // (the prompt asks for exactly that, #306): an empty transcript, not a provider
+                // failure. Any other finish reason (SAFETY, MAX_TOKENS, ...) stays an error.
+                else if (candidate.optString("finishReason") == "STOP") Result("", null)
+                else Result(null, "No text content in response")
             }
         } else if (obj.has("error")) {
             Result(null, obj.getJSONObject("error").optString("message", "Unknown Gemini error"))
@@ -158,7 +179,8 @@ object GeminiTranscriberClient {
 
         // #114 part 2: interpolate the user's vocabulary into the transcription prompt itself
         // (previously only cleanup-stage prompts got it), always on when terms exist.
-        val body = buildRequestBody(audioBytes, prompt = transcribePrompt(vocabularyTerms, language), mimeType = mimeType)
+        val prompt = transcribePrompt(vocabularyTerms, language)
+        val body = buildRequestBody(audioBytes, prompt = prompt, mimeType = mimeType)
             .toString().toRequestBody("application/json".toMediaType())
 
         // A malformed key/model (or one OkHttp otherwise rejects) throws IllegalArgumentException
@@ -192,7 +214,7 @@ object GeminiTranscriberClient {
                 // swallowed by OkHttp (onFailure never fires), so this callback would otherwise
                 // never be invoked and the dictation would hang until the watchdog.
                 HttpBodyReader.read(response).fold(
-                    onSuccess = { responseBody -> callback(parseResponse(responseBody)) },
+                    onSuccess = { responseBody -> callback(resultFor(responseBody, vocabularyTerms, prompt)) },
                     onFailure = { e -> callback(Result(null, e.message)) },
                 )
             }

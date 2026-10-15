@@ -104,6 +104,16 @@ object TranscriberClient {
     }
 
     /**
+     * A parsed response with the prompt-echo guard applied (#306): `prompt` / `keywords[]` are
+     * documented to be echoed by Whisper-family models on silence, so a transcript that is just
+     * the vocabulary list becomes an empty transcript, which callers treat as "no speech".
+     */
+    fun resultFor(responseBody: String, terms: List<String>): Result {
+        val parsed = parseResponse(responseBody)
+        return if (VocabularyEchoGuard.isEcho(parsed.text, terms)) Result("", null) else parsed
+    }
+
+    /**
      * The `language` form part for [language] (#290): the ISO-639-1 field OpenAI, Groq, Open
      * WebUI and Whisper-based servers all accept to skip auto-detection. Without it, detection
      * can settle on English for non-English speech, and the model returns English or
@@ -181,7 +191,7 @@ object TranscriberClient {
                 // swallowed by OkHttp, so the callback (and the temp PCM file's deletion in it)
                 // would otherwise never run and the dictation would hang until the watchdog.
                 HttpBodyReader.read(response).fold(
-                    onSuccess = { body -> callback(parseResponse(body)) },
+                    onSuccess = { body -> callback(resultFor(body, vocabularyTerms)) },
                     onFailure = { e -> callback(Result(null, e.message)) },
                 )
             }

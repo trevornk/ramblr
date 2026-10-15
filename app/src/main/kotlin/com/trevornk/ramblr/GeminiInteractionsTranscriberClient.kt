@@ -187,7 +187,7 @@ class GeminiInteractionsTranscriberClient(
                 complete(Result(null, failureMessage(error)))
             },
             onResponse = { response, responseBody ->
-                val result = if (response.isSuccessful) parseResponse(responseBody)
+                val result = if (response.isSuccessful) guardEcho(parseResponse(responseBody), customVocabulary)
                 else parseError(responseBody, "Interactions API failed (HTTP ${response.code})")
                 cleanup(uploaded.name, apiKey)
                 complete(result)
@@ -341,6 +341,11 @@ class GeminiInteractionsTranscriberClient(
         } catch (e: Exception) {
             Result(null, e.message ?: "Parse error")
         }
+
+        /** #306: a transcript that is just the custom vocabulary list coming back is an empty
+         *  transcript (no speech), not text to deliver. */
+        internal fun guardEcho(result: Result, customVocabulary: List<String>): Result =
+            if (VocabularyEchoGuard.isEcho(result.text, customVocabulary)) Result("", null) else result
 
         private fun parseError(body: String, fallback: String): Result {
             val parsed = parseResponse(body)

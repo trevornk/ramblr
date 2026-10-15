@@ -80,6 +80,23 @@ class GeminiInteractionsTranscriberClientTest {
         return result.get() to callbacks.get()
     }
 
+    @Test fun `a custom-vocabulary answer from the interactions API is delivered as an empty transcript (306)`() {
+        val terms = listOf("Zorbex", "Quillfarm", "Nimbato", "Plinth")
+        enqueueSuccessfulUpload()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"Zorbex, Quillfarm, Nimbato, Plinth."}]}]}""",
+            ),
+        )
+        server.enqueue(MockResponse().setBody("{}"))
+
+        val (result, callbacks) = awaitResult(vocabulary = terms)
+
+        assertEquals("", result.text)
+        assertNull(result.error)
+        assertEquals(1, callbacks)
+    }
+
     @Test fun `resumable upload interaction and deletion use the documented request shapes`() {
         enqueueSuccessfulUpload()
         server.enqueue(
