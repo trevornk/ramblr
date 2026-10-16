@@ -11,7 +11,7 @@ import org.json.JSONObject
  */
 object ProviderChainStore {
     private const val PREFS_NAME = "ramblr"
-    private const val KEY_ENTRIES = "provider_chain_entries"
+    internal const val KEY_ENTRIES = "provider_chain_entries"
 
     fun serialize(chain: ProviderChain): String {
         val array = JSONArray()
