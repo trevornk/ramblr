@@ -171,23 +171,12 @@ class DictationRuntimeBatchPreloadTest {
     }
 
     @Test
-    fun `preload happens when a LOCAL transcription candidate exists in a cloud chain`() {
-        prefs.edit().putBoolean("use_local", false).commit()
-        drainOffMain()
+    fun `preload is skipped for a LOCAL candidate in a cloud-first chain`() {
+        // A LOCAL entry is only reached after every cloud provider fails; it loads on demand.
         ProviderChainStore.save(app, cloudOnlyChain.withLocalFloor("some-model"))
-        drainOffMain() // the chain write itself may already load it; the explicit preload must too
-        localCreated.clear()
-        localReleased.clear()
-        runtime.initLocalModel()
-        assertEquals(1, localCreated.size)
-    }
-
-    @Test
-    fun `preload is skipped when the LOCAL candidate is removed by allow_local_fallback off`() {
-        ProviderChainStore.save(app, cloudOnlyChain.withLocalFloor("some-model"))
-        prefs.edit().putBoolean("allow_local_fallback", false).commit()
         setCloudOnly()
         runtime.initLocalModel()
+        drainOffMain()
         assertTrue(localCreated.isEmpty())
     }
 
@@ -206,12 +195,14 @@ class DictationRuntimeBatchPreloadTest {
     }
 
     @Test
-    fun `adding a LOCAL candidate to the chain loads the recognizer`() {
+    fun `adding a LOCAL candidate to the chain does not load the recognizer`() {
         setCloudOnly()
         runtime.initLocalModel()
         ProviderChainStore.save(app, cloudOnlyChain.withLocalFloor("some-model"))
+        prefs.edit().putBoolean("allow_local_fallback", true).commit()
         drainOffMain()
-        assertEquals(1, localCreated.size)
+        runtime.initLocalModel()
+        assertTrue(localCreated.isEmpty())
     }
 
     @Test

@@ -419,10 +419,11 @@ class DictationRuntime internal constructor(
 
     /**
      * The preload entry point (service connect, IME show, post-trim / post-cleanup reload,
-     * settings and download reloads). Loads the batch recognizer only when settings can ever
-     * route a dictation to it (#310, [BatchRecognizerPolicy]); on a cloud-only setup it loads
-     * nothing and drops a recognizer left over from before the user switched to cloud. On-demand
-     * loads ([awaitLocalTranscriber]) bypass this gate by design.
+     * settings and download reloads). Preloads the batch recognizer only when `use_local` is on
+     * (#310, [BatchRecognizerPolicy]); otherwise it loads nothing and drops a recognizer left over
+     * from before the user switched to cloud. A LOCAL fallback candidate in a cloud-first chain is
+     * not preloaded: [awaitLocalTranscriber] loads it on demand through [initLocalModelLocked],
+     * which bypasses this gate by design.
      */
     internal fun initLocalModel() = synchronized(localModelLoadLock) {
         if (batchRecognizerCanBeUsed()) {
@@ -434,20 +435,18 @@ class DictationRuntime internal constructor(
 
     private fun batchRecognizerCanBeUsed(): Boolean = BatchRecognizerPolicy.canBeUsed(
         useLocal = prefs().getBoolean("use_local", true),
-        chain = ProviderChainStore.load(context),
-        allowLocalFallback = DictationModeToggle.allowLocalFallback(context),
     )
 
     private fun releaseUnusedBatchRecognizerLocked() {
-        Log.i(TAG, "On-device batch recognizer not preloaded: transcription is cloud-only")
+        Log.i(TAG, "On-device batch recognizer not preloaded: use_local is off")
         val release = transcriberLifecycle.beginRelease() ?: return
         transcriberLifecycle.releaseIfCurrent(release)
     }
 
     /**
-     * Re-evaluates the preload after a setting that decides [BatchRecognizerPolicy.canBeUsed]
-     * changed: loads when it newly can be used, releases when it no longer can, and otherwise
-     * leaves a loaded recognizer alone (a chain edit must not reload a ~1 GB model). Off-main only.
+     * Re-evaluates the preload after `use_local` changed: loads when it newly can be used,
+     * releases when it no longer can, and otherwise leaves a loaded recognizer alone.
+     * Off-main only.
      */
     internal fun syncBatchRecognizerWithSettings() = synchronized(localModelLoadLock) {
         if (shuttingDown) return@synchronized
@@ -458,8 +457,8 @@ class DictationRuntime internal constructor(
         }
     }
 
-    // #310: use_local / the fallback toggle / the chain are written from half a dozen screens, so
-    // watching the prefs here is what guarantees "switch to local" loads the model. SharedPreferences
+    // #310: use_local is written from several screens, so watching the pref here is what
+    // guarantees "switch to local" loads the model. SharedPreferences
     // holds listeners weakly, hence the field; unregistered in [beginShutdown].
     private val batchPolicyPrefsListener =
         android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
