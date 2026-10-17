@@ -13,8 +13,10 @@
     <color name="ime_mic_disabled">#B0B4BA</color>
 
     <!-- Launcher icon colors only, intentionally separate from the app's Material theme colors
-         above (primary/primary_container), which stay untouched. Dark background, neon magenta
-         mic glyph, matching the overlay's default border color. -->
-    <color name="launcher_icon_background">#0D0D0F</color>
-    <color name="launcher_icon_foreground">#FF00FF</color>
+         above (primary/primary_container), which stay untouched. Deep navy background, mic glyph
+         in an indigo-to-cyan gradient, a soft spark. -->
+    <color name="launcher_icon_background">#111531</color>
+    <color name="launcher_icon_gradient_start">#A5B4FC</color>
+    <color name="launcher_icon_gradient_end">#22D3EE</color>
+    <color name="launcher_icon_spark">#E0E7FF</color>
 </resources>

@@ -29,6 +29,7 @@ import kotlin.concurrent.thread
 class OverlayAppearanceActivity : BaseSettingsActivity() {
 
     private lateinit var overlaySizeRow: LinearLayout
+    private lateinit var overlayShapeRow: LinearLayout
     private lateinit var overlayBorderColorRow: LinearLayout
     private lateinit var overlayFillColorRow: LinearLayout
     private lateinit var overlayGlyphColorRow: LinearLayout
@@ -74,6 +75,9 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
 
         overlaySizeRow = settingsRow("Icon size", "") { promptOverlaySize() }
         root.addView(overlaySizeRow)
+
+        overlayShapeRow = settingsRow("Shape", "") { promptOverlayShape() }
+        root.addView(overlayShapeRow)
 
         overlayBorderColorRow = settingsRow("Border color", "") {
             pickOverlayColor("Border color", OverlayAppearancePrefs.load(this).borderColor) { color ->
@@ -128,6 +132,7 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
 
     private val overlayColorSwatches: List<Pair<String, Int?>> = listOf(
         "Default" to null,
+        "Magenta (classic)" to 0xFFFF00FF.toInt(),
         "White" to 0xFFFFFFFF.toInt(),
         "Black" to 0xFF000000.toInt(),
         "Emerald" to 0xFF34D399.toInt(),
@@ -138,8 +143,8 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
         "Slate" to 0xFF64748B.toInt(),
     )
 
-    private fun colorSummary(color: Int?): String =
-        if (color == null) "Default" else String.format("#%06X", 0xFFFFFF and color)
+    private fun colorSummary(color: Int?, defaultLabel: String = "Default"): String =
+        if (color == null) defaultLabel else String.format("#%06X", 0xFFFFFF and color)
 
     private fun overlaySizeSummary(ringSizeDp: Int): String =
         overlaySizePresets.firstOrNull { it.second == ringSizeDp }?.first ?: "Custom (${ringSizeDp}dp)"
@@ -154,9 +159,11 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
         val hasCustomIcon = appearance.hasCustomIcon && OverlayIconStore.exists(this)
 
         overlaySizeRow.findViewWithTag<TextView>("subtitle").text = overlaySizeSummary(appearance.ringSizeDp)
+        overlayShapeRow.findViewWithTag<TextView>("subtitle").text =
+            if (appearance.roundedSquare) "Rounded square" else "Circle"
 
-        setOverlayColorRowState(overlayBorderColorRow, appearance.borderColor, hasCustomIcon)
-        setOverlayColorRowState(overlayFillColorRow, appearance.fillColor, hasCustomIcon)
+        setOverlayColorRowState(overlayBorderColorRow, appearance.borderColor, hasCustomIcon, "None")
+        setOverlayColorRowState(overlayFillColorRow, appearance.fillColor, hasCustomIcon, "Indigo gradient")
         setOverlayColorRowState(overlayGlyphColorRow, appearance.glyphColor, hasCustomIcon)
 
         overlayCustomIconRow.findViewWithTag<TextView>("subtitle").text =
@@ -164,11 +171,24 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
         overlayRemoveCustomIconRow.visibility = if (hasCustomIcon) View.VISIBLE else View.GONE
     }
 
-    private fun setOverlayColorRowState(row: LinearLayout, color: Int?, disabledByCustomIcon: Boolean) {
+    private fun setOverlayColorRowState(row: LinearLayout, color: Int?, disabledByCustomIcon: Boolean, defaultLabel: String = "Default") {
         row.isEnabled = !disabledByCustomIcon
         row.alpha = if (disabledByCustomIcon) 0.4f else 1f
         row.findViewWithTag<TextView>("subtitle").text =
-            if (disabledByCustomIcon) "Not used while a custom icon image is set" else colorSummary(color)
+            if (disabledByCustomIcon) "Not used while a custom icon image is set" else colorSummary(color, defaultLabel)
+    }
+
+    private fun promptOverlayShape() {
+        val options = arrayOf("Circle", "Rounded square")
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Shape")
+            .setSingleChoiceItems(options, if (OverlayAppearancePrefs.load(this).roundedSquare) 1 else 0) { dialog, which ->
+                OverlayAppearancePrefs.setRoundedSquare(this, which == 1)
+                onOverlayAppearanceChanged()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun promptOverlaySize() {
@@ -340,8 +360,9 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
         fun subtitle(context: android.content.Context): String {
             val appearance = OverlayAppearancePrefs.load(context)
             val hasCustomIcon = appearance.hasCustomIcon && OverlayIconStore.exists(context)
-            return if (hasCustomIcon) "Custom icon, ${appearance.ringSizeDp}dp"
-                else "Default icon, ${appearance.ringSizeDp}dp"
+            val shape = if (appearance.roundedSquare) "rounded square" else "circle"
+            return if (hasCustomIcon) "Custom image, ${appearance.ringSizeDp}dp"
+                else "Default look, $shape, ${appearance.ringSizeDp}dp"
         }
     }
 }

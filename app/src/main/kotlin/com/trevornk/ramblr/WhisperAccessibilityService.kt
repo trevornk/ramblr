@@ -332,17 +332,28 @@ open class WhisperAccessibilityService : AccessibilityService() {
          *  picked a custom glyph color (#43), so an unconfigured install renders identically. */
         private const val COLOR_GLYPH_DEFAULT = 0xFFFFFFFF.toInt()
 
-        /** Default overlay border color for a fresh install (no explicit [OverlayAppearance]
-         *  override yet) -- neon magenta, matching the public launcher icon's accent color and
-         *  Trevor's own long-standing manual override, made the shipped default so new installs
-         *  see the same look out of the box instead of a borderless ring. */
-        private const val COLOR_BORDER_DEFAULT = 0xFFFF00FF.toInt()
+        /** Default overlay border: none. The idle gradient carries the look on its own; anyone who
+         *  wants the classic neon ring back picks it under Floating icon > Size and colors. */
+        private const val COLOR_BORDER_DEFAULT = Color.TRANSPARENT
+
+        /** Default idle fill: a soft indigo-to-violet gradient (used only while no custom idle
+         *  fill is set). Same translucency as [COLOR_IDLE]. */
+        private val IDLE_GRADIENT = intArrayOf(0xDD4F46E5.toInt(), 0xDD7C3AED.toInt())
+
+        /** Corner radius of the rounded-square shape, as a fraction of the button's size. */
+        private const val SQUARE_CORNER_FRACTION = 0.3f
 
         /** Anonymous [ViewOutlineProvider]s can't be `const`, but this one never varies per-view,
          *  so a single shared instance is used to clip a custom icon image (#43) into a circle
          *  matching its own bounds, whatever size the ring is currently configured to. */
         private val OVAL_OUTLINE_PROVIDER = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) = outline.setOval(0, 0, view.width, view.height)
+        }
+
+        /** Same, for the rounded-square shape. */
+        private val ROUNDED_SQUARE_OUTLINE_PROVIDER = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) =
+                outline.setRoundRect(0, 0, view.width, view.height, view.width * SQUARE_CORNER_FRACTION)
         }
     }
 
@@ -1730,12 +1741,23 @@ open class WhisperAccessibilityService : AccessibilityService() {
         feedbackLayoutParams = null
     }
 
-    /** [fillColor] transparent means "no border" -- [GradientDrawable.setStroke] is skipped
-     *  entirely rather than drawn at zero alpha, since a customized ring size means the stroke
-     *  width would otherwise still consume visible space in the drawable's bounds. */
-    private fun circleWithBorder(fillColor: Int, borderColor: Int) = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL
-        setColor(fillColor)
+    /** [fill] with more than one color draws a diagonal gradient. [borderColor] transparent
+     *  means "no border" -- [GradientDrawable.setStroke] is skipped entirely rather than drawn at
+     *  zero alpha, since a customized ring size means the stroke width would otherwise still
+     *  consume visible space in the drawable's bounds. [sizePx] sets the rounded-square corners. */
+    private fun buttonBackground(fill: IntArray, borderColor: Int, roundedSquare: Boolean, sizePx: Int) = GradientDrawable().apply {
+        if (roundedSquare) {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = sizePx * SQUARE_CORNER_FRACTION
+        } else {
+            shape = GradientDrawable.OVAL
+        }
+        if (fill.size > 1) {
+            orientation = GradientDrawable.Orientation.TL_BR
+            colors = fill
+        } else {
+            setColor(fill[0])
+        }
         if (borderColor != Color.TRANSPARENT) setStroke((2 * dp).toInt(), borderColor)
     }
 
@@ -1776,7 +1798,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 btn.imageTintList = null
                 btn.setImageBitmap(bitmap)
                 btn.clipToOutline = true
-                btn.outlineProvider = OVAL_OUTLINE_PROVIDER
+                btn.outlineProvider = if (appearance.roundedSquare) ROUNDED_SQUARE_OUTLINE_PROVIDER else OVAL_OUTLINE_PROVIDER
                 return
             }
             // Stored file missing/corrupt: fall through to the built-in glyph (#43's documented
@@ -1788,8 +1810,13 @@ open class WhisperAccessibilityService : AccessibilityService() {
         btn.scaleType = ImageView.ScaleType.CENTER_INSIDE
         btn.setImageResource(R.drawable.ic_mic)
         btn.imageTintList = ColorStateList.valueOf(appearance.glyphColor ?: COLOR_GLYPH_DEFAULT)
-        val fill = if (stateColor == COLOR_IDLE) (appearance.fillColor ?: COLOR_IDLE) else stateColor
-        btn.background = circleWithBorder(fill, appearance.borderColor ?: COLOR_BORDER_DEFAULT)
+        val fill = when {
+            stateColor != COLOR_IDLE -> intArrayOf(stateColor)
+            appearance.fillColor != null -> intArrayOf(appearance.fillColor)
+            else -> IDLE_GRADIENT
+        }
+        val sizePx = btn.layoutParams?.width?.takeIf { it > 0 } ?: (dpScaledToRing(BTN_DP, appearance.ringSizeDp) * dp).toInt()
+        btn.background = buttonBackground(fill, appearance.borderColor ?: COLOR_BORDER_DEFAULT, appearance.roundedSquare, sizePx)
     }
 
     private fun setAppearance(color: Int) {
