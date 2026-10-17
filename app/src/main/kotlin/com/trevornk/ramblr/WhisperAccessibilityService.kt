@@ -53,12 +53,14 @@ sealed class ClipboardClearAction {
 }
 
 /**
- * A DIRECT injection never reads the clipboard, so it's safe to wipe right away. A FROM_CLIPBOARD
- * injection just read it, so clearing waits a grace period in case the target app hasn't finished
- * consuming it. NONE means the clipboard is the actual fallback delivery path — leave it alone.
+ * A DIRECT injection never reads the clipboard: when [clipboardWritten] is false it was never
+ * touched at all, and when an earlier candidate's paste attempt staged the text first it's safe to
+ * restore right away. A FROM_CLIPBOARD injection just read it, so restoring waits a grace period in
+ * case the target app hasn't finished consuming it. NONE means the clipboard is the actual fallback
+ * delivery path — leave it alone.
  */
-fun clipboardClearActionFor(method: InjectMethod, delayMs: Long): ClipboardClearAction = when (method) {
-    InjectMethod.DIRECT -> ClipboardClearAction.Immediate
+fun clipboardClearActionFor(method: InjectMethod, clipboardWritten: Boolean, delayMs: Long): ClipboardClearAction = when (method) {
+    InjectMethod.DIRECT -> if (clipboardWritten) ClipboardClearAction.Immediate else ClipboardClearAction.None
     InjectMethod.FROM_CLIPBOARD -> ClipboardClearAction.Delayed(delayMs)
     InjectMethod.NONE -> ClipboardClearAction.None
 }
@@ -2767,8 +2769,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
             return
         }
 
+        // Read only -- the dictated text is put on the clipboard later, and only when a paste-style
+        // write actually needs it or nothing took the text (see finishInjection). A DIRECT
+        // injection, the common case, never writes the clipboard at all.
         val priorClipboard = currentClipboardText()
-        ClipboardUtil.copy(this, text)
 
         val candidates = findInjectionCandidates()
 
@@ -2824,6 +2828,16 @@ open class WhisperAccessibilityService : AccessibilityService() {
         var priorNodeText: String? = null
         var injectedNode: AccessibilityNodeInfo? = null
         var handledStreamingHandoff = false
+        // Staged at most once, right before the first paste attempt or for the NONE fallback --
+        // never up front, so a DIRECT injection leaves the user's clipboard (and any clipboard
+        // history / Android 13+ copy preview) completely untouched.
+        var clipboardStaged = false
+        val stageClipboard = {
+            if (!clipboardStaged) {
+                ClipboardUtil.copy(this, text)
+                clipboardStaged = true
+            }
+        }
         try {
             for (candidate in candidates) {
                 // #45: when this candidate is the exact node the streaming session was tracking,
@@ -2835,7 +2849,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 val attempt = if (trackedSession != null) {
                     tryCloseStreamingSpan(candidate, trackedSession, text)
                 } else {
-                    tryInjectIntoNode(candidate, text)
+                    tryInjectIntoNode(candidate, text, stageClipboard)
                 }
                 if (attempt.method != InjectMethod.NONE) {
                     method = attempt.method
@@ -2859,6 +2873,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
         }
 
         Log.i(TAG, if (method != InjectMethod.NONE) "Text injection action reported success" else "No injection action succeeded; clipboard fallback only")
+        // NONE: the clipboard is the deliverable the user pastes from manually (#5).
+        if (method == InjectMethod.NONE) stageClipboard()
 
         // #115: write the end-to-end pipeline benchmark line the moment injection has actually
         // resolved (success or clipboard fallback) -- this IS the "text appears in the focused
@@ -2918,7 +2934,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         }
         displayFeedback?.let { showFeedback(it, duration, touchable = retryRawOffered || isFallback, isFallback = isFallback, targetBounds = targetBounds) }
 
-        when (val action = clipboardClearActionFor(method, CLIPBOARD_CLEAR_DELAY_MS)) {
+        when (val action = clipboardClearActionFor(method, clipboardStaged, CLIPBOARD_CLEAR_DELAY_MS)) {
             ClipboardClearAction.Immediate -> restoreClipboardAfterInjection(text, priorClipboard)
             is ClipboardClearAction.Delayed -> {
                 val restore = Runnable {
@@ -3255,8 +3271,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * (which covers most apps, including Discord's message box) avoids the clipboard entirely and
      * with it that toast, while apps that genuinely need paste still get it as the fallback.
      */
-    private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String): TextCommitResult =
-        DictationTextWriter.commit(AccessibilityTextDestination(node), text)
+    private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String, stageClipboard: () -> Unit): TextCommitResult =
+        DictationTextWriter.commit(AccessibilityTextDestination(node, beforePaste = stageClipboard), text)
 
     private fun findCustomPasteAction(node: AccessibilityNodeInfo): AccessibilityNodeInfo.AccessibilityAction? =
         AccessibilityTextDestination.findCustomPasteAction(node)

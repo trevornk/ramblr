@@ -102,7 +102,8 @@ interface TextDestination {
      * [acceptsDirectWrite] is false or a direct write failed. Returns false when no paste route
      * worked.
      *
-     * Accessibility: a labelled custom paste action, else `ACTION_PASTE`.
+     * Accessibility: stages the dictated text on the clipboard (only now, never ahead of time), then
+     * a labelled custom paste action, else `ACTION_PASTE`.
      * IME: `performContextMenuAction(android.R.id.paste)`.
      */
     fun pasteFromClipboard(): Boolean
