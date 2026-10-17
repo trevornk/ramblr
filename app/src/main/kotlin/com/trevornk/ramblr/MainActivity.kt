@@ -579,7 +579,8 @@ class MainActivity : BaseSettingsActivity() {
         val accessibilityEnabled = WhisperAccessibilityService.instance != null
         val setupMode = onboardingSetupModeOrNull()
         val complete = prefs().getBoolean(KEY_ONBOARDING_COMPLETE, false)
-        if (!OnboardingWizard.shouldAdvance(onboardingIntroShown, force, accessibilityEnabled, complete)) return
+        val dismissed = prefs().getBoolean(KEY_ONBOARDING_DISMISSED, false)
+        if (!OnboardingWizard.shouldAdvance(onboardingIntroShown, force, accessibilityEnabled, complete, dismissed)) return
 
         when {
             !onboardingIntroShown || setupMode == null -> {
@@ -631,6 +632,10 @@ class MainActivity : BaseSettingsActivity() {
      *  who bailed out isn't re-nagged on the next onResume (#H4). */
     private fun abandonWalkthrough() {
         walkthroughForced = false
+        // Remembered across launches so the wizard stays away until the user re-enters it from the
+        // Status row or "Redo setup walkthrough".
+        prefs().edit().putBoolean(KEY_ONBOARDING_DISMISSED, true).apply()
+        onboardingIntroShown = false
         dismissOnboarding()
     }
 
@@ -1177,6 +1182,7 @@ class MainActivity : BaseSettingsActivity() {
         private const val TAG = "MainActivity"
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
         private const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
+        private const val KEY_ONBOARDING_DISMISSED = "onboarding_dismissed"
         private const val KEY_ONBOARDING_SETUP_MODE = "onboarding_setup_mode"
         /** Instance-state key: whether the wizard already started this session (#80). */
         private const val STATE_ONBOARDING_INTRO_SHOWN = "state_onboarding_intro_shown"

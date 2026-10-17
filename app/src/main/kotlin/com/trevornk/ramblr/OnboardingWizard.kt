@@ -37,7 +37,11 @@ object OnboardingWizard {
         forced: Boolean,
         accessibilityEnabled: Boolean,
         onboardingComplete: Boolean,
-    ): Boolean = forced || (!onboardingComplete && (wizardStarted || shouldShow(accessibilityEnabled, onboardingComplete)))
+        // A top-level "Not now" is remembered: without this, a user who never turns
+        // Accessibility on (shouldShow stays true) got the wizard back on every onResume.
+        dismissedByUser: Boolean = false,
+    ): Boolean = forced ||
+        (!onboardingComplete && !dismissedByUser && (wizardStarted || shouldShow(accessibilityEnabled, onboardingComplete)))
 
     /**
      * Whether the app is in a genuinely usable state (#52): permissions granted and Transcription

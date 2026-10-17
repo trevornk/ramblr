@@ -245,6 +245,20 @@ class OnboardingWizardTest {
         ))
     }
 
+    @Test fun `a top-level Not now keeps the wizard away even while accessibility stays off`() {
+        assertFalse(OnboardingWizard.shouldAdvance(
+            wizardStarted = true, forced = false, accessibilityEnabled = false, onboardingComplete = false,
+            dismissedByUser = true,
+        ))
+    }
+
+    @Test fun `forced re-entry still advances after a Not now`() {
+        assertTrue(OnboardingWizard.shouldAdvance(
+            wizardStarted = false, forced = true, accessibilityEnabled = false, onboardingComplete = false,
+            dismissedByUser = true,
+        ))
+    }
+
     @Test fun `forced re-entry always advances regardless of prior state`() {
         assertTrue(OnboardingWizard.shouldAdvance(
             wizardStarted = false, forced = true, accessibilityEnabled = true, onboardingComplete = true,
