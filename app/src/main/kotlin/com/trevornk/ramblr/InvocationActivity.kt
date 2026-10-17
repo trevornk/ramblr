@@ -452,15 +452,35 @@ class InvocationActivity : BaseSettingsActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val statusBar = getSystemService(StatusBarManager::class.java)
             if (statusBar != null) {
-                statusBar.requestAddTileService(
-                    ComponentName(this, RamblrQsTileService::class.java),
-                    getString(R.string.tile_label),
-                    Icon.createWithResource(this, R.drawable.ic_mic),
-                    mainExecutor,
-                ) { /* result codes don't distinguish states we can act on; refresh is moot since tile placement isn't readable */ }
-                return
+                try {
+                    statusBar.requestAddTileService(
+                        ComponentName(this, RamblrQsTileService::class.java),
+                        getString(R.string.tile_label),
+                        Icon.createWithResource(this, R.drawable.ic_mic),
+                        mainExecutor,
+                    ) { result -> onQsTileAddResult(result) }
+                    return
+                } catch (e: RuntimeException) {
+                    // Some OEM status bars reject the request outright; the manual steps still work.
+                    android.util.Log.w("Ramblr", "requestAddTileService failed", e)
+                }
             }
         }
+        showManualQsTileSteps()
+    }
+
+    /** The one-tap sheet is not universal: some OEM skins answer with an error code and show
+     *  nothing, which used to make this row a silent dead tap. */
+    private fun onQsTileAddResult(result: Int) {
+        when (qsTileAddOutcome(result)) {
+            QsTileAddOutcome.ADDED -> toast("Ramblr tile added to Quick Settings")
+            QsTileAddOutcome.ALREADY_ADDED -> toast("The Ramblr tile is already in Quick Settings")
+            QsTileAddOutcome.DECLINED -> Unit
+            QsTileAddOutcome.UNSUPPORTED -> showManualQsTileSteps()
+        }
+    }
+
+    private fun showManualQsTileSteps() {
         android.app.AlertDialog.Builder(this)
             .setTitle("Add the Ramblr tile")
             .setMessage(

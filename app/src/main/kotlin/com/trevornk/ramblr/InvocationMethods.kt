@@ -522,6 +522,20 @@ fun invocationQsTileSubtitleText(canRequestAdd: Boolean): String =
     if (canRequestAdd) "Dictate from the Quick Settings panel — tap to add the tile"
     else "Dictate from the Quick Settings panel — tap for setup steps"
 
+/** What to do with [android.app.StatusBarManager.requestAddTileService]'s result code. */
+enum class QsTileAddOutcome { ADDED, ALREADY_ADDED, DECLINED, UNSUPPORTED }
+
+/** Codes 0-2 are the documented user outcomes (not added / already added / added); every
+ *  TILE_ADD_REQUEST_ERROR_* code is 1000+, which some OEM status bars return without ever showing
+ *  the sheet -- the caller falls back to manual setup steps for those. Raw ints so this stays a
+ *  pure, JVM-testable function. */
+fun qsTileAddOutcome(result: Int): QsTileAddOutcome = when (result) {
+    2 -> QsTileAddOutcome.ADDED
+    1 -> QsTileAddOutcome.ALREADY_ADDED
+    0 -> QsTileAddOutcome.DECLINED
+    else -> QsTileAddOutcome.UNSUPPORTED
+}
+
 // --- #238 voice-keyboard status -------------------------------------------------------------
 
 /**
