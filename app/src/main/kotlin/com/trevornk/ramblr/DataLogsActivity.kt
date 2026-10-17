@@ -125,9 +125,9 @@ class DataLogsActivity : BaseSettingsActivity() {
             intent.getBooleanExtra(EXTRA_SHOW_HISTORY, false) &&
             prefs().getBoolean(KEY_HISTORY_ENABLED, true)
         ) {
-            // Opened as a destination from the main screen: closing the viewer returns
-            // there instead of stranding the user on Data & Logs.
-            finishOnHistoryClose = true
+            // Closing the viewer deliberately leaves the user here, on the "Save dictation history"
+            // switch: finishing straight back to the main screen made that switch unreachable from
+            // the History row.
             showHistory()
         }
     }
@@ -283,9 +283,6 @@ class DataLogsActivity : BaseSettingsActivity() {
             .show()
     }
 
-    /** True when launched straight into history from MainActivity's History row (#283). */
-    private var finishOnHistoryClose = false
-
     private fun showHistory() {
         val store = DictationHistoryStore.forContext(this)
         val entries = store.all()
@@ -307,8 +304,7 @@ class DataLogsActivity : BaseSettingsActivity() {
         val builder = android.app.AlertDialog.Builder(this)
             .setTitle("Dictation history")
             .setView(ScrollView(this).apply { addView(list) })
-            .setNegativeButton("Close") { _, _ -> if (finishOnHistoryClose) finish() }
-            .setOnCancelListener { if (finishOnHistoryClose) finish() }
+            .setNegativeButton("Close", null)
         if (entries.isNotEmpty()) {
             builder.setNeutralButton("Clear all") { _, _ -> confirmClearAllHistory(store, onChanged) }
         }
