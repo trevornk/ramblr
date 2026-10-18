@@ -28,7 +28,9 @@ data class OverlayAppearance(
     val borderColor: Int?,
     val fillColor: Int?,
     val glyphColor: Int?,
-    val hasCustomIcon: Boolean
+    val hasCustomIcon: Boolean,
+    /** Rounded square instead of the default circle. */
+    val roundedSquare: Boolean = false,
 )
 
 object OverlayAppearancePrefs {
@@ -38,6 +40,7 @@ object OverlayAppearancePrefs {
     const val KEY_FILL_COLOR = "overlay_fill_color"
     const val KEY_GLYPH_COLOR = "overlay_glyph_color"
     const val KEY_HAS_CUSTOM_ICON = "overlay_has_custom_icon"
+    const val KEY_ROUNDED_SQUARE = "overlay_rounded_square"
 
     /** Matches the pre-#53 fixed RING_DP constant, so an unconfigured install is unaffected. */
     const val DEFAULT_RING_DP = 56
@@ -59,7 +62,8 @@ object OverlayAppearancePrefs {
         borderColor = prefs.getInt(KEY_BORDER_COLOR, NO_COLOR).takeIf { it != NO_COLOR },
         fillColor = prefs.getInt(KEY_FILL_COLOR, NO_COLOR).takeIf { it != NO_COLOR },
         glyphColor = prefs.getInt(KEY_GLYPH_COLOR, NO_COLOR).takeIf { it != NO_COLOR },
-        hasCustomIcon = prefs.getBoolean(KEY_HAS_CUSTOM_ICON, false)
+        hasCustomIcon = prefs.getBoolean(KEY_HAS_CUSTOM_ICON, false),
+        roundedSquare = prefs.getBoolean(KEY_ROUNDED_SQUARE, false),
     )
 
     fun load(context: Context): OverlayAppearance = load(prefs(context))
@@ -75,6 +79,12 @@ object OverlayAppearancePrefs {
     fun setHasCustomIcon(prefs: SharedPreferences, has: Boolean) {
         prefs.edit().putBoolean(KEY_HAS_CUSTOM_ICON, has).apply()
     }
+
+    fun setRoundedSquare(prefs: SharedPreferences, square: Boolean) {
+        prefs.edit().putBoolean(KEY_ROUNDED_SQUARE, square).apply()
+    }
+
+    fun setRoundedSquare(context: Context, square: Boolean) = setRoundedSquare(prefs(context), square)
 
     fun setRingSizeDp(context: Context, dp: Int) = setRingSizeDp(prefs(context), dp)
     fun setBorderColor(context: Context, color: Int?) = setBorderColor(prefs(context), color)
