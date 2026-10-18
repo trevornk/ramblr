@@ -2403,15 +2403,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
     /** Turns cleanup on if it isn't already, respecting the same local-cleanup consent gate (#23)
      *  [onStyleMenuCleanupToggleTapped] enforces. Returns whether cleanup ended up enabled --
      *  true if it was already on or turning it on just succeeded, false if blocked on consent. */
-    private fun ensureCleanupEnabled(): Boolean {
-        if (PostProcessingToggle.isEnabled(this)) return true
-        val useLocal = prefs().getBoolean("use_local", true)
-        val hasConsented = prefs().getBoolean("local_cleanup_consent_seen", false)
-        val cleanupIsLocalOnly = !CloudFeatureToggle.cleanupEnabled(this)
-        if (LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing = true, hasConsented = hasConsented, cleanupIsLocalOnly = cleanupIsLocalOnly)) return false
-        PostProcessingToggle.setEnabled(this, true)
-        return true
-    }
+    private fun ensureCleanupEnabled(): Boolean = CleanupSwitch.ensureEnabled(this)
 
     /**
      * Persona/style switch from the style menu (#40, #53, #57) -- the overlay-based counterpart to

@@ -39,6 +39,7 @@
     <string name="ime_mic_stop">Stop recording and transcribe</string>
     <string name="ime_switch_keyboard">Switch keyboard</string>
     <string name="ime_open_settings">Open Ramblr settings</string>
+    <string name="ime_delete">Delete</string>
 
     <!-- #285: audio-file transcription and record-now/transcribe-later. -->
     <string name="audio_share_label">Transcribe with Ramblr</string>

@@ -96,6 +96,14 @@ interface RuntimeListener {
     /** Whether this host/session permits retention of transcript-bearing diagnostics. */
     fun allowsTranscriptRetention(): Boolean = true
 
+    /** The keyboard's translate chip: English name of the language to translate this dictation
+     *  into, or null to keep the spoken language. Read once, when cleanup starts. Any thread. */
+    fun translationTarget(): String? = null
+
+    /** Mic loudness from 0 (silence) to 1, about 20 times a second while recording, for a
+     *  level animation. Main thread. */
+    fun onAudioLevel(level: Float) {}
+
     /**
      * #284: a dictation ended without any text to deliver (nothing heard, provider/chain error,
      * timeout). Invoked on the main thread immediately BEFORE the [onIdleUi] funnel for that
@@ -750,6 +758,16 @@ class DictationRuntime internal constructor(
                 runCatching { liveAttempt.session?.sendPcm(buf, len) }
             }
 
+            // Loudness for the host's mic animation: measured on the reader thread, posted at
+            // most ~20 times a second, and dropped once this recording is no longer the live one.
+            val levelMeter = AudioLevelMeter()
+            val meteredOnChunk: (ByteArray, Int) -> Unit = { buf, len ->
+                onChunk(buf, len)
+                levelMeter.offer(buf, len, android.os.SystemClock.uptimeMillis())?.let { level ->
+                    handler.post { if (stateMachine.isRecording()) listener.onAudioLevel(level) }
+                }
+            }
+
             val engine = engineFactory(context.cacheDir, stateMachine)
             val started = engine.start(
             onFinished = { result ->
@@ -768,7 +786,7 @@ class DictationRuntime internal constructor(
                 val finalResult = if (compressedFile != null) result.copy(compressedFile = compressedFile) else result
                 onRecordingFinished(engine, finalResult, lease)
             },
-            onChunk = onChunk
+            onChunk = meteredOnChunk
         )
             if (!started) {
             // End the streaming session so a failed recorder start doesn't leak the OnlineStream
@@ -1888,7 +1906,17 @@ class DictationRuntime internal constructor(
             return
         }
 
-        val usePostProcessing = PostProcessingToggle.shouldRunCleanup(PostProcessingToggle.isEnabled(context))
+        val cleanupEnabled = PostProcessingToggle.shouldRunCleanup(PostProcessingToggle.isEnabled(context))
+        // A translation needs the cleanup model even when cleanup itself is off ("As is"). It
+        // always sends text to the cloud, so with on-device recognition it waits for the #23
+        // consent the keyboard asks for when a language is picked.
+        val requestedTranslation = listener.translationTarget()
+        val translationConsentMissing = requestedTranslation != null && KeyboardAiReadiness.translationNeedsConsent(context)
+        if (translationConsentMissing) {
+            handler.post { if (guard.isCurrent(token)) toast("Translation is off until you allow sending text to the cloud — pick the language again") }
+        }
+        val translateTo = requestedTranslation.takeUnless { translationConsentMissing }
+        val usePostProcessing = cleanupEnabled || translateTo != null
 
         if (usePostProcessing) {
             // Phase 3 (#95): "Use cloud for Cleanup" toggle on the new unified Cloud screen --
@@ -1913,7 +1941,14 @@ class DictationRuntime internal constructor(
 
             // A zero-step provider chain means the user explicitly removed every executable cleanup
             // step: cleanup is disabled, so inject raw instead of falling back to any legacy store.
-            if (cleanupWaterfall.steps.isEmpty()) {
+            // A translation also needs a cloud step: the on-device model always runs its own cleanup
+            // prompt and cannot translate. Without one, cleanup (if on) still runs untranslated.
+            val translationUnavailable = translateTo != null &&
+                cleanupWaterfall.steps.all { it.group == CleanupStepGroup.LOCAL_LLM }
+            if (translationUnavailable) {
+                handler.post { if (guard.isCurrent(token)) toast("Translation needs a cloud AI provider") }
+            }
+            if (cleanupWaterfall.steps.isEmpty() || (translationUnavailable && !cleanupEnabled)) {
                 handler.post {
                     if (!guard.isCurrent(token)) return@post
                     listener.deliverText(finalizeForDelivery(text), rawText = null, paidFallbackGroup = null, cleanupError = null, feedbackDurationMs = 2000)
@@ -1921,6 +1956,7 @@ class DictationRuntime internal constructor(
                 }
                 return
             }
+            val translateInto = translateTo.takeUnless { translationUnavailable }
 
             // A single-OpenAI chain has exactly one required credential and no other step to fall
             // through to, so a missing key is worth failing fast on here, before the executor makes
@@ -1946,12 +1982,19 @@ class DictationRuntime internal constructor(
             } else {
                 null
             }
-            val rawPrompt = perAppPersonaKey
-                ?.let { CleanupPersonas.promptForExplicitSelection(PersonaRegistry.resolve(context, it)) }
-                ?: savedPrompt
+            val rawPrompt = if (!cleanupEnabled) {
+                PostProcessor.TRANSLATE_ONLY_PROMPT
+            } else {
+                perAppPersonaKey
+                    ?.let { CleanupPersonas.promptForExplicitSelection(PersonaRegistry.resolve(context, it)) }
+                    ?: savedPrompt
+            }
             val vocabulary = vocabularyTerms()
-            // #290: keep cleanup in the transcript's language (see KEEP_LANGUAGE_CLAUSE).
-            val prompt = PostProcessor.withKeepLanguage(PostProcessor.interpolateVocabulary(rawPrompt, vocabulary))
+            val interpolated = PostProcessor.interpolateVocabulary(rawPrompt, vocabulary)
+            // #290: keep cleanup in the transcript's language (see KEEP_LANGUAGE_CLAUSE), unless the
+            // keyboard asked for a translation.
+            val prompt = if (translateInto != null) PostProcessor.withTranslation(interpolated, translateInto)
+                else PostProcessor.withKeepLanguage(interpolated)
 
             if (!guard.isCurrent(token)) return
             handler.post { if (guard.isCurrent(token)) listener.onCleaningStarted() }
@@ -1973,6 +2016,7 @@ class DictationRuntime internal constructor(
                     temperatureCacheContext = context.applicationContext,
                     benchmarkContext = context.takeIf { listener.allowsTranscriptRetention() },
                     benchmarkCorrelationId = correlationIdFor(token),
+                    fidelityGuard = translateInto == null && PostProcessor.preservesWording(prompt),
                 ) { result ->
                     handler.post {
                         if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI

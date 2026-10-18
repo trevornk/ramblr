@@ -12,6 +12,14 @@
     <color name="ime_mic_recording">#BE2D2D</color>
     <color name="ime_mic_disabled">#B0B4BA</color>
 
+    <!-- Keyboard-only accent for the ready mic, its processing ring and the small Ramblr wordmark,
+         so the panel does not pass for another vendor's voice keyboard. The launcher icon's
+         indigo-to-cyan gradient, darkened so the white mic glyph stays legible. Same in both ui
+         modes; the app's own theme colours above are untouched. -->
+    <color name="ime_brand_start">#5458E8</color>
+    <color name="ime_brand_end">#1597D6</color>
+    <color name="ime_wordmark">#5458E8</color>
+
     <!-- Launcher icon colors only, intentionally separate from the app's Material theme colors
          above (primary/primary_container), which stay untouched. Deep navy background, mic glyph
          in an indigo-to-cyan gradient, a soft spark. -->
