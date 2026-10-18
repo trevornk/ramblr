@@ -208,12 +208,16 @@ class MainActivity : BaseSettingsActivity() {
         // Mic + notifications go in ONE requestPermissions call (M13): two back-to-back calls both
         // using request code 1 could cancel each other on some Android versions, so the mic prompt
         // might never appear. Notifications (#56) never block a download if declined -- see
-        // DownloadNotifications.
+        // DownloadNotifications. Notifications are asked for once only (NotificationPermissionAsk);
+        // Setup's "Notifications" row turns them on later.
         if (alreadyOnboarded) {
             val needed = mutableListOf<String>()
             if (!hasPerm(Manifest.permission.RECORD_AUDIO)) needed += Manifest.permission.RECORD_AUDIO
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPerm(Manifest.permission.POST_NOTIFICATIONS)) {
+            val notificationsGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                hasPerm(Manifest.permission.POST_NOTIFICATIONS)
+            if (NotificationPermissionAsk.shouldAutoAsk(Build.VERSION.SDK_INT, notificationsGranted, NotificationPermissionAsk.alreadyAsked(this))) {
                 needed += Manifest.permission.POST_NOTIFICATIONS
+                NotificationPermissionAsk.markAsked(this)
             }
             if (needed.isNotEmpty()) ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1)
         }
