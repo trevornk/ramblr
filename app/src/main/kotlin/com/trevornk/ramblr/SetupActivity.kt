@@ -17,6 +17,7 @@ class SetupActivity : BaseSettingsActivity() {
 
     private lateinit var audioRowSub: android.widget.TextView
     private lateinit var accRowSub: android.widget.TextView
+    private lateinit var notificationsRowSub: android.widget.TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,6 +45,10 @@ class SetupActivity : BaseSettingsActivity() {
         accRowSub = accRow.findViewWithTag("subtitle")
         root.addView(accRow)
 
+        val notificationsRow = settingsRow("Notifications", "Checking...") { onNotificationsRowTapped() }
+        notificationsRowSub = notificationsRow.findViewWithTag("subtitle")
+        root.addView(notificationsRow)
+
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
             addView(root)
@@ -63,7 +68,7 @@ class SetupActivity : BaseSettingsActivity() {
         // no-op -- the row would then visibly do nothing forever, with no path to App info. When
         // the denial result comes back and Android won't show a rationale again, offer App info so
         // the user isn't stuck. (A soft first denial leaves shouldShow == true, so no dialog then.)
-        if (!hasPerm(Manifest.permission.RECORD_AUDIO) &&
+        if (c != REQUEST_NOTIFICATIONS && !hasPerm(Manifest.permission.RECORD_AUDIO) &&
             !ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.RECORD_AUDIO)
         ) {
             showMicPermanentlyDeniedDialog()
@@ -98,6 +103,25 @@ class SetupActivity : BaseSettingsActivity() {
         val acc = WhisperAccessibilityService.instance != null
         audioRowSub.text = if (audio) "Granted" else "Tap to grant permission"
         accRowSub.text = if (acc) "Enabled" else "Tap to enable in settings"
+        notificationsRowSub.text = NotificationPermissionAsk.status(notificationsGranted())
+    }
+
+    private fun notificationsGranted(): Boolean =
+        android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU ||
+            hasPerm(Manifest.permission.POST_NOTIFICATIONS)
+
+    /** Asks while Android still shows the prompt; once it won't (or they're already on), opens the
+     *  app's notification settings, which is also where single kinds can be muted. */
+    private fun onNotificationsRowTapped() {
+        val canPrompt = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU && !notificationsGranted() &&
+            (!NotificationPermissionAsk.alreadyAsked(this) ||
+                ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.POST_NOTIFICATIONS))
+        if (canPrompt) {
+            NotificationPermissionAsk.markAsked(this)
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        } else {
+            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+        }
     }
 
     private fun hasPerm(p: String) = ContextCompat.checkSelfPermission(this, p) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -152,5 +176,7 @@ class SetupActivity : BaseSettingsActivity() {
             !hasAudio -> "Audio permission needed"
             else -> "Accessibility service needed"
         }
+
+        private const val REQUEST_NOTIFICATIONS = 2
     }
 }

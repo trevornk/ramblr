@@ -63,9 +63,9 @@ sealed class ClipboardRestoreOutcome {
 }
 
 /**
- * Injection copies the dictated text to the clipboard as either the actual payload a paste-based
- * strategy reads, or (for a DIRECT/ACTION_SET_TEXT injection) just a byproduct of always copying
- * first. Either way, once it's no longer needed the *user's own prior clipboard contents* should
+ * Injection copies the dictated text to the clipboard only as the payload a paste-based strategy
+ * reads (or for a DIRECT/ACTION_SET_TEXT injection that landed after an earlier candidate's paste
+ * attempt had already staged it). Either way, once it's no longer needed the *user's own prior clipboard contents* should
  * come back — wiping it to empty instead would silently throw away whatever they had copied before
  * dictating, which is a quietly infuriating side effect of using dictation at all.
  *

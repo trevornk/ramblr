@@ -208,12 +208,16 @@ class MainActivity : BaseSettingsActivity() {
         // Mic + notifications go in ONE requestPermissions call (M13): two back-to-back calls both
         // using request code 1 could cancel each other on some Android versions, so the mic prompt
         // might never appear. Notifications (#56) never block a download if declined -- see
-        // DownloadNotifications.
+        // DownloadNotifications. Notifications are asked for once only (NotificationPermissionAsk);
+        // Setup's "Notifications" row turns them on later.
         if (alreadyOnboarded) {
             val needed = mutableListOf<String>()
             if (!hasPerm(Manifest.permission.RECORD_AUDIO)) needed += Manifest.permission.RECORD_AUDIO
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPerm(Manifest.permission.POST_NOTIFICATIONS)) {
+            val notificationsGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                hasPerm(Manifest.permission.POST_NOTIFICATIONS)
+            if (NotificationPermissionAsk.shouldAutoAsk(Build.VERSION.SDK_INT, notificationsGranted, NotificationPermissionAsk.alreadyAsked(this))) {
                 needed += Manifest.permission.POST_NOTIFICATIONS
+                NotificationPermissionAsk.markAsked(this)
             }
             if (needed.isNotEmpty()) ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1)
         }
@@ -579,7 +583,8 @@ class MainActivity : BaseSettingsActivity() {
         val accessibilityEnabled = WhisperAccessibilityService.instance != null
         val setupMode = onboardingSetupModeOrNull()
         val complete = prefs().getBoolean(KEY_ONBOARDING_COMPLETE, false)
-        if (!OnboardingWizard.shouldAdvance(onboardingIntroShown, force, accessibilityEnabled, complete)) return
+        val dismissed = prefs().getBoolean(KEY_ONBOARDING_DISMISSED, false)
+        if (!OnboardingWizard.shouldAdvance(onboardingIntroShown, force, accessibilityEnabled, complete, dismissed)) return
 
         when {
             !onboardingIntroShown || setupMode == null -> {
@@ -631,6 +636,10 @@ class MainActivity : BaseSettingsActivity() {
      *  who bailed out isn't re-nagged on the next onResume (#H4). */
     private fun abandonWalkthrough() {
         walkthroughForced = false
+        // Remembered across launches so the wizard stays away until the user re-enters it from the
+        // Status row or "Redo setup walkthrough".
+        prefs().edit().putBoolean(KEY_ONBOARDING_DISMISSED, true).apply()
+        onboardingIntroShown = false
         dismissOnboarding()
     }
 
@@ -1177,6 +1186,7 @@ class MainActivity : BaseSettingsActivity() {
         private const val TAG = "MainActivity"
         private const val KEY_LOCAL_CLEANUP_CONSENT = "local_cleanup_consent_seen"
         private const val KEY_ONBOARDING_COMPLETE = "onboarding_complete"
+        private const val KEY_ONBOARDING_DISMISSED = "onboarding_dismissed"
         private const val KEY_ONBOARDING_SETUP_MODE = "onboarding_setup_mode"
         /** Instance-state key: whether the wizard already started this session (#80). */
         private const val STATE_ONBOARDING_INTRO_SHOWN = "state_onboarding_intro_shown"

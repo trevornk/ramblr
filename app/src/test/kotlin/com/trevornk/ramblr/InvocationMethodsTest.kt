@@ -814,4 +814,17 @@ class InvocationMethodsTest {
                 .contains(SeamlessWrite.BIND_BUTTON_TARGET),
         )
     }
+
+    // --- Quick Settings tile add result ---
+
+    @Test fun `documented tile add results map to user outcomes`() {
+        assertEquals(QsTileAddOutcome.DECLINED, qsTileAddOutcome(0))
+        assertEquals(QsTileAddOutcome.ALREADY_ADDED, qsTileAddOutcome(1))
+        assertEquals(QsTileAddOutcome.ADDED, qsTileAddOutcome(2))
+    }
+
+    @Test fun `tile add error codes fall back to manual steps`() {
+        assertEquals(QsTileAddOutcome.UNSUPPORTED, qsTileAddOutcome(1001))
+        assertEquals(QsTileAddOutcome.UNSUPPORTED, qsTileAddOutcome(1005))
+    }
 }

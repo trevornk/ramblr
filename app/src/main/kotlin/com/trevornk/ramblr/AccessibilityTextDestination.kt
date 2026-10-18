@@ -17,8 +17,14 @@ import android.view.accessibility.AccessibilityNodeInfo
  * Node ownership stays with the caller: this class never obtains or recycles [node]. The service's
  * candidate scan already owns that lifecycle, and a destination that recycled its own node would
  * break the undo snapshot (#27), which keeps a separate obtained copy.
+ *
+ * [beforePaste] runs right before any paste attempt so the caller can put the dictated text on the
+ * clipboard only when a paste actually needs it, instead of on every injection.
  */
-class AccessibilityTextDestination(val node: AccessibilityNodeInfo) : TextDestination {
+class AccessibilityTextDestination(
+    val node: AccessibilityNodeInfo,
+    private val beforePaste: () -> Unit = {},
+) : TextDestination {
 
     override fun acceptsDirectWrite(): Boolean =
         node.isEditable || node.className?.toString()?.contains("EditText") == true
@@ -66,6 +72,7 @@ class AccessibilityTextDestination(val node: AccessibilityNodeInfo) : TextDestin
     }
 
     override fun pasteFromClipboard(): Boolean {
+        beforePaste()
         findCustomPasteAction(node)?.let { action ->
             val ok = node.performAction(action.id)
             Log.i(TAG, "Custom action '${action.label}' (${action.id}) => $ok")

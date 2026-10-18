@@ -1,6 +1,7 @@
 package com.trevornk.ramblr
 
 import okhttp3.Call
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -19,8 +20,15 @@ class InFlightCall {
 
     @Volatile private var cancelled = false
 
+    private val cancels = AtomicInteger(0)
+
     /** True once [cancel] has run for the current unit of work (see [beginWork]). */
     val isCancelled: Boolean get() = cancelled
+
+    /** How many times [cancel] has run. Unlike the sticky [isCancelled] flag, which only
+     *  [beginWork] clears, a caller that snapshots this can tell whether a cancel arrived since
+     *  (a Gemini overload retry waiting out its backoff has no [Call] for [cancel] to abort). */
+    val cancelCount: Int get() = cancels.get()
 
     /** Marks the start of a new logical unit of cancellable work, clearing any stale cancel. */
     fun beginWork() {
@@ -39,6 +47,7 @@ class InFlightCall {
     /** Cancels the in-flight call, if any, and clears the reference. Safe to call with nothing in flight. */
     fun cancel() {
         cancelled = true
+        cancels.incrementAndGet()
         ref.getAndSet(null)?.cancel()
     }
 }

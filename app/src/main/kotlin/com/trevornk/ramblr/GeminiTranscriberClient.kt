@@ -8,6 +8,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Multimodal audio-in client for Gemini transcription (#96): sends the recorded PCM as an
@@ -83,6 +85,37 @@ object GeminiTranscriberClient {
     fun canInlineAudio(pcmBytes: Long): Boolean = pcmBytes <= MAX_INLINE_PCM_BYTES
 
     /**
+     * Waits before each retry of a "busy, try again" answer. Seen 2026-10 as a burst of 503
+     * UNAVAILABLE "This model is currently experiencing high demand..." on gemini-3.1-flash-lite:
+     * without a retry each one lost the dictation, or fell through to an on-device model that a
+     * fresh install doesn't have yet. Two short retries (~6s added worst case) ride out a brief
+     * spike; a longer outage still fails fast enough for the user to switch models.
+     */
+    val OVERLOAD_RETRY_DELAYS_MS: List<Long> = listOf(1_500L, 4_000L)
+
+    /** Daemon so a pending retry never keeps the process alive. */
+    private val retryScheduler = Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "gemini-overload-retry").apply { isDaemon = true }
+    }
+
+    /**
+     * True for a server-side "temporarily unable" answer worth retrying unchanged: 500/502/503/504
+     * per Google's API troubleshooting guide, or an error message naming the overload when the
+     * status alone doesn't say so. 429 is left out: on the free tier it is usually a spent daily
+     * quota, which a retry seconds later can't fix.
+     */
+    fun isOverloaded(httpCode: Int, error: String?): Boolean {
+        if (httpCode in setOf(500, 502, 503, 504)) return true
+        val message = error?.lowercase() ?: return false
+        return "high demand" in message || "overloaded" in message
+    }
+
+    /** The error shown once every retry hit the overload, naming the model so the user knows
+     *  what to switch away from. */
+    fun overloadedMessage(model: String, attempts: Int): String =
+        "Gemini model $model is overloaded right now (tried $attempts times). Try again in a minute or pick another transcription model."
+
+    /**
      * Builds the generateContent request body with the audio bytes inlined as base64
      * `inline_data` (see https://ai.google.dev/gemini-api/docs/audio#inline-audio). [audioBytes]
      * must already be in the container/encoding described by [mimeType] -- callers building from
@@ -155,6 +188,9 @@ object GeminiTranscriberClient {
      * succeeded), that finished `.m4a` is embedded instead as `audio/aac` -- read directly rather
      * than WAV-wrapped, since it's already a complete, playable audio container. Falls back to
      * the WAV path built from [pcmFile] exactly as before whenever it's null.
+     *
+     * An overloaded answer (see [isOverloaded]) is retried after each of [retryDelaysMs] before
+     * it reports [overloadedMessage]; [endpoint] and [retryDelaysMs] are only overridden by tests.
      */
     fun transcribe(
         pcmFile: File,
@@ -164,6 +200,8 @@ object GeminiTranscriberClient {
         vocabularyTerms: List<String> = emptyList(),
         compressedFile: File? = null,
         language: String? = null,
+        endpoint: String = GeminiCleanupProvider.endpointUrl(model),
+        retryDelaysMs: List<Long> = OVERLOAD_RETRY_DELAYS_MS,
         callback: (Result) -> Unit,
     ) {
         val (audioBytes, mimeType) = try {
@@ -191,7 +229,7 @@ object GeminiTranscriberClient {
         // defense in depth so nothing echoed from the URL can leak a secret.
         val request = try {
             Request.Builder()
-                .url(GeminiCleanupProvider.endpointUrl(model))
+                .url(endpoint)
                 .header("x-goog-api-key", apiKey)
                 .post(body)
                 .build()
@@ -200,24 +238,41 @@ object GeminiTranscriberClient {
             return
         }
 
-        val call = client.newCall(request)
-        cancelHolder.set(call)
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                cancelHolder.clear(call)
-                callback(Result(null, e.message))
-            }
+        val cancelsAtStart = cancelHolder.cancelCount
+        fun send(attempt: Int) {
+            val call = client.newCall(request)
+            cancelHolder.set(call)
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    cancelHolder.clear(call)
+                    callback(Result(null, e.message))
+                }
 
-            override fun onResponse(call: Call, response: Response) {
-                cancelHolder.clear(call)
-                // Read via HttpBodyReader (#62): a body read that throws inside onResponse is
-                // swallowed by OkHttp (onFailure never fires), so this callback would otherwise
-                // never be invoked and the dictation would hang until the watchdog.
-                HttpBodyReader.read(response).fold(
-                    onSuccess = { responseBody -> callback(resultFor(responseBody, vocabularyTerms, prompt)) },
-                    onFailure = { e -> callback(Result(null, e.message)) },
-                )
-            }
-        })
+                override fun onResponse(call: Call, response: Response) {
+                    cancelHolder.clear(call)
+                    // Read via HttpBodyReader (#62): a body read that throws inside onResponse is
+                    // swallowed by OkHttp (onFailure never fires), so this callback would otherwise
+                    // never be invoked and the dictation would hang until the watchdog.
+                    HttpBodyReader.read(response).fold(
+                        onSuccess = { responseBody ->
+                            val result = resultFor(responseBody, vocabularyTerms, prompt)
+                            val overloaded = result.text == null && isOverloaded(response.code, result.error)
+                            when {
+                                !overloaded -> callback(result)
+                                attempt < retryDelaysMs.size -> retryScheduler.schedule({
+                                    // A cancel during the backoff has no Call to abort, so it is
+                                    // checked here instead of sending a request nobody waits for.
+                                    if (cancelHolder.cancelCount != cancelsAtStart) callback(Result(null, "Canceled"))
+                                    else send(attempt + 1)
+                                }, retryDelaysMs[attempt], TimeUnit.MILLISECONDS)
+                                else -> callback(Result(null, overloadedMessage(model, attempt + 1)))
+                            }
+                        },
+                        onFailure = { e -> callback(Result(null, e.message)) },
+                    )
+                }
+            })
+        }
+        send(0)
     }
 }

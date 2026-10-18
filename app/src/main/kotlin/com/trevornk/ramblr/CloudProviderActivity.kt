@@ -256,7 +256,11 @@ class CloudProviderActivity : BaseSettingsActivity() {
 
     private fun refreshModeSelection() {
         val mode = currentMode()
-        modeRadioButtons.forEach { (candidate, button) -> button.isChecked = candidate == mode }
+        // Through the group, never per-button: clearing a radio with isChecked = false leaves
+        // RadioGroup's checked id pointing at it, and re-tapping that preset then made the group
+        // uncheck it again under the user's finger.
+        val button = modeRadioButtons[mode]
+        if (button == null) modeRadioGroup.clearCheck() else modeRadioGroup.check(button.id)
         if (mode == DictationMode.CUSTOM) {
             modeCustomNote.visibility = View.VISIBLE
             modeCustomNote.text = "Custom — transcription and cleanup are set independently below."
