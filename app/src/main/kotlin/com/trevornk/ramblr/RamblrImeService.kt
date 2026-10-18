@@ -625,7 +625,8 @@ class RamblrImeService : InputMethodService() {
                     "Choose which languages show up here", selected = false, icon = R.drawable.ic_ime_add) {
                     closePicker()
                     startActivity(
-                        Intent(this, InvocationActivity::class.java)
+                        InvocationActivity.intent(this, InvocationActivity.Section.KEYBOARD)
+                            .putExtra(BaseSettingsActivity.EXTRA_HIGHLIGHT_TITLE, "Translation languages")
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     )
                 })

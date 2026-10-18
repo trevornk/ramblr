@@ -66,8 +66,8 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
         })
 
         root.addView(TextView(this).apply {
-            text = "Customize how the floating mic button looks. A custom icon image replaces " +
-                "the built-in circle entirely, so border/fill colors stop applying once one is set."
+            text = "Change how the floating button looks. A custom image replaces the whole " +
+                "button, so the colors below stop applying."
             textSize = 14f
             setTextColor(attrColor(android.R.attr.textColorSecondary))
             setPadding(dp(24), 0, dp(24), dp(8))
@@ -172,8 +172,7 @@ class OverlayAppearanceActivity : BaseSettingsActivity() {
     }
 
     private fun setOverlayColorRowState(row: LinearLayout, color: Int?, disabledByCustomIcon: Boolean, defaultLabel: String = "Default") {
-        row.isEnabled = !disabledByCustomIcon
-        row.alpha = if (disabledByCustomIcon) 0.4f else 1f
+        setRowEnabled(row, !disabledByCustomIcon)
         row.findViewWithTag<TextView>("subtitle").text =
             if (disabledByCustomIcon) "Not used while a custom icon image is set" else colorSummary(color, defaultLabel)
     }

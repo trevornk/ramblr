@@ -2325,7 +2325,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
             styleMenuRow(
                 icon = null,
                 title = "Hide it",
-                subtitle = "Get it back from the notification, the Quick Settings tile, or Settings > Behavior",
+                subtitle = "Get it back from the notification, the Quick Settings tile, or Settings > Floating icon",
             ) { onHideIconConfirmed() }
         )
 
@@ -2484,7 +2484,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // A Toast is a separate system-owned window and is unaffected. Belt-and-braces alongside
         // the confirmation page that just named the same paths: the toast is what remains on
         // screen for a moment *after* the ring vanishes, which is when the loss is felt.
-        toast("Icon hidden. Tap the notification, or Settings > Behavior, to show it again")
+        toast("Icon hidden. Tap the notification, or Settings > Floating icon, to show it again")
     }
 
     private fun startPulse() {
@@ -2536,7 +2536,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 PerAppExclusionStore.isExcluded(this, currentForegroundPackageName()),
             )
         ) {
-            toast("Ramblr is excluded in this app — see Settings > Behavior")
+            toast("Ramblr is excluded in this app — see Settings > Privacy")
             return
         }
         runtime.onTap()

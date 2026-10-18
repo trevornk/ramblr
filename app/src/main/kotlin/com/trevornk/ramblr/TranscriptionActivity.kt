@@ -30,6 +30,12 @@ class TranscriptionActivity : BaseSettingsActivity() {
     private lateinit var cloudLinkRowSub: TextView
     private lateinit var routingSummaryRowSub: TextView
     private lateinit var dictationLanguageRowSub: TextView
+    private lateinit var localThreadsRowSub: TextView
+    private lateinit var canaryLanguageRowSub: TextView
+    private lateinit var compressedUploadSwitch: MaterialSwitch
+    private lateinit var cloudLiveSwitch: MaterialSwitch
+    private lateinit var cloudLiveRowSub: TextView
+    private lateinit var livePreviewRowSub: TextView
 
     private data class ModelRowViews(
         val radio: MaterialRadioButton,
@@ -53,19 +59,16 @@ class TranscriptionActivity : BaseSettingsActivity() {
         val root = vertical(0, 0)
 
         val header = TextView(this).apply {
-            text = "Transcription"
+            text = "Recognition"
             textSize = 32f
             setPadding(dp(24), dp(64), dp(24), dp(24))
         }
         root.addView(header)
 
-        root.addView(TextView(this).apply {
-            text = "Required — choose how speech becomes text. Local (default): fastest, fully " +
-                "private, works with no internet. Cloud: uses your Cloud provider chain."
-            textSize = 14f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(8))
-        })
+        root.addView(explainer(
+            "Required: choose how your speech becomes text. On-device (default): fastest, " +
+                "private and works offline. Cloud: uses the providers you set up under Cloud providers."
+        ))
 
         val isCloud = !prefs().getBoolean("use_local", true)
 
@@ -110,13 +113,82 @@ class TranscriptionActivity : BaseSettingsActivity() {
 
         // #290: spoken-language hint for cloud transcription. Lives here, next to the
         // local/cloud choice, because a wrong-language transcript is a transcription problem;
-        // the local-only Canary token stays under Behavior > Advanced tuning.
+        // the local-only Canary token sits just below, under On-device tuning.
         root.addView(sectionHeader("Language"))
         val languageRow = settingsRow("Dictation language", dictationLanguageSummary(), indent = 0) {
             promptDictationLanguage()
         }
         dictationLanguageRowSub = languageRow.findViewWithTag("subtitle")
         root.addView(languageRow)
+
+        // Moved here from the former Fine-tuning screen: both only change how the on-device
+        // models run, so they belong with the models.
+        root.addView(sectionHeader("On-device tuning"))
+
+        // Local transcription thread count (#107): a developer-ish tuning knob, not a mainstream
+        // everyday setting, so it sits below the model picker rather than in it. See
+        // LocalTranscriptionThreads' kdoc for why the default stays 2.
+        val localThreadsRow = settingsRow(
+            "Local transcription threads", localThreadsSummary(),
+            details = "On-device transcription only, runs on the CPU. Compare speeds with the benchmark log in Diagnostics",
+        ) { promptLocalTranscriptionThreads() }
+        localThreadsRowSub = localThreadsRow.findViewWithTag("subtitle")
+        root.addView(localThreadsRow)
+
+        // Canary source language (#177): same developer-ish tuning tier as the threads knob
+        // above. Only the Canary model reads this -- see CanaryLanguage's kdoc for why the
+        // wrong language token doesn't just degrade output but collapses it entirely.
+        val canaryLanguageRow = settingsRow(
+            "Canary language", canaryLanguageSummary(),
+            details = "The language you speak when dictating with the Canary local model. Only affects Canary; other models ignore this",
+        ) { promptCanaryLanguage() }
+        canaryLanguageRowSub = canaryLanguageRow.findViewWithTag("subtitle")
+        root.addView(canaryLanguageRow)
+
+        root.addView(sectionHeader("Cloud transcription options"))
+
+        // Compressed (AAC/M4A) cloud upload (#109), moved here from Recording and text. Off by
+        // default (see CompressedUploadToggle's kdoc for why) and a genuine behavior change to
+        // the audio actually sent to a cloud transcription provider, so it gets an honest
+        // description instead of pretending it's already proven.
+        compressedUploadSwitch = MaterialSwitch(this).apply {
+            isChecked = CompressedUploadToggle.isEnabled(this@TranscriptionActivity)
+            isClickable = false
+        }
+        root.addView(settingsRow(
+            "Compress audio before cloud upload",
+            "Smaller uploads for mobile data or slow internet. Accuracy with compressed audio isn't proven yet",
+            compressedUploadSwitch,
+            details = "Encodes to AAC/M4A before sending to OpenAI or Gemini. Leave it off where accuracy really matters until you've tried it",
+        ) {
+            val newVal = !compressedUploadSwitch.isChecked
+            CompressedUploadToggle.setEnabled(this, newVal)
+            compressedUploadSwitch.isChecked = newVal
+        })
+
+        // Experimental live cloud transcription (#233 Phase 1), moved here from the Cloud
+        // providers screen. It still reads the Gemini key from that screen's chain.
+        cloudLiveSwitch = MaterialSwitch(this).apply { isClickable = false }
+        val cloudLiveRow = settingsRow(
+            "Live cloud transcription", cloudLiveSubtitle(), cloudLiveSwitch,
+            details = "Experimental. Streams audio to Gemini while you speak, so text appears as you talk " +
+                "instead of after you stop.\n" +
+                "\u2022 Ramblr keyboard only. Needs cloud transcription and a Gemini key.\n" +
+                "\u2022 Doesn't change which provider transcribes you, or the order of your Cloud providers.\n" +
+                "\u2022 Unproven on real devices and roughly 1.8x the cost of the normal upload, so it is off until you turn it on.\n" +
+                "\u2022 If a stream fails, the recording still finishes over the normal path.",
+        ) { onToggleCloudLive(!cloudLiveSwitch.isChecked) }
+        cloudLiveRowSub = cloudLiveRow.findViewWithTag("subtitle")
+        root.addView(cloudLiveRow)
+
+        // Live Preview keeps its own screen (model download + toggle); this is its way in, next
+        // to the rest of speech recognition.
+        root.addView(sectionHeader("Live preview"))
+        val livePreviewRow = settingsRow("Live preview", LivePreviewActivity.subtitle(this)) {
+            startActivity(Intent(this, LivePreviewActivity::class.java))
+        }
+        livePreviewRowSub = livePreviewRow.findViewWithTag("subtitle")
+        root.addView(livePreviewRow)
 
         // #276: read-only "what will actually happen" line, since the mode presets + per-feature
         // overrides + two fallback toggles on the Cloud screen can otherwise leave it unclear
@@ -162,6 +234,12 @@ class TranscriptionActivity : BaseSettingsActivity() {
 
         routingSummaryRowSub.text = effectiveTranscriptionRouting()
         dictationLanguageRowSub.text = dictationLanguageSummary()
+        localThreadsRowSub.text = localThreadsSummary()
+        canaryLanguageRowSub.text = canaryLanguageSummary()
+        compressedUploadSwitch.isChecked = CompressedUploadToggle.isEnabled(this)
+        cloudLiveSwitch.isChecked = CloudLiveToggle.isEnabled(this)
+        cloudLiveRowSub.text = cloudLiveSubtitle()
+        livePreviewRowSub.text = LivePreviewActivity.subtitle(this)
 
         val cur = prefs().getString("model_name", "") ?: ""
         val curModel = MODEL_CATALOG.firstOrNull { it.archive == cur }
@@ -201,7 +279,7 @@ class TranscriptionActivity : BaseSettingsActivity() {
                     "audio and can guess English, which makes your speech come back in English. " +
                     "Choosing your language stops the guessing. The Canary on-device model also " +
                     "uses it when it is English, Spanish, German or French (you can override " +
-                    "that under Behavior). Other on-device models aren't affected."
+                    "that below, under On-device tuning). Other on-device models aren't affected."
                 textSize = 14f
                 setTextColor(attrColor(android.R.attr.textColorSecondary))
                 setPadding(0, dp(8), 0, 0)
@@ -218,6 +296,136 @@ class TranscriptionActivity : BaseSettingsActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    // --- Local transcription thread count (#107), moved from the former Fine-tuning screen ---
+
+    private fun localThreadsSummary(): String {
+        val threads = LocalTranscriptionThreads.threadsOrDefault(this)
+        return "$threads threads. More can be faster but uses more battery"
+    }
+
+    /** Presets-only picker (#107): the issue's whole point is letting Trevor A/B 2/4/6 himself
+     *  using his own real-usage [BenchmarkLogger] data, not offering a free-form "Custom…" input
+     *  the way the silence threshold does for a user-experience threshold -- there's no
+     *  forgiving range to fall back to here, just three concrete values to compare. */
+    private fun promptLocalTranscriptionThreads() {
+        // AlertDialog.Builder's message and single-choice-item list share the same content area
+        // and are mutually exclusive -- calling both silently drops the list with no error, which
+        // is exactly what happened here: the dialog rendered title+message+Cancel but never the
+        // three thread presets, making the setting effectively unreachable (GH bug report,
+        // 2026-07-17). Fixed using the documented workaround: a custom title view carrying both
+        // the heading and the explanatory copy (in place of setTitle()+setMessage()), leaving the
+        // content area free for setSingleChoiceItems() to actually render.
+        val presets = LocalTranscriptionThreads.PRESET_THREADS
+        val labels = presets.map { "$it threads" }.toTypedArray()
+        val current = LocalTranscriptionThreads.threadsOrDefault(this)
+        val checkedIndex = presets.indexOf(current).let { if (it < 0) 0 else it }
+        val titleView = vertical(dp(20), dp(20)).apply {
+            addView(TextView(this@TranscriptionActivity).apply {
+                text = "Local transcription threads"
+                textSize = 20f
+                setTextColor(attrColor(android.R.attr.textColorPrimary))
+            })
+            addView(TextView(this@TranscriptionActivity).apply {
+                text = "How many CPU threads on-device transcription uses to decode. The " +
+                    "default (2) is unchanged from before this setting existed -- try 4 or 6 " +
+                    "and compare against the benchmark log (Diagnostics > Share benchmark log) " +
+                    "to see what's actually faster on your device."
+                textSize = 14f
+                setTextColor(attrColor(android.R.attr.textColorSecondary))
+                setPadding(0, dp(8), 0, 0)
+            })
+        }
+        android.app.AlertDialog.Builder(this)
+            .setCustomTitle(titleView)
+            .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
+                LocalTranscriptionThreads.setThreads(this, presets[which])
+                refresh()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // --- Canary source language (#177), moved from the former Fine-tuning screen ---
+
+    private val canaryLanguageLabels = mapOf(
+        "en" to "English (en)",
+        "es" to "Spanish (es)",
+        "de" to "German (de)",
+        "fr" to "French (fr)",
+    )
+
+    private fun canaryLanguageSummary(): String {
+        val lang = CanaryLanguage.languageOrDefault(this)
+        val label = canaryLanguageLabels[lang] ?: lang
+        val source = if (CanaryLanguage.followsDictationLanguage(this)) "follows Dictation language" else "set here"
+        return "$label, $source"
+    }
+
+    /** Fixed-list picker modeled on [promptLocalTranscriptionThreads]: "Follow Dictation language"
+     *  first (the default, #294), then exactly the four languages the shipped canary-180m-flash
+     *  model supports, no free-form entry. Applies immediately by reloading the running
+     *  recognizer: the language is baked in when it is created. */
+    private fun promptCanaryLanguage() {
+        // Same AlertDialog gotcha as promptLocalTranscriptionThreads: setMessage() and
+        // setSingleChoiceItems() share the content area, so the explanatory copy must ride in a
+        // custom title view or the language list silently never renders.
+        val languages = CanaryLanguage.SUPPORTED
+        val dictation = DictationLanguage.languageOrNull(this)
+        val followLabel = "Follow Dictation language (" +
+            (if (dictation != null && dictation in languages) canaryLanguageLabels[dictation] ?: dictation
+            else "English unless Dictation language is one of Canary's four") + ")"
+        val labels = (listOf(followLabel) + languages.map { canaryLanguageLabels[it] ?: it }).toTypedArray()
+        val explicit = CanaryLanguage.explicitOrNull(this)
+        val checkedIndex = if (explicit == null) 0 else languages.indexOf(explicit) + 1
+        val titleView = vertical(dp(20), dp(20)).apply {
+            addView(TextView(this@TranscriptionActivity).apply {
+                text = "Canary language"
+                textSize = 20f
+                setTextColor(attrColor(android.R.attr.textColorPrimary))
+            })
+            addView(TextView(this@TranscriptionActivity).apply {
+                text = "The language you speak when dictating with the Canary local model. " +
+                    "Canary needs to be told the source language -- with the wrong one it " +
+                    "answers in English or produces garbage instead of your words. By default " +
+                    "it follows Dictation language (above). Only affects the Canary " +
+                    "model; other local models detect or fix their language on their own."
+                textSize = 14f
+                setTextColor(attrColor(android.R.attr.textColorSecondary))
+                setPadding(0, dp(8), 0, 0)
+            })
+        }
+        android.app.AlertDialog.Builder(this)
+            .setCustomTitle(titleView)
+            .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
+                if (which == 0) CanaryLanguage.followDictationLanguage(this)
+                else CanaryLanguage.setLanguage(this, languages[which - 1])
+                LocalModelReload.reloadIfCanaryActive(this)
+                refresh()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // --- Experimental: live cloud transcription (#233 Phase 1), moved from Cloud providers ---
+
+    /** Delegates to the pure [cloudLiveSubtitleText], reading the same three inputs
+     *  [CloudLiveWiring.factoryOrNull] gates on so the row and the wiring cannot disagree. */
+    private fun cloudLiveSubtitle(): String = cloudLiveSubtitleText(
+        enabled = CloudLiveToggle.isEnabled(this),
+        useLocalTranscription = prefs().getBoolean("use_local", true),
+        hasGeminiKey = ProviderCredentialStore.isConfiguredForKind(this, ProviderChainStore.load(this), ProviderKind.GEMINI),
+    )
+
+    /** Persists intent only. The switch never edits `use_local`, the chain, or any credential --
+     *  turning it on while transcription is on-device leaves the row honestly saying so instead
+     *  of silently reconfiguring the user's providers behind the toggle. */
+    private fun onToggleCloudLive(enabled: Boolean) {
+        CloudLiveToggle.setEnabled(this, enabled)
+        refresh()
     }
 
     /** "Transcription: ..." routing summary (#276), delegating to the pure [EffectiveRouting]

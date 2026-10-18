@@ -18,8 +18,8 @@ object TranscriberTrimPolicy {
 /** #280: honest reason the on-device transcriber is unavailable for this dictation. */
 object LocalModelUnavailability {
     const val DOWNLOADING = "Local model still downloading — try again once it finishes"
-    const val NOT_INSTALLED = "No on-device model installed — choose one in Ramblr's Transcription settings"
-    const val FAILED_TO_LOAD = "On-device model failed to load — try again, or re-select it in Transcription settings"
+    const val NOT_INSTALLED = "No on-device model installed — choose one in Ramblr's Recognition settings"
+    const val FAILED_TO_LOAD = "On-device model failed to load — try again, or re-select it in Recognition settings"
 
     fun message(installed: Boolean, downloadInFlight: Boolean): String = when {
         installed -> FAILED_TO_LOAD

@@ -43,6 +43,9 @@ class CleanupActivity : BaseSettingsActivity() {
     private lateinit var cloudLinkRowSub: TextView
     private lateinit var previewBeforeInjectSwitch: MaterialSwitch
     private lateinit var routingSummaryRowSub: TextView
+    private lateinit var postProcessRowDetails: TextView
+    private lateinit var perAppPersonaSwitch: MaterialSwitch
+    private lateinit var rawTextRetrySwitch: MaterialSwitch
 
     private var pendingLocalCleanupSelection = false
     private val cleanupModelRows = mutableMapOf<String, ModelRowViews>()
@@ -63,7 +66,7 @@ class CleanupActivity : BaseSettingsActivity() {
         val root = vertical(0, 0)
 
         val header = TextView(this).apply {
-            text = "Cleanup"
+            text = "AI cleanup"
             textSize = 32f
             setPadding(dp(24), dp(64), dp(24), dp(24))
         }
@@ -74,12 +77,15 @@ class CleanupActivity : BaseSettingsActivity() {
             isChecked = isPostProcessing
             isClickable = false
         }
-        val postProcessRow = settingsRow("Improve my dictation with AI", cleanupSubtitle(), postProcessSwitch) {
+        val postProcessRow = settingsRow(
+            "Improve my dictation with AI", cleanupSubtitle(), postProcessSwitch, details = cleanupCostNote().orEmpty(),
+        ) {
             val newVal = !postProcessSwitch.isChecked
             val useLocal = prefs().getBoolean("use_local", true)
             applyLocalCleanupChange(useLocal, newVal)
         }
         postProcessRowSub = postProcessRow.findViewWithTag("subtitle")
+        postProcessRowDetails = postProcessRow.findViewWithTag("details")
         root.addView(postProcessRow)
 
         // Everything below only matters once cleanup is on -- shown/hidden as one unit in refresh().
@@ -121,7 +127,7 @@ class CleanupActivity : BaseSettingsActivity() {
             buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
         }
         cleanupDetailContainer.addView(
-            settingsRow("Cloud", "Configure providers and keys under Cloud", cleanupCloudRadio) {
+            settingsRow("Cloud", "Configure providers and keys under Cloud providers", cleanupCloudRadio) {
                 onSelectSimpleCleanup(SimpleCleanupChoice.CLOUD)
             }
         )
@@ -156,6 +162,43 @@ class CleanupActivity : BaseSettingsActivity() {
         cleanupDetailContainer.addView(previewBeforeInjectRow)
         root.addView(cleanupDetailContainer)
 
+        // Outside cleanupDetailContainer, moved here from Recording and text: both only act once
+        // cleanup runs, but stay adjustable while it's off so turning it on keeps your choice.
+        root.addView(sectionHeader("Cleanup options"))
+
+        perAppPersonaSwitch = MaterialSwitch(this).apply {
+            isChecked = PerAppPersonaToggle.isEnabled(this@CleanupActivity)
+            isClickable = false
+        }
+        root.addView(settingsRow(
+            "Remember cleanup style per app",
+            "Each app keeps the cleanup style you last picked in it",
+            perAppPersonaSwitch,
+            details = "Instead of always using your global default style",
+        ) {
+            val newVal = !perAppPersonaSwitch.isChecked
+            PerAppPersonaToggle.setEnabled(this, newVal)
+            perAppPersonaSwitch.isChecked = newVal
+        })
+
+        rawTextRetrySwitch = MaterialSwitch(this).apply {
+            isChecked = RawTextRetryToggle.isEnabled(this@CleanupActivity)
+            isClickable = false
+        }
+        root.addView(settingsRow(
+            "Offer raw text after cleanup",
+            "After cleanup changes your words, a bubble lets you swap back to exactly what you said",
+            rawTextRetrySwitch,
+            details = "The \u201cTap to use raw text\u201d bubble stays for a few seconds",
+        ) {
+            val newVal = !rawTextRetrySwitch.isChecked
+            RawTextRetryToggle.setEnabled(this, newVal)
+            rawTextRetrySwitch.isChecked = newVal
+        })
+
+        // Keyboard translation languages moved to the Voice keyboard screen (InvocationActivity),
+        // next to the keyboard they configure.
+
         // #276: read-only "what will actually happen" line, matching TranscriptionActivity's.
         // Placed outside cleanupDetailContainer so it's visible even while cleanup itself is off
         // (in which case it just reads "Cleanup: Off").
@@ -181,6 +224,11 @@ class CleanupActivity : BaseSettingsActivity() {
         val usePostProcessing = prefs().getBoolean("use_post_processing", false)
         postProcessSwitch.isChecked = usePostProcessing
         postProcessRowSub.text = cleanupSubtitle()
+        val costNote = cleanupCostNote()
+        postProcessRowDetails.text = costNote.orEmpty()
+        postProcessRowDetails.visibility = if (costNote == null) View.GONE else View.VISIBLE
+        perAppPersonaSwitch.isChecked = PerAppPersonaToggle.isEnabled(this)
+        rawTextRetrySwitch.isChecked = RawTextRetryToggle.isEnabled(this)
         previewBeforeInjectSwitch.isChecked = PreviewBeforeInjectToggle.isEnabled(this)
         cleanupDetailContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
 
@@ -292,12 +340,16 @@ class CleanupActivity : BaseSettingsActivity() {
         val chain = ProviderChainStore.load(this)
         val entry = CleanupDestination.firstCloudEntry(chain)
         val host = entry?.let { CleanupDestination.hostFor(it) } ?: CleanupDestination.consentHost(chain)
-        val base = if (useLocal) "Sends transcript over the network to $host, even though transcription stays on-device."
+        return if (useLocal) "Sends transcript over the network to $host, even though transcription stays on-device."
         else "Sends transcript to $host to fix grammar and punctuation."
-        val costNote = entry?.let {
-            " Uses your ${CleanupDestination.label(it.kind)} API key and is billed pay-per-use (typically a fraction of a cent per dictation)."
-        } ?: ""
-        return base + costNote
+    }
+
+    /** The billing half of the cleanup disclosure, shown as the row's fine print under
+     *  [cleanupSubtitle]; null when cleanup stays on-device or no cloud entry is set up yet. */
+    private fun cleanupCostNote(): String? {
+        if (!CloudFeatureToggle.cleanupEnabled(this)) return null
+        val entry = CleanupDestination.firstCloudEntry(ProviderChainStore.load(this)) ?: return null
+        return "Uses your ${CleanupDestination.label(entry.kind)} API key and is billed pay-per-use (typically a fraction of a cent per dictation)."
     }
 
     // --- Style summary (#103) ---

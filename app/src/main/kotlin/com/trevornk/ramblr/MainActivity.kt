@@ -10,6 +10,7 @@ import android.text.InputType
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.app.ActivityCompat
@@ -34,13 +35,17 @@ class MainActivity : BaseSettingsActivity() {
     private lateinit var setupRowSub: TextView
     private lateinit var transcriptionRowSub: TextView
     private lateinit var cleanupRowSub: TextView
-    private lateinit var livePreviewRowSub: TextView
+    private lateinit var dictationModeRowSub: TextView
     private lateinit var cloudRowSub: TextView
     private lateinit var vocabularyRowSub: TextView
     private lateinit var invocationRowSub: TextView
     private lateinit var voiceKeyboardRowSub: TextView
     private lateinit var historyRowSub: TextView
     private lateinit var audioFilesRowSub: TextView
+    private lateinit var floatingIconRowSub: TextView
+    private lateinit var diagnosticsRowSub: TextView
+    private lateinit var sections: LinearLayout
+    private lateinit var searchResults: LinearLayout
     private lateinit var serviceKilledBanner: View
     private lateinit var staleComponentBanner: View
 
@@ -105,92 +110,139 @@ class MainActivity : BaseSettingsActivity() {
         statusSubtitle = statusRow.findViewWithTag("subtitle")
         root.addView(statusRow)
 
-        root.addView(sectionHeader("Settings"))
+        // Settings search: typing swaps the grouped list below for matching settings from every
+        // screen; tapping a result opens that screen scrolled to the row (SettingsSearchIndex).
+        searchResults = vertical(0, 0).apply { visibility = View.GONE }
+        root.addView(buildSearchBox())
+        root.addView(searchResults)
+        sections = vertical(0, 0)
+        root.addView(sections)
 
-        val setupRow = settingsRow("Setup", "Checking...") {
-            startActivity(Intent(this, SetupActivity::class.java))
+        sections.addView(sectionHeader("Speech and text"))
+
+        // The same three presets as the radio group on Cloud providers (DictationModePresets),
+        // one tap from the top so the most common choice isn't buried two screens down.
+        val dictationModeRow = settingsRow("Dictation mode", "Checking...", icon = R.drawable.ic_settings_tune) {
+            promptDictationMode()
         }
-        setupRowSub = setupRow.findViewWithTag("subtitle")
-        root.addView(setupRow)
+        dictationModeRowSub = dictationModeRow.findViewWithTag("subtitle")
+        sections.addView(dictationModeRow)
 
-        val transcriptionRow = settingsRow("Transcription", "Checking...") {
+        val transcriptionRow = settingsRow("Recognition", "Checking...", icon = R.drawable.ic_settings_mic) {
             startActivity(Intent(this, TranscriptionActivity::class.java))
         }
         transcriptionRowSub = transcriptionRow.findViewWithTag("subtitle")
-        root.addView(transcriptionRow)
+        sections.addView(transcriptionRow)
 
-        val cleanupRow = settingsRow("Cleanup", "Checking...") {
+        val cleanupRow = settingsRow("AI cleanup", "Checking...", icon = R.drawable.ic_settings_auto_awesome) {
             startActivity(Intent(this, CleanupActivity::class.java))
         }
         cleanupRowSub = cleanupRow.findViewWithTag("subtitle")
-        root.addView(cleanupRow)
+        sections.addView(cleanupRow)
 
-        val livePreviewRow = settingsRow("Live Preview", "Checking...") {
-            startActivity(Intent(this, LivePreviewActivity::class.java))
+        // Personal vocabulary (#217) now opens its own screen together with snippets and smart
+        // suggestions, still one tap from here and findable through search.
+        val vocabularyRow = settingsRow("Words and snippets", "Checking...", icon = R.drawable.ic_settings_menu_book) {
+            startActivity(BehaviorActivity.intent(this, BehaviorActivity.Section.WORDS))
         }
-        livePreviewRowSub = livePreviewRow.findViewWithTag("subtitle")
-        root.addView(livePreviewRow)
+        vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
+        sections.addView(vocabularyRow)
 
-        val cloudRow = settingsRow("Cloud", "Checking...") {
+        val cloudRow = settingsRow("Cloud providers", "Checking...", icon = R.drawable.ic_settings_cloud) {
             startActivity(Intent(this, CloudProviderActivity::class.java))
         }
         cloudRowSub = cloudRow.findViewWithTag("subtitle")
-        root.addView(cloudRow)
+        sections.addView(cloudRow)
 
-        // Top-level Personal vocabulary entry (#217): the editor stayed reachable only via
-        // Advanced > Behavior for so long that #140's reporter asked for the feature without
-        // finding it. Same shared editor as the Behavior row ([VocabularyEditor]) -- this row
-        // just makes it discoverable, with a live term count as its subtitle.
-        val vocabularyRow = settingsRow("Personal vocabulary", "Checking...") {
-            VocabularyEditor.prompt(this) { refresh() }
+        // Live Preview keeps its own screen; its entry point now sits on Recognition, next to
+        // the other speech-to-text options.
+
+        sections.addView(sectionHeader("Starting dictation"))
+
+        val floatingIconRow = settingsRow("Floating icon", "Checking...", icon = R.drawable.ic_settings_radio_button_checked) {
+            startActivity(BehaviorActivity.intent(this, BehaviorActivity.Section.ICON))
         }
-        vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
-        root.addView(vocabularyRow)
+        floatingIconRowSub = floatingIconRow.findViewWithTag("subtitle")
+        sections.addView(floatingIconRow)
 
-        // Invocation-method chooser (#156): one screen for every way to start dictation --
-        // app-owned (ring, QS tile) and OS-owned (a11y button/gesture, volume keys) -- with the
-        // invisible-toggle education the OS's own UI lacks. Top-level rather than under
-        // Advanced/Behavior: the OS-owned methods are how #156's service-kill trap gets sprung,
-        // so the safe path to them should be as discoverable as the trap is.
-        val invocationRow = settingsRow("Invocation", "Checking...") {
-            startActivity(Intent(this, InvocationActivity::class.java))
-        }
-        invocationRowSub = invocationRow.findViewWithTag("subtitle")
-        root.addView(invocationRow)
-
-        // Supported, user-initiated IME activation only. Android owns the enable switch; Ramblr
-        // neither writes Secure settings nor auto-selects itself. The subtitle was previously
-        // hardcoded to the "not set up yet" instruction, so on a device where the keyboard was
-        // already enabled and default it still read "Enable Ramblr Voice ... then select it" --
-        // telling the user to do something already done (#238). It now reports live state, and
-        // the row routes into Invocation settings where the keyboard has its own section rather
-        // than duplicating that surface here.
-        val voiceKeyboardRow = settingsRow("Voice keyboard", "Checking...") {
-            startActivity(Intent(this, InvocationActivity::class.java))
+        // Reports live IME state (#238) and opens the keyboard part of Invocation.
+        val voiceKeyboardRow = settingsRow("Voice keyboard", "Checking...", icon = R.drawable.ic_settings_keyboard) {
+            startActivity(InvocationActivity.intent(this, InvocationActivity.Section.KEYBOARD))
         }
         voiceKeyboardRowSub = voiceKeyboardRow.findViewWithTag("subtitle")
-        root.addView(voiceKeyboardRow)
+        sections.addView(voiceKeyboardRow)
 
-        // Top-level History entry (#283): the viewer (tap an entry to copy it) already lived under
-        // Advanced > Data & Logs, where users didn't find it. This opens it directly; with
-        // history off it lands on the Data & Logs toggle instead of showing anything.
-        val historyRow = settingsRow("History", "Checking...") {
-            startActivity(Intent(this, DataLogsActivity::class.java).putExtra(DataLogsActivity.EXTRA_SHOW_HISTORY, true))
+        // Invocation-method chooser (#156): the mode and the OS-owned ways to start dictation.
+        val invocationRow = settingsRow("System shortcuts", "Checking...", icon = R.drawable.ic_settings_touch_app) {
+            startActivity(InvocationActivity.intent(this, InvocationActivity.Section.SHORTCUTS))
+        }
+        invocationRowSub = invocationRow.findViewWithTag("subtitle")
+        sections.addView(invocationRow)
+
+        sections.addView(settingsRow(
+            "Recording",
+            "Auto-stop after silence, silence threshold",
+            icon = R.drawable.ic_settings_settings_suggest,
+        ) { startActivity(BehaviorActivity.intent(this, BehaviorActivity.Section.DICTATION)) })
+
+        sections.addView(sectionHeader("Your recordings"))
+
+        // Top-level History entry (#283): opens the viewer directly; with history off it lands
+        // on the History screen's toggle instead.
+        val historyRow = settingsRow("History", "Checking...", icon = R.drawable.ic_settings_history) {
+            startActivity(
+                DataLogsActivity.intent(this, DataLogsActivity.Section.HISTORY)
+                    .putExtra(DataLogsActivity.EXTRA_SHOW_HISTORY, true)
+            )
         }
         historyRowSub = historyRow.findViewWithTag("subtitle")
-        root.addView(historyRow)
+        sections.addView(historyRow)
 
         // Audio files (#285): transcribe a recording from the phone or another app, or record a
         // note now and transcribe it later.
-        val audioFilesRow = settingsRow(getString(R.string.audio_files_row_title), getString(R.string.audio_files_row_idle)) {
-            startActivity(Intent(this, AudioFilesActivity::class.java))
-        }
+        val audioFilesRow = settingsRow(
+            getString(R.string.audio_files_row_title),
+            getString(R.string.audio_files_row_idle),
+            icon = R.drawable.ic_settings_graphic_eq,
+        ) { startActivity(Intent(this, AudioFilesActivity::class.java)) }
         audioFilesRowSub = audioFilesRow.findViewWithTag("subtitle")
-        root.addView(audioFilesRow)
+        sections.addView(audioFilesRow)
 
-        root.addView(settingsRow("Advanced", AdvancedActivity.subtitle(this)) {
-            startActivity(Intent(this, AdvancedActivity::class.java))
-        })
+        sections.addView(sectionHeader("Privacy and data"))
+
+        sections.addView(settingsRow(
+            "Privacy",
+            "Apps where Ramblr stays off, turning Ramblr off, automation",
+            icon = R.drawable.ic_settings_shield,
+        ) { startActivity(BehaviorActivity.intent(this, BehaviorActivity.Section.PRIVACY)) })
+
+        sections.addView(settingsRow(
+            "Backup & restore",
+            "Save history, logs and settings to an encrypted file, or load one",
+            icon = R.drawable.ic_settings_database,
+        ) { startActivity(DataLogsActivity.intent(this, DataLogsActivity.Section.BACKUP)) })
+
+        sections.addView(sectionHeader("More"))
+
+        val setupRow = settingsRow("Setup", "Checking...", icon = R.drawable.ic_settings_build) {
+            startActivity(Intent(this, SetupActivity::class.java))
+        }
+        setupRowSub = setupRow.findViewWithTag("subtitle")
+        sections.addView(setupRow)
+
+        val diagnosticsRow = settingsRow("Diagnostics", "Checking...", icon = R.drawable.ic_settings_bolt) {
+            startActivity(DataLogsActivity.intent(this, DataLogsActivity.Section.DIAGNOSTICS))
+        }
+        diagnosticsRowSub = diagnosticsRow.findViewWithTag("subtitle")
+        sections.addView(diagnosticsRow)
+
+        // Self-update lives in the github flavor only, so it's looked up reflectively and the row
+        // simply doesn't exist on storefront builds (see selfUpdateSettingsActivityClass).
+        selfUpdateSettingsActivityClass()?.let { activityClass ->
+            sections.addView(settingsRow("Updates", "Check for and manage app updates", icon = R.drawable.ic_settings_system_update) {
+                startActivity(Intent(this, activityClass))
+            })
+        }
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -237,7 +289,7 @@ class MainActivity : BaseSettingsActivity() {
         // + KEEP (see SelfUpdateCheckWorker.schedule) makes every repeat call a harmless no-op
         // regardless. Reflective lookup because SelfUpdateCheckWorker/SelfUpdatePrefs live in
         // src/github/ and this Activity is compiled into every flavor including storefront,
-        // which never has those classes at all -- mirrors AdvancedActivity's identical
+        // which never has those classes at all -- mirrors this Activity's own
         // selfUpdateSettingsActivityClass() Class.forName pattern.
         scheduleSelfUpdateCheckIfEnabled()
 
@@ -275,13 +327,141 @@ class MainActivity : BaseSettingsActivity() {
         handleWalkthroughIntent(intent)
     }
 
-    /** AdvancedActivity's "Redo setup walkthrough" row hands off here rather than duplicating any
+    /** Setup's "Redo setup walkthrough" row hands off here rather than duplicating any
      *  wizard-dialog logic (#93) -- see this class's own kdoc. */
     private fun handleWalkthroughIntent(intent: Intent?) {
         if (intent?.getBooleanExtra(EXTRA_START_WALKTHROUGH, false) == true) {
             intent.removeExtra(EXTRA_START_WALKTHROUGH)
             startWalkthrough()
         }
+    }
+
+    // --- Settings search ---
+
+    private fun buildSearchBox(): View {
+        val box = EditText(this).apply {
+            hint = "Search settings"
+            setSingleLine()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            textSize = 16f
+            val icon = ContextCompat.getDrawable(this@MainActivity, R.drawable.ic_settings_search)?.mutate()?.apply {
+                setTint(attrColor(android.R.attr.textColorSecondary))
+            }
+            setCompoundDrawablesRelativeWithIntrinsicBounds(icon, null, null, null)
+            compoundDrawablePadding = dp(12)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(28).toFloat()
+                setColor(attrColor(com.google.android.material.R.attr.colorSurfaceVariant))
+            }
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) = showSearchResults(s?.toString().orEmpty())
+            })
+        }
+        return LinearLayout(this).apply {
+            // Takes the initial focus itself, so opening the app doesn't focus the search box and
+            // pop the keyboard up before the user asked to search.
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            addView(box, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+    }
+
+    private fun showSearchResults(query: String) {
+        val results = SettingsSearchIndex.search(query)
+        val searching = query.isNotBlank()
+        sections.visibility = if (searching) View.GONE else View.VISIBLE
+        searchResults.visibility = if (searching) View.VISIBLE else View.GONE
+        searchResults.removeAllViews()
+        if (!searching) return
+        if (results.isEmpty()) {
+            searchResults.addView(TextView(this).apply {
+                text = "Nothing found for \"${query.trim()}\""
+                textSize = 14f
+                setTextColor(attrColor(android.R.attr.textColorSecondary))
+                setPadding(dp(24), dp(16), dp(24), dp(16))
+            })
+            return
+        }
+        for (entry in results) {
+            searchResults.addView(settingsRow(entry.title, entry.where) {
+                startActivity(entry.open(this).putExtra(EXTRA_HIGHLIGHT_TITLE, entry.title))
+            })
+        }
+    }
+
+    /** Single-choice dialog over the same presets as Cloud providers' radio group, each option a
+     *  bold name over a lighter one-line explanation. A custom mix (set under Mix and match) has
+     *  no preset to tick, so nothing is checked then and the dialog says what picking one does. */
+    private fun promptDictationMode() {
+        val current = DictationModePresets.current(this)
+        val secondary = attrColor(android.R.attr.textColorSecondary)
+        val span = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        lateinit var dialog: android.app.AlertDialog
+        val group = android.widget.RadioGroup(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(24), dp(8))
+        }
+        for (mode in DictationModePresets.OPTIONS) {
+            val parts = DictationModePresets.label(mode).split(" — ", limit = 2)
+            group.addView(com.google.android.material.radiobutton.MaterialRadioButton(this).apply {
+                id = View.generateViewId()
+                text = android.text.SpannableStringBuilder().apply {
+                    append(parts[0], android.text.style.StyleSpan(android.graphics.Typeface.BOLD), span)
+                    parts.getOrNull(1)?.let { detail ->
+                        append("\n")
+                        val start = length
+                        append(detail.replaceFirstChar { it.uppercase() })
+                        setSpan(android.text.style.RelativeSizeSpan(0.85f), start, length, span)
+                        setSpan(android.text.style.ForegroundColorSpan(secondary), start, length, span)
+                    }
+                }
+                isChecked = mode == current
+                setLineSpacing(dp(2).toFloat(), 1f)
+                setPadding(paddingLeft + dp(4), dp(10), paddingRight, dp(10))
+                buttonTintList = android.content.res.ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
+                setOnClickListener {
+                    DictationModePresets.apply(this@MainActivity, mode)
+                    dialog.dismiss()
+                    refresh()
+                }
+            })
+        }
+        val message = "Where your speech is recognized and where AI cleanup runs. Whether cleanup runs at all " +
+            "is set under AI cleanup." +
+            if (current == DictationMode.CUSTOM) "\n\nYou have a custom mix from Cloud providers › Mix and match; " +
+                "picking a mode here replaces it." else ""
+        dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Dictation mode")
+            .setMessage(message)
+            .setView(ScrollView(this).apply { addView(group) })
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun floatingIconSubtitle(): String {
+        // The on/off switch for the ring itself moved onto this screen, so say when it's hidden.
+        if (IconHiddenState.isHidden(this)) return "Off — the ring is hidden"
+        val shown = when (RingVisibilityMode.read(this)) {
+            RingVisibilityMode.ALWAYS -> "Always shown"
+            RingVisibilityMode.KEYBOARD -> "Shown while the keyboard is open"
+            RingVisibilityMode.TEXT_FIELD -> "Shown while a text field is selected"
+        }
+        val peek = if (AutoPeekToggle.isEnabled(this)) "slides to the edge when idle" else "stays in place"
+        return "$shown, $peek"
+    }
+
+    /** `SelfUpdateSettingsActivity` exists only in the github flavor; null on storefront builds,
+     *  where the class isn't compiled in at all. */
+    @Suppress("UNCHECKED_CAST")
+    private fun selfUpdateSettingsActivityClass(): Class<out android.app.Activity>? = try {
+        Class.forName("com.trevornk.ramblr.SelfUpdateSettingsActivity") as Class<out android.app.Activity>
+    } catch (_: ClassNotFoundException) {
+        null
     }
 
     override fun onResume() {
@@ -332,13 +512,18 @@ class MainActivity : BaseSettingsActivity() {
         }
         transcriptionRowSub.text = TranscriptionActivity.subtitle(this)
         cleanupRowSub.text = CleanupActivity.subtitle(this)
-        livePreviewRowSub.text = LivePreviewActivity.subtitle(this)
+        dictationModeRowSub.text = DictationModePresets.summary(
+            DictationModePresets.current(this),
+            cleanupOn = PostProcessingToggle.isEnabled(this),
+        )
         cloudRowSub.text = CloudProviderActivity.subtitle(this)
         vocabularyRowSub.text = vocabularyMainRowSubtitleText(VocabularyEditor.terms(this).size)
         invocationRowSub.text = InvocationActivity.subtitle(this)
         voiceKeyboardRowSub.text = invocationVoiceKeyboardSubtitleText(voiceKeyboardStatus())
         historyRowSub.text = DataLogsActivity.historyRowSubtitle(this)
         audioFilesRowSub.text = AudioFilesActivity.rowSubtitle(this)
+        floatingIconRowSub.text = floatingIconSubtitle()
+        diagnosticsRowSub.text = DataLogsActivity.diagnosticsSubtitle(this)
         serviceKilledBanner.visibility =
             if (InvocationGuardRail.shouldShowBanner(this)) View.VISIBLE else View.GONE
 
@@ -1204,7 +1389,7 @@ class MainActivity : BaseSettingsActivity() {
         private const val STEP_STREAMING = "streaming"
         private const val STEP_TRY = "try"
 
-        /** Intent extra AdvancedActivity sets when handing off "Redo setup walkthrough" back to
+        /** Intent extra SetupActivity sets when handing off "Redo setup walkthrough" back to
          *  this Activity (#93) -- see [handleWalkthroughIntent]. */
         const val EXTRA_START_WALKTHROUGH = "start_walkthrough"
     }

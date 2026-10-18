@@ -25,8 +25,18 @@ import kotlin.concurrent.thread
 class DataLogsActivity : BaseSettingsActivity() {
 
     private lateinit var historyEnabledSwitch: com.google.android.material.materialswitch.MaterialSwitch
+    private lateinit var historyViewerRowSub: TextView
     private lateinit var qualityLogEnabledSwitch: com.google.android.material.materialswitch.MaterialSwitch
+    private lateinit var debugVisibilitySwitch: com.google.android.material.materialswitch.MaterialSwitch
     private lateinit var backupRowSub: TextView
+
+    /** The screens this activity's rows are split across since the settings regroup (see
+     *  [EXTRA_SECTION]); no section shows all three, under the old "Data & Logs" title. */
+    enum class Section(val title: String) {
+        HISTORY("History"),
+        BACKUP("Backup & restore"),
+        DIAGNOSTICS("Diagnostics"),
+    }
 
     /** SAF file picker for restore (#103): OpenDocument (not GetContent) so the returned Uri
      *  grants a stable, permission-scoped read -- matches the Activity Result API idiom already
@@ -39,77 +49,104 @@ class DataLogsActivity : BaseSettingsActivity() {
         super.onCreate(savedInstanceState)
 
         val root = vertical(0, 0)
+        // Notifications and Audio files open the viewer with EXTRA_SHOW_HISTORY alone; they land
+        // on the History screen.
+        val shown = intent.getStringExtra(EXTRA_SECTION)?.let { name -> Section.entries.firstOrNull { it.name == name } }
+            ?: Section.HISTORY.takeIf { intent.getBooleanExtra(EXTRA_SHOW_HISTORY, false) }
 
         root.addView(TextView(this).apply {
-            text = "Data & Logs"
+            text = shown?.title ?: "Data & Logs"
             textSize = 32f
             setPadding(dp(24), dp(64), dp(24), dp(24))
         })
+
+        val history = vertical(0, 0)
+        val backup = vertical(0, 0)
+        val diagnostics = vertical(0, 0)
 
         val isHistoryEnabled = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
         historyEnabledSwitch = com.google.android.material.materialswitch.MaterialSwitch(this).apply {
             isChecked = isHistoryEnabled
             isClickable = false
         }
-        root.addView(settingsRow(
+        history.addView(settingsRow(
             "Save dictation history",
-            "Keeps past transcripts on-device so a failed insertion isn't lost",
+            "Keeps your past dictations on this phone, so nothing is lost if inserting fails",
             historyEnabledSwitch
         ) { onHistoryToggle(!historyEnabledSwitch.isChecked) })
 
+        // Stays tappable with saving off: turning it off can keep what was saved, and that
+        // must remain viewable (and deletable) without turning saving back on.
         val historyGroup = nestedGroup()
-        historyGroup.content.addView(
-            settingsRow("Dictation history", "Recover past transcripts, tap to copy", indent = 0) { showHistory() }
-        )
-        root.addView(historyGroup.outer)
+        val historyViewerRow = settingsRow("Dictation history", "Find an old dictation and tap it to copy", indent = 0) { showHistory() }
+        historyViewerRowSub = historyViewerRow.findViewWithTag("subtitle")
+        historyGroup.content.addView(historyViewerRow)
+        history.addView(historyGroup.outer)
 
         // --- Backup / restore (#103) ---
-        root.addView(sectionHeader("Backup & restore"))
-        root.addView(TextView(this).apply {
-            text = "Saves dictation history, benchmark log, and settings to a file " +
-                "you choose where to send. API keys are never included -- they're encrypted to " +
-                "this device's hardware Keystore and can't be restored elsewhere, so you'll " +
-                "re-enter them once on a new device. The quality log is never included either: " +
-                "it contains your actual dictated text, so it stays strictly on this device."
-            textSize = 14f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(8))
-        })
+        if (shown == null) backup.addView(sectionHeader("Backup & restore"))
+        backup.addView(explainer(
+            "Saves history, the benchmark log and settings to a file. API keys are never " +
+                "included: they're encrypted with this phone's hardware Keystore, so on a new " +
+                "phone you enter them again. The quality log holds your real dictated text, so " +
+                "it never leaves this phone either."
+        ))
 
         val backupRow = settingsRow(
             "Backup all data",
-            "Share a backup file containing history, the benchmark log, and settings"
+            "Save history, logs and settings to a file you can send anywhere"
         ) { createAndShareBackup() }
         backupRowSub = backupRow.findViewWithTag("subtitle")
-        root.addView(backupRow)
+        backup.addView(backupRow)
 
-        root.addView(settingsRow(
+        backup.addView(settingsRow(
             "Restore from backup",
-            "Pick a backup file to restore. This overwrites existing history, benchmark log, and settings"
+            "Load a backup file. Replaces your current history, logs and settings"
         ) { pickRestoreFile.launch(arrayOf("application/zip", "application/octet-stream")) })
 
-        // --- Benchmark / quality logs ---
-        root.addView(sectionHeader("Diagnostic logs"))
+        // --- Diagnostics: the debug details toggle (moved from the former Fine-tuning screen)
+        // and the benchmark / quality logs ---
+        if (shown == null) diagnostics.addView(sectionHeader("Diagnostics"))
+        debugVisibilitySwitch = com.google.android.material.materialswitch.MaterialSwitch(this).apply {
+            isChecked = DebugVisibilityToggle.isEnabled(this@DataLogsActivity)
+            isClickable = false
+        }
+        diagnostics.addView(settingsRow(
+            "Debug / visibility",
+            "Shows extra technical details, such as which dictations used a paid cleanup fallback",
+            debugVisibilitySwitch
+        ) {
+            val newVal = !debugVisibilitySwitch.isChecked
+            DebugVisibilityToggle.setEnabled(this, newVal)
+            debugVisibilitySwitch.isChecked = newVal
+        })
 
-        root.addView(settingsRow(
+        diagnostics.addView(sectionHeader("Diagnostic logs"))
+
+        diagnostics.addView(settingsRow(
             "Share benchmark log",
-            "Send the on-device transcription/cleanup benchmark log (timings and model ids only, no dictation text) to any app"
+            "Send speed measurements to any app. Only timings and model ids, no dictated text"
         ) { shareBenchmarkLog() })
 
         qualityLogEnabledSwitch = com.google.android.material.materialswitch.MaterialSwitch(this).apply {
             isChecked = QualityLogger.isEnabled(this@DataLogsActivity)
             isClickable = false
         }
-        root.addView(settingsRow(
+        diagnostics.addView(settingsRow(
             "Save quality log",
-            "Keeps the raw and cleaned text of every dictation on-device for provider/model quality review. Off by default",
+            "Keeps the raw and cleaned text of each dictation on this phone, to compare providers. Off by default",
             qualityLogEnabledSwitch
         ) { onQualityLogToggle(!qualityLogEnabledSwitch.isChecked) })
 
-        root.addView(settingsRow(
+        // Always tappable, as before the regroup: with nothing saved yet it says so.
+        diagnostics.addView(settingsRow(
             "Share quality log",
-            "Send the on-device raw/cleaned transcript pairs (real text) and provider/model ids to any app"
+            "Send the saved text pairs and provider/model ids to any app. Contains your real text"
         ) { shareQualityLog() })
+
+        for ((section, container) in listOf(Section.HISTORY to history, Section.BACKUP to backup, Section.DIAGNOSTICS to diagnostics)) {
+            if (shown == null || shown == section) root.addView(container)
+        }
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -138,8 +175,12 @@ class DataLogsActivity : BaseSettingsActivity() {
     }
 
     private fun refresh() {
-        historyEnabledSwitch.isChecked = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
+        val historyOn = prefs().getBoolean(KEY_HISTORY_ENABLED, true)
+        historyEnabledSwitch.isChecked = historyOn
         qualityLogEnabledSwitch.isChecked = QualityLogger.isEnabled(this)
+        debugVisibilitySwitch.isChecked = DebugVisibilityToggle.isEnabled(this)
+        historyViewerRowSub.text = if (historyOn) "Find an old dictation and tap it to copy"
+            else "Saving is off. Shows what was kept from before, if anything"
     }
 
     // --- Backup / restore (#103) ---
@@ -321,7 +362,7 @@ class DataLogsActivity : BaseSettingsActivity() {
                 onCleared()
             }
             // "Clear all" already dismissed the viewer; backing out returns to it rather
-            // than leaving the user on Data & Logs.
+            // than leaving the user on the History screen.
             .setNegativeButton("Cancel") { _, _ -> showHistory() }
             .setOnCancelListener { showHistory() }
             .show()
@@ -426,6 +467,13 @@ class DataLogsActivity : BaseSettingsActivity() {
         /** Boolean extra: open the dictation history viewer on launch (#283). */
         const val EXTRA_SHOW_HISTORY = "show_history"
 
+        /** [Section] name to show; absent shows every section (or History, with
+         *  [EXTRA_SHOW_HISTORY]). */
+        const val EXTRA_SECTION = "com.trevornk.ramblr.extra.DATA_SECTION"
+
+        fun intent(context: android.content.Context, section: Section): Intent =
+            Intent(context, DataLogsActivity::class.java).putExtra(EXTRA_SECTION, section.name)
+
         /** Subtitle for MainActivity's top-level History row (#283). */
         fun historyRowSubtitle(context: android.content.Context): String {
             val enabled = context.getSharedPreferences("ramblr", MODE_PRIVATE)
@@ -435,11 +483,21 @@ class DataLogsActivity : BaseSettingsActivity() {
             return historyMainRowSubtitleText(enabled, count)
         }
 
-        /** Category subtitle for AdvancedActivity's Data & Logs row (#104). */
+        /** Category subtitle for the former Data & Logs row (#104). */
         fun subtitle(context: android.content.Context): String {
             val enabled = context.getSharedPreferences("ramblr", MODE_PRIVATE)
                 .getBoolean(KEY_HISTORY_ENABLED, true)
             return if (enabled) "History on · backup, benchmark & quality logs" else "History off · backup, benchmark & quality logs"
+        }
+
+        /** Subtitle for MainActivity's Diagnostics row: what's switched on, else what's there. */
+        fun diagnosticsSubtitle(context: android.content.Context): String {
+            val on = listOfNotNull(
+                "debug details on".takeIf { DebugVisibilityToggle.isEnabled(context) },
+                "quality log on".takeIf { QualityLogger.isEnabled(context) },
+            )
+            return if (on.isEmpty()) "Debug details, benchmark and quality logs"
+            else on.joinToString(" · ").replaceFirstChar { it.uppercase() } + " · benchmark log"
         }
     }
 }

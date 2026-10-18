@@ -590,14 +590,15 @@ fun invocationVoiceKeyboardSubtitleText(status: VoiceKeyboardStatus): String = w
 }
 
 /**
- * Section-header text spelling out the coexistence, since the keyboard sits directly below two
- * cards that ARE mutually exclusive and would otherwise read as a third option in that set.
+ * Section-header text spelling out the coexistence with the two mutually exclusive mode cards,
+ * so the keyboard never reads as a third option in that set. It names the System shortcuts
+ * screen rather than saying "above": the keyboard now usually opens on a screen of its own.
  */
 fun invocationVoiceKeyboardSectionSubtitleText(status: VoiceKeyboardStatus): String =
     if (status == VoiceKeyboardStatus.DISABLED)
-        "A dictation keyboard you can switch to in any text field. Independent of the mode above."
+        "A dictation keyboard you can switch to in any text field. Independent of the System shortcuts mode."
     else
-        "A dictation keyboard you can switch to in any text field. Works alongside the mode above."
+        "A dictation keyboard you can switch to in any text field. Works alongside the System shortcuts mode."
 
 /** The advanced tier's row subtitle: granted state is feature-detected, never assumed. */
 fun invocationAdvancedTierSubtitleText(granted: Boolean): String =

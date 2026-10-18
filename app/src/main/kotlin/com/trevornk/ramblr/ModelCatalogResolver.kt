@@ -182,4 +182,12 @@ object ModelCatalogResolver {
         ModelTier.GOOD -> "Good"
         ModelTier.ADVANCED -> "Advanced"
     }
+
+    /** "$0.20 in · $1.20 out per 1M tokens", or null when the catalog has no per-token price
+     *  (transcription models are billed per minute of audio, so their fields are 0). */
+    fun priceLabel(entry: ModelCatalogEntry): String? {
+        if (entry.costPer1MInputUsd <= 0.0 && entry.costPer1MOutputUsd <= 0.0) return null
+        fun usd(v: Double) = "$" + String.format(java.util.Locale.US, "%.2f", v)
+        return "${usd(entry.costPer1MInputUsd)} in \u00b7 ${usd(entry.costPer1MOutputUsd)} out per 1M tokens"
+    }
 }

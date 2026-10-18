@@ -12,17 +12,19 @@ import androidx.work.WorkManager
 import com.google.android.material.materialswitch.MaterialSwitch
 
 /**
- * "Behavior" settings screen (#104 restructure): debug/visibility toggle, per-app persona,
- * hide-icon toggle, auto-hide (toggle + delay + peek size), raw-text-retry, and personal
- * vocabulary -- rows previously spread across AdvancedActivity's single long list, grouped here
- * because they all shape how dictation *behaves* day to day, as opposed to how the overlay
- * *looks* ([OverlayAppearanceActivity]) or on-device *data* ([DataLogsActivity]). Moved verbatim
- * -- same prefs keys, same toggle logic, same dialogs -- this is a pure UI reorganization.
+ * "Behavior" settings screen (#104 restructure), shown one [Section] at a time from the main
+ * list: Floating icon (ring on/off, visibility, auto-hide, hide-icon), Recording (silence
+ * auto-stop), Words and snippets, and Privacy (exclusions, the off switch, the automation hook).
+ * Rows were moved here verbatim -- same prefs keys, same toggle logic, same dialogs -- this is a
+ * pure UI reorganization. Since the settings regroup, the debug toggle lives under Diagnostics
+ * ([DataLogsActivity]), the per-app style and raw-text rows under AI cleanup, and compressed
+ * upload plus the on-device tuning knobs under Recognition.
  */
 class BehaviorActivity : BaseSettingsActivity() {
 
-    private lateinit var debugVisibilitySwitch: MaterialSwitch
-    private lateinit var perAppPersonaSwitch: MaterialSwitch
+    private lateinit var ringSwitch: MaterialSwitch
+    private lateinit var ringRowSub: TextView
+    private lateinit var serviceOffRowSub: TextView
     private lateinit var hideIconSwitch: MaterialSwitch
     private lateinit var automationOffHookSwitch: MaterialSwitch
     private lateinit var exclusionListRowSub: TextView
@@ -31,7 +33,6 @@ class BehaviorActivity : BaseSettingsActivity() {
     private lateinit var autoPeekDelayRow: LinearLayout
     private lateinit var peekSizeRow: LinearLayout
     private lateinit var singleTapRestoreSwitch: MaterialSwitch
-    private lateinit var rawTextRetrySwitch: MaterialSwitch
     private lateinit var silenceAutoStopSwitch: MaterialSwitch
     private lateinit var silenceAutoStopRow: LinearLayout
     private lateinit var silenceAutoStopThresholdRow: LinearLayout
@@ -48,60 +49,70 @@ class BehaviorActivity : BaseSettingsActivity() {
     private lateinit var vocabSuggestionsSwitch: MaterialSwitch
     private lateinit var suggestionsContainer: LinearLayout
     private lateinit var dismissedSuggestionsRow: LinearLayout
-    private lateinit var localThreadsRowSub: TextView
-    private lateinit var canaryLanguageRowSub: TextView
-    private lateinit var compressedUploadSwitch: MaterialSwitch
     // Built unconditionally and shown/hidden in refresh() (#L16): building it only when hidden at
     // onCreate meant hiding the icon via the overlay while this screen was paused left no way back
     // on resume, and it relied on recreate() as a refresh hammer.
     private lateinit var iconHiddenRow: LinearLayout
 
+    /** The screens this activity's rows are split across (see [EXTRA_SECTION]). Every row is still
+     *  built on every launch, so refresh() can keep updating all of them unconditionally; only
+     *  the requested section's rows are attached. */
+    enum class Section(val title: String) {
+        ICON("Floating icon"),
+        DICTATION("Recording"),
+        WORDS("Words and snippets"),
+        PRIVACY("Privacy"),
+    }
+
+    private val placed = mutableMapOf<Section, MutableList<Pair<Int, View>>>()
+
+    private fun place(section: Section, order: Int, view: View) {
+        placed.getOrPut(section) { mutableListOf() } += order to view
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val root = vertical(0, 0)
+        val shown = intent.getStringExtra(EXTRA_SECTION)?.let { name -> Section.entries.firstOrNull { it.name == name } }
 
         root.addView(TextView(this).apply {
-            text = "Behavior"
+            text = shown?.title ?: "Behavior"
             textSize = 32f
             setPadding(dp(24), dp(64), dp(24), dp(24))
         })
 
-        debugVisibilitySwitch = MaterialSwitch(this).apply {
-            isChecked = DebugVisibilityToggle.isEnabled(this@BehaviorActivity)
-            isClickable = false
+        // Floating ring on/off (app-owned, works in BOTH invocation modes), moved here from Ways
+        // to start dictation: a direct toggle over IconHiddenState, the same flag the long-press
+        // "Hide icon" menu and the "Icon is currently hidden" restore row below already share.
+        ringSwitch = MaterialSwitch(this).apply { isClickable = false }
+        val ringRow = settingsRow("Floating ring", "Checking...", ringSwitch) {
+            val nowHidden = !IconHiddenState.isHidden(this)
+            IconHiddenState.setHidden(this, nowHidden)
+            if (nowHidden) {
+                // Same affordance chain as the long-press hide (#135): once the ring is gone
+                // the notification is the way back that doesn't require finding this screen.
+                IconVisibilityNotifications.postHidden(this)
+            } else {
+                IconVisibilityNotifications.cancel(this)
+            }
+            WhisperAccessibilityService.instance?.applyOverlayVisibility()
+            refresh()
         }
-        root.addView(settingsRow(
-            "Debug / visibility",
-            "Shows extra under-the-hood detail, like which dictations used a paid cleanup fallback",
-            debugVisibilitySwitch
-        ) {
-            val newVal = !debugVisibilitySwitch.isChecked
-            DebugVisibilityToggle.setEnabled(this, newVal)
-            debugVisibilitySwitch.isChecked = newVal
-        })
+        ringRowSub = ringRow.findViewWithTag("subtitle")
+        place(Section.ICON, 1, ringRow)
 
-        perAppPersonaSwitch = MaterialSwitch(this).apply {
-            isChecked = PerAppPersonaToggle.isEnabled(this@BehaviorActivity)
-            isClickable = false
-        }
-        root.addView(settingsRow(
-            "Remember cleanup style per app",
-            "Auto-selects the last style you picked for each app instead of always using your global default",
-            perAppPersonaSwitch
-        ) {
-            val newVal = !perAppPersonaSwitch.isChecked
-            PerAppPersonaToggle.setEnabled(this, newVal)
-            perAppPersonaSwitch.isChecked = newVal
+        place(Section.ICON, 5, settingsRow("Size and colors", OverlayAppearanceActivity.subtitle(this)) {
+            startActivity(android.content.Intent(this, OverlayAppearanceActivity::class.java))
         })
 
         hideIconSwitch = MaterialSwitch(this).apply {
             isChecked = HideIconToggle.isEnabled(this@BehaviorActivity)
             isClickable = false
         }
-        root.addView(settingsRow(
+        place(Section.ICON, 60, settingsRow(
             "Allow hiding the floating icon",
-            "Adds a 'Hide icon' option to the long-press menu, so you can fully hide the icon and bring it back from a notification",
+            "Adds \"Hide icon\" to the long-press menu. You bring the icon back from a notification",
             hideIconSwitch
         ) {
             val newVal = !hideIconSwitch.isChecked
@@ -116,12 +127,13 @@ class BehaviorActivity : BaseSettingsActivity() {
             isChecked = AutomationOffHookToggle.isEnabled(this@BehaviorActivity)
             isClickable = false
         }
-        root.addView(settingsRow(
+        place(Section.PRIVACY, 20, settingsRow(
             "Let automation apps turn Ramblr off",
-            "Adds a broadcast MacroDroid or Tasker can send to switch the accessibility service " +
-                "off — more reliable than having them edit the accessibility setting directly. " +
-                "Any app on your phone can send it, so leave this off unless you use it",
-            automationOffHookSwitch
+            "Lets Tasker or MacroDroid switch Ramblr off. Any app on your phone could use it, " +
+                "so leave this off unless you need it",
+            automationOffHookSwitch,
+            details = "Adds a broadcast that switches the accessibility service off, more reliable " +
+                "than having the automation app edit the accessibility setting directly",
         ) {
             val newVal = !automationOffHookSwitch.isChecked
             AutomationOffHookToggle.setEnabled(this, newVal)
@@ -137,30 +149,44 @@ class BehaviorActivity : BaseSettingsActivity() {
         val exclusionListRow = settingsRow(
             "App exclusions",
             exclusionListSummary(),
-            indent = 0
+            indent = 0,
+            details = "Only suppresses recording and insertion: it does not detach the service or " +
+                "bypass bank fraud detection",
         ) {
             startActivity(android.content.Intent(this, ExclusionListActivity::class.java))
         }
         exclusionListRowSub = exclusionListRow.findViewWithTag("subtitle")
-        root.addView(exclusionListRow)
+        place(Section.PRIVACY, 10, exclusionListRow)
+
+        // #254 off switch, moved here from Ways to start dictation so every "keep Ramblr out"
+        // control sits on one screen. In system-controls mode this is the ONLY off switch that
+        // exists anywhere, because the OS hides the master toggle on Ramblr's own Accessibility
+        // page for INVISIBLE_TOGGLE services -- so it must stay easy to find.
+        val serviceOffRow = settingsRow("Turn Ramblr off", "Checking...") {
+            ServiceOffFlow.onRowTapped(this) { refresh() }
+        }
+        serviceOffRowSub = serviceOffRow.findViewWithTag("subtitle")
+        place(Section.PRIVACY, 15, serviceOffRow)
 
         val ringVisibilityRow = settingsRow("Show the icon", ringVisibilitySummary()) { promptRingVisibility() }
         ringVisibilityRowSub = ringVisibilityRow.findViewWithTag("subtitle")
-        root.addView(ringVisibilityRow)
+        place(Section.ICON, 10, ringVisibilityRow)
 
         autoPeekSwitch = MaterialSwitch(this).apply {
             isChecked = AutoPeekToggle.isEnabled(this@BehaviorActivity)
             isClickable = false
         }
-        root.addView(settingsRow(
+        place(Section.ICON, 20, settingsRow(
             "Auto-hide icon when idle",
-            "Slides the icon toward the screen edge after a few seconds of inactivity. Turn off to keep it fully visible at all times",
-            autoPeekSwitch
+            "Slides the icon to the screen edge after a few seconds without use",
+            autoPeekSwitch,
+            details = "Turn off to keep it fully visible at all times",
         ) {
             val newVal = !autoPeekSwitch.isChecked
             AutoPeekToggle.setEnabled(this, newVal)
             autoPeekSwitch.isChecked = newVal
             if (!newVal) WhisperAccessibilityService.instance?.restoreFromPeekIfPeeked()
+            refresh()
         })
 
         autoPeekDelayRow = settingsRow(
@@ -168,42 +194,29 @@ class BehaviorActivity : BaseSettingsActivity() {
             autoPeekDelaySummary(),
             indent = 1
         ) { promptAutoPeekDelay() }
-        root.addView(autoPeekDelayRow)
+        place(Section.ICON, 21, autoPeekDelayRow)
 
         peekSizeRow = settingsRow(
             "Peeked sliver size",
             peekSizeSummary(),
             indent = 1
         ) { promptPeekSize() }
-        root.addView(peekSizeRow)
+        place(Section.ICON, 22, peekSizeRow)
 
         singleTapRestoreSwitch = MaterialSwitch(this).apply {
             isChecked = SingleTapRestoreToggle.isEnabled(this@BehaviorActivity)
             isClickable = false
         }
-        root.addView(settingsRow(
+        place(Section.ICON, 23, settingsRow(
             "Single-tap restore and record",
-            "While peeked, one tap both brings the icon back and starts recording. Off by default, which keeps the first tap just restoring the icon and a second tap starting recording",
+            "When the icon sits at the edge, one tap brings it back and starts recording. Off: the first tap only brings it back",
             singleTapRestoreSwitch,
-            indent = 1
+            indent = 1,
+            details = "Off by default",
         ) {
             val newVal = !singleTapRestoreSwitch.isChecked
             SingleTapRestoreToggle.setEnabled(this, newVal)
             singleTapRestoreSwitch.isChecked = newVal
-        })
-
-        rawTextRetrySwitch = MaterialSwitch(this).apply {
-            isChecked = RawTextRetryToggle.isEnabled(this@BehaviorActivity)
-            isClickable = false
-        }
-        root.addView(settingsRow(
-            "Offer raw text after cleanup",
-            "Shows a \"Tap to use raw text\" bubble for a few seconds after cleanup changes your wording, so you can undo it with one tap",
-            rawTextRetrySwitch
-        ) {
-            val newVal = !rawTextRetrySwitch.isChecked
-            RawTextRetryToggle.setEnabled(this, newVal)
-            rawTextRetrySwitch.isChecked = newVal
         })
 
         // Silence-based auto-stop (#108, mode 1). Off by default (see SilenceAutoStopToggle's
@@ -220,33 +233,14 @@ class BehaviorActivity : BaseSettingsActivity() {
         ) {
             onSilenceAutoStopToggled(!silenceAutoStopSwitch.isChecked)
         }
-        root.addView(silenceAutoStopRow)
+        place(Section.DICTATION, 10, silenceAutoStopRow)
 
         silenceAutoStopThresholdRow = settingsRow(
             "Silence threshold",
             silenceAutoStopThresholdSummary(),
             indent = 1
         ) { promptSilenceAutoStopThreshold() }
-        root.addView(silenceAutoStopThresholdRow)
-
-        // Compressed (AAC/M4A) cloud upload (#109). Off by default (see CompressedUploadToggle's
-        // kdoc for why) and a genuine behavior change to the audio actually sent to a cloud
-        // transcription provider, so it gets an honest description instead of pretending it's
-        // already proven -- mirrors silenceAutoStopRow's "needs real-world validation" framing
-        // above.
-        compressedUploadSwitch = MaterialSwitch(this).apply {
-            isChecked = CompressedUploadToggle.isEnabled(this@BehaviorActivity)
-            isClickable = false
-        }
-        root.addView(settingsRow(
-            "Compress audio before cloud upload",
-            "Encodes to AAC/M4A before sending to OpenAI or Gemini for transcription -- primarily useful on cellular or slow connections. Transcription quality with compressed audio hasn't been verified in real-world use yet, so leave off for dictations where accuracy really matters until you've tried it",
-            compressedUploadSwitch
-        ) {
-            val newVal = !compressedUploadSwitch.isChecked
-            CompressedUploadToggle.setEnabled(this, newVal)
-            compressedUploadSwitch.isChecked = newVal
-        })
+        place(Section.DICTATION, 11, silenceAutoStopThresholdRow)
 
         // Fallback restore path (#Feature B): if the icon is currently hidden -- including for
         // someone who turns the toggle above off while already hidden -- give them a way back
@@ -257,7 +251,7 @@ class BehaviorActivity : BaseSettingsActivity() {
             IconVisibilityNotifications.cancel(this)
             refresh()
         }
-        root.addView(iconHiddenRow)
+        place(Section.ICON, 61, iconHiddenRow)
 
         // Snippets (#248): its own row, not folded into Vocabulary -- the two features solve
         // different problems (spelling correction vs. whole-phrase canned-text insertion) and
@@ -267,14 +261,13 @@ class BehaviorActivity : BaseSettingsActivity() {
             startActivity(android.content.Intent(this, SnippetManagerActivity::class.java))
         }
         snippetsRowSub = snippetsRow.findViewWithTag("subtitle")
-        root.addView(snippetsRow)
+        place(Section.WORDS, 40, snippetsRow)
 
-        root.addView(sectionHeader("Vocabulary"))
         val vocabularyRow = settingsRow("Personal vocabulary", VocabularyEditor.rowSummary(this)) {
             VocabularyEditor.prompt(this) { refresh() }
         }
         vocabularyRowSub = vocabularyRow.findViewWithTag("subtitle")
-        root.addView(vocabularyRow)
+        place(Section.WORDS, 10, vocabularyRow)
 
         // Smart vocabulary suggestions (#216): master toggle plus the dynamic Suggested-terms
         // section and the Dismissed-suggestions review row. Turning the toggle off clears all
@@ -285,9 +278,9 @@ class BehaviorActivity : BaseSettingsActivity() {
             isChecked = VocabularySuggestionsToggle.isEnabled(this@BehaviorActivity)
             isClickable = false
         }
-        root.addView(settingsRow(
+        place(Section.WORDS, 20, settingsRow(
             "Smart vocabulary suggestions",
-            "Notices words dictation keeps correcting or that keep recurring, and suggests adding them to your vocabulary. Everything stays on this device; turning this off also deletes what's been noticed so far",
+            "Suggests words to add when dictation keeps getting them wrong. Stays on this phone; turning it off forgets what it noticed",
             vocabSuggestionsSwitch
         ) {
             val newVal = !vocabSuggestionsSwitch.isChecked
@@ -300,33 +293,24 @@ class BehaviorActivity : BaseSettingsActivity() {
         // dictations) and after every Add/Dismiss, and the row count varies, so declarative
         // rebuild beats trying to patch child views in place.
         suggestionsContainer = vertical(0, 0)
-        root.addView(suggestionsContainer)
+        place(Section.WORDS, 21, suggestionsContainer)
 
         dismissedSuggestionsRow = settingsRow(
             "Dismissed suggestions",
             "Checking...",
             indent = 1
         ) { promptDismissedSuggestions() }
-        root.addView(dismissedSuggestionsRow)
+        place(Section.WORDS, 22, dismissedSuggestionsRow)
 
-        // Local transcription thread count (#107): a developer-ish tuning knob, not a mainstream
-        // everyday setting, so it lives down here rather than cluttering Transcription's main
-        // local-model picker. See LocalTranscriptionThreads' kdoc for why the default stays 2.
-        root.addView(sectionHeader("Advanced tuning"))
-        val localThreadsRow = settingsRow("Local transcription threads", localThreadsSummary()) {
-            promptLocalTranscriptionThreads()
+        // One section per screen when opened from the main list; every section, each under its
+        // own header, when opened without one.
+        for (section in Section.entries) {
+            if (shown != null && section != shown) continue
+            val rows = placed[section].orEmpty().sortedBy { it.first }
+            if (rows.isEmpty()) continue
+            if (shown == null) root.addView(sectionHeader(section.title))
+            rows.forEach { root.addView(it.second) }
         }
-        localThreadsRowSub = localThreadsRow.findViewWithTag("subtitle")
-        root.addView(localThreadsRow)
-
-        // Canary source language (#177): same developer-ish tuning tier as the threads knob
-        // above. Only the Canary model reads this -- see CanaryLanguage's kdoc for why the
-        // wrong language token doesn't just degrade output but collapses it entirely.
-        val canaryLanguageRow = settingsRow("Canary language", canaryLanguageSummary()) {
-            promptCanaryLanguage()
-        }
-        canaryLanguageRowSub = canaryLanguageRow.findViewWithTag("subtitle")
-        root.addView(canaryLanguageRow)
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -376,27 +360,30 @@ class BehaviorActivity : BaseSettingsActivity() {
 
     private fun refresh() {
         iconHiddenRow.visibility = if (IconHiddenState.isHidden(this)) View.VISIBLE else View.GONE
-        debugVisibilitySwitch.isChecked = DebugVisibilityToggle.isEnabled(this)
-        perAppPersonaSwitch.isChecked = PerAppPersonaToggle.isEnabled(this)
+        val ringVisible = !IconHiddenState.isHidden(this)
+        ringSwitch.isChecked = ringVisible
+        ringRowSub.text = invocationRingSubtitleText(ringVisible)
+        serviceOffRowSub.text = ServiceOffFlow.subtitle(this)
         hideIconSwitch.isChecked = HideIconToggle.isEnabled(this)
         automationOffHookSwitch.isChecked = AutomationOffHookToggle.isEnabled(this)
         exclusionListRowSub.text = exclusionListSummary()
         ringVisibilityRowSub.text = ringVisibilitySummary()
         autoPeekSwitch.isChecked = AutoPeekToggle.isEnabled(this)
         singleTapRestoreSwitch.isChecked = SingleTapRestoreToggle.isEnabled(this)
-        rawTextRetrySwitch.isChecked = RawTextRetryToggle.isEnabled(this)
         silenceAutoStopSwitch.isChecked = SilenceAutoStopToggle.isEnabled(this)
         silenceAutoStopThresholdRow.findViewWithTag<TextView>("subtitle").text = silenceAutoStopThresholdSummary()
         refreshSilenceAutoStopSummary()
-        compressedUploadSwitch.isChecked = CompressedUploadToggle.isEnabled(this)
         vocabularyRowSub.text = VocabularyEditor.rowSummary(this)
         snippetsRowSub.text = SnippetManagerActivity.subtitle(this)
         vocabSuggestionsSwitch.isChecked = VocabularySuggestionsToggle.isEnabled(this)
         refreshSuggestionSections()
-        localThreadsRowSub.text = localThreadsSummary()
-        canaryLanguageRowSub.text = canaryLanguageSummary()
         autoPeekDelayRow.findViewWithTag<TextView>("subtitle").text = autoPeekDelaySummary()
         peekSizeRow.findViewWithTag<TextView>("subtitle").text = peekSizeSummary()
+        // Only meaningful while auto-hide is on: greyed out, still visible, otherwise.
+        val autoPeekOn = AutoPeekToggle.isEnabled(this)
+        setRowEnabled(autoPeekDelayRow, autoPeekOn)
+        setRowEnabled(peekSizeRow, autoPeekOn)
+        (singleTapRestoreSwitch.parent as? View)?.let { setRowEnabled(it, autoPeekOn) }
     }
 
     // --- Smart vocabulary suggestions (#216) ---
@@ -583,8 +570,8 @@ class BehaviorActivity : BaseSettingsActivity() {
     private fun exclusionListSummary(): String {
         val count = PerAppExclusionStore.exclusions(this).size
         val countText = if (count == 0) "No apps excluded" else "$count app${if (count == 1) "" else "s"} excluded"
-        return "$countText — suppresses recording and insertion, does not detach the service " +
-            "or bypass bank fraud detection. Use the off switch to fully disable Ramblr."
+        return "$countText. Ramblr won't record or insert text there. Not a full off switch: " +
+            "use \"Turn Ramblr off\" for that"
     }
 
     // --- Auto-hide delay (Feature A follow-up) ---
@@ -655,8 +642,8 @@ class BehaviorActivity : BaseSettingsActivity() {
 
     private fun refreshSilenceAutoStopSummary() {
         silenceAutoStopRow.findViewWithTag<TextView>("subtitle").text = silenceAutoStopSummary()
-        silenceAutoStopThresholdRow.visibility =
-            if (SilenceAutoStopToggle.isEnabled(this)) View.VISIBLE else View.GONE
+        // Greyed rather than hidden, so it's visible what turning auto-stop on unlocks.
+        setRowEnabled(silenceAutoStopThresholdRow, SilenceAutoStopToggle.isEnabled(this))
     }
 
     private fun silenceAutoStopThresholdSummary(): String {
@@ -785,123 +772,11 @@ class BehaviorActivity : BaseSettingsActivity() {
     // Personal vocabulary (#26) editor + summaries moved to [VocabularyEditor] (#217), shared
     // with MainActivity's top-level row.
 
-    // --- Local transcription thread count (#107) ---
-
-    private fun localThreadsSummary(): String {
-        val threads = LocalTranscriptionThreads.threadsOrDefault(this)
-        return "$threads threads for on-device transcription. Higher may transcribe faster " +
-            "but uses more CPU/battery -- compare with the benchmark log in Data & Logs"
-    }
-
-    /** Presets-only picker (#107): the issue's whole point is letting Trevor A/B 2/4/6 himself
-     *  using his own real-usage [BenchmarkLogger] data, not offering a free-form "Custom…" input
-     *  the way [promptSilenceAutoStopThreshold] does for a user-experience threshold -- there's
-     *  no forgiving range to fall back to here, just three concrete values to compare. */
-    private fun promptLocalTranscriptionThreads() {
-        // AlertDialog.Builder's message and single-choice-item list share the same content area
-        // and are mutually exclusive -- calling both silently drops the list with no error, which
-        // is exactly what happened here: the dialog rendered title+message+Cancel but never the
-        // three thread presets, making the setting effectively unreachable (GH bug report,
-        // 2026-07-17). Fixed using the documented workaround: a custom title view carrying both
-        // the heading and the explanatory copy (in place of setTitle()+setMessage()), leaving the
-        // content area free for setSingleChoiceItems() to actually render.
-        val presets = LocalTranscriptionThreads.PRESET_THREADS
-        val labels = presets.map { "$it threads" }.toTypedArray()
-        val current = LocalTranscriptionThreads.threadsOrDefault(this)
-        val checkedIndex = presets.indexOf(current).let { if (it < 0) 0 else it }
-        val titleView = vertical(dp(20), dp(20)).apply {
-            addView(TextView(this@BehaviorActivity).apply {
-                text = "Local transcription threads"
-                textSize = 20f
-                setTextColor(attrColor(android.R.attr.textColorPrimary))
-            })
-            addView(TextView(this@BehaviorActivity).apply {
-                text = "How many CPU threads on-device transcription uses to decode. The " +
-                    "default (2) is unchanged from before this setting existed -- try 4 or 6 " +
-                    "and compare against the benchmark log (Data & Logs > Share benchmark log) " +
-                    "to see what's actually faster on your device."
-                textSize = 14f
-                setTextColor(attrColor(android.R.attr.textColorSecondary))
-                setPadding(0, dp(8), 0, 0)
-            })
-        }
-        android.app.AlertDialog.Builder(this)
-            .setCustomTitle(titleView)
-            .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
-                LocalTranscriptionThreads.setThreads(this, presets[which])
-                refresh()
-                dialog.dismiss()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    // --- Canary source language (#177) ---
-
-    private val canaryLanguageLabels = mapOf(
-        "en" to "English (en)",
-        "es" to "Spanish (es)",
-        "de" to "German (de)",
-        "fr" to "French (fr)",
-    )
-
-    private fun canaryLanguageSummary(): String {
-        val lang = CanaryLanguage.languageOrDefault(this)
-        val label = canaryLanguageLabels[lang] ?: lang
-        val source = if (CanaryLanguage.followsDictationLanguage(this)) "follows Dictation language" else "set here"
-        return "$label ($source) -- the language you speak when dictating with the Canary local model. " +
-            "Only affects Canary; other models ignore this"
-    }
-
-    /** Fixed-list picker modeled on [promptLocalTranscriptionThreads]: "Follow Dictation language"
-     *  first (the default, #294), then exactly the four languages the shipped canary-180m-flash
-     *  model supports, no free-form entry. Applies immediately by reloading the running
-     *  recognizer: the language is baked in when it is created. */
-    private fun promptCanaryLanguage() {
-        // Same AlertDialog gotcha as promptLocalTranscriptionThreads: setMessage() and
-        // setSingleChoiceItems() share the content area, so the explanatory copy must ride in a
-        // custom title view or the language list silently never renders.
-        val languages = CanaryLanguage.SUPPORTED
-        val dictation = DictationLanguage.languageOrNull(this)
-        val followLabel = "Follow Dictation language (" +
-            (if (dictation != null && dictation in languages) canaryLanguageLabels[dictation] ?: dictation
-            else "English unless Dictation language is one of Canary's four") + ")"
-        val labels = (listOf(followLabel) + languages.map { canaryLanguageLabels[it] ?: it }).toTypedArray()
-        val explicit = CanaryLanguage.explicitOrNull(this)
-        val checkedIndex = if (explicit == null) 0 else languages.indexOf(explicit) + 1
-        val titleView = vertical(dp(20), dp(20)).apply {
-            addView(TextView(this@BehaviorActivity).apply {
-                text = "Canary language"
-                textSize = 20f
-                setTextColor(attrColor(android.R.attr.textColorPrimary))
-            })
-            addView(TextView(this@BehaviorActivity).apply {
-                text = "The language you speak when dictating with the Canary local model. " +
-                    "Canary needs to be told the source language -- with the wrong one it " +
-                    "answers in English or produces garbage instead of your words. By default " +
-                    "it follows Transcription > Dictation language. Only affects the Canary " +
-                    "model; other local models detect or fix their language on their own."
-                textSize = 14f
-                setTextColor(attrColor(android.R.attr.textColorSecondary))
-                setPadding(0, dp(8), 0, 0)
-            })
-        }
-        android.app.AlertDialog.Builder(this)
-            .setCustomTitle(titleView)
-            .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
-                if (which == 0) CanaryLanguage.followDictationLanguage(this)
-                else CanaryLanguage.setLanguage(this, languages[which - 1])
-                LocalModelReload.reloadIfCanaryActive(this)
-                refresh()
-                dialog.dismiss()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
     companion object {
-        /** Category subtitle for AdvancedActivity's Behavior row (#104). */
-        fun subtitle(context: android.content.Context): String =
-            "Auto-hide, per-app style, vocabulary, and more"
+        /** [Section] name to show; absent shows every section under its own header. */
+        const val EXTRA_SECTION = "com.trevornk.ramblr.extra.BEHAVIOR_SECTION"
+
+        fun intent(context: android.content.Context, section: Section): android.content.Intent =
+            android.content.Intent(context, BehaviorActivity::class.java).putExtra(EXTRA_SECTION, section.name)
     }
 }

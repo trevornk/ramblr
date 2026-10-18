@@ -48,7 +48,7 @@ class ExclusionListActivity : BaseSettingsActivity() {
                 "in the foreground. It does not detach the accessibility service: Ramblr stays " +
                 "enabled and bound like normal, and this list does not bypass or weaken your " +
                 "bank's own security detections. If you want Ramblr fully off before opening a " +
-                "sensitive app, use Settings > Invocation > \"Turn Ramblr off\", or switch to " +
+                "sensitive app, use Settings > Privacy > \"Turn Ramblr off\", or switch to " +
                 "Floating icon mode's off switch."
             textSize = 13f
             setTextColor(attrColor(android.R.attr.textColorSecondary))

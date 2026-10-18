@@ -48,8 +48,6 @@ class CloudProviderActivity : BaseSettingsActivity() {
     private lateinit var localFallbackRowSub: TextView
     private lateinit var cloudFallbackSwitch: MaterialSwitch
     private lateinit var cloudFallbackRowSub: TextView
-    private lateinit var cloudLiveSwitch: MaterialSwitch
-    private lateinit var cloudLiveRowSub: TextView
 
     /** Provider kinds a user can manually add here. LOCAL is the implicit floor (never a
      *  manually-added row). OMNIROUTE only appears once a base URL has been supplied via
@@ -70,75 +68,18 @@ class CloudProviderActivity : BaseSettingsActivity() {
         val root = vertical(0, 0)
 
         root.addView(TextView(this).apply {
-            text = "Cloud"
+            text = "Cloud providers"
             textSize = 32f
             setPadding(dp(24), dp(64), dp(24), dp(24))
         })
 
-        root.addView(TextView(this).apply {
-            text = "One ordered list of cloud providers, shared by transcription and cleanup. " +
-                "Each feature automatically uses the first entry in the list that supports it. " +
-                "On-device always works underneath, with no setup needed."
-            textSize = 14f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(8))
-        })
+        root.addView(explainer(
+            "Your cloud providers, in order. Transcription and cleanup each use the first " +
+                "one that can do the job. On-device always works as a base, no setup needed."
+        ))
 
-        root.addView(sectionHeader("Dictation mode"))
-        root.addView(TextView(this).apply {
-            text = "Pick a preset, or fine-tune with the toggles below. Each mode controls both " +
-                "how your speech is transcribed and how the text gets cleaned up."
-            textSize = 14f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(8))
-        })
-
-        modeRadioGroup = RadioGroup(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(4), dp(24), dp(8))
-        }
-        modeRadioButtons = DICTATION_MODE_OPTIONS.associateWith { mode ->
-            MaterialRadioButton(this).apply {
-                text = modeLabel(mode)
-                id = View.generateViewId()
-                buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
-                setOnClickListener { applyMode(mode) }
-            }
-        }
-        modeRadioButtons.values.forEach { modeRadioGroup.addView(it) }
-        root.addView(modeRadioGroup)
-
-        modeCustomNote = TextView(this).apply {
-            text = ""
-            textSize = 13f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(12))
-            visibility = View.GONE
-        }
-        root.addView(modeCustomNote)
-
-        root.addView(sectionHeader("Fallback behavior"))
-        root.addView(TextView(this).apply {
-            text = "These control what happens automatically when your current mode's provider fails."
-            textSize = 14f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(8))
-        })
-
-        localFallbackSwitch = MaterialSwitch(this).apply { isClickable = false }
-        val localFallbackRow = settingsRow(
-            "Fall back to on-device if cloud fails", localFallbackSubtitle(), localFallbackSwitch
-        ) { onToggleLocalFallback(!localFallbackSwitch.isChecked) }
-        localFallbackRowSub = localFallbackRow.findViewWithTag("subtitle")
-        root.addView(localFallbackRow)
-
-        cloudFallbackSwitch = MaterialSwitch(this).apply { isClickable = false }
-        val cloudFallbackRow = settingsRow(
-            "Fall back to cloud if on-device fails", cloudFallbackSubtitle(), cloudFallbackSwitch
-        ) { onToggleCloudFallback(!cloudFallbackSwitch.isChecked) }
-        cloudFallbackRowSub = cloudFallbackRow.findViewWithTag("subtitle")
-        root.addView(cloudFallbackRow)
-
+        // The accounts themselves come first: they are what this screen is for. The presets and
+        // per-feature overrides further down only decide which side uses them.
         root.addView(sectionHeader("Cloud provider chain"))
 
         chainContainer = vertical(0)
@@ -156,14 +97,58 @@ class CloudProviderActivity : BaseSettingsActivity() {
             promptAddOrEditEntry(null) { newEntry -> saveChain(ProviderChainEditing.addCloud(currentChain().entries, newEntry)) }
         })
 
-        root.addView(sectionHeader("Advanced: per-feature override"))
-        root.addView(TextView(this).apply {
-            text = "Usually set together by the mode preset above. Only change these individually " +
-                "if you want a mix, e.g. cloud transcription with on-device cleanup."
-            textSize = 14f
+        root.addView(sectionHeader("Fallback behavior"))
+        root.addView(explainer("What happens when the chosen provider fails."))
+
+        localFallbackSwitch = MaterialSwitch(this).apply { isClickable = false }
+        val localFallbackRow = settingsRow(
+            "Fall back to on-device if cloud fails", localFallbackSubtitle(), localFallbackSwitch
+        ) { onToggleLocalFallback(!localFallbackSwitch.isChecked) }
+        localFallbackRowSub = localFallbackRow.findViewWithTag("subtitle")
+        root.addView(localFallbackRow)
+
+        cloudFallbackSwitch = MaterialSwitch(this).apply { isClickable = false }
+        val cloudFallbackRow = settingsRow(
+            "Fall back to cloud if on-device fails", cloudFallbackSubtitle(), cloudFallbackSwitch
+        ) { onToggleCloudFallback(!cloudFallbackSwitch.isChecked) }
+        cloudFallbackRowSub = cloudFallbackRow.findViewWithTag("subtitle")
+        root.addView(cloudFallbackRow)
+
+        // Also offered on the main screen's "Dictation mode" row; both go through
+        // DictationModePresets, so they can't disagree.
+        root.addView(sectionHeader("Dictation mode"))
+        root.addView(explainer("Pick how your speech is turned into text and cleaned up. Fine-tune it below if needed."))
+
+        modeRadioGroup = RadioGroup(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(4), dp(24), dp(8))
+        }
+        modeRadioButtons = DICTATION_MODE_OPTIONS.associateWith { mode ->
+            MaterialRadioButton(this).apply {
+                text = modeLabel(mode)
+                id = View.generateViewId()
+                minHeight = dp(48)
+                buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
+                setOnClickListener { applyMode(mode) }
+            }
+        }
+        modeRadioButtons.values.forEach { modeRadioGroup.addView(it) }
+        root.addView(modeRadioGroup)
+
+        modeCustomNote = TextView(this).apply {
+            text = ""
+            textSize = 13f
             setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(8))
-        })
+            setPadding(dp(24), 0, dp(24), dp(12))
+            visibility = View.GONE
+        }
+        root.addView(modeCustomNote)
+
+        root.addView(sectionHeader("Mix and match"))
+        root.addView(explainer(
+            "Normally set by the preset above. Change these only for a mix, like cloud " +
+                "transcription with on-device cleanup."
+        ))
 
         cloudTranscriptionSwitch = MaterialSwitch(this).apply { isClickable = false }
         val transcriptionRow = settingsRow(
@@ -188,25 +173,8 @@ class CloudProviderActivity : BaseSettingsActivity() {
             alpha = 0.6f
         })
 
-        root.addView(sectionHeader("Experimental"))
-
-        cloudLiveSwitch = MaterialSwitch(this).apply { isClickable = false }
-        val cloudLiveRow = settingsRow(
-            "Live cloud transcription", cloudLiveSubtitle(), cloudLiveSwitch
-        ) { onToggleCloudLive(!cloudLiveSwitch.isChecked) }
-        cloudLiveRowSub = cloudLiveRow.findViewWithTag("subtitle")
-        root.addView(cloudLiveRow)
-        root.addView(TextView(this).apply {
-            text = "Streams audio to Gemini while you speak, so text appears as you talk instead " +
-                "of after you stop. Ramblr keyboard only. Requires cloud transcription and a " +
-                "Gemini key — it does not change which provider transcribes you, or the order of " +
-                "the chain above. Unproven on real devices and roughly 1.8x the cost of the " +
-                "normal upload, so it is off until you turn it on. If a stream fails, the " +
-                "recording still finishes over the normal path."
-            textSize = 13f
-            setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(dp(24), 0, dp(24), dp(12))
-        })
+        // "Live cloud transcription" (#233) moved to the Recognition screen, next to the other
+        // cloud transcription options; it still reads the Gemini key from the chain above.
 
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
@@ -243,16 +211,10 @@ class CloudProviderActivity : BaseSettingsActivity() {
         cloudFallbackSwitch.isChecked = DictationModeToggle.allowCloudFallback(this)
         cloudFallbackRowSub.text = cloudFallbackSubtitle()
 
-        cloudLiveSwitch.isChecked = CloudLiveToggle.isEnabled(this)
-        cloudLiveRowSub.text = cloudLiveSubtitle()
-
         refreshModeSelection()
     }
 
-    private fun currentMode(): DictationMode = DictationMode.resolve(
-        useLocalTranscription = prefs().getBoolean("use_local", true),
-        cloudCleanupEnabled = CloudFeatureToggle.cleanupEnabled(this),
-    )
+    private fun currentMode(): DictationMode = DictationModePresets.current(this)
 
     private fun refreshModeSelection() {
         val mode = currentMode()
@@ -269,34 +231,13 @@ class CloudProviderActivity : BaseSettingsActivity() {
         }
     }
 
-    /** Applies a mode preset by flipping the two underlying per-feature toggles together --
-     *  [DictationMode] itself has no persisted state of its own, it's purely derived from
-     *  ([prefs] "use_local", [CloudFeatureToggle.cleanupEnabled]) via [DictationMode.resolve]. */
+    /** Applies a mode preset -- see [DictationModePresets.apply]. */
     private fun applyMode(mode: DictationMode) {
-        when (mode) {
-            DictationMode.CLOUD -> {
-                prefs().edit().putBoolean("use_local", false).apply()
-                CloudFeatureToggle.setCleanupEnabled(this, true)
-            }
-            DictationMode.LOCAL -> {
-                prefs().edit().putBoolean("use_local", true).apply()
-                CloudFeatureToggle.setCleanupEnabled(this, false)
-            }
-            DictationMode.FASTEST -> {
-                prefs().edit().putBoolean("use_local", true).apply()
-                CloudFeatureToggle.setCleanupEnabled(this, true)
-            }
-            DictationMode.CUSTOM -> Unit // not directly selectable -- no matching radio button
-        }
+        DictationModePresets.apply(this, mode)
         refresh()
     }
 
-    private fun modeLabel(mode: DictationMode): String = when (mode) {
-        DictationMode.CLOUD -> "Cloud — cloud transcription + cloud cleanup"
-        DictationMode.LOCAL -> "Local — on-device transcription + on-device cleanup, fully offline"
-        DictationMode.FASTEST -> "Fastest — on-device transcription (near-instant) + cloud cleanup"
-        DictationMode.CUSTOM -> "Custom"
-    }
+    private fun modeLabel(mode: DictationMode): String = DictationModePresets.label(mode)
 
     /** Only cloud-capable entries are ever shown as rows here: LOCAL is the undeletable floor
      *  (see kdoc above and [ProviderChain.withLocalFloor]) and this screen is specifically titled
@@ -467,6 +408,35 @@ class CloudProviderActivity : BaseSettingsActivity() {
      *  re-hit the cache repeatedly. */
     private fun loadCatalogForDialog(): List<ModelCatalogEntry> = ModelCatalogStore.currentCatalog(this)
 
+    /** One model in the add/edit dialog: the name in bold with its tier, then the price and the
+     *  curated description on their own smaller, lighter lines, instead of one run-on block. */
+    private fun modelOption(entry: ModelCatalogEntry) = MaterialRadioButton(this).apply {
+        val secondary = attrColor(android.R.attr.textColorSecondary)
+        val primary = attrColor(com.google.android.material.R.attr.colorPrimary)
+        val span = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        text = android.text.SpannableStringBuilder().apply {
+            append(entry.displayName, android.text.style.StyleSpan(android.graphics.Typeface.BOLD), span)
+            append("  ")
+            append(ModelCatalogResolver.tierBadge(entry.tier), android.text.style.ForegroundColorSpan(primary), span)
+            ModelCatalogResolver.priceLabel(entry)?.let { price ->
+                append("\n")
+                val start = length
+                append(price)
+                setSpan(android.text.style.RelativeSizeSpan(0.85f), start, length, span)
+                setSpan(android.text.style.ForegroundColorSpan(secondary), start, length, span)
+            }
+            append("\n")
+            val start = length
+            append(entry.description)
+            setSpan(android.text.style.RelativeSizeSpan(0.85f), start, length, span)
+            setSpan(android.text.style.ForegroundColorSpan(secondary), start, length, span)
+        }
+        id = View.generateViewId()
+        setLineSpacing(dp(2).toFloat(), 1f)
+        setPadding(paddingLeft + dp(4), dp(10), paddingRight, dp(10))
+        buttonTintList = ColorStateList.valueOf(primary)
+    }
+
     private fun promptAddOrEditEntry(existing: ProviderChainEntry?, onSave: (ProviderChainEntry) -> Unit) {
         val catalog = loadCatalogForDialog()
         val container = vertical(dp(24), dp(8))
@@ -509,7 +479,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         // typed string. Rebuilt whenever the selected provider kind changes, since the catalog
         // is keyed by ProviderKind.
         container.addView(TextView(this).apply {
-            text = "Model"
+            text = "Cleanup model"
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             setPadding(0, dp(16), 0, dp(4))
         })
@@ -566,11 +536,8 @@ class CloudProviderActivity : BaseSettingsActivity() {
                 ?: entries.firstOrNull()?.modelId
 
             entries.forEach { entry ->
-                val row = MaterialRadioButton(this).apply {
-                    text = "${entry.displayName} \u00b7 ${ModelCatalogResolver.tierBadge(entry.tier)}\n${entry.description}"
-                    id = View.generateViewId()
+                val row = modelOption(entry).apply {
                     isChecked = entry.modelId == pickedModelId
-                    buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
                     setOnClickListener {
                         pickedModelId = entry.modelId
                         advancedSection.visibility = View.GONE
@@ -652,11 +619,8 @@ class CloudProviderActivity : BaseSettingsActivity() {
                 ?: entries.firstOrNull()?.modelId
 
             entries.forEach { entry ->
-                val row = MaterialRadioButton(this).apply {
-                    text = "${entry.displayName} \u00b7 ${ModelCatalogResolver.tierBadge(entry.tier)}\n${entry.description}"
-                    id = View.generateViewId()
+                val row = modelOption(entry).apply {
                     isChecked = entry.modelId == pickedTranscriptionModelId
-                    buttonTintList = ColorStateList.valueOf(attrColor(com.google.android.material.R.attr.colorPrimary))
                     setOnClickListener {
                         pickedTranscriptionModelId = entry.modelId
                         advancedTranscriptionSection.visibility = View.GONE
@@ -903,31 +867,13 @@ class CloudProviderActivity : BaseSettingsActivity() {
         refresh()
     }
 
-    // --- Experimental: live cloud transcription (#233 Phase 1) ---
-
-    /** Delegates to the pure [cloudLiveSubtitleText], reading the same three inputs
-     *  [CloudLiveWiring.factoryOrNull] gates on so the row and the wiring cannot disagree. */
-    private fun cloudLiveSubtitle(): String = cloudLiveSubtitleText(
-        enabled = CloudLiveToggle.isEnabled(this),
-        useLocalTranscription = prefs().getBoolean("use_local", true),
-        hasGeminiKey = ProviderCredentialStore.isConfiguredForKind(this, currentChain(), ProviderKind.GEMINI),
-    )
-
-    /** Persists intent only. The switch never edits `use_local`, the chain, or any credential --
-     *  turning it on while transcription is on-device leaves the row honestly saying so instead
-     *  of silently reconfiguring the user's providers behind the toggle. */
-    private fun onToggleCloudLive(enabled: Boolean) {
-        CloudLiveToggle.setEnabled(this, enabled)
-        refresh()
-    }
-
     companion object {
         private const val LP_WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
 
         /** Presets shown as radio options on the Dictation mode section, in display order.
          *  [DictationMode.CUSTOM] deliberately has no radio button -- it's a derived state
          *  reachable only by hand-editing the per-feature overrides below, never picked directly. */
-        private val DICTATION_MODE_OPTIONS = listOf(DictationMode.CLOUD, DictationMode.LOCAL, DictationMode.FASTEST)
+        private val DICTATION_MODE_OPTIONS = DictationModePresets.OPTIONS
 
         /** Category subtitle for MainActivity's Cloud row (#95 Phase 3), e.g. "1 provider
          *  configured" or "Not configured". Counts only cloud-capable entries -- the same LOCAL-

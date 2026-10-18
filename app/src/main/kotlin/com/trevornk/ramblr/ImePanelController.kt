@@ -364,7 +364,7 @@ internal class ImePanelController(
         }
         // #256: only blocks a NEW recording (not currently recording) -- stop stays reachable.
         if (!isRecording() && isPackageExcluded(cachedPackageName)) {
-            userMessage("Ramblr is excluded in this app — see Settings > Behavior")
+            userMessage("Ramblr is excluded in this app — see Settings > Privacy")
             return
         }
         runtime.onTap()

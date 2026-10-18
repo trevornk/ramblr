@@ -81,14 +81,12 @@
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <activity android:name=".CloudProviderActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
-        <activity android:name=".AdvancedActivity" android:exported="false"
-            android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <!-- Invocation-method chooser (#156): same internal-only + fold/unfold handling as the
              other per-category Settings screens above. -->
         <activity android:name=".InvocationActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
-        <!-- Advanced's four sub-Activities (#104 restructure): mirror AdvancedActivity's own
-             configChanges declaration above for the same Pixel Fold fold/unfold reasoning. -->
+        <!-- Former Advanced sub-screens, now reached from the main list: same configChanges as the
+             other per-category Settings screens above, for the same Pixel Fold fold/unfold reasoning. -->
         <activity android:name=".OverlayAppearanceActivity" android:exported="false"
             android:configChanges="screenLayout|smallestScreenSize|screenSize|orientation|keyboardHidden|uiMode" />
         <activity android:name=".BehaviorActivity" android:exported="false"

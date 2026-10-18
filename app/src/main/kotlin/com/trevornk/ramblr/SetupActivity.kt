@@ -49,6 +49,19 @@ class SetupActivity : BaseSettingsActivity() {
         notificationsRowSub = notificationsRow.findViewWithTag("subtitle")
         root.addView(notificationsRow)
 
+        // Moved here from the retired Advanced screen.
+        root.addView(sectionHeader("Walkthrough"))
+        root.addView(settingsRow(
+            "Redo setup walkthrough",
+            "Run the step-by-step guide again: microphone, transcription, cleanup, live preview"
+        ) {
+            startActivity(android.content.Intent(this, MainActivity::class.java).apply {
+                putExtra(MainActivity.EXTRA_START_WALKTHROUGH, true)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            })
+            finish()
+        })
+
         setContentView(ScrollView(this).apply {
             setBackgroundColor(attrColor(android.R.attr.colorBackground))
             addView(root)

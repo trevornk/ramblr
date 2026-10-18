@@ -740,7 +740,7 @@ class InvocationMethodsTest {
             val text = invocationVoiceKeyboardSectionSubtitleText(status)
             assertTrue(
                 "status $status must not read as a third mode option",
-                text.contains("Independent of the mode above") || text.contains("Works alongside the mode above"),
+                text.contains("Independent of the System shortcuts mode") || text.contains("Works alongside the System shortcuts mode"),
             )
         }
     }

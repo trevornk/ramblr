@@ -81,3 +81,70 @@ enum class DictationMode {
         }
     }
 }
+
+/**
+ * Reads and applies the [DictationMode] presets for every screen that offers them (the Cloud
+ * providers screen and the main screen's "Dictation mode" row), so both always flip the same two
+ * prefs the same way.
+ */
+object DictationModePresets {
+    /** Presets in display order. [DictationMode.CUSTOM] is never offered: it is only what the
+     *  per-feature overrides add up to. */
+    val OPTIONS = listOf(DictationMode.CLOUD, DictationMode.LOCAL, DictationMode.FASTEST)
+
+    fun current(context: android.content.Context): DictationMode = DictationMode.resolve(
+        useLocalTranscription = prefs(context).getBoolean("use_local", true),
+        cloudCleanupEnabled = CloudFeatureToggle.cleanupEnabled(context),
+    )
+
+    /** Flips the two underlying per-feature toggles together; [DictationMode] has no persisted
+     *  state of its own. */
+    fun apply(context: android.content.Context, mode: DictationMode) {
+        when (mode) {
+            DictationMode.CLOUD -> {
+                prefs(context).edit().putBoolean("use_local", false).apply()
+                CloudFeatureToggle.setCleanupEnabled(context, true)
+            }
+            DictationMode.LOCAL -> {
+                prefs(context).edit().putBoolean("use_local", true).apply()
+                CloudFeatureToggle.setCleanupEnabled(context, false)
+            }
+            DictationMode.FASTEST -> {
+                prefs(context).edit().putBoolean("use_local", true).apply()
+                CloudFeatureToggle.setCleanupEnabled(context, true)
+            }
+            DictationMode.CUSTOM -> Unit // not directly selectable
+        }
+    }
+
+    fun label(mode: DictationMode): String = when (mode) {
+        DictationMode.CLOUD -> "Cloud — cloud transcription + cloud cleanup"
+        DictationMode.LOCAL -> "Local — on-device transcription + on-device cleanup, fully offline"
+        DictationMode.FASTEST -> "Fastest — on-device transcription (near-instant) + cloud cleanup"
+        DictationMode.CUSTOM -> "Custom"
+    }
+
+    /** Main screen row subtitle. The presets only pick where cleanup runs; whether it runs at
+     *  all is AI cleanup's own switch, so with that off the subtitle says so instead of
+     *  promising a cleanup that won't happen. */
+    fun summary(mode: DictationMode, cleanupOn: Boolean = true): String {
+        if (!cleanupOn) {
+            val speech = when (mode) {
+                DictationMode.CLOUD -> "Cloud: speech goes to your cloud providers"
+                DictationMode.LOCAL -> "Local: speech stays on this phone, works offline"
+                DictationMode.FASTEST -> "Fastest: speech on this phone"
+                DictationMode.CUSTOM -> "Custom mix (Cloud providers › Mix and match)"
+            }
+            return "$speech · AI cleanup is off"
+        }
+        return when (mode) {
+            DictationMode.CLOUD -> "Cloud: speech and cleanup both go to your cloud providers"
+            DictationMode.LOCAL -> "Local: everything stays on this phone, works offline"
+            DictationMode.FASTEST -> "Fastest: speech on this phone, cleanup in the cloud"
+            DictationMode.CUSTOM -> "Custom mix: set under Cloud providers › Mix and match"
+        }
+    }
+
+    private fun prefs(context: android.content.Context) =
+        context.getSharedPreferences("ramblr", android.content.Context.MODE_PRIVATE)
+}

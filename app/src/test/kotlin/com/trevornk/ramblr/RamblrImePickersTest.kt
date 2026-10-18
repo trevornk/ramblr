@@ -210,6 +210,8 @@ class RamblrImePickersTest {
 
         val started = shadowOf(service).nextStartedActivity
         assertEquals(InvocationActivity::class.java.name, started.component?.className)
+        assertEquals(InvocationActivity.Section.KEYBOARD.name, started.getStringExtra(InvocationActivity.EXTRA_SECTION))
+        assertEquals("Translation languages", started.getStringExtra(BaseSettingsActivity.EXTRA_HIGHLIGHT_TITLE))
         assertFalse(root.listShown())
     }
 

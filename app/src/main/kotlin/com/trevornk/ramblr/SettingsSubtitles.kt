@@ -68,7 +68,7 @@ fun vocabularyMainRowSubtitleText(termCount: Int): String {
  * and the row leads to the toggle instead of the viewer).
  */
 fun historyMainRowSubtitleText(historyEnabled: Boolean, entryCount: Int): String {
-    if (!historyEnabled) return "History is off — tap to turn it on in Data & Logs"
+    if (!historyEnabled) return "History is off — tap to turn it on"
     return when (entryCount) {
         0 -> "No dictations saved yet — recent ones appear here"
         1 -> "1 saved dictation — tap one to copy it"
@@ -94,7 +94,7 @@ fun cloudLiveSubtitleText(
 ): String = when {
     !enabled -> "Off — cloud transcription returns your text once you stop speaking"
     useLocalTranscription -> "On, but transcription is set to on-device — needs cloud transcription above"
-    !hasGeminiKey -> "On, but no Gemini key is set — add a Gemini provider above"
+    !hasGeminiKey -> "On, but no Gemini key is set — add a Gemini provider under Cloud providers"
     else -> "On — the keyboard streams to Gemini as you speak. Experimental, costs more than batch"
 }
 
