@@ -210,6 +210,44 @@ class CloudCleanupFidelityGuardTest {
         assertOk(s, s)
     }
 
+    // --- swearing rephrased (Formal) -----------------------------------------------------------
+
+    @Test fun `rephrased swearing in English passes`() =
+        assertOk(
+            "this damn build broke again and whoever pushed that crap is a total idiot",
+            "The build broke again, and whoever pushed that change made a serious mistake.",
+        )
+
+    @Test fun `rephrased swearing in Russian passes`() =
+        assertOk(
+            "вы пидарасы я вашу мать ебал верните деньги за заказ",
+            "Мне кажется, вы неправы. Пожалуйста, верните деньги за заказ.",
+        )
+
+    @Test fun `swearing dropped down to the point passes`() =
+        assertOk(
+            "блять сука этот ебаный принтер опять нахуй не печатает",
+            "Принтер опять не печатает.",
+        )
+
+    @Test fun `swearing does not excuse a changed number or a lost name`() {
+        assertRejected(FidelityViolation.NUMERIC_DIVERGENCE, "fucking hell the invoice is 450 dollars", "The invoice is 540 dollars.")
+        assertRejected(FidelityViolation.ENTITY_LOST, "tell Sarah Connor this shit is late again", "Tell Sarah this is late again.")
+    }
+
+    @Test fun `ordinary words that look like swearing still get the insertion check`() {
+        assertRejected(
+            FidelityViolation.WORDS_INSERTED,
+            "the class assignment is due on Monday",
+            "The class assignment is due on Monday per the revised syllabus.",
+        )
+        assertRejected(
+            FidelityViolation.WORDS_INSERTED,
+            "положи себе на небо ещё немного",
+            "Положи себе на небо ещё немного синих облаков сверху.",
+        )
+    }
+
     // --- user-facing notice ---------------------------------------------------------------------
 
     @Test fun `every violation has a fixed user-facing phrase`() {
