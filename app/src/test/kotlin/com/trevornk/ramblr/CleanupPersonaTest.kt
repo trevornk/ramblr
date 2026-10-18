@@ -32,6 +32,11 @@ class CleanupPersonaTest {
         assertEquals(PostProcessor.CONCISE_PROMPT, CleanupPersonas.CONCISE.prompt)
     }
 
+    @Test fun `diplomatic maps to diplomatic prompt byte for byte`() {
+        assertEquals(PostProcessor.DIPLOMATIC_PROMPT, CleanupPersonas.DIPLOMATIC.prompt)
+        assertEquals("diplomatic", CleanupPersonas.DIPLOMATIC.key)
+    }
+
     @Test fun `original three keys are unchanged so existing saved selections still resolve`() {
         assertEquals("formal", CleanupPersonas.FORMAL.key)
         assertEquals("casual", CleanupPersonas.CASUAL.key)
@@ -67,10 +72,10 @@ class CleanupPersonaTest {
 
     // --- Persona list integrity ---
 
-    @Test fun `built-in list contains all six task-oriented personas`() {
-        assertEquals(6, CleanupPersonas.BUILT_IN.size)
+    @Test fun `built-in list contains all seven task-oriented personas`() {
+        assertEquals(7, CleanupPersonas.BUILT_IN.size)
         assertEquals(
-            setOf("natural", "formal", "casual", "notes", "email", "concise"),
+            setOf("natural", "formal", "casual", "notes", "email", "concise", "diplomatic"),
             CleanupPersonas.BUILT_IN.map { it.key }.toSet()
         )
     }

@@ -60,6 +60,21 @@ object CloudCleanupFidelityGuard {
         RegexOption.IGNORE_CASE,
     )
 
+    // Swearing and insults, as word starts (Russian and English). Formal rephrases them rather than
+    // keeping them, so for such a transcript new words and a much shorter result are the point of
+    // cleanup, not a sign of drift; the other checks still apply. A missed word only means the old,
+    // stricter check runs, and a false hit only skips those two checks for that one transcript.
+    private val PROFANITY_CUE = Regex(
+        "(?<!\\p{L})(" +
+            "ху[йеёяию]|пизд|бля|(?:за|вы|у|на|отъ|от|по|при|до|разъ|подъ|въ|съ|пере|недо)?[её]б(?:а|у|и|л|н|ё|е[тш]|ыр|ло|уч|(?!\\p{L}))|" +
+            "долбо[её]б|сук(?:[аиеуо](?!\\p{L})|ин)|пид[оа]р|педик|муда[кч]|мудил|г[ао]нд[оа]н|залуп|шлюх|шалав|мраз[ьи]|" +
+            "говн|дерьм|жоп|(?:на|об|за)?сра(?:ть|л|н)|дебил|идиот|кретин|придур|ублюд|сволоч|тупиц|урод|коз[её]л|козл|" +
+            "дур(?:а|ак)(?!\\p{L})|твар[ьи](?!\\p{L})|падл|гнид|чмо(?!\\p{L})|" +
+            "fuck|shit|bitch|asshole|ass(?!\\p{L})|bastard|cunt|damn|goddamn|crap(?!\\p{L})|piss|wtf(?!\\p{L})|" +
+            "idiot|moron|stupid|dumbass|jerk(?!\\p{L})|screw you)",
+        RegexOption.IGNORE_CASE,
+    )
+
     // Cues that the speaker corrected themselves. Dropping the superseded name or words is then the
     // point of cleanup, so neither the lost-name nor the collapse check applies. Deliberately
     // phrases, not single words: "actually" or "I mean" alone are everyday filler.
@@ -113,18 +128,19 @@ object CloudCleanupFidelityGuard {
         if (COMMAND_REQUEST.containsMatchIn(rawText)) return FidelityVerdict.Ok
 
         if (isMetaReply(rawText, outText)) return FidelityVerdict.Rejected(FidelityViolation.META_REPLY)
+        val rephrasesSwearing = PROFANITY_CUE.containsMatchIn(rawText)
 
         val rawWords = rawText.split(Regex("\\s+")).size
         val outWords = outText.split(Regex("\\s+")).size
         if (rawWords >= MIN_WORDS_FOR_LENGTH_CHECK) {
             val ratio = outWords.toDouble() / rawWords
-            if (ratio < MIN_LENGTH_RATIO && !SELF_CORRECTION_CUE.containsMatchIn(rawText)) return FidelityVerdict.Rejected(FidelityViolation.LENGTH_COLLAPSE)
+            if (ratio < MIN_LENGTH_RATIO && !rephrasesSwearing && !SELF_CORRECTION_CUE.containsMatchIn(rawText)) return FidelityVerdict.Rejected(FidelityViolation.LENGTH_COLLAPSE)
             if (ratio > MAX_LENGTH_RATIO) return FidelityVerdict.Rejected(FidelityViolation.LENGTH_EXPANSION)
         }
 
         if (numbersChanged(rawText, outText)) return FidelityVerdict.Rejected(FidelityViolation.NUMERIC_DIVERGENCE)
         if (entityLost(rawText, outText)) return FidelityVerdict.Rejected(FidelityViolation.ENTITY_LOST)
-        if (tooManyInsertedWords(rawText, outText)) return FidelityVerdict.Rejected(FidelityViolation.WORDS_INSERTED)
+        if (!rephrasesSwearing && tooManyInsertedWords(rawText, outText)) return FidelityVerdict.Rejected(FidelityViolation.WORDS_INSERTED)
         return FidelityVerdict.Ok
     }
 

@@ -39,11 +39,28 @@ class NaturalPromptTest {
     }
 
     @Test fun `migration - a saved copy of the old default with no chosen style becomes the new default`() {
-        assertEquals(PostProcessor.NATURAL_PROMPT, PostProcessor.effectiveSavedPrompt(PostProcessor.DEV_PROMPT, null))
+        assertEquals(PostProcessor.NATURAL_PROMPT, PostProcessor.effectiveSavedPrompt(PreviousPromptTexts.DEV_PROMPT_V1, null))
     }
 
     @Test fun `migration - an explicitly chosen Formal persona keeps DEV_PROMPT`() {
         assertEquals(PostProcessor.DEV_PROMPT, PostProcessor.effectiveSavedPrompt(PostProcessor.DEV_PROMPT, "formal"))
+    }
+
+    @Test fun `migration - an old saved copy of a built-in prompt moves to that style's current text`() {
+        assertEquals(PostProcessor.DEV_PROMPT, PostProcessor.effectiveSavedPrompt(PreviousPromptTexts.DEV_PROMPT_V1, "formal"))
+        assertEquals(PostProcessor.STRUCTURED_PROMPT, PostProcessor.effectiveSavedPrompt(PreviousPromptTexts.STRUCTURED_PROMPT_V1, "notes"))
+        assertEquals(PostProcessor.EMAIL_PROMPT, PostProcessor.effectiveSavedPrompt(PreviousPromptTexts.EMAIL_PROMPT_V1, "email"))
+        assertEquals(PostProcessor.STRUCTURED_PROMPT, PostProcessor.effectiveSavedPrompt(PreviousPromptTexts.STRUCTURED_PROMPT_V1, null))
+    }
+
+    @Test fun `migration - a custom style holding an old built-in text is left alone`() {
+        assertEquals(PreviousPromptTexts.EMAIL_PROMPT_V1, PostProcessor.effectiveSavedPrompt(PreviousPromptTexts.EMAIL_PROMPT_V1, "custom_1"))
+    }
+
+    @Test fun `migration - previous texts differ from the current ones`() {
+        assertTrue(PreviousPromptTexts.DEV_PROMPT_V1 != PostProcessor.DEV_PROMPT)
+        assertTrue(PreviousPromptTexts.STRUCTURED_PROMPT_V1 != PostProcessor.STRUCTURED_PROMPT)
+        assertTrue(PreviousPromptTexts.EMAIL_PROMPT_V1 != PostProcessor.EMAIL_PROMPT)
     }
 
     @Test fun `migration - a hand-edited prompt is returned unchanged`() {

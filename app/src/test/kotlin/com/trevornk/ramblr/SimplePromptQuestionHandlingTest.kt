@@ -35,6 +35,7 @@ class SimplePromptQuestionHandlingTest {
         "TEACHER_PROMPT" to PostProcessor.TEACHER_PROMPT,
         "EMAIL_PROMPT" to PostProcessor.EMAIL_PROMPT,
         "CONCISE_PROMPT" to PostProcessor.CONCISE_PROMPT,
+        "DIPLOMATIC_PROMPT" to PostProcessor.DIPLOMATIC_PROMPT,
     )
 
     /**
