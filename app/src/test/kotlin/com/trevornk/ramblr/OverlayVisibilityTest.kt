@@ -89,4 +89,60 @@ class OverlayVisibilityTest {
             ),
         )
     }
+
+    // --- Ring visibility mode ---
+
+    @Test fun `hidden by visibility mode hides an otherwise visible overlay`() {
+        assertEquals(
+            false,
+            overlayShouldBeVisible(
+                mainActivityForeground = false, hiddenByUser = false, lockedByKeyguard = false,
+                hiddenByVisibilityMode = true,
+            ),
+        )
+    }
+
+    @Test fun `onboarding force-visible override still shows the ring when the mode would hide it`() {
+        assertEquals(
+            true,
+            overlayShouldBeVisible(
+                mainActivityForeground = true, hiddenByUser = false, lockedByKeyguard = false,
+                forceVisibleOverride = true, hiddenByVisibilityMode = true,
+            ),
+        )
+    }
+
+    private fun hidden(
+        mode: RingVisibilityMode,
+        keyboard: Boolean = false,
+        field: Boolean = false,
+        idle: Boolean = true,
+        bubble: Boolean = false,
+    ) = ringHiddenByVisibilityMode(mode, keyboard, field, idle, bubble)
+
+    @Test fun `always mode never hides the ring`() {
+        assertEquals(false, hidden(RingVisibilityMode.ALWAYS))
+    }
+
+    @Test fun `keyboard mode hides an idle ring with no keyboard and shows it with one`() {
+        assertEquals(true, hidden(RingVisibilityMode.KEYBOARD))
+        assertEquals(false, hidden(RingVisibilityMode.KEYBOARD, keyboard = true))
+    }
+
+    @Test fun `keyboard mode ignores a focused field once the keyboard is closed`() {
+        assertEquals(true, hidden(RingVisibilityMode.KEYBOARD, field = true))
+    }
+
+    @Test fun `text field mode keeps the ring while the field stays focused after Back closes the keyboard`() {
+        assertEquals(false, hidden(RingVisibilityMode.TEXT_FIELD, field = true))
+        assertEquals(false, hidden(RingVisibilityMode.TEXT_FIELD, keyboard = true))
+        assertEquals(true, hidden(RingVisibilityMode.TEXT_FIELD))
+    }
+
+    @Test fun `no mode hides the ring mid-dictation or under a bubble`() {
+        for (mode in RingVisibilityMode.entries) {
+            assertEquals(false, hidden(mode, idle = false))
+            assertEquals(false, hidden(mode, bubble = true))
+        }
+    }
 }

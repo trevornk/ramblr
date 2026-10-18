@@ -28,6 +28,10 @@ package com.trevornk.ramblr
  * user explicitly asked Ramblr to stay out of. This is evaluated only when a caller already has a
  * fresh foreground-package read (an existing [applyOverlayVisibility] trigger), never from a new
  * poll or subscription -- see [ExclusionGating]'s doc for the honest limits that implies.
+ *
+ * [hiddenByVisibilityMode] is the user's "when to show the ring" choice (see
+ * [ringHiddenByVisibilityMode]). It sits in the same tier as [mainActivityForeground], so the
+ * onboarding "Try it out" override still shows the ring even when no keyboard or field is active.
  */
 fun overlayShouldBeVisible(
     mainActivityForeground: Boolean,
@@ -35,8 +39,30 @@ fun overlayShouldBeVisible(
     lockedByKeyguard: Boolean,
     forceVisibleOverride: Boolean = false,
     excludedForeground: Boolean = false,
+    hiddenByVisibilityMode: Boolean = false,
 ): Boolean =
     if (lockedByKeyguard) false
     else if (excludedForeground) false
     else if (forceVisibleOverride) !hiddenByUser
-    else !mainActivityForeground && !hiddenByUser
+    else !mainActivityForeground && !hiddenByUser && !hiddenByVisibilityMode
+
+/**
+ * Whether the user's [RingVisibilityMode] hides the ring right now. Never while dictation is
+ * running (the user needs the ring to stop it) or while a feedback/preview bubble is up (it may
+ * still need a tap: clipboard fallback, raw-text retry, preview commit). [TEXT_FIELD] also counts
+ * an open keyboard, since a keyboard is only ever up for some text input.
+ */
+fun ringHiddenByVisibilityMode(
+    mode: RingVisibilityMode,
+    keyboardShowing: Boolean,
+    textFieldFocused: Boolean,
+    dictationIdle: Boolean,
+    bubbleShowing: Boolean,
+): Boolean {
+    if (!dictationIdle || bubbleShowing) return false
+    return when (mode) {
+        RingVisibilityMode.ALWAYS -> false
+        RingVisibilityMode.KEYBOARD -> !keyboardShowing
+        RingVisibilityMode.TEXT_FIELD -> !keyboardShowing && !textFieldFocused
+    }
+}
