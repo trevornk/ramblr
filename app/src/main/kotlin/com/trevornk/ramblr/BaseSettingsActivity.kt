@@ -1,6 +1,8 @@
 package com.trevornk.ramblr
 
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.LayerDrawable
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
@@ -42,6 +44,28 @@ abstract class BaseSettingsActivity : AppCompatActivity() {
     override fun setContentView(view: View) {
         super.setContentView(view)
         applyContentInsets(view)
+        // Rows appear, disappear and move between sections at runtime (refresh() toggles
+        // visibility), so "is this the last row of its list" is re-evaluated on every layout.
+        view.viewTreeObserver.addOnGlobalLayoutListener { updateRowDividers(view) }
+    }
+
+    /** Shows a row's divider only when the next visible sibling is another row: the last row of a
+     *  list (followed by a section header, an explainer, or nothing) gets no trailing line. */
+    private fun updateRowDividers(view: View) {
+        if (view !is ViewGroup) return
+        var nextIsRow = false
+        for (i in view.childCount - 1 downTo 0) {
+            val child = view.getChildAt(i)
+            if (child.visibility == View.GONE) continue
+            val divider = child.getTag(R.id.settings_row_divider) as? android.graphics.drawable.Drawable
+            if (divider != null) {
+                divider.alpha = if (nextIsRow) 255 else 0
+                nextIsRow = true
+            } else {
+                updateRowDividers(child)
+                nextIsRow = false
+            }
+        }
     }
 
     private fun applyContentInsets(content: View) {
@@ -61,7 +85,8 @@ abstract class BaseSettingsActivity : AppCompatActivity() {
                 cutoutLeft = cutout.left, cutoutRight = cutout.right,
                 imeBottom = ime.bottom,
             )
-            v.setPadding(p.left, p.top, p.right, p.bottom)
+            // Extra room under the last item so it never sits flush against the navigation bar.
+            v.setPadding(p.left, p.top, p.right, p.bottom + dp(BOTTOM_SPACE_DP))
 
             // Consume nothing: return the insets unchanged so any child that wants to react to the
             // keyboard still can. Returning CONSUMED here would silently break those.
@@ -104,10 +129,13 @@ abstract class BaseSettingsActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, LP_WRAP, 1f)
         }
 
+        // Medium-weight title over a regular subtitle, so a long list reads as "name, then what
+        // it does" at a glance instead of two lines of equal weight.
         textContainer.addView(TextView(this).apply {
             tag = "title"
             text = title
-            textSize = 18f
+            textSize = 17f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             setTextColor(attrColor(android.R.attr.textColorPrimary))
         })
 
@@ -115,12 +143,31 @@ abstract class BaseSettingsActivity : AppCompatActivity() {
             tag = "subtitle"
             text = subtitle
             textSize = 14f
+            setLineSpacing(dp(2).toFloat(), 1f)
             setTextColor(attrColor(android.R.attr.textColorSecondary))
-            setPadding(0, dp(2), 0, 0)
+            setPadding(0, dp(3), 0, 0)
         })
 
         row.addView(textContainer)
-        if (widget != null) row.addView(widget)
+        if (widget != null) {
+            // Keep a gap so wrapped text never runs into the switch.
+            (textContainer.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(16)
+            row.addView(widget)
+        }
+
+        // Hairline under every row so long lists don't read as one undivided block. Drawn as the
+        // foreground so it never replaces the ripple background above; inset on both sides to
+        // line up with the row's text and right padding, so it never runs to the screen edges.
+        // One physical pixel at a stronger alpha reads as a crisp line instead of a grey band.
+        // updateRowDividers() hides it on the last row of each list.
+        val divider = LayerDrawable(arrayOf(ColorDrawable(withAlpha(attrColor(android.R.attr.textColorPrimary), 0x40)))).apply {
+            setLayerGravity(0, Gravity.BOTTOM or Gravity.FILL_HORIZONTAL)
+            setLayerHeight(0, 1)
+            setLayerInsetStart(0, dp(24) + dp(INDENT_STEP_DP) * indent)
+            setLayerInsetEnd(0, dp(24))
+        }
+        row.foreground = divider
+        row.setTag(R.id.settings_row_divider, divider)
 
         return row
     }
@@ -128,9 +175,10 @@ abstract class BaseSettingsActivity : AppCompatActivity() {
     protected fun sectionHeader(title: String) = TextView(this).apply {
         text = title
         textSize = 14f
+        letterSpacing = 0.02f
         setTypeface(typeface, Typeface.BOLD)
         setTextColor(attrColor(com.google.android.material.R.attr.colorPrimary)) // Neutral Android-like blue
-        setPadding(dp(24), dp(24), dp(24), dp(8))
+        setPadding(dp(24), dp(28), dp(24), dp(8))
     }
 
     /** A smaller, indented label for a subsection nested inside a top-level feature (#49) -- e.g.
@@ -206,5 +254,7 @@ abstract class BaseSettingsActivity : AppCompatActivity() {
         const val LP_WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
         // Consistent nesting indent step (#49) -- see nestedGroup()/subsectionHeader()/settingsRow's indent param.
         const val INDENT_STEP_DP = 16
+        // Breathing room below the last item of every screen, on top of the navigation bar inset.
+        const val BOTTOM_SPACE_DP = 32
     }
 }

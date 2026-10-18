@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tag key on every settingsRow() holding its divider drawable (BaseSettingsActivity). -->
+    <item name="settings_row_divider" type="id" />
+</resources>
