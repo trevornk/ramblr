@@ -162,6 +162,10 @@ internal class ImePanelController(
      *  and where a failed one reports. Null in tests that don't exercise it: the fallback is then
      *  exactly the pre-#284 "history + in-panel message". */
     private val backgroundSink: BackgroundResultSink? = null,
+    /** The keyboard's translate chip (English language name), or null for "Original". */
+    private val translationLanguage: () -> String? = { null },
+    /** Mic loudness 0..1 while recording, for the panel's level animation. */
+    private val renderLevel: (Float) -> Unit = {},
 ) {
     private var active = true
     private var deliveryTerminal = false
@@ -170,9 +174,20 @@ internal class ImePanelController(
     @Volatile private var cachedPackageName: String? = null
     @Volatile private var editorPolicy = ImeEditorPolicy(allowsDictation = true, allowsRetention = true)
     @Volatile private var sessionAllowsRetention = true
+    /** The runtime's last message ("Error: ...", "No speech detected", ...). Its teardown repaints
+     *  IDLE right after posting one, which overwrote the text before it could be read, so idle
+     *  shows it again until the next recording starts. */
+    private var lastMessage: String? = null
+
+    /** A message that must outlive the idle repaint the runtime sends right after it. */
+    private fun notice(message: String) {
+        lastMessage = message
+        userMessage(message)
+    }
 
     val listener: RuntimeListener = object : RuntimeListener {
         override fun onRecordingStartRequested() {
+            lastMessage = null
             if (!active || !editorPolicy.allowsDictation) return
             editorSnapshot?.invoke()?.let { (generation, identity, connection) ->
                 onEditorChanged(generation, identity, connection)
@@ -188,7 +203,11 @@ internal class ImePanelController(
         override fun onRecordingStarted() { if (active) renderState(ImeUiState.RECORDING) }
         override fun onEnterTranscribingUi() { if (active) renderState(ImeUiState.TRANSCRIBING) }
         override fun onCleaningStarted() { if (active) renderState(ImeUiState.CLEANING) }
-        override fun onIdleUi() { if (active) renderState(ImeUiState.IDLE) }
+        override fun onIdleUi() {
+            if (!active) return
+            renderState(ImeUiState.IDLE)
+            lastMessage?.let(userMessage)
+        }
         override fun onStreamingTeardown() = Unit
         override fun onStreamingPartial(text: String) { if (active) renderPartial(text) }
         override fun onCloudLiveInterim(text: String) {
@@ -197,7 +216,7 @@ internal class ImePanelController(
         override fun onUserMessage(message: String) {
             if (!active) return
             renderState(ImeUiState.ERROR)
-            userMessage(message)
+            notice(message)
         }
 
         override fun deliverText(
@@ -227,7 +246,7 @@ internal class ImePanelController(
                 if (ownsUi) latestUiTicket = null
                 if (ownsUi && active) {
                     renderState(ImeUiState.IDLE)
-                    userMessage("Ramblr is excluded in this app — nothing inserted")
+                    notice("Ramblr is excluded in this app — nothing inserted")
                 }
                 // #284: when the user has since left that editor an in-panel message nobody sees
                 // isn't enough. Nothing is copied (excluded); the notice states what was saved.
@@ -270,6 +289,8 @@ internal class ImePanelController(
 
         override fun foregroundPackageName(): String? = cachedPackageName
         override fun allowsTranscriptRetention(): Boolean = sessionAllowsRetention
+        override fun translationTarget(): String? = translationLanguage()
+        override fun onAudioLevel(level: Float) { if (active) renderLevel(level) }
 
         // #284: only a notification when the editor this dictation was for is gone; while it is
         // still bound the runtime's own toast + the panel's ERROR state already say everything.
@@ -316,12 +337,12 @@ internal class ImePanelController(
         if (!ownsUi) return
         if (result != ImeCommitResult.SUCCESS) {
             renderState(ImeUiState.ERROR)
-            userMessage(
+            notice(
                 if (historySaved) "Text could not be inserted — dictated text was saved in Ramblr history"
                 else "Text could not be inserted"
             )
         } else if (cleanupError != null) {
-            userMessage("Cleanup failed — inserted raw transcript")
+            notice("Cleanup failed — inserted raw transcript")
         }
     }
 
@@ -374,6 +395,10 @@ internal fun imeMicEnabled(state: ImeUiState): Boolean = when (state) {
     ImeUiState.TRANSCRIBING, ImeUiState.CLEANING, ImeUiState.SECURE_FIELD -> false
     ImeUiState.IDLE, ImeUiState.RECORDING, ImeUiState.ERROR -> true
 }
+
+/** The recording is being transcribed or cleaned up: the mic is locked and a ring spins around it. */
+internal fun imeIsProcessing(state: ImeUiState): Boolean =
+    state == ImeUiState.TRANSCRIBING || state == ImeUiState.CLEANING
 
 internal fun imeMicAppearance(state: ImeUiState): ImeMicAppearance = when {
     state == ImeUiState.RECORDING -> ImeMicAppearance.RECORDING

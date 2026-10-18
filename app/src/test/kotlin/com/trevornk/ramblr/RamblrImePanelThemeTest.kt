@@ -55,14 +55,15 @@ class RamblrImePanelThemeTest {
         if (this is ViewGroup) (0 until childCount).flatMap { getChildAt(it).descendants() } + this
         else listOf(this)
 
+    /** A solid fill's colour, or the first stop of a gradient (the ready mic). */
     private fun backgroundColor(view: View): Int =
-        (view.background as GradientDrawable).color!!.defaultColor
+        (view.background as GradientDrawable).let { it.color?.defaultColor ?: it.colors!!.first() }
 
     private fun micButton(root: View): ImageButton =
         root.descendants().filterIsInstance<ImageButton>().first { it.isClickable && it.contentDescription != null }
 
     private fun statusText(root: View): TextView =
-        root.descendants().filterIsInstance<TextView>().first()
+        root.descendants().filterIsInstance<TextView>().first { it.tag == RamblrImeService.STATUS_TAG }
 
     @Test
     @Config(sdk = [34], qualifiers = "night")

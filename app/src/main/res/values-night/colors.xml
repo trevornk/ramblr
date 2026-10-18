@@ -9,4 +9,7 @@
          reason, keeping the danger cue visible without glowing. -->
     <color name="ime_mic_recording">#E5484D</color>
     <color name="ime_mic_disabled">#3A3F46</color>
+    <!-- The light wordmark indigo is too dark to read on a dark surface; this is the launcher
+         icon's own light indigo. -->
+    <color name="ime_wordmark">#A5B4FC</color>
 </resources>

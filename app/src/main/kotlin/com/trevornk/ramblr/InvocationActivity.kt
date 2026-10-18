@@ -53,6 +53,8 @@ class InvocationActivity : BaseSettingsActivity() {
     private lateinit var serviceOffRowSub: TextView
     private lateinit var voiceKeyboardSectionSub: TextView
     private lateinit var voiceKeyboardRowSub: TextView
+    private lateinit var keyboardThemeRowSub: TextView
+    private lateinit var translationLanguagesRowSub: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,6 +103,20 @@ class InvocationActivity : BaseSettingsActivity() {
         }
         voiceKeyboardRowSub = voiceKeyboardRow.findViewWithTag("subtitle")
         root.addView(voiceKeyboardRow)
+
+        val keyboardThemeRow = settingsRow("Keyboard theme", KeyboardTheme.current(this).title) {
+            promptKeyboardTheme()
+        }
+        keyboardThemeRowSub = keyboardThemeRow.findViewWithTag("subtitle")
+        root.addView(keyboardThemeRow)
+
+        // The keyboard's translate buttons. Translating works with cleanup off ("As is" on the
+        // keyboard), so this lives with the keyboard rather than under Cleanup.
+        val translationLanguagesRow = settingsRow("Translation languages", KeyboardTranslation.summary(this)) {
+            promptTranslationLanguages()
+        }
+        translationLanguagesRowSub = translationLanguagesRow.findViewWithTag("subtitle")
+        root.addView(translationLanguagesRow)
 
         root.addView(sectionHeader("How to start dictation"))
 
@@ -209,6 +225,38 @@ class InvocationActivity : BaseSettingsActivity() {
         refresh()
     }
 
+    /** The voice keyboard follows the system's dark mode unless told otherwise; it picks the
+     *  change up the next time it opens. */
+    private fun promptKeyboardTheme() {
+        val themes = KeyboardTheme.entries
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Keyboard theme")
+            .setSingleChoiceItems(themes.map { it.title }.toTypedArray(), themes.indexOf(KeyboardTheme.current(this))) { dialog, which ->
+                KeyboardTheme.set(this, themes[which])
+                refresh()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Which languages get a translate button on the Ramblr keyboard. */
+    private fun promptTranslationLanguages() {
+        val all = KeyboardTranslation.ALL
+        val chosen = KeyboardTranslation.chosen(this).map { it.code }.toSet()
+        val checked = BooleanArray(all.size) { all[it].code in chosen }
+        val labels = all.map { if (it.nativeName == it.englishName) it.englishName else "${it.englishName} (${it.nativeName})" }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Translate into")
+            .setMultiChoiceItems(labels.toTypedArray(), checked) { _, which, isChecked -> checked[which] = isChecked }
+            .setPositiveButton("Save") { _, _ ->
+                KeyboardTranslation.setChosen(this, all.filterIndexed { i, _ -> checked[i] }.map { it.code })
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun refresh() {
         val mode = InvocationServiceMode.currentMode(this)
         val systemMode = mode == InvocationMode.SYSTEM_CONTROLS
@@ -229,6 +277,8 @@ class InvocationActivity : BaseSettingsActivity() {
             directControl = direct,
         )
         advancedTierRowSub.text = invocationAdvancedTierSubtitleText(granted = direct)
+        keyboardThemeRowSub.text = KeyboardTheme.current(this).title
+        translationLanguagesRowSub.text = KeyboardTranslation.summary(this)
         serviceOffRowSub.text = serviceOffRowSubtitleText(
             serviceEnabled = InvocationSecureSettings.isServiceEnabled(this),
             mode = mode,
