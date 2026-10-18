@@ -82,4 +82,13 @@ class InFlightCallTest {
         assertFalse(first.cancelled)
         assertTrue(second.cancelled)
     }
+
+    @Test fun `cancelCount moves on every cancel and beginWork leaves it alone`() {
+        val holder = InFlightCall()
+        val before = holder.cancelCount
+        holder.cancel()
+        holder.beginWork()
+        assertTrue(holder.cancelCount == before + 1)
+        assertFalse(holder.isCancelled)
+    }
 }
