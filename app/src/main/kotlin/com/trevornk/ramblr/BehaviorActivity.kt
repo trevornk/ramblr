@@ -27,6 +27,7 @@ class BehaviorActivity : BaseSettingsActivity() {
     private lateinit var automationOffHookSwitch: MaterialSwitch
     private lateinit var exclusionListRowSub: TextView
     private lateinit var autoPeekSwitch: MaterialSwitch
+    private lateinit var ringVisibilityRowSub: TextView
     private lateinit var autoPeekDelayRow: LinearLayout
     private lateinit var peekSizeRow: LinearLayout
     private lateinit var singleTapRestoreSwitch: MaterialSwitch
@@ -142,6 +143,10 @@ class BehaviorActivity : BaseSettingsActivity() {
         }
         exclusionListRowSub = exclusionListRow.findViewWithTag("subtitle")
         root.addView(exclusionListRow)
+
+        val ringVisibilityRow = settingsRow("Show the icon", ringVisibilitySummary()) { promptRingVisibility() }
+        ringVisibilityRowSub = ringVisibilityRow.findViewWithTag("subtitle")
+        root.addView(ringVisibilityRow)
 
         autoPeekSwitch = MaterialSwitch(this).apply {
             isChecked = AutoPeekToggle.isEnabled(this@BehaviorActivity)
@@ -337,6 +342,38 @@ class BehaviorActivity : BaseSettingsActivity() {
         refresh()
     }
 
+    private fun ringVisibilityLabel(mode: RingVisibilityMode): String = when (mode) {
+        RingVisibilityMode.ALWAYS -> "Always"
+        RingVisibilityMode.KEYBOARD -> "Only while the keyboard is open"
+        RingVisibilityMode.TEXT_FIELD -> "While a text field is selected"
+    }
+
+    private fun ringVisibilitySummary(): String {
+        val mode = RingVisibilityMode.read(this)
+        return when (mode) {
+            RingVisibilityMode.ALWAYS -> "Always"
+            RingVisibilityMode.KEYBOARD -> "Only while the keyboard is open"
+            RingVisibilityMode.TEXT_FIELD -> "While a text field is selected, even after you close the keyboard"
+        } + ". Never hides while you're recording"
+    }
+
+    private fun promptRingVisibility() {
+        val modes = RingVisibilityMode.entries
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Show the icon")
+            .setSingleChoiceItems(
+                modes.map { ringVisibilityLabel(it) }.toTypedArray(),
+                modes.indexOf(RingVisibilityMode.read(this)),
+            ) { dialog, which ->
+                RingVisibilityMode.write(this, modes[which])
+                WhisperAccessibilityService.instance?.applyOverlayVisibility()
+                refresh()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun refresh() {
         iconHiddenRow.visibility = if (IconHiddenState.isHidden(this)) View.VISIBLE else View.GONE
         debugVisibilitySwitch.isChecked = DebugVisibilityToggle.isEnabled(this)
@@ -344,6 +381,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         hideIconSwitch.isChecked = HideIconToggle.isEnabled(this)
         automationOffHookSwitch.isChecked = AutomationOffHookToggle.isEnabled(this)
         exclusionListRowSub.text = exclusionListSummary()
+        ringVisibilityRowSub.text = ringVisibilitySummary()
         autoPeekSwitch.isChecked = AutoPeekToggle.isEnabled(this)
         singleTapRestoreSwitch.isChecked = SingleTapRestoreToggle.isEnabled(this)
         rawTextRetrySwitch.isChecked = RawTextRetryToggle.isEnabled(this)

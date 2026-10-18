@@ -26,6 +26,7 @@ import android.view.ViewOutlineProvider
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -383,6 +384,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 setAppearance(COLOR_RECORDING)
                 startPulse()
             }
+            // A recording started from the QS tile or a11y button while the keyboard-only gate had
+            // the ring hidden must bring it back -- the user needs it to see and stop recording.
+            reapplyVisibilityModeGate()
         }
 
         override fun onEnterTranscribingUi() {
@@ -405,6 +409,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
             clearDictationTarget()
             setBusy(false)
             setAppearance(COLOR_IDLE)
+            // Posted, not run inline: deliverText() has already posted this dictation's feedback
+            // bubble, and the gate must see that bubble as showing rather than hide it.
+            reapplyVisibilityModeGate()
         }
 
         override fun onStreamingTeardown() {
@@ -665,6 +672,13 @@ open class WhisperAccessibilityService : AccessibilityService() {
     /** True while the busy ring shows the cleanup phase (#294). Main thread only. */
     private var cleaningUi = false
     private var feedbackView: TextView? = null
+    /** True from [showFeedback] until [hideFeedback] runs; keeps the keyboard-only gate from
+     *  hiding the ring under a bubble that may still need a tap. Main thread only. */
+    private var feedbackShowing = false
+    /** Last "is the ring's anchor present" answer seen by [onAccessibilityEvent] (keyboard up, or
+     *  a text field focused, per [RingVisibilityMode]), so the overlay is only re-laid-out when it
+     *  actually changes -- each re-layout itself fires another TYPE_WINDOWS_CHANGED. */
+    private var lastRingAnchorPresent: Boolean? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var feedbackLayoutParams: WindowManager.LayoutParams? = null
 
@@ -695,6 +709,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private var screenStateReceiver: android.content.BroadcastReceiver? = null
     private val handler = Handler(Looper.getMainLooper())
     private val hideFeedback = Runnable {
+        val wasShowing = feedbackShowing
+        feedbackShowing = false
         setFeedbackTouchable(false)
         // alpha only, never GONE (real root cause, verified via UID/window-token-attributed
         // BLASTSyncEngine analysis on-device: this window's WindowToken is type=2032
@@ -709,6 +725,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // enough to stall the whole token's sync. See applyOverlayVisibility() for the same fix
         // applied to the ring.
         feedbackView?.animate()?.alpha(0f)?.setDuration(180)?.start()
+        // The bubble was what kept the keyboard-only gate open; re-evaluate now that it's gone.
+        // wasShowing guards against a loop: applyOverlayVisibility() itself posts this runnable.
+        if (wasShowing && RingVisibilityMode.read(this@WhisperAccessibilityService) != RingVisibilityMode.ALWAYS) {
+            applyOverlayVisibility()
+        }
     }
 
     // Long-press style/cleanup menu (#53) -- a scrim (catches an outside tap to dismiss) plus the
@@ -931,7 +952,22 @@ open class WhisperAccessibilityService : AccessibilityService() {
         }
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    /** Only window and focus changes matter, and only for a non-ALWAYS [RingVisibilityMode]: they
+     *  are how the service learns the keyboard opened/closed or a text field gained/lost focus
+     *  without any polling. */
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val type = event?.eventType ?: return
+        if (type != AccessibilityEvent.TYPE_WINDOWS_CHANGED && type != AccessibilityEvent.TYPE_VIEW_FOCUSED) return
+        val mode = RingVisibilityMode.read(this)
+        if (mode == RingVisibilityMode.ALWAYS) {
+            lastRingAnchorPresent = null
+            return
+        }
+        val present = isKeyboardShowing() || (mode == RingVisibilityMode.TEXT_FIELD && isTextFieldFocused())
+        if (present == lastRingAnchorPresent) return
+        lastRingAnchorPresent = present
+        applyOverlayVisibility()
+    }
     override fun onInterrupt() {}
 
     /**
@@ -1472,12 +1508,25 @@ open class WhisperAccessibilityService : AccessibilityService() {
             currentForegroundPackageName(),
             PerAppExclusionStore.exclusions(this),
         )
+        val visibilityMode = RingVisibilityMode.read(this)
+        val gated = visibilityMode != RingVisibilityMode.ALWAYS
+        val hiddenByVisibilityMode = ringHiddenByVisibilityMode(
+            mode = visibilityMode,
+            // Only query windows/focus when a gate is on; the results are ignored for ALWAYS.
+            keyboardShowing = gated && isKeyboardShowing(),
+            textFieldFocused = visibilityMode == RingVisibilityMode.TEXT_FIELD && isTextFieldFocused(),
+            // runtimeInstance, not runtime: reading the lazy getter here would construct one.
+            dictationIdle = (runtimeInstance?.currentState() ?: RecordingStateMachine.State.IDLE) ==
+                RecordingStateMachine.State.IDLE,
+            bubbleShowing = feedbackShowing || pendingPreview != null,
+        )
         val visible = overlayShouldBeVisible(
             mainActivityForeground,
             IconHiddenState.isHidden(this),
             isKeyguardLocked(),
             overlayForceVisibleOverride,
             excludedForeground,
+            hiddenByVisibilityMode,
         )
         setOverlayTouchable(visible)
         // alpha, not View.GONE (Pixel Fold display-transition stall, root-caused via Opus + real
@@ -1498,6 +1547,34 @@ open class WhisperAccessibilityService : AccessibilityService() {
         if (!visible) {
             handler.post(hideFeedback)
             dismissStyleMenu()
+        }
+    }
+
+    /** Whether an on-screen keyboard window is currently showing, for [RingVisibilityMode].
+     *  Needs flagRetrieveInteractiveWindows (accessibility_service_config.xml); an empty window
+     *  list means window retrieval isn't working at all, so this fails open to "showing" rather
+     *  than hiding the ring for good. */
+    private fun isKeyboardShowing(): Boolean {
+        val all = windows
+        if (all.isNullOrEmpty()) return true
+        return all.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+    }
+
+    /** Re-evaluates visibility after a dictation state change, but only when a visibility-mode
+     *  gate is on -- every other gate ignores dictation state, so there's nothing to redo. */
+    private fun reapplyVisibilityModeGate() {
+        if (RingVisibilityMode.read(this) != RingVisibilityMode.ALWAYS) handler.post { applyOverlayVisibility() }
+    }
+
+    /** Whether the node holding input focus (in any window) is an editable text field -- the
+     *  anchor for [RingVisibilityMode.TEXT_FIELD]. It survives the keyboard being dismissed with
+     *  Back, which is exactly the case that mode exists for. */
+    private fun isTextFieldFocused(): Boolean {
+        val focused = try { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) } catch (e: RuntimeException) { null } ?: return false
+        return try {
+            focused.isEditable || focused.className?.contains("EditText") == true
+        } finally {
+            focused.recycle()
         }
     }
 
@@ -1948,6 +2025,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
             view.alpha = 0f
             view.animate().alpha(1f).setDuration(120).start()
             handler.postDelayed(hideFeedback, durationMs)
+            feedbackShowing = true
+            // A bubble that appears while the keyboard-only gate has the ring hidden (e.g. the
+            // clipboard fallback, where no field and so no keyboard is up) brings the ring back
+            // with it, so a tappable bubble never floats next to an invisible ring.
+            if (RingVisibilityMode.read(this) != RingVisibilityMode.ALWAYS) applyOverlayVisibility()
         }
     }
 

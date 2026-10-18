@@ -19,7 +19,7 @@
      The #220 guard-rail banner covers the kill-by-shortcut-switch trap while this component is
      the active one. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeViewFocused"
+    android:accessibilityEventTypes="typeViewFocused|typeWindowsChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows|flagRequestAccessibilityButton"
     android:canRetrieveWindowContent="true"
