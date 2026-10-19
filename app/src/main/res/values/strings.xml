@@ -102,6 +102,7 @@
     <string name="audio_status_cleaning">Cleaning up…</string>
     <string name="audio_status_done">Done · in History</string>
     <string name="audio_status_done_cleanup_failed">Done · cleanup failed, raw text in History</string>
+    <string name="audio_status_done_cleanup_partial">Done · partly cleaned (%1$d of %2$d sections), in History</string>
     <string name="audio_status_done_copied">Done · copied to clipboard (History is off)</string>
     <string name="audio_status_failed">Failed · %1$s</string>
     <string name="audio_status_cancelled">Cancelled</string>
@@ -137,6 +138,7 @@
     <string name="audio_notif_done_text">Your audio was transcribed. Tap to open it in History.</string>
     <string name="audio_notif_done_text_copied">Your audio was transcribed and the text was copied to your clipboard.</string>
     <string name="audio_notif_done_text_cleanup_failed">Your audio was transcribed, but cleanup failed, so this is the raw text.</string>
+    <string name="audio_notif_done_text_cleanup_partial">Your audio was transcribed. Cleanup worked on %1$d of %2$d sections; the rest is raw text.</string>
     <string name="audio_notif_failed_title">Audio transcription failed</string>
     <string name="audio_notif_failed_text">%1$s. Tap to see it in Ramblr.</string>
     <string name="audio_notif_recording_title">Recording a note</string>

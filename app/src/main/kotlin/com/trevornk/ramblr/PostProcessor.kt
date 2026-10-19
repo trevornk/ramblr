@@ -9,7 +9,15 @@ object PostProcessor {
      * chunks fell back to their raw text: [text] is then a mix of cleaned and raw chunks, and
      * [error] stays null so every existing "did cleanup succeed" check keeps reading it as success.
      */
-    data class Result(val text: String?, val error: String?, val partial: PartialCleanup? = null)
+    data class Result(
+        val text: String?,
+        val error: String?,
+        val partial: PartialCleanup? = null,
+        /** Chunk counts of a chunked on-device run (cleaned of total), also when every chunk was
+         *  cleaned; null for any other provider. Lets a caller that stitches several runs together
+         *  (the audio-files job) report an honest "N of M sections". Counts only. */
+        val sections: PartialCleanup? = null,
+    )
 
     /** Default OpenAI-compatible base URL, used when the user hasn't configured a custom one (see #4). */
     const val DEFAULT_BASE_URL = "https://api.openai.com/v1"

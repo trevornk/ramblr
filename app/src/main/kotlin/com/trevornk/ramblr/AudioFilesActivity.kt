@@ -232,13 +232,12 @@ class AudioFilesActivity : BaseSettingsActivity() {
             JobStatus.DECODING -> ctx.getString(R.string.audio_status_decoding, j.decodePercent)
             JobStatus.TRANSCRIBING -> ctx.getString(R.string.audio_status_transcribing, j.chunkIndex + 1, j.chunkTotal.coerceAtLeast(1))
             JobStatus.CLEANING -> ctx.getString(R.string.audio_status_cleaning)
-            JobStatus.DONE -> ctx.getString(
-                when {
-                    j.copiedInsteadOfSaved -> R.string.audio_status_done_copied
-                    j.cleanupFailed -> R.string.audio_status_done_cleanup_failed
-                    else -> R.string.audio_status_done
-                }
-            )
+            JobStatus.DONE -> when {
+                j.copiedInsteadOfSaved -> ctx.getString(R.string.audio_status_done_copied)
+                j.cleanupFailed -> ctx.getString(R.string.audio_status_done_cleanup_failed)
+                j.cleanupPartial -> ctx.getString(R.string.audio_status_done_cleanup_partial, j.cleanupSectionsCleaned, j.cleanupSectionsTotal)
+                else -> ctx.getString(R.string.audio_status_done)
+            }
             JobStatus.FAILED -> ctx.getString(R.string.audio_status_failed, AudioJobNotifications.failureLabel(ctx, j.failure))
             JobStatus.CANCELLED -> ctx.getString(R.string.audio_status_cancelled)
         }

@@ -85,6 +85,7 @@ class LocalChunkedCleanupTest {
 
         assertNull(result.error)
         assertNull("every chunk cleaned => not partial", result.partial)
+        assertEquals("a fully cleaned run still reports its real size", PartialCleanup(engine.userTexts.size, engine.userTexts.size), result.sections)
         assertTrue("expected several chunks, got ${engine.userTexts.size}", engine.userTexts.size > 5)
         val max = LocalCleanupChunker.maxChunkChars(prompt)
         assertTrue(engine.userTexts.all { it.length <= max })
@@ -120,6 +121,7 @@ class LocalChunkedCleanupTest {
 
         assertEquals("Cleaned.", result.text)
         assertNull(result.partial)
+        assertNull("single pass has no chunk report", result.sections)
         assertEquals(listOf(text), engine.userTexts)
         val deadline = engine.deadlines.single()
         assertTrue(deadline >= before + TERMINAL_LOCAL_LLM_STEP_BUDGET_MS)
@@ -172,6 +174,7 @@ class LocalChunkedCleanupTest {
         val partial = result.partial!!
         assertEquals(engine.userTexts.size - 1, partial.cleanedChunks)
         assertEquals(engine.userTexts.size, partial.totalChunks)
+        assertEquals(partial, result.sections)
         val out = result.text!!
         val rawChunk = engine.userTexts[2]
         assertTrue("failed chunk delivered raw, unbracketed", out.contains(" $rawChunk ") && !out.contains("[$rawChunk]"))

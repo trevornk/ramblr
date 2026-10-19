@@ -265,7 +265,10 @@ fun cleanupWaterfallSignature(waterfall: CleanupWaterfall): String =
 /** Why a waterfall step did not produce a result. Distinguishes connection-level failures
  *  (which disqualify the rest of that step's group) from step-level failures (which don't). */
 sealed class CleanupStepOutcome {
-    data class Success(val text: String, val partial: PartialCleanup? = null) : CleanupStepOutcome()
+    /** [sections] is set only by the chunked on-device path: how many chunks were cleaned out of how
+     *  many, whether or not any fell back (so a fully cleaned run still reports its real size).
+     *  [partial] is [sections] again, but only when some chunk fell back raw. */
+    data class Success(val text: String, val partial: PartialCleanup? = null, val sections: PartialCleanup? = null) : CleanupStepOutcome()
     /** Host unreachable, connect timeout, or read timeout — the whole group is dead for this call. */
     data class ConnectionFailed(val message: String?) : CleanupStepOutcome()
     /** Reachable host, but this step failed on its own (bad model name, HTTP error, malformed response). */
@@ -706,7 +709,7 @@ object CleanupWaterfallExecutor {
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
                         cursor.recordSuccess(index, nowMs())
-                        callback(PostProcessor.Result(outcome.text, null, outcome.partial))
+                        callback(PostProcessor.Result(outcome.text, null, outcome.partial, outcome.sections))
                     }
                     is CleanupStepOutcome.Rejected -> {
                         // The provider worked, so remember it; only its content was refused.
@@ -941,7 +944,7 @@ object CleanupWaterfallExecutor {
             return CleanupStepOutcome.StepFailed(lastFailure ?: stoppedEarly ?: "Local cleanup produced no usable chunk")
         }
         val partial = if (cleaned < chunks.size) PartialCleanup(cleaned, chunks.size) else null
-        return CleanupStepOutcome.Success(LocalCleanupChunker.join(chunks, texts), partial)
+        return CleanupStepOutcome.Success(LocalCleanupChunker.join(chunks, texts), partial, PartialCleanup(cleaned, chunks.size))
     }
 
     /** Failure messages that mean "ran out of time", as opposed to "model said something unusable":

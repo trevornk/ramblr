@@ -14,13 +14,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 
 /** What the user is told when a job reaches a terminal state. No transcript text, ever. */
-internal enum class AudioNoticeKind { DONE, DONE_COPIED, DONE_CLEANUP_FAILED, FAILED }
+internal enum class AudioNoticeKind { DONE, DONE_COPIED, DONE_CLEANUP_FAILED, DONE_CLEANUP_PARTIAL, FAILED }
 
 /** Pure: the one notice (if any) a job's new state calls for. */
 internal fun audioNoticeFor(job: AudioJob): AudioNoticeKind? = when (job.status) {
     JobStatus.DONE -> when {
         job.copiedInsteadOfSaved -> AudioNoticeKind.DONE_COPIED
         job.cleanupFailed -> AudioNoticeKind.DONE_CLEANUP_FAILED
+        job.cleanupPartial -> AudioNoticeKind.DONE_CLEANUP_PARTIAL
         else -> AudioNoticeKind.DONE
     }
     JobStatus.FAILED -> AudioNoticeKind.FAILED
@@ -130,6 +131,7 @@ internal object AudioJobNotifications {
             AudioNoticeKind.DONE -> ctx.getString(R.string.audio_notif_done_text)
             AudioNoticeKind.DONE_COPIED -> ctx.getString(R.string.audio_notif_done_text_copied)
             AudioNoticeKind.DONE_CLEANUP_FAILED -> ctx.getString(R.string.audio_notif_done_text_cleanup_failed)
+            AudioNoticeKind.DONE_CLEANUP_PARTIAL -> ctx.getString(R.string.audio_notif_done_text_cleanup_partial, job.cleanupSectionsCleaned, job.cleanupSectionsTotal)
             AudioNoticeKind.FAILED -> ctx.getString(R.string.audio_notif_failed_text, failureLabel(ctx, job.failure).replaceFirstChar { it.uppercase() })
         }
         val b = NotificationCompat.Builder(ctx, RESULT_CHANNEL)

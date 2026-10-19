@@ -65,11 +65,21 @@ data class AudioJob(
     /** 0..100 while decoding. */
     val decodePercent: Int = 0,
     val failure: JobFailure? = null,
+    /** Cleanup ran and produced nothing: the saved text is the raw transcript. A job where only
+     *  some sections were cleaned is NOT this -- see [cleanupSectionsTotal]. */
     val cleanupFailed: Boolean = false,
+    /** Sections cleaned / total, recorded only when cleanup ran and cleaned some but not all of
+     *  them (#325). Both 0 otherwise. */
+    val cleanupSectionsCleaned: Int = 0,
+    val cleanupSectionsTotal: Int = 0,
     val historyTimestamp: Long? = null,
     /** Result was put on the clipboard because History is switched off. */
     val copiedInsteadOfSaved: Boolean = false,
 )
+
+/** The job's cleanup finished with some sections cleaned and some left raw. */
+val AudioJob.cleanupPartial: Boolean
+    get() = !cleanupFailed && cleanupSectionsTotal > cleanupSectionsCleaned
 
 /** Events that move a job through its life. The only code allowed to change [AudioJob.status]. */
 sealed class JobEvent {
@@ -80,7 +90,13 @@ sealed class JobEvent {
     data class TranscribeStarted(val chunkTotal: Int, val durationMs: Long) : JobEvent()
     data class ChunkDone(val index: Int) : JobEvent()
     object CleaningStarted : JobEvent()
-    data class Completed(val historyTimestamp: Long?, val cleanupFailed: Boolean, val copied: Boolean) : JobEvent()
+    data class Completed(
+        val historyTimestamp: Long?,
+        val cleanupFailed: Boolean,
+        val copied: Boolean,
+        val sectionsCleaned: Int = 0,
+        val sectionsTotal: Int = 0,
+    ) : JobEvent()
     data class Failed(val failure: JobFailure) : JobEvent()
 
     /** User cancelled. */
@@ -123,6 +139,8 @@ object AudioJobMachine {
                     status = JobStatus.DONE,
                     historyTimestamp = event.historyTimestamp,
                     cleanupFailed = event.cleanupFailed,
+                    cleanupSectionsCleaned = event.sectionsCleaned,
+                    cleanupSectionsTotal = event.sectionsTotal,
                     copiedInsteadOfSaved = event.copied,
                     hasLocalAudio = false,
                     failure = null,
@@ -280,6 +298,8 @@ class AudioJobStore(private val file: File) {
         put("decodePercent", j.decodePercent)
         put("failure", j.failure?.name ?: JSONObject.NULL)
         put("cleanupFailed", j.cleanupFailed)
+        put("cleanupSectionsCleaned", j.cleanupSectionsCleaned)
+        put("cleanupSectionsTotal", j.cleanupSectionsTotal)
         put("historyTimestamp", j.historyTimestamp ?: JSONObject.NULL)
         put("copiedInsteadOfSaved", j.copiedInsteadOfSaved)
     }.toString()
@@ -300,6 +320,8 @@ class AudioJobStore(private val file: File) {
             decodePercent = o.optInt("decodePercent", 0),
             failure = if (o.isNull("failure")) null else runCatching { JobFailure.valueOf(o.getString("failure")) }.getOrNull(),
             cleanupFailed = o.optBoolean("cleanupFailed", false),
+            cleanupSectionsCleaned = o.optInt("cleanupSectionsCleaned", 0),
+            cleanupSectionsTotal = o.optInt("cleanupSectionsTotal", 0),
             historyTimestamp = if (o.isNull("historyTimestamp")) null else o.getLong("historyTimestamp"),
             copiedInsteadOfSaved = o.optBoolean("copiedInsteadOfSaved", false),
         )

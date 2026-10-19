@@ -24,6 +24,27 @@ class AudioJobMachineTest {
         assertFalse(j.hasLocalAudio)
     }
 
+    @Test fun `completion records section counts for a partly cleaned job`() {
+        val j = walk(
+            job(JobStatus.CLEANING),
+            JobEvent.Completed(7L, cleanupFailed = false, copied = false, sectionsCleaned = 12, sectionsTotal = 29),
+        )
+        assertEquals(12, j.cleanupSectionsCleaned)
+        assertEquals(29, j.cleanupSectionsTotal)
+        assertFalse(j.cleanupFailed)
+        assertTrue(j.cleanupPartial)
+    }
+
+    @Test fun `fully cleaned and failed jobs are not partial`() {
+        val ok = walk(job(JobStatus.CLEANING), JobEvent.Completed(7L, false, false))
+        assertFalse(ok.cleanupPartial)
+        val failed = walk(job(JobStatus.CLEANING), JobEvent.Completed(7L, true, false))
+        assertTrue(failed.cleanupFailed)
+        assertFalse(failed.cleanupPartial)
+        // Even if counts were somehow present, failed wins.
+        assertFalse(ok.copy(cleanupFailed = true, cleanupSectionsCleaned = 1, cleanupSectionsTotal = 2).cleanupPartial)
+    }
+
     @Test fun `cleanup stage is optional`() {
         val j = walk(job(JobStatus.QUEUED, audio = true), JobEvent.DecodeStarted, JobEvent.TranscribeStarted(1, 1), JobEvent.Completed(5, false, false))
         assertEquals(JobStatus.DONE, j.status)
@@ -104,6 +125,9 @@ class AudioJobMachineTest {
         assertEquals(AudioNoticeKind.DONE, audioNoticeFor(base))
         assertEquals(AudioNoticeKind.DONE_CLEANUP_FAILED, audioNoticeFor(base.copy(cleanupFailed = true)))
         assertEquals(AudioNoticeKind.DONE_COPIED, audioNoticeFor(base.copy(copiedInsteadOfSaved = true, cleanupFailed = true)))
+        val partial = base.copy(cleanupSectionsCleaned = 12, cleanupSectionsTotal = 29)
+        assertEquals(AudioNoticeKind.DONE_CLEANUP_PARTIAL, audioNoticeFor(partial))
+        assertEquals(AudioNoticeKind.DONE_COPIED, audioNoticeFor(partial.copy(copiedInsteadOfSaved = true)))
         assertEquals(AudioNoticeKind.FAILED, audioNoticeFor(job(JobStatus.FAILED)))
         assertNull(audioNoticeFor(job(JobStatus.CANCELLED)))
         assertNull(audioNoticeFor(job(JobStatus.SAVED)))
@@ -137,6 +161,20 @@ class AudioJobStoreTest {
         assertEquals("a", s.nextQueued()?.id)
         s.update("a", JobEvent.DecodeStarted)
         assertEquals("b", s.nextQueued()?.id)
+    }
+
+    @Test fun `partial cleanup counts round trip and old rows default to none`() {
+        val f = tmp()
+        val s = AudioJobStore(f)
+        val j = job("p", JobStatus.DONE, audio = false).copy(cleanupSectionsCleaned = 12, cleanupSectionsTotal = 29, historyTimestamp = 5)
+        s.upsert(j)
+        assertEquals(j, AudioJobStore(f).get("p"))
+        // A row written before these fields existed (the 1.0.42 shape) still reads, as "no partial".
+        val legacy = tmp()
+        legacy.writeText("""{"id":"old","displayName":"n","kind":"IMPORTED","status":"DONE","createdAt":1,"sourceUri":null,"hasLocalAudio":false,"durationMs":0,"chunkIndex":0,"chunkTotal":0,"decodePercent":0,"failure":null,"cleanupFailed":true,"historyTimestamp":3,"copiedInsteadOfSaved":false}""" + "\n")
+        val old = AudioJobStore(legacy).get("old")!!
+        assertTrue(old.cleanupFailed)
+        assertFalse(old.cleanupPartial)
     }
 
     @Test fun `recoverInterrupted fails running jobs only`() {

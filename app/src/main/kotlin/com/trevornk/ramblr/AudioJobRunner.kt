@@ -142,7 +142,11 @@ internal class AudioJobRunner(
                 // History is the one place a job's text lives; with it off, hand the text over now.
                 ClipboardUtil.copy(context, finalText)
             }
-            val done = store.update(id, JobEvent.Completed(if (historyOn) timestamp else null, cleanup.failed, copied = !historyOn))
+            val done = store.update(id, JobEvent.Completed(
+                if (historyOn) timestamp else null, cleanup.failed, copied = !historyOn,
+                sectionsCleaned = if (cleanup.tally.partlyCleaned) cleanup.tally.cleaned else 0,
+                sectionsTotal = if (cleanup.tally.partlyCleaned) cleanup.tally.total else 0,
+            ))
             deleteAudio(id)
             done?.let { onStatus(it) }
         } catch (s: Stop) {
@@ -286,7 +290,7 @@ internal class AudioJobRunner(
 
     // ---- cleanup --------------------------------------------------------------------------------
 
-    private class CleanupOutcome(val cleaned: String?, val failed: Boolean)
+    private class CleanupOutcome(val cleaned: String?, val failed: Boolean, val tally: CleanupSectionTally = CleanupSectionTally())
 
     /** Same toggle, chain, prompt and vocabulary as live dictation; applied piece by piece because
      *  a long transcript is far beyond a cleanup model's context window. */
@@ -305,8 +309,9 @@ internal class AudioJobRunner(
         val prompt = PostProcessor.withKeepLanguage(PostProcessor.interpolateVocabulary(savedPrompt, vocabulary))
         val cursor = CleanupWaterfallCursor()
 
-        var anyFailed = false
-        var anyCleaned = false
+        val tally = CleanupSectionTally()
+        val localPrompt = LocalCleanupProvider.selectedSystemPrompt(context)
+        val localTerminal = waterfall.steps.lastOrNull()?.group == CleanupStepGroup.LOCAL_LLM
         val out = ArrayList<String>()
         // Pieces for a local chain are split into model-sized chunks by the executor itself (#325);
         // this only bounds how much one waterfall run (and its latch) covers.
@@ -324,19 +329,27 @@ internal class AudioJobRunner(
                 credentialLookup = { kind -> ProviderCredentialStore.getLegacyByKind(context, kind) },
                 entryCredentialLookup = { entryId -> ProviderCredentialStore.get(context, entryId) },
                 localModelPath = { ModelDownloader.localCleanupModelFile(context, LocalCleanupProvider.selectedModel(context))?.absolutePath },
-                localPrompt = LocalCleanupProvider.selectedSystemPrompt(context),
+                localPrompt = localPrompt,
                 localVocabulary = vocabulary,
                 temperatureCacheContext = context.applicationContext,
             ) { r -> result = r; latch.countDown() }
             if (!latch.await(CLEANUP_PIECE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) inFlight.cancel()
             if (isCancelled(id)) throw Stop(null)
             val cleaned = result?.text?.takeIf { it.isNotBlank() }
-            // A chunked on-device run that left some chunks raw (#325) is a partly-failed cleanup,
-            // reported the same way a failed piece is.
-            if (cleaned != null) { out += cleaned; anyCleaned = true; if (result?.partial != null) anyFailed = true } else { out += piece; anyFailed = true }
+            // A piece is cleaned, partly cleaned (a chunked on-device run that left some chunks
+            // raw, #325 -- its text is the cleaned+raw mix) or raw. The tally keeps the section
+            // counts so the job can say "partly cleaned" instead of "cleanup failed".
+            if (cleaned != null) {
+                out += cleaned
+                tally.pieceCleaned(result?.sections)
+            } else {
+                out += piece
+                // A raw piece would have been cleaned chunk by chunk on a terminal on-device step.
+                tally.pieceRaw(if (localTerminal) LocalCleanupChunker.split(piece, LocalCleanupChunker.maxChunkChars(localPrompt)).size else 1)
+            }
         }
         // Nothing improved: report the raw transcript honestly rather than a "cleaned" copy of it.
-        return if (anyCleaned) CleanupOutcome(out.joinToString("\n\n"), anyFailed) else CleanupOutcome(null, true)
+        return if (tally.cleaned > 0) CleanupOutcome(out.joinToString("\n\n"), failed = false, tally = tally) else CleanupOutcome(null, true, tally)
     }
 
     companion object {
