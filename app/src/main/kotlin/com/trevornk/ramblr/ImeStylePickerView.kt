@@ -45,8 +45,10 @@ internal class MaxWidthLinearLayout(context: Context, private val maxWidthPx: In
  * mispositioned on some devices. Rendering in-window works everywhere and keeps the keyboard's
  * height stable (the host sizes its container to the main panel's height before showing it).
  *
- * Rows are the [CleanupStyleMenu.Model] the floating ring's menu also renders: cleanup on/off,
- * then the user's quick-menu styles with the current one marked.
+ * Content is the [CleanupStyleMenu.Model] the floating ring's menu also renders: a cleanup on/off
+ * chip in the header, then the user's quick-menu styles as a grid of title chips with the current
+ * one marked. A grid (2 columns, 3 on wide screens such as the Fold's inner display) rather than a
+ * list because the keyboard is short: two-line rows left room for barely two styles.
  */
 internal class ImeStylePickerView(
     context: Context,
@@ -57,10 +59,11 @@ internal class ImeStylePickerView(
 ) : LinearLayout(context) {
     private val density = context.resources.displayMetrics.density
     private fun dp(v: Int) = (v * density).toInt()
-    private val list = LinearLayout(context).apply { orientation = VERTICAL }
+    private val toggleChip = TextView(context)
+    private val grid = LinearLayout(context).apply { orientation = VERTICAL }
     private val scroll = ScrollView(context).apply {
         isFillViewport = false
-        addView(list, ViewGroup.LayoutParams(-1, -2))
+        addView(grid, ViewGroup.LayoutParams(-1, -2))
     }
 
     init {
@@ -76,6 +79,18 @@ internal class ImeStylePickerView(
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
                 isAccessibilityHeading = true
             }, LayoutParams(0, -2, 1f))
+            toggleChip.apply {
+                textSize = 14f
+                gravity = Gravity.CENTER
+                minHeight = dp(48)
+                setPadding(dp(14), 0, dp(14), 0)
+                setTextColor(palette.onSurface)
+                isClickable = true
+                isFocusable = true
+                background = ImeKeyStyle.keyBackground(context, palette)
+                setOnClickListener { onToggleCleanup() }
+            }
+            addView(toggleChip, LayoutParams(-2, dp(48)))
             addView(ImageButton(context).apply {
                 setImageResource(R.drawable.ic_close)
                 contentDescription = context.getString(R.string.ime_style_picker_close)
@@ -89,73 +104,62 @@ internal class ImeStylePickerView(
     }
 
     fun bind(model: CleanupStyleMenu.Model) {
-        list.removeAllViews()
-        list.addView(row(
-            title = context.getString(if (model.cleanupEnabled) R.string.ime_style_cleanup_on else R.string.ime_style_cleanup_off),
-            subtitle = context.getString(if (model.cleanupEnabled) R.string.ime_style_cleanup_on_hint else R.string.ime_style_cleanup_off_hint),
-            selected = false,
-            description = null,
-        ) { onToggleCleanup() })
-        list.addView(View(context).apply {
-            setBackgroundColor((palette.onSurfaceVariant and 0x00FFFFFF) or 0x33000000)
-        }, LayoutParams(-1, dp(1)).apply { topMargin = dp(4); bottomMargin = dp(4) })
-        for (persona in model.personas) {
-            val selected = persona == model.current
-            list.addView(row(
-                title = persona.title,
-                subtitle = persona.subtitle,
-                selected = selected,
-                description = if (selected) context.getString(R.string.ime_style_selected_desc, persona.title) else persona.title,
-            ) { onPick(persona) })
+        toggleChip.text = context.getString(if (model.cleanupEnabled) R.string.ime_style_cleanup_on else R.string.ime_style_cleanup_off)
+        toggleChip.contentDescription = toggleChip.text.toString() + ". " +
+            context.getString(if (model.cleanupEnabled) R.string.ime_style_cleanup_on_hint else R.string.ime_style_cleanup_off_hint)
+        grid.removeAllViews()
+        val columns = if (context.resources.configuration.screenWidthDp >= 560) 3 else 2
+        for (chunk in model.personas.chunked(columns)) {
+            val row = LinearLayout(context).apply { orientation = HORIZONTAL }
+            for (persona in chunk) row.addView(styleChip(persona, persona == model.current), LayoutParams(0, dp(48), 1f))
+            // Keep the last row's chips the same width as the rest instead of stretching one wide.
+            repeat(columns - chunk.size) { row.addView(View(context), LayoutParams(0, dp(48), 1f)) }
+            grid.addView(row, LayoutParams(-1, -2))
         }
     }
 
-    private fun row(title: String, subtitle: String, selected: Boolean, description: String?, onClick: () -> Unit): View {
-        val row = LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+    private fun styleChip(persona: CleanupPersona, selected: Boolean): View {
+        val chip = LinearLayout(context).apply {
+            gravity = Gravity.CENTER
             minimumHeight = dp(48)
             isClickable = true
             isFocusable = true
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            background = RippleDrawable(
-                ColorStateList.valueOf((palette.onSurface and 0x00FFFFFF) or 0x33000000),
-                if (selected) GradientDrawable().apply {
-                    cornerRadius = dp(12).toFloat()
-                    setColor((palette.accent and 0x00FFFFFF) or 0x26000000)
-                } else null,
-                GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(-1) },
+            setPadding(dp(8), 0, dp(8), 0)
+            contentDescription = if (selected) context.getString(R.string.ime_style_selected_desc, persona.title) else persona.title
+            isSelected = selected
+            val face = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                if (selected) {
+                    setColor((palette.accent and 0x00FFFFFF) or 0x33000000)
+                    setStroke(dp(2), palette.accent)
+                } else {
+                    setColor(palette.keyFill)
+                }
+            }
+            val mask = GradientDrawable().apply { cornerRadius = dp(12).toFloat(); setColor(-1) }
+            background = InsetDrawable(
+                RippleDrawable(ColorStateList.valueOf((palette.onSurface and 0x00FFFFFF) or 0x33000000), face, mask),
+                dp(4), dp(4), dp(4), dp(4),
             )
-            if (description != null) contentDescription = description
-            setOnClickListener { onClick() }
+            setOnClickListener { onPick(persona) }
         }
-        val texts = LinearLayout(context).apply {
-            orientation = VERTICAL
-            addView(TextView(context).apply {
-                text = title
-                textSize = 15f
-                setTextColor(palette.onSurface)
-                if (selected) setTypeface(typeface, Typeface.BOLD)
-            })
-            addView(TextView(context).apply {
-                text = subtitle
-                textSize = 12f
-                maxLines = 2
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                setTextColor(palette.onSurfaceVariant)
-                // The row's own contentDescription already carries the title; don't double-read.
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            })
-        }
-        row.addView(texts, LayoutParams(0, -2, 1f))
+        chip.addView(TextView(context).apply {
+            text = persona.title
+            textSize = 15f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setTextColor(palette.onSurface)
+            if (selected) setTypeface(typeface, Typeface.BOLD)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LayoutParams(-2, -2))
         if (selected) {
-            row.addView(ImageView(context).apply {
+            chip.addView(ImageView(context).apply {
                 setImageResource(R.drawable.ic_check)
                 setColorFilter(palette.accent)
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LayoutParams(dp(24), dp(24)).apply { marginStart = dp(8) })
+            }, LayoutParams(dp(18), dp(18)).apply { marginStart = dp(4) })
         }
-        return row
+        return chip
     }
 }
 

@@ -29,6 +29,10 @@ class RamblrImeService : InputMethodService() {
     companion object {
         private const val TAG = "RamblrImeService"
         private const val PICKER_HOST_TAG = "ime_style_picker_host"
+        private val STYLE_PREF_KEYS = setOf(
+            PostProcessingToggle.KEY, "cleanup_style", "per_app_cleanup_persona",
+            PerAppPersonaToggle.KEY, "quick_menu_persona_keys", "custom_cleanup_personas",
+        )
     }
 
     private val destination = ImeDestinationGuard()
@@ -40,6 +44,12 @@ class RamblrImeService : InputMethodService() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val historyStore by lazy { DictationHistoryStore.forContext(this) }
     private val mainHandler = Handler(Looper.getMainLooper())
+    /** #312: keeps the style chip honest when the style / cleanup state is changed elsewhere (the
+     *  ring's menu, Settings) while this keyboard is on screen. Held in a field because
+     *  SharedPreferences only keeps a weak reference to its listeners. */
+    private val stylePrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key in STYLE_PREF_KEYS) refreshPanelChrome()
+    }
     private var editorPolicy = ImeEditorPolicy(allowsDictation = false, allowsRetention = false)
     /** #284: the bound editor is a secure (password/PIN) one. Distinct from `!allowsDictation`,
      *  which is also true between editors; only this may veto repainting an enabled mic. */
@@ -89,6 +99,7 @@ class RamblrImeService : InputMethodService() {
         ProviderChainMigration.runIfNeeded(this)
         ProviderAccountMigration.runIfNeeded(this)
         registerNetworkCallback()
+        getSharedPreferences("ramblr", MODE_PRIVATE).registerOnSharedPreferenceChangeListener(stylePrefsListener)
         thread { ProcessRecordingOrphanCleaner.cleanupOnce(cacheDir) }
         thread { ModelDownloader.pruneOrphanedModelDirs(this) }
     }
@@ -106,6 +117,25 @@ class RamblrImeService : InputMethodService() {
                 setColor(resolveColor(com.google.android.material.R.attr.colorSurface, Color.WHITE))
             }
         }
+        // The panel is drawn edge to edge (targetSdk 35+), so the system's hide-keyboard and
+        // switch-IME buttons (the IME navigation bar, a sibling view in this same window) sit ON TOP
+        // of the bottom of the panel. The key row spans the full width, so without clearance
+        // Backspace/Enter end up under those buttons. Clearance is the larger of the nav-bar inset
+        // and that bar's measured height (its inset is only the thin gesture handle). Recomputed,
+        // never accumulated.
+        val basePadBottom = dp(10)
+        var navInset = 0
+        fun applyBottomClearance(v: View) {
+            val want = basePadBottom + maxOf(navInset, imeNavigationBarHeight(v))
+            if (v.paddingBottom != want) v.setPadding(v.paddingLeft, v.paddingTop, v.paddingRight, want)
+        }
+        root.setOnApplyWindowInsetsListener { v, insets ->
+            navInset = insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom
+            applyBottomClearance(v)
+            insets
+        }
+        // The IME nav bar is attached/laid out after our insets arrive; re-check once it has size.
+        root.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> v.post { applyBottomClearance(v) } }
         // The dictation controls live in [main] so the style picker can swap in over them inside
         // the same window (see ImeStylePickerView) without the keyboard changing height.
         val main = LinearLayout(context).apply {
@@ -342,6 +372,7 @@ class RamblrImeService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        getSharedPreferences("ramblr", MODE_PRIVATE).unregisterOnSharedPreferenceChangeListener(stylePrefsListener)
         loseLifecycle(ImeLifecycleLoss.DESTROYED)
         unregisterNetworkCallback()
         super.onDestroy()
@@ -547,7 +578,7 @@ class RamblrImeService : InputMethodService() {
         minHeight = dp(48)
         maxWidth = dp(150)
         setTextColor(colors.onSurface)
-        setPadding(dp(12), 0, dp(4), 0)
+        setPadding(dp(14), 0, dp(8), 0)
         compoundDrawablePadding = dp(2)
         setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, R.drawable.ic_arrow_drop_down, 0)
         compoundDrawableTintList = android.content.res.ColorStateList.valueOf(colors.onSurface)
@@ -730,6 +761,16 @@ class RamblrImeService : InputMethodService() {
 
     /** Night-aware lookup for the literal mic-state colours, which are resources, not theme roles. */
     private fun themedColor(colorRes: Int): Int = panelContext().getColor(colorRes)
+
+    /** Height of the IME navigation bar (back / switch-IME buttons) the platform overlays on this
+     *  window, or 0 when absent. Looked up by its framework id name so a missing/renamed id on some
+     *  OEM degrades to the plain nav-bar inset instead of failing. */
+    private fun imeNavigationBarHeight(from: View): Int {
+        val id = resources.getIdentifier("input_method_navigation_bar_view", "id", "android")
+        if (id == 0) return 0
+        val bar = from.rootView?.findViewById<View>(id) ?: return 0
+        return if (bar.visibility == View.VISIBLE) bar.height else 0
+    }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }

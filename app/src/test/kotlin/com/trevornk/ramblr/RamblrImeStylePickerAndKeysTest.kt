@@ -142,6 +142,39 @@ class RamblrImeStylePickerAndKeysTest {
         assertEquals("Formal", root.chip().text.toString())
     }
 
+    @Test fun `the picker's cleanup chip toggles the shared cleanup pref and reports consent blocks`() {
+        PostProcessingToggle.setEnabled(app, true)
+        val (_, root, _) = panel()
+        root.chip().performClick()
+
+        root.all().filterIsInstance<TextView>().first { it.text.toString() == "Cleanup: On" }.performClick()
+
+        assertFalse("tapping Cleanup: On turns cleanup off, shared with the ring", PostProcessingToggle.isEnabled(app))
+        assertEquals("Cleanup off", root.chip().text.toString())
+
+        // Consent withdrawn: turning it back on must be refused with a pointer to Settings.
+        prefs().edit().putBoolean("local_cleanup_consent_seen", false).apply()
+        root.chip().performClick()
+        root.all().filterIsInstance<TextView>().first { it.text.toString() == "Cleanup: Off" }.performClick()
+        assertFalse(PostProcessingToggle.isEnabled(app))
+        assertTrue(root.all().filterIsInstance<TextView>().any { it.text.toString() == "Enable cleanup once in Ramblr settings first" })
+    }
+
+    @Test fun `chip follows a style or cleanup change made elsewhere while the keyboard is open`() {
+        val (_, root, _) = panel()
+        assertEquals("Cleanup off", root.chip().text.toString())
+
+        // e.g. picked from the floating ring's long-press menu while the keyboard is on screen
+        CleanupStyleMenu.select(app, "harness.example", CleanupPersonas.EMAIL)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertEquals("Email", root.chip().text.toString())
+
+        PostProcessingToggle.setEnabled(app, false)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals("Cleanup off", root.chip().text.toString())
+    }
+
     @Test fun `a style picked on the keyboard is what the ring menu model reads`() {
         val (_, root, _) = panel()
         root.chip().performClick()
@@ -190,6 +223,27 @@ class RamblrImeStylePickerAndKeysTest {
         val (_, root, _) = panel(secure)
 
         for (label in listOf("Backspace", "Space", "Enter")) assertFalse(label, root.byDescription(label).isEnabled)
+    }
+
+    @Test fun `panel clears the navigation bar so the full-width key row is not under the system IME buttons`() {
+        val (_, root, _) = panel()
+        val basePadding = root.paddingBottom
+
+        root.dispatchApplyWindowInsets(
+            android.view.WindowInsets.Builder()
+                .setInsets(android.view.WindowInsets.Type.navigationBars(), android.graphics.Insets.of(0, 0, 0, 107))
+                .build(),
+        )
+
+        assertEquals(basePadding + 107, root.paddingBottom)
+
+        // Insets are re-dispatched on every layout; padding must be recomputed, not accumulated.
+        root.dispatchApplyWindowInsets(
+            android.view.WindowInsets.Builder()
+                .setInsets(android.view.WindowInsets.Type.navigationBars(), android.graphics.Insets.of(0, 0, 0, 107))
+                .build(),
+        )
+        assertEquals(basePadding + 107, root.paddingBottom)
     }
 
     @Test fun `edit keys with no input connection do nothing and do not crash`() {
