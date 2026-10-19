@@ -195,6 +195,23 @@ fun shouldUseStreamingPreview(settingEnabled: Boolean, streamingModelInstalled: 
     settingEnabled && streamingModelInstalled
 
 /**
+ * Whether the "Live preview" setting may be turned on: it means "show live text in the field while
+ * I speak", and that text can come from the on-device streaming model OR from Cloud Live
+ * transcription's interims (#245). Gating only on the model locked cloud-only users out of it.
+ * This gates the *setting* only -- the local engine still loads solely via [shouldUseStreamingPreview].
+ */
+fun canEnableLivePreview(streamingModelInstalled: Boolean, cloudLiveEnabled: Boolean): Boolean =
+    streamingModelInstalled || cloudLiveEnabled
+
+/**
+ * Whether the Live preview setting is effectively on, for display. The pref is left untouched when
+ * the last source disappears (Cloud Live turned off, no model), so re-enabling the source restores
+ * it; meanwhile the UI reports it as off instead of a switch that is on with nothing behind it.
+ */
+fun isLivePreviewOn(settingEnabled: Boolean, streamingModelInstalled: Boolean, cloudLiveEnabled: Boolean): Boolean =
+    settingEnabled && canEnableLivePreview(streamingModelInstalled, cloudLiveEnabled)
+
+/**
  * Whether a live streaming partial should render inside the floating feedback bubble instead of
  * writing directly to the real accessibility field (bug fix, live-preview + preview-before-insert
  * interaction). When Preview-before-insert is on, the real field must stay completely untouched

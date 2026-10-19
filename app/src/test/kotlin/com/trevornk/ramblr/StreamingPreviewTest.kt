@@ -329,6 +329,40 @@ class StreamingPreviewTest {
         assertFalse(shouldUseStreamingPreview(settingEnabled = false, streamingModelInstalled = false))
     }
 
+    // --- canEnableLivePreview / isLivePreviewOn: Live preview works for cloud-only users ---
+
+    @Test fun `live preview can be enabled with an installed streaming model`() {
+        assertTrue(canEnableLivePreview(streamingModelInstalled = true, cloudLiveEnabled = false))
+    }
+
+    @Test fun `live preview can be enabled with cloud live on and no streaming model`() {
+        // The cloud-only user: nothing local to download, Cloud Live supplies the live text.
+        assertTrue(canEnableLivePreview(streamingModelInstalled = false, cloudLiveEnabled = true))
+    }
+
+    @Test fun `live preview cannot be enabled with neither a model nor cloud live`() {
+        assertFalse(canEnableLivePreview(streamingModelInstalled = false, cloudLiveEnabled = false))
+    }
+
+    @Test fun `live preview shows on for a cloud-only user who enabled it`() {
+        assertTrue(isLivePreviewOn(settingEnabled = true, streamingModelInstalled = false, cloudLiveEnabled = true))
+    }
+
+    @Test fun `live preview shows off when cloud live is later turned off and no model exists`() {
+        // The pref stays true (so turning Cloud Live back on restores it) but the UI reports
+        // unavailable rather than a switch that is on with nothing behind it.
+        assertFalse(isLivePreviewOn(settingEnabled = true, streamingModelInstalled = false, cloudLiveEnabled = false))
+    }
+
+    @Test fun `live preview shows off when the setting is off regardless of sources`() {
+        assertFalse(isLivePreviewOn(settingEnabled = false, streamingModelInstalled = true, cloudLiveEnabled = true))
+    }
+
+    @Test fun `the local streaming engine stays gated on the model even when cloud live allows the setting`() {
+        // Enabling for a cloud-only user must not make the local engine load.
+        assertFalse(shouldUseStreamingPreview(settingEnabled = true, streamingModelInstalled = false))
+    }
+
     // --- shouldRouteStreamingPartialToBubble (live-preview + preview-before-insert interaction fix) ---
 
     @Test fun `partials are routed to the bubble when Preview-before-insert is on`() {

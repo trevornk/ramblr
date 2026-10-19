@@ -182,7 +182,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         root.addView(sectionHeader("Live Preview"))
         root.addView(settingsRow(
             "Live Preview",
-            "Always on-device — a cloud round trip would defeat the point of showing text live while you speak"
+            "The streaming model is always on-device. With Live cloud transcription on (below), Cloud Live supplies the live text instead"
         ).apply {
             isEnabled = false
             alpha = 0.6f

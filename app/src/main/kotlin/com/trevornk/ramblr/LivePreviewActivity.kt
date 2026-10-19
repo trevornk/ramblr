@@ -49,8 +49,8 @@ class LivePreviewActivity : BaseSettingsActivity() {
         root.addView(header)
 
         root.addView(TextView(this).apply {
-            text = "Shows live partial text in the focused field as you speak, using a separate " +
-                "on-device streaming model. The final text (after you tap to stop) still comes " +
+            text = "Shows live partial text in the focused field as you speak, from a separate " +
+                "on-device streaming model or from Cloud Live transcription. The final text (after you tap to stop) still comes " +
                 "from your regular transcription + cleanup settings — this only changes " +
                 "what's shown while recording."
             textSize = 14f
@@ -84,9 +84,10 @@ class LivePreviewActivity : BaseSettingsActivity() {
     }
 
     private fun refresh() {
-        streamingPreviewSwitch.isChecked = shouldUseStreamingPreview(
+        streamingPreviewSwitch.isChecked = isLivePreviewOn(
             settingEnabled = prefs().getBoolean(KEY_STREAMING_PREVIEW, false),
-            streamingModelInstalled = ModelDownloader.isInstalled(this, selectedStreamingModel())
+            streamingModelInstalled = ModelDownloader.isInstalled(this, selectedStreamingModel()),
+            cloudLiveEnabled = CloudLiveToggle.isEnabled(this)
         )
         streamingPreviewRowSub.text = streamingPreviewSubtitle()
         refreshAllStreamingRows()
@@ -96,12 +97,19 @@ class LivePreviewActivity : BaseSettingsActivity() {
         ModelDownloader.resolveActiveModel(STREAMING_MODEL_CATALOG, prefs().getString(KEY_STREAMING_MODEL_NAME, "") ?: "")
 
     private fun streamingPreviewSubtitle(): String =
-        if (!ModelDownloader.isInstalled(this, selectedStreamingModel())) "Download the streaming model below first"
-        else "Shows live partial results in the field as you speak"
+        when {
+            ModelDownloader.isInstalled(this, selectedStreamingModel()) ->
+                "Shows live partial results in the field as you speak"
+            CloudLiveToggle.isEnabled(this) -> "Cloud Live transcription supplies the live text in the field"
+            else -> "Download the streaming model below, or turn on Cloud Live transcription"
+        }
 
     private fun onStreamingPreviewToggle(enabling: Boolean) {
-        if (enabling && !ModelDownloader.isInstalled(this, selectedStreamingModel())) {
-            toast("Download the streaming model first")
+        if (enabling && !canEnableLivePreview(
+                ModelDownloader.isInstalled(this, selectedStreamingModel()), CloudLiveToggle.isEnabled(this)
+            )
+        ) {
+            toast("Download the streaming model or turn on Cloud Live first")
             return
         }
         prefs().edit().putBoolean(KEY_STREAMING_PREVIEW, enabling).apply()
@@ -264,11 +272,13 @@ class LivePreviewActivity : BaseSettingsActivity() {
             val prefs = context.getSharedPreferences("ramblr", android.content.Context.MODE_PRIVATE)
             val archive = prefs.getString(KEY_STREAMING_MODEL_NAME, "") ?: ""
             val model = ModelDownloader.resolveActiveModel(STREAMING_MODEL_CATALOG, archive)
-            val enabled = shouldUseStreamingPreview(
+            val installed = ModelDownloader.isInstalled(context, model)
+            val enabled = isLivePreviewOn(
                 settingEnabled = prefs.getBoolean(KEY_STREAMING_PREVIEW, false),
-                streamingModelInstalled = ModelDownloader.isInstalled(context, model)
+                streamingModelInstalled = installed,
+                cloudLiveEnabled = CloudLiveToggle.isEnabled(prefs)
             )
-            return if (enabled) "On · ${model.name}" else "Off"
+            return if (!enabled) "Off" else if (installed) "On · ${model.name}" else "On · Cloud Live"
         }
     }
 }

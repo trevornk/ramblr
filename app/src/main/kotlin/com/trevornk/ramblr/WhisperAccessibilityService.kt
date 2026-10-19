@@ -2157,7 +2157,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
         container.addView(styleMenuDivider())
 
-        val streamingEnabled = prefs().getBoolean("streaming_preview_enabled", false)
+        val streamingEnabled = isLivePreviewOn(
+            settingEnabled = prefs().getBoolean("streaming_preview_enabled", false),
+            streamingModelInstalled = ModelDownloader.isInstalled(this, selectedStreamingModel()),
+            cloudLiveEnabled = CloudLiveToggle.isEnabled(this)
+        )
         container.addView(
             styleMenuRow(
                 icon = null,
@@ -2335,14 +2339,16 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
     /** Streaming live-preview on/off from the style menu (#57) -- reads/writes the exact same
      *  "streaming_preview_enabled" pref MainActivity's Settings toggle uses (see
-     *  MainActivity.onStreamingPreviewToggle), including the same "model must be installed"
-     *  gate, so both surfaces always agree on state and neither can turn on a live preview with
-     *  nothing installed to back it. */
+     *  LivePreviewActivity.onStreamingPreviewToggle), including the same "model installed or
+     *  Cloud Live on" gate ([canEnableLivePreview]), so both surfaces always agree on state and
+     *  neither can turn on a live preview with nothing to back it. */
     private fun onStyleMenuStreamingToggleTapped() {
-        val enabling = !prefs().getBoolean("streaming_preview_enabled", false)
-        if (enabling && !ModelDownloader.isInstalled(this, selectedStreamingModel())) {
+        val modelInstalled = ModelDownloader.isInstalled(this, selectedStreamingModel())
+        val cloudLive = CloudLiveToggle.isEnabled(this)
+        val enabling = !isLivePreviewOn(prefs().getBoolean("streaming_preview_enabled", false), modelInstalled, cloudLive)
+        if (enabling && !canEnableLivePreview(modelInstalled, cloudLive)) {
             dismissStyleMenu()
-            toast("Download the streaming model in Ramblr settings first")
+            toast("Download the streaming model or turn on Cloud Live in Ramblr settings first")
             return
         }
         prefs().edit().putBoolean("streaming_preview_enabled", enabling).apply()

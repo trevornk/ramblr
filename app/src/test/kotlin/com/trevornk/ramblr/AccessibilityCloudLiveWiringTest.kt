@@ -285,6 +285,27 @@ class AccessibilityCloudLiveWiringTest {
         assertFalse(feedbackText(service).contains("hello from cloud live", ignoreCase = true))
     }
 
+    /**
+     * Cloud-only user (no streaming model installed, Cloud Live on): the Live preview setting must
+     * be enableable without a model, and once on the interims reach the field, not the bubble.
+     */
+    @Test
+    fun `cloud-only user with live preview on and no streaming model gets interims in the field`() {
+        PreviewBeforeInjectToggle.setEnabled(app, false)
+        configureFullyEnabledCloudLive()
+        assertTrue(canEnableLivePreview(
+            streamingModelInstalled = ModelDownloader.isInstalled(app, STREAMING_MODEL_CATALOG.first()),
+            cloudLiveEnabled = CloudLiveToggle.isEnabled(app),
+        ))
+        prefs().edit().putBoolean("streaming_preview_enabled", true).apply()
+        val (service, listener) = recordingServiceWithOverlay()
+
+        listener.onCloudLiveInterim("hello from cloud live")
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertFalse(feedbackText(service).contains("hello from cloud live", ignoreCase = true))
+    }
+
     @Test
     fun `onCloudLiveInterim is a no-op while not recording, matching onStreamingPartial's guard`() {
         PreviewBeforeInjectToggle.setEnabled(app, true)
