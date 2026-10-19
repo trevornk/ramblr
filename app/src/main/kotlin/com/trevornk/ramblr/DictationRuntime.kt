@@ -1981,6 +1981,10 @@ class DictationRuntime internal constructor(
                     handler.post {
                         if (!guard.isCurrent(token)) return@post // cancelled or watchdog already reset the UI
                         if (result.text != null && result.text.isNotBlank()) {
+                            // #325: a chunked on-device cleanup that left some chunks raw still counts
+                            // as success (the cleaned text is delivered); note it in the log so the
+                            // mixed result is diagnosable. Counts only, never text.
+                            result.partial?.let { Log.w(TAG, "Local cleanup was partial: ${it.cleanedChunks}/${it.totalChunks} chunks cleaned, the rest delivered raw") }
                             val servingGroup = recordProviderChainCleanupSuccess(cleanupWaterfall)
                             val paidFallbackGroup = servingGroup?.takeIf { it.isPaidFallback() }
                             // #248: Snippets expand AFTER cleanup and AFTER vocabulary correction

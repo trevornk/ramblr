@@ -121,3 +121,26 @@ class TranscriptChunkerTest {
         assertEquals(listOf(300, 300, 300, 100), parts.map { it.length })
     }
 }
+
+/** Piece sizing for the audio-files cleanup step (#325). */
+class TranscriptPieceSizingTest {
+    private fun step(g: CleanupStepGroup) = CleanupStep(g, "m")
+
+    @Test fun `a chain ending in the on-device model gets large pieces the executor chunks itself`() {
+        assertEquals(1_500, TranscriptChunker.pieceCharsFor(CleanupWaterfall(listOf(step(CleanupStepGroup.LOCAL_LLM)))))
+        assertEquals(1_500, TranscriptChunker.pieceCharsFor(CleanupWaterfall(listOf(step(CleanupStepGroup.OPENAI_DIRECT), step(CleanupStepGroup.LOCAL_LLM)))))
+    }
+
+    @Test fun `an on-device model with a cloud step behind it keeps model-sized pieces`() {
+        assertEquals(300, TranscriptChunker.pieceCharsFor(CleanupWaterfall(listOf(step(CleanupStepGroup.LOCAL_LLM), step(CleanupStepGroup.OPENAI_DIRECT)))))
+    }
+
+    @Test fun `a cloud-only chain keeps the large cloud pieces`() {
+        assertEquals(3_000, TranscriptChunker.pieceCharsFor(CleanupWaterfall(listOf(step(CleanupStepGroup.OPENAI_DIRECT)))))
+    }
+
+    @Test fun `terminal pieces stay within five model chunks so the 240 second piece latch holds`() {
+        assertTrue(TranscriptChunker.LOCAL_TERMINAL_MAX_CHARS / LocalCleanupChunker.MAX_CHUNK_CHARS <= 5)
+        assertTrue(5 * LOCAL_CHUNK_BUDGET_MS < 240_000L)
+    }
+}

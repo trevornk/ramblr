@@ -308,9 +308,9 @@ internal class AudioJobRunner(
         var anyFailed = false
         var anyCleaned = false
         val out = ArrayList<String>()
-        // A small on-device cleanup model collapses on multi-paragraph input (its output validator
-        // rejects it), so it gets short pieces; cloud models take whole paragraphs.
-        val pieceChars = if (waterfall.usesLocalLlm()) TranscriptChunker.LOCAL_MAX_CHARS else TranscriptChunker.DEFAULT_MAX_CHARS
+        // Pieces for a local chain are split into model-sized chunks by the executor itself (#325);
+        // this only bounds how much one waterfall run (and its latch) covers.
+        val pieceChars = TranscriptChunker.pieceCharsFor(waterfall)
         for (piece in TranscriptChunker.split(raw, pieceChars)) {
             if (isCancelled(id)) throw Stop(null)
             val latch = CountDownLatch(1)
@@ -331,7 +331,9 @@ internal class AudioJobRunner(
             if (!latch.await(CLEANUP_PIECE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) inFlight.cancel()
             if (isCancelled(id)) throw Stop(null)
             val cleaned = result?.text?.takeIf { it.isNotBlank() }
-            if (cleaned != null) { out += cleaned; anyCleaned = true } else { out += piece; anyFailed = true }
+            // A chunked on-device run that left some chunks raw (#325) is a partly-failed cleanup,
+            // reported the same way a failed piece is.
+            if (cleaned != null) { out += cleaned; anyCleaned = true; if (result?.partial != null) anyFailed = true } else { out += piece; anyFailed = true }
         }
         // Nothing improved: report the raw transcript honestly rather than a "cleaned" copy of it.
         return if (anyCleaned) CleanupOutcome(out.joinToString("\n\n"), anyFailed) else CleanupOutcome(null, true)

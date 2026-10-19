@@ -4,7 +4,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object PostProcessor {
-    data class Result(val text: String?, val error: String?)
+    /**
+     * [partial] is non-null only for a successful chunked on-device cleanup (#325) in which some
+     * chunks fell back to their raw text: [text] is then a mix of cleaned and raw chunks, and
+     * [error] stays null so every existing "did cleanup succeed" check keeps reading it as success.
+     */
+    data class Result(val text: String?, val error: String?, val partial: PartialCleanup? = null)
 
     /** Default OpenAI-compatible base URL, used when the user hasn't configured a custom one (see #4). */
     const val DEFAULT_BASE_URL = "https://api.openai.com/v1"

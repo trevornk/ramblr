@@ -188,6 +188,40 @@ fun localLlmStepDeadline(
     else minOf(overallDeadlineAtMs, nowMs + LOCAL_LLM_STEP_BUDGET_MS)
 
 /**
+ * Wall-clock budget for ONE chunk of a chunked terminal LOCAL_LLM step (#325). A chunk is at most
+ * [LocalCleanupChunker.MAX_CHUNK_CHARS] characters (~75 output tokens), so the same 12s a short
+ * single-pass dictation gets would already be enough on a Pixel 10a (4-10s measured); 20s widens
+ * that to roughly 4 tokens/s of decode speed, which covers a phone a few times slower than the
+ * 10a without letting one stuck decode hold a live dictation hostage. It is a per-chunk ceiling,
+ * not a total: a 10-minute recording is ~35 chunks and is bounded by
+ * [LOCAL_CHUNKED_TOTAL_BUDGET_MS] and [LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS] instead.
+ */
+const val LOCAL_CHUNK_BUDGET_MS = 20_000L
+
+/**
+ * Ceiling on a whole chunked LOCAL_LLM step (#325). Once it is spent the remaining chunks are
+ * delivered raw rather than running on. Below the 400s dictation watchdog (which fires and resets
+ * the UI mid-cleanup) so a chunked run always finishes -- partially cleaned -- before it, and at
+ * 4 minutes covers ~24 chunks at the 10s worst case, i.e. ~7,000 characters / ~8 minutes of
+ * speech inside one live dictation. Longer inputs reach this path as several smaller calls
+ * (see [AudioJobRunner]), each with its own budget.
+ */
+const val LOCAL_CHUNKED_TOTAL_BUDGET_MS = 240_000L
+
+/**
+ * After this many chunks in a row time out, the device is plainly too slow for the model and the
+ * remaining chunks are returned raw instead of burning [LOCAL_CHUNK_BUDGET_MS] on each. Validator
+ * rejections do not count: those are quick and independent per chunk.
+ */
+const val LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS = 2
+
+/**
+ * How much of a chunked local cleanup actually got cleaned, attached to a successful result when
+ * some chunks fell back to their raw text (#325). Counts only -- never transcript text.
+ */
+data class PartialCleanup(val cleanedChunks: Int, val totalChunks: Int)
+
+/**
  * Pure grouping/ordering logic for [CleanupWaterfall.steps], split out from the network-calling
  * executor so it's independently unit-testable without any I/O. Groups consecutive steps that
  * share a [CleanupStepGroup] into one fail-fast unit: if the first step in a group fails due to
@@ -231,7 +265,7 @@ fun cleanupWaterfallSignature(waterfall: CleanupWaterfall): String =
 /** Why a waterfall step did not produce a result. Distinguishes connection-level failures
  *  (which disqualify the rest of that step's group) from step-level failures (which don't). */
 sealed class CleanupStepOutcome {
-    data class Success(val text: String) : CleanupStepOutcome()
+    data class Success(val text: String, val partial: PartialCleanup? = null) : CleanupStepOutcome()
     /** Host unreachable, connect timeout, or read timeout — the whole group is dead for this call. */
     data class ConnectionFailed(val message: String?) : CleanupStepOutcome()
     /** Reachable host, but this step failed on its own (bad model name, HTTP error, malformed response). */
@@ -672,7 +706,7 @@ object CleanupWaterfallExecutor {
                 when (outcome) {
                     is CleanupStepOutcome.Success -> {
                         cursor.recordSuccess(index, nowMs())
-                        callback(PostProcessor.Result(outcome.text, null))
+                        callback(PostProcessor.Result(outcome.text, null, outcome.partial))
                     }
                     is CleanupStepOutcome.Rejected -> {
                         // The provider worked, so remember it; only its content was refused.
@@ -767,6 +801,169 @@ object CleanupWaterfallExecutor {
         }
     }
 
+    /**
+     * One on-device cleanup pass over [text]: normalize spoken numbers, run the model (the engine
+     * validates its output, see [RealLocalInferenceEngine]), then re-check numbers and apply the
+     * personal-vocabulary post-pass. This is the entire pre-#325 LOCAL_LLM step, unchanged -- a
+     * short transcript calls it once with the step's own deadline, and the chunked path calls it
+     * once per chunk, so a chunk is held to exactly the standard a whole short dictation is.
+     */
+    private fun cleanLocalPass(
+        text: String,
+        localPrompt: String,
+        localVocabulary: List<String>,
+        localInference: LocalInferenceEngine,
+        modelPath: String,
+        deadlineAtMs: Long,
+        cancelHolder: InFlightCall,
+    ): CleanupStepOutcome {
+        val normalization = SpokenNumberNormalizer.normalize(text)
+        return when (
+            val result = localInference.complete(
+                localPrompt,
+                normalization.text,
+                modelPath,
+                deadlineAtMs,
+                { cancelHolder.isCancelled },
+            )
+        ) {
+            is LocalInferenceResult.Success -> {
+                // Trim to match what both cloud parsers already do to their model text.
+                val trimmed = result.text.trim()
+                when {
+                    trimmed.isEmpty() -> CleanupStepOutcome.StepFailed("Local model produced an empty response")
+                    NumericPreservationVerifier.verify(normalization, trimmed) is NumericPreservation.Rejected ->
+                        CleanupStepOutcome.StepFailed("Local cleanup output rejected (NUMERIC_DIVERGENCE)")
+                    // #182 option 2: personal vocabulary reaches local cleanup as a
+                    // deterministic post-pass over ACCEPTED output, never as prompt
+                    // text (which made LFM2.5 echo the term list). Runs after the
+                    // validator and the numeric check so corrections are applied to
+                    // output that has already earned acceptance -- and never to text
+                    // that is about to be discarded for a fallback step.
+                    else -> CleanupStepOutcome.Success(VocabularyPostCorrector.correct(trimmed, localVocabulary))
+                }
+            }
+            is LocalInferenceResult.Failure -> CleanupStepOutcome.StepFailed(result.message)
+            is LocalInferenceResult.TimedOut -> CleanupStepOutcome.StepFailed(result.message)
+            is LocalInferenceResult.Cancelled -> CleanupStepOutcome.Cancelled
+        }
+    }
+
+    /**
+     * Terminal LOCAL_LLM step for a transcript too long for one pass (#325): split it at sentence
+     * boundaries ([LocalCleanupChunker]), clean the chunks in order through [cleanLocalPass] on the
+     * already-loaded model, and re-join them.
+     *
+     * **Failure policy.** Each chunk stands alone. A chunk whose pass fails (validator rejection,
+     * 512-piece cap, loop detection, its own [LOCAL_CHUNK_BUDGET_MS] expiring, native error) is
+     * kept as its raw text and the run continues, so one bad sentence cannot cost the user the
+     * other 34 chunks of cleanup. The result is a [CleanupStepOutcome.Success] as long as at least
+     * one chunk was cleaned, carrying [PartialCleanup] when any chunk fell back; with no chunk
+     * cleaned it is a [CleanupStepOutcome.StepFailed] with the last chunk's reason, i.e. exactly
+     * what a failed single pass reports, so the existing notices and fall-through still apply.
+     * Output of a chunk that fails is never mixed in half-way: it is raw or cleaned, nothing else.
+     *
+     * **Bounds.** Cancellation is checked before every chunk (and inside each pass by the engine),
+     * so a cancel stops the run within one chunk. [LOCAL_CHUNK_BUDGET_MS] bounds each chunk;
+     * [LOCAL_CHUNKED_TOTAL_BUDGET_MS] bounds the step and [LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS]
+     * stops early on a device too slow for the model -- in both cases the unprocessed remainder is
+     * delivered raw. Only the terminal step chunks: a non-terminal local step has a 4s budget that
+     * exists to protect the cloud step behind it, and that step is the better place for a long
+     * transcript anyway.
+     *
+     * The model stays loaded across chunks ([LocalCleanupModelHolder] reuses it, and each chunk
+     * refreshes its idle clock, so the 5-minute idle unload cannot fire mid-run).
+     */
+    private fun cleanLocalInChunks(
+        text: String,
+        localPrompt: String,
+        localVocabulary: List<String>,
+        localInference: LocalInferenceEngine,
+        modelPath: String,
+        cancelHolder: InFlightCall,
+        nowMs: () -> Long,
+    ): CleanupStepOutcome {
+        val chunks = LocalCleanupChunker.split(text, LocalCleanupChunker.maxChunkChars(localPrompt))
+        val startedAtMs = nowMs()
+        val texts = ArrayList<String>(chunks.size)
+        var cleaned = 0
+        var consecutiveTimeouts = 0
+        var lastFailure: String? = null
+        var stoppedEarly: String? = null
+        for ((index, chunk) in chunks.withIndex()) {
+            if (cancelHolder.isCancelled) return CleanupStepOutcome.Cancelled
+            if (stoppedEarly == null) {
+                if (nowMs() - startedAtMs >= LOCAL_CHUNKED_TOTAL_BUDGET_MS) {
+                    stoppedEarly = "total budget of ${LOCAL_CHUNKED_TOTAL_BUDGET_MS}ms spent"
+                } else if (consecutiveTimeouts >= LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS) {
+                    stoppedEarly = "$consecutiveTimeouts consecutive chunks timed out"
+                }
+            }
+            if (stoppedEarly != null) {
+                texts += chunk.text
+                continue
+            }
+            val chunkStartedAtMs = nowMs()
+            val outcome = cleanLocalPass(
+                chunk.text, localPrompt, localVocabulary, localInference, modelPath,
+                chunkStartedAtMs + LOCAL_CHUNK_BUDGET_MS, cancelHolder,
+            )
+            val tookMs = nowMs() - chunkStartedAtMs
+            when (outcome) {
+                is CleanupStepOutcome.Cancelled -> return outcome
+                is CleanupStepOutcome.Success -> {
+                    texts += outcome.text
+                    cleaned++
+                    consecutiveTimeouts = 0
+                    logChunk(index, chunks.size, chunk.text.length, outcome.text.length, tookMs, "cleaned")
+                }
+                else -> {
+                    val message = when (outcome) {
+                        is CleanupStepOutcome.StepFailed -> outcome.message
+                        is CleanupStepOutcome.ConnectionFailed -> outcome.message
+                        else -> null
+                    }
+                    lastFailure = message ?: lastFailure
+                    consecutiveTimeouts = if (isTimeoutMessage(message)) consecutiveTimeouts + 1 else 0
+                    texts += chunk.text
+                    logChunk(index, chunks.size, chunk.text.length, chunk.text.length, tookMs, "raw: ${message ?: "failed"}")
+                }
+            }
+        }
+        runCatching {
+            android.util.Log.i(
+                "CleanupWaterfallExecutor",
+                "Chunked local cleanup: $cleaned/${chunks.size} chunks cleaned in ${nowMs() - startedAtMs}ms" +
+                    (stoppedEarly?.let { " (stopped early: $it)" } ?: ""),
+            )
+        }
+        if (cleaned == 0) {
+            return CleanupStepOutcome.StepFailed(lastFailure ?: stoppedEarly ?: "Local cleanup produced no usable chunk")
+        }
+        val partial = if (cleaned < chunks.size) PartialCleanup(cleaned, chunks.size) else null
+        return CleanupStepOutcome.Success(LocalCleanupChunker.join(chunks, texts), partial)
+    }
+
+    /** Failure messages that mean "ran out of time", as opposed to "model said something unusable":
+     *  the engine's [LocalInferenceResult.TimedOut], the accumulator's between-piece deadline, and
+     *  the native ggml abort. */
+    private fun isTimeoutMessage(message: String?): Boolean =
+        message != null && (
+            message.contains("timed out") ||
+                message.contains("wall-clock deadline") ||
+                message.contains("inference budget exceeded")
+            )
+
+    /** Lengths and timing only -- never transcript or model text. */
+    private fun logChunk(index: Int, total: Int, inChars: Int, outChars: Int, tookMs: Long, verdict: String) {
+        runCatching {
+            android.util.Log.i(
+                "CleanupWaterfallExecutor",
+                "Local chunk ${index + 1}/$total: ${inChars}ch -> ${outChars}ch in ${tookMs}ms ($verdict)",
+            )
+        }
+    }
+
     /** Resolves one step's credential, builds its wire-format-specific request, and interprets the result. */
     private fun performStep(
         step: CleanupStep,
@@ -795,6 +992,18 @@ object CleanupWaterfallExecutor {
                 callback(CleanupStepOutcome.StepFailed("Local cleanup model not downloaded"))
                 return
             }
+            // #325: a transcript too long for one pass (see [LocalCleanupChunker]) is cleaned in
+            // chunks, each with its own budget. Terminal step only -- a short transcript, or any
+            // non-terminal local step, falls through to the single-pass code below, unchanged.
+            if (isLastStep && LocalCleanupChunker.needsChunking(text, localPrompt)) {
+                callback(
+                    cleanLocalInChunks(
+                        text, localPrompt, localVocabulary, localInference, modelPath, cancelHolder, nowMs,
+                    )
+                )
+                return
+            }
+
             // Bounded to LOCAL_LLM_STEP_BUDGET_MS (#98) so a slow/aborted local attempt still
             // leaves real time for a subsequent cloud step's own CleanupStepTimeouts to run --
             // except when this LOCAL_LLM step is the LAST step in the whole waterfall (#37
@@ -804,37 +1013,8 @@ object CleanupWaterfallExecutor {
             // as `deadlineAtMs - CLEANUP_WATERFALL_HARD_CAP_MS` -- exact here, since execute()
             // builds deadlineAtMs as startedAtMs + CLEANUP_WATERFALL_HARD_CAP_MS.
             val localDeadlineAtMs = localLlmStepDeadline(deadlineAtMs, System.currentTimeMillis(), isLastStep)
-            val normalization = SpokenNumberNormalizer.normalize(text)
             callback(
-                when (
-                    val result = localInference.complete(
-                        localPrompt,
-                        normalization.text,
-                        modelPath,
-                        localDeadlineAtMs,
-                        { cancelHolder.isCancelled },
-                    )
-                ) {
-                    is LocalInferenceResult.Success -> {
-                        // Trim to match what both cloud parsers already do to their model text.
-                        val trimmed = result.text.trim()
-                        when {
-                            trimmed.isEmpty() -> CleanupStepOutcome.StepFailed("Local model produced an empty response")
-                            NumericPreservationVerifier.verify(normalization, trimmed) is NumericPreservation.Rejected ->
-                                CleanupStepOutcome.StepFailed("Local cleanup output rejected (NUMERIC_DIVERGENCE)")
-                            // #182 option 2: personal vocabulary reaches local cleanup as a
-                            // deterministic post-pass over ACCEPTED output, never as prompt
-                            // text (which made LFM2.5 echo the term list). Runs after the
-                            // validator and the numeric check so corrections are applied to
-                            // output that has already earned acceptance -- and never to text
-                            // that is about to be discarded for a fallback step.
-                            else -> CleanupStepOutcome.Success(VocabularyPostCorrector.correct(trimmed, localVocabulary))
-                        }
-                    }
-                    is LocalInferenceResult.Failure -> CleanupStepOutcome.StepFailed(result.message)
-                    is LocalInferenceResult.TimedOut -> CleanupStepOutcome.StepFailed(result.message)
-                    is LocalInferenceResult.Cancelled -> CleanupStepOutcome.Cancelled
-                }
+                cleanLocalPass(text, localPrompt, localVocabulary, localInference, modelPath, localDeadlineAtMs, cancelHolder)
             )
             return
         }

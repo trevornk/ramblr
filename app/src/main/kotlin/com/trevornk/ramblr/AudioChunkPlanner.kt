@@ -148,8 +148,25 @@ object AudioChunkPlanner {
 object TranscriptChunker {
     const val DEFAULT_MAX_CHARS = 3_000
 
-    /** For the small on-device cleanup model: its output validator rejects long input and each step has a ~12 s budget. */
+    /** For a chain where an on-device model is NOT the last step: that step's ~4 s budget is only
+     *  enough for a model-sized piece, and the cloud step behind it takes the rest. */
     const val LOCAL_MAX_CHARS = 300
+
+    /**
+     * Piece size when the on-device model IS the last step. The executor splits each piece
+     * further into sentence-aligned model-sized chunks ([LocalCleanupChunker], #325), so the model
+     * still never sees more than ~300 characters at a time, but paragraph breaks land every ~1500
+     * characters instead of every ~300. 1500 characters is ~5 chunks: at the 20 s per-chunk
+     * ceiling that is 100 s worst case, inside the runner's 240 s per-piece latch.
+     */
+    const val LOCAL_TERMINAL_MAX_CHARS = 1_500
+
+    /** The piece size to cut a transcript into for [waterfall]'s cleanup chain. */
+    fun pieceCharsFor(waterfall: CleanupWaterfall): Int = when {
+        waterfall.steps.lastOrNull()?.group == CleanupStepGroup.LOCAL_LLM -> LOCAL_TERMINAL_MAX_CHARS
+        waterfall.usesLocalLlm() -> LOCAL_MAX_CHARS
+        else -> DEFAULT_MAX_CHARS
+    }
 
     fun split(text: String, maxChars: Int = DEFAULT_MAX_CHARS): List<String> {
         require(maxChars >= 100) { "maxChars too small" }
