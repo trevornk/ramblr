@@ -417,7 +417,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
             // flushes it right after, since no injection will ever follow there); safe to call
             // even when no session is active.
             flushPendingStreamingHandoff()
-                pendingStreamingHandoff = streamingSession
+            pendingStreamingHandoff = streamingSession
             streamingSession = null
             // #300: a session that overwrote a selection and ended with nothing to deliver
             // (cancelled, nothing heard, provider error) has no final injection coming to close its
