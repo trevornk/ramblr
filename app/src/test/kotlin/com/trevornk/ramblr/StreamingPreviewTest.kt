@@ -670,7 +670,12 @@ class StreamingPreviewTest {
     @Test fun `first partial over a select-all replaces the whole field instead of prepending`() {
         val write = composeFirstStreamingPartial("hello there friend", selStart = 0, selEnd = 18, displayText = "Replaced")
         assertEquals("Replaced", write.updatedText)
-        assertEquals(StreamingSpan(insertionStart = 0, previousLength = 8, replacedText = "hello there friend"), write.span)
+        assertEquals(
+            StreamingSpan(insertionStart = 0, previousLength = 8, replacedText = "hello there friend"),
+            write.span.copy(trace = null),
+        )
+        assertEquals("the overwritten selection is the prior state a dropped write falls back to", "hello there friend", write.span.trace?.priorText)
+        assertEquals(18, write.span.trace?.priorLength)
     }
 
     @Test fun `first partial over a partial selection replaces only that range`() {
@@ -749,5 +754,70 @@ class StreamingPreviewTest {
         val write = composeFirstStreamingPartial("abc", selStart = 1, selEnd = 99, displayText = "X")
         assertEquals("aX", write.updatedText.replace(" ", ""))
         assertEquals("bc", write.span.replacedText)
+    }
+
+    // --- cloud-live interims honor the Live preview setting ---
+
+    @Test
+    fun `with live preview off a partial never goes to the field even without preview-before-insert`() {
+        assertTrue(shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled = false, livePreviewEnabled = false))
+    }
+
+    @Test
+    fun `with live preview on and preview-before-insert off the partial goes to the field`() {
+        assertFalse(shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled = false, livePreviewEnabled = true))
+    }
+
+    @Test
+    fun `preview-before-insert keeps priority with live preview on`() {
+        assertTrue(shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled = true, livePreviewEnabled = true))
+    }
+
+    // --- span drift: a partial write the target dropped or reverted ---
+
+    private val trace = StreamingWriteTrace(
+        writtenText = "Alpha beta gamma delta.",
+        priorText = "Alpha beta gamma delta. To you.",
+        priorLength = 31,
+    )
+
+    @Test
+    fun `tracked length is trusted when the field holds what was written`() {
+        assertEquals(23, effectivePreviousLength("Alpha beta gamma delta.", 23, trace))
+    }
+
+    @Test
+    fun `tracked length falls back to the prior length when the field holds the prior text`() {
+        assertEquals(31, effectivePreviousLength("Alpha beta gamma delta. To you.", 23, trace))
+    }
+
+    @Test
+    fun `tracked length is kept for an unrecognised field value or no trace`() {
+        assertEquals(23, effectivePreviousLength("something the user typed", 23, trace))
+        assertEquals(23, effectivePreviousLength("Alpha beta gamma delta. To you.", 23, null))
+    }
+
+    @Test
+    fun `closing a drifted span replaces the whole leftover instead of leaving a duplicated tail`() {
+        val span = StreamingSpan(insertionStart = 0, previousLength = 23, trace = trace)
+        // Without the trace this was "Final. To you." -- the duplicated trailing fragment.
+        assertEquals(
+            "Final.",
+            reconcileStreamingSpan("Alpha beta gamma delta. To you.", span, "Final.", isFinalInjectionTarget = true),
+        )
+        assertEquals(
+            "",
+            reconcileStreamingSpan("Alpha beta gamma delta. To you.", span, "", isFinalInjectionTarget = false),
+        )
+    }
+
+    @Test
+    fun `the first partial records the original field as the prior state`() {
+        val write = composeFirstStreamingPartial("draft", 5, 5, "hello")
+        assertEquals("draft hello", write.updatedText)
+        assertEquals(
+            StreamingWriteTrace(writtenText = "draft hello", priorText = "draft", priorLength = 0),
+            write.span.trace,
+        )
     }
 }

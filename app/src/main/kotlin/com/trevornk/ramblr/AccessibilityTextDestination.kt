@@ -61,9 +61,10 @@ class AccessibilityTextDestination(val node: AccessibilityNodeInfo) : TextDestin
         }
         val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         Log.i(TAG, "ACTION_SET_TEXT => $ok")
-        if (ok) nudgeSelectionToEnd(node, text.length)
         return ok
     }
+
+    override fun placeCaretAtEnd(textLength: Int) = nudgeSelectionToEnd(node, textLength)
 
     override fun pasteFromClipboard(): Boolean {
         findCustomPasteAction(node)?.let { action ->
@@ -114,6 +115,12 @@ class AccessibilityTextDestination(val node: AccessibilityNodeInfo) : TextDestin
          * text renderers only recompute/repaint their layout in response to an explicit
          * selection-change action rather than trusting ACTION_SET_TEXT alone. Best-effort --
          * failure here doesn't invalidate the SET_TEXT that already succeeded.
+         *
+         * MUST NOT be sent straight behind the write: a Compose text field (Hermes Relay's
+         * composer) applies SET_TEXT on its next recomposition, and a selection action that
+         * arrives first is built from the field's still-stale value and replaces the new text with
+         * the old one -- while ACTION_SET_TEXT has already reported true. Callers place the caret
+         * only once the write has been observed to land ([DictationTextWriter]).
          */
         private fun nudgeSelectionToEnd(node: AccessibilityNodeInfo, textLength: Int) {
             val args = Bundle().apply {

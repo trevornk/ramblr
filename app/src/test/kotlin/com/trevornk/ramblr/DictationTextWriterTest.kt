@@ -61,7 +61,62 @@ private class FakeTextDestination(
         calls += "pasteFromClipboard"
         return paste
     }
+
+    override fun placeCaretAtEnd(textLength: Int) {
+        calls += "placeCaretAtEnd"
+    }
 }
+
+
+/**
+ * A destination that behaves like the Compose `BasicTextField` in Hermes Relay's composer
+ * (ramblr#TBD): `ACTION_SET_TEXT` reports success but the new value only becomes visible to a
+ * reader after the field recomposes ([landsAfterReads] reads later); a caret move issued *before*
+ * that happens re-applies the field's stale value and silently loses the write; and a target may
+ * simply swallow a write while still reporting success ([dropWrites]; [Int.MAX_VALUE] = always).
+ */
+private class ComposeLikeDestination(
+    var text: String,
+    private val landsAfterReads: Int = 0,
+    private var dropWrites: Int = 0,
+    private val normalize: (String) -> String = { it },
+    private val stale: Boolean = false,
+) : TextDestination {
+    var replaceCalls = 0
+    var caretCalls = 0
+    var caretPlacedAfterLanding = false
+    private var pending: String? = null
+    private var readsSincePending = 0
+
+    private fun settle() {
+        val p = pending ?: return
+        if (readsSincePending >= landsAfterReads) { text = normalize(p); pending = null }
+    }
+
+    override fun acceptsDirectWrite() = true
+    override fun refresh(): Boolean { readsSincePending++; return !stale }
+    override fun readText(): String { settle(); return text }
+    override fun selectionStart() = text.length
+    override fun selectionEnd() = text.length
+    override fun prepareForWrite() {}
+    override fun replaceAllText(text: String): Boolean {
+        replaceCalls++
+        if (dropWrites > 0) { if (dropWrites != Int.MAX_VALUE) dropWrites--; return true }
+        pending = text
+        readsSincePending = 0
+        settle()
+        return true
+    }
+    override fun pasteFromClipboard() = false
+    override fun placeCaretAtEnd(textLength: Int) {
+        caretCalls++
+        if (pending != null) { pending = null } else caretPlacedAfterLanding = true
+    }
+    /** What the user ends up looking at once the field has finished recomposing. */
+    fun settled(): String { readsSincePending = Int.MAX_VALUE; settle(); return text }
+}
+
+private val NO_PAUSE = WritePause { }
 
 class DictationTextWriterTest {
 
@@ -268,5 +323,129 @@ class DictationTextWriterTest {
             StreamingSpan(insertionStart = 5, previousLength = 7, replacedText = "selected"),
         )
         assertEquals("note selected end", destination.writtenText)
+    }
+
+    // --- confirmed writes: a target can report ACTION_SET_TEXT success and still not apply it ---
+
+    @Test
+    fun `a final write the target silently swallows is retried once and lands`() {
+        val destination = ComposeLikeDestination(text = "interim hypothesis text", dropWrites = 1)
+
+        val result = DictationTextWriter.commitClosingStreamingSpan(
+            destination, StreamingSpan(insertionStart = 0, previousLength = 23), "Final text.", NO_PAUSE,
+        )
+
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals("Final text.", destination.settled())
+        assertEquals(2, destination.replaceCalls)
+    }
+
+    @Test
+    fun `a final write the target keeps swallowing reports NONE instead of a phantom success`() {
+        val destination = ComposeLikeDestination(text = "interim hypothesis text", dropWrites = Int.MAX_VALUE)
+
+        val result = DictationTextWriter.commitClosingStreamingSpan(
+            destination, StreamingSpan(insertionStart = 0, previousLength = 23), "Final text.", NO_PAUSE,
+        )
+
+        assertEquals(InjectMethod.NONE, result.method)
+        assertEquals("exactly one retry, not a loop", 2, destination.replaceCalls)
+        assertEquals("no caret move on a write that never landed", 0, destination.caretCalls)
+    }
+
+    @Test
+    fun `the confirmation wait is bounded`() {
+        val destination = ComposeLikeDestination(text = "interim", dropWrites = Int.MAX_VALUE)
+        var slept = 0L
+
+        DictationTextWriter.commitClosingStreamingSpan(
+            destination, StreamingSpan(0, 7), "Final.", WritePause { slept += it },
+        )
+
+        assertTrue("slept ${slept}ms", slept in 1..1000)
+    }
+
+    @Test
+    fun `a target that rewrites the text still counts as landed and is not written again`() {
+        val destination = ComposeLikeDestination(text = "interim", normalize = { it.trim().uppercase() })
+
+        val result = DictationTextWriter.commitClosingStreamingSpan(
+            destination, StreamingSpan(0, 7), "final ", NO_PAUSE,
+        )
+
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals(1, destination.replaceCalls)
+        assertEquals("FINAL", destination.settled())
+    }
+
+    @Test
+    fun `the caret is only moved after the write is observed, never into a stale value`() {
+        val destination = ComposeLikeDestination(text = "interim hypothesis", landsAfterReads = 3)
+
+        val result = DictationTextWriter.commitClosingStreamingSpan(
+            destination, StreamingSpan(0, 18), "Final text.", NO_PAUSE,
+        )
+
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals("Final text.", destination.settled())
+        assertTrue("caret must follow a landed write", destination.caretPlacedAfterLanding)
+    }
+
+    @Test
+    fun `a destination that goes stale right after the write is not treated as a failed write`() {
+        val destination = ComposeLikeDestination(text = "interim", landsAfterReads = 0, stale = false)
+        val result = DictationTextWriter.commitClosingStreamingSpan(
+            destination, StreamingSpan(0, 7), "Final.", NO_PAUSE,
+        )
+        assertEquals(InjectMethod.DIRECT, result.method)
+    }
+
+    @Test
+    fun `commit retries a swallowed one-shot write and lands it`() {
+        val destination = ComposeLikeDestination(text = "", dropWrites = 1)
+
+        val result = DictationTextWriter.commit(destination, "Hello there.", NO_PAUSE)
+
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals("Hello there.", destination.settled())
+    }
+
+    @Test
+    fun `commit never reports DIRECT for a write that never landed`() {
+        val destination = ComposeLikeDestination(text = "draft", dropWrites = Int.MAX_VALUE)
+
+        val result = DictationTextWriter.commit(destination, "Hello there.", NO_PAUSE)
+
+        assertEquals(InjectMethod.NONE, result.method)
+    }
+
+    @Test
+    fun `clearStreamingSpan retries a swallowed revert so no preview garbage is left behind`() {
+        val destination = ComposeLikeDestination(text = "note Partial end", dropWrites = 1)
+
+        DictationTextWriter.clearStreamingSpan(
+            destination, StreamingSpan(insertionStart = 5, previousLength = 7, replacedText = "selected"), NO_PAUSE,
+        )
+
+        assertEquals("note selected end", destination.settled())
+    }
+
+    @Test
+    fun `closing a span whose last partial write was reverted removes the whole leftover`() {
+        // The field still holds the previous, longer partial because the newest (shorter) partial
+        // never landed; the trace lets the close span cover what is really there.
+        val destination = FakeTextDestination(text = "Alpha beta gamma delta. To you.")
+        val span = StreamingSpan(
+            insertionStart = 0, previousLength = 23,
+            trace = StreamingWriteTrace(
+                writtenText = "Alpha beta gamma delta.",
+                priorText = "Alpha beta gamma delta. To you.", priorLength = 31,
+            ),
+        )
+
+        val result = DictationTextWriter.commitClosingStreamingSpan(destination, span, "Final.")
+
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals("Final.", destination.writtenText)
     }
 }

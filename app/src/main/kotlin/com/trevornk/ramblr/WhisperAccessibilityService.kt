@@ -298,6 +298,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
          *  target app's input and feel janky. The very first partial of a recording bypasses this
          *  (see [shouldInjectPartial]) so live preview doesn't feel laggy at speech onset. */
         private const val STREAMING_PARTIAL_MIN_INTERVAL_MS = 400L
+        private const val PARTIAL_CARET_NUDGE_DELAY_MS = 150L
         /** Clipboard-fallback feedback stays up much longer than a normal success bubble (#5): it's
          *  the only record the user gets that injection didn't happen, so it shouldn't be easy to miss. */
         private const val FALLBACK_FEEDBACK_DURATION_MS = 6000L
@@ -750,7 +751,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // restore it. Empty when the first partial was a pure insertion.
         val replacedText: String,
         var lastInjectedText: String?,
-        var lastInjectedAtMs: Long
+        var lastInjectedAtMs: Long,
+        // What the last write did to the field, so a write the target dropped or reverted can't
+        // leave the tracked span describing text that isn't there (see StreamingWriteTrace).
+        var trace: StreamingWriteTrace? = null,
     )
     private var streamingSession: StreamingPreviewSession? = null
 
@@ -781,6 +785,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private val screenH get() = resources.displayMetrics.heightPixels
 
     override fun onServiceConnected() {
+        DictationTextWriter.diagnostic = { Log.w(TAG, it) }
         instance = this
         // #156 guard rail: record that this install has a working service (the signal that
         // separates "killed by the OS shortcut switch" from "never enabled") and re-arm the
@@ -2561,7 +2566,13 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // is on, the real field must never be touched until the user explicitly commits, so route
         // the live partial into the floating feedback bubble instead of the field. When it's off,
         // fall through to the existing direct-field-write behavior completely unchanged.
-        if (shouldRouteStreamingPartialToBubble(PreviewBeforeInjectToggle.isEnabled(this))) {
+        // Live preview OFF is the same promise: the field is untouched until the final text.
+        // Cloud Live interims (#245) arrive here whether or not the user turned the setting on.
+        if (shouldRouteStreamingPartialToBubble(
+                PreviewBeforeInjectToggle.isEnabled(this),
+                livePreviewEnabled = prefs().getBoolean("streaming_preview_enabled", false),
+            )
+        ) {
             updateLivePreviewBubble(text, now)
             return
         }
@@ -2599,7 +2610,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
             }
             streamingSession = StreamingPreviewSession(
                 candidate, write.span.insertionStart, write.span.previousLength, write.span.replacedText, text, now,
+                trace = write.span.trace,
             )
+            scheduleCaretNudgeAfterLanding(candidate, write.updatedText)
             return
         }
 
@@ -2618,9 +2631,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // #144: recomputed rather than remembered, and deliberately safe to recompute -- the
         // character it reads sits before insertionStart, upstream of the span being rewritten, so
         // it's identical on every partial of the session.
-        val write = composeStreamingPartial(current, session.insertionStart, session.lastPartialLength, displayText)
+        val write = composeTracedStreamingPartial(current, session.insertionStart, session.lastPartialLength, session.trace, displayText)
         if (!setNodeText(session.node, write.updatedText)) { endStreamingSession(); return }
         session.lastPartialLength = write.trackedLength
+        session.trace = write.trace
+        scheduleCaretNudgeAfterLanding(session.node, write.updatedText)
         session.lastInjectedText = text
         session.lastInjectedAtMs = now
     }
@@ -2661,6 +2676,26 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
     private fun refreshNode(node: AccessibilityNodeInfo): Boolean =
         AccessibilityTextDestination(node).refresh()
+
+    private var partialCaretNudge: Runnable? = null
+
+    /**
+     * The caret nudge that used to ride directly behind every ACTION_SET_TEXT, moved to after the
+     * write has been seen to land. Sent immediately it raced a Compose field's recomposition and
+     * made the field re-apply its stale value -- silently undoing the write. Only the newest
+     * partial's nudge is kept; a session that ended in the meantime skips it.
+     */
+    private fun scheduleCaretNudgeAfterLanding(node: AccessibilityNodeInfo, expected: String) {
+        partialCaretNudge?.let(handler::removeCallbacks)
+        val nudge = Runnable {
+            partialCaretNudge = null
+            if (streamingSession?.node !== node) return@Runnable
+            val destination = AccessibilityTextDestination(node)
+            if (destination.refresh() && destination.readText() == expected) destination.placeCaretAtEnd(expected.length)
+        }
+        partialCaretNudge = nudge
+        handler.postDelayed(nudge, PARTIAL_CARET_NUDGE_DELAY_MS)
+    }
 
     private fun endStreamingSession() {
         streamingSession?.let { restoreReplacedSelection(it); it.node.recycle() }
@@ -3224,7 +3259,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun tryCloseStreamingSpan(node: AccessibilityNodeInfo, session: StreamingPreviewSession, text: String): TextCommitResult =
         DictationTextWriter.commitClosingStreamingSpan(
             AccessibilityTextDestination(node),
-            StreamingSpan(session.insertionStart, session.lastPartialLength, session.replacedText),
+            StreamingSpan(session.insertionStart, session.lastPartialLength, session.replacedText, session.trace),
             text,
         )
 
@@ -3235,7 +3270,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun clearStreamingLeftover(session: StreamingPreviewSession) {
         DictationTextWriter.clearStreamingSpan(
             AccessibilityTextDestination(session.node),
-            StreamingSpan(session.insertionStart, session.lastPartialLength, session.replacedText),
+            StreamingSpan(session.insertionStart, session.lastPartialLength, session.replacedText, session.trace),
         )
     }
 

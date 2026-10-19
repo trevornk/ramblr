@@ -235,6 +235,56 @@ class AccessibilityCloudLiveWiringTest {
         )
     }
 
+    /** Shared setup: a service with overlays attached and the state machine in RECORDING. */
+    private fun recordingServiceWithOverlay(): Pair<TestService, RuntimeListener> {
+        val service = build()
+        WhisperAccessibilityService::class.java.getDeclaredMethod("showOverlay")
+            .apply { isAccessible = true }.invoke(service)
+        val runtime = runtimeField(service)
+        val stateMachine = DictationRuntime::class.java.getDeclaredField("stateMachine")
+            .apply { isAccessible = true }.get(runtime) as RecordingStateMachine
+        assertTrue(stateMachine.tryStartRecording())
+        val listener = WhisperAccessibilityService::class.java.getDeclaredField("runtimeListener")
+            .apply { isAccessible = true }.get(service) as RuntimeListener
+        return service to listener
+    }
+
+    private fun feedbackText(service: WhisperAccessibilityService): String =
+        (WhisperAccessibilityService::class.java.getDeclaredField("feedbackView")
+            .apply { isAccessible = true }.get(service) as android.widget.TextView).text.toString()
+
+    /**
+     * Live preview OFF must mean the field is untouched until the final text. Cloud Live interims
+     * used to be written into the focused field regardless of that setting (~95 writes during one
+     * dictation on a Fold, none of which the user asked for). With the setting off and
+     * preview-before-insert off they now surface in the feedback bubble only.
+     */
+    @Test
+    fun `with live preview off a cloud-live interim goes to the bubble, never the field`() {
+        PreviewBeforeInjectToggle.setEnabled(app, false)
+        prefs().edit().putBoolean("streaming_preview_enabled", false).apply()
+        val (service, listener) = recordingServiceWithOverlay()
+
+        listener.onCloudLiveInterim("hello from cloud live")
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals("Hello from cloud live", feedbackText(service))
+    }
+
+    @Test
+    fun `with live preview on a cloud-live interim is written to the field, not the bubble`() {
+        PreviewBeforeInjectToggle.setEnabled(app, false)
+        prefs().edit().putBoolean("streaming_preview_enabled", true).apply()
+        val (service, listener) = recordingServiceWithOverlay()
+
+        listener.onCloudLiveInterim("hello from cloud live")
+        shadowOf(Looper.getMainLooper()).idle()
+
+        // No focused node exists under Robolectric, so the field write is a no-op -- the point is
+        // that the bubble stays out of it.
+        assertFalse(feedbackText(service).contains("hello from cloud live", ignoreCase = true))
+    }
+
     @Test
     fun `onCloudLiveInterim is a no-op while not recording, matching onStreamingPartial's guard`() {
         PreviewBeforeInjectToggle.setEnabled(app, true)

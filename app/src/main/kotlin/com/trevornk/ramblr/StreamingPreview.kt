@@ -175,6 +175,11 @@ fun composeFirstStreamingPartial(
             insertionStart = replacement.start,
             previousLength = write.trackedLength,
             replacedText = current.substring(replacement.start, replacement.endExclusive),
+            trace = StreamingWriteTrace(
+                writtenText = write.updatedText,
+                priorText = current,
+                priorLength = replacement.endExclusive - replacement.start,
+            ),
         ),
     )
 }
@@ -198,9 +203,13 @@ fun shouldUseStreamingPreview(settingEnabled: Boolean, streamingModelInstalled: 
  * the target app with nothing left to reconcile it against. When Preview-before-insert is off,
  * this returns false and [WhisperAccessibilityService.maybeInjectPartial] keeps writing straight
  * into the field exactly as it always has.
+ *
+ * [livePreviewEnabled] is the user's own "Live preview" setting. Cloud Live interims (#245) reach
+ * the partial path regardless of it, so with the setting off the field must stay untouched until
+ * the final text lands -- the partial goes to the feedback bubble instead.
  */
-fun shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled: Boolean): Boolean =
-    previewBeforeInjectEnabled
+fun shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled: Boolean, livePreviewEnabled: Boolean = true): Boolean =
+    previewBeforeInjectEnabled || !livePreviewEnabled
 
 /**
  * Formats a raw partial hypothesis for display only (#42). The bundled streaming model
@@ -236,7 +245,61 @@ fun smartCapitalize(text: String): String {
  * final-injection handoff decision (#45) can be unit tested in isolation. [WhisperAccessibilityService]
  * builds one of these from its own (node-holding) `StreamingPreviewSession` right before reconciling.
  */
-data class StreamingSpan(val insertionStart: Int, val previousLength: Int, val replacedText: String = "")
+data class StreamingSpan(
+    val insertionStart: Int,
+    val previousLength: Int,
+    val replacedText: String = "",
+    val trace: StreamingWriteTrace? = null,
+)
+
+/**
+ * What the streaming session last did to the field, so its span arithmetic can notice when the
+ * target did not keep a write. A target app can report `ACTION_SET_TEXT` success and still end up
+ * holding the *previous* value (Hermes Relay's Compose composer re-applies its stale value when a
+ * selection action races the recomposition). The tracked length then describes text that is not in
+ * the field, and the next replacement leaves the difference behind as a duplicated trailing
+ * fragment.
+ *
+ * [writtenText] is the full field text the last write produced; [priorText] the full field text
+ * just before that write and [priorLength] the span length that applied to it.
+ */
+data class StreamingWriteTrace(
+    val writtenText: String,
+    val priorText: String,
+    val priorLength: Int,
+)
+
+/**
+ * The span length to replace in [current]. Trusts [trackedLength] when the field holds what the
+ * last write produced (or anything unrecognised -- an external edit keeps the clamped, loss-free
+ * behaviour of [replacePartialInField]); when the field still holds the text from *before* that
+ * write the write did not stick, so the span is the one that applied to that earlier text.
+ */
+fun effectivePreviousLength(current: String, trackedLength: Int, trace: StreamingWriteTrace?): Int = when {
+    trace == null -> trackedLength
+    current == trace.writtenText -> trackedLength
+    current == trace.priorText -> trace.priorLength
+    else -> trackedLength
+}
+
+/** One streaming partial with its drift-aware span and the trace to record for the next one. */
+data class TracedStreamingPartialWrite(val updatedText: String, val trackedLength: Int, val trace: StreamingWriteTrace)
+
+fun composeTracedStreamingPartial(
+    current: String,
+    insertionStart: Int,
+    trackedLength: Int,
+    trace: StreamingWriteTrace?,
+    displayText: String,
+): TracedStreamingPartialWrite {
+    val previousLength = effectivePreviousLength(current, trackedLength, trace)
+    val write = composeStreamingPartial(current, insertionStart, previousLength, displayText)
+    return TracedStreamingPartialWrite(
+        updatedText = write.updatedText,
+        trackedLength = write.trackedLength,
+        trace = StreamingWriteTrace(write.updatedText, priorText = current, priorLength = previousLength),
+    )
+}
 
 /**
  * What a field the streaming-preview session (#29) was tracking should become now that the final
@@ -265,14 +328,15 @@ fun reconcileStreamingSpan(
     if (session == null) return null
     // #300: reverting must hand back whatever the first partial overwrote. Applied verbatim, with
     // no separator -- it is the user's own text, already correctly placed before it was replaced.
+    val previousLength = effectivePreviousLength(current, session.previousLength, session.trace)
     if (!isFinalInjectionTarget) {
-        return replacePartialInField(current, session.insertionStart, session.previousLength, session.replacedText)
+        return replacePartialInField(current, session.insertionStart, previousLength, session.replacedText)
     }
     // #144: routed through composeStreamingPartial so closing the span applies the same separator
     // rule the partials inside it were built with -- otherwise closing strips it back off and the
     // final text re-glues itself to the preceding draft. The clear path passes "", which
     // leadingSeparatorFor never decorates, so it stays a pure deletion.
-    return composeStreamingPartial(current, session.insertionStart, session.previousLength, finalText).updatedText
+    return composeStreamingPartial(current, session.insertionStart, previousLength, finalText).updatedText
 }
 
 /**

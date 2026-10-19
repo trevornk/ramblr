@@ -106,6 +106,23 @@ interface TextDestination {
      * IME: `performContextMenuAction(android.R.id.paste)`.
      */
     fun pasteFromClipboard(): Boolean
+
+    /**
+     * Moves the caret to the end of the destination's text, which is [textLength] characters long.
+     * Best-effort; failure never invalidates the write that preceded it.
+     *
+     * Accessibility: `ACTION_SET_SELECTION`. IME: `setSelection(textLength, textLength)`.
+     */
+    fun placeCaretAtEnd(textLength: Int)
+}
+
+/** Injectable pause so the write-confirmation loop is deterministic under test. */
+fun interface WritePause {
+    fun sleep(ms: Long)
+
+    companion object {
+        val REAL = WritePause { ms -> Thread.sleep(ms) }
+    }
 }
 
 /**
@@ -125,6 +142,54 @@ data class TextCommitResult(val method: InjectMethod, val priorText: String? = n
  */
 object DictationTextWriter {
 
+    /** Receives a one-line note whenever a write is observed to have been swallowed. The host
+     *  routes it to its log; the default is silent so this object stays free of Android types. */
+    @Volatile var diagnostic: (String) -> Unit = {}
+
+    /** How long one write gets to show up in the destination before it counts as swallowed. */
+    internal const val LAND_TIMEOUT_MS = 400L
+    private const val LAND_POLL_MS = 25L
+
+    /**
+     * Whether the write of [expected] over [previous] has taken effect. `ACTION_SET_TEXT` returning
+     * true only means the action was dispatched: a Compose text field applies it on its next
+     * recomposition and some targets drop it outright (Hermes Relay's composer does, silently),
+     * so success has to be read back. "Took effect" means the field no longer holds [previous];
+     * a target that normalises what it was given (trims, caps, filters) still counts as landed
+     * rather than being rewritten and then reported as a failure. A destination that cannot be
+     * re-read is given the benefit of the doubt -- there is nothing to verify against.
+     */
+    private fun awaitLanded(destination: TextDestination, previous: String, expected: String, pause: WritePause): Boolean {
+        if (expected == previous) return true
+        var waited = 0L
+        while (true) {
+            if (!destination.refresh()) return true
+            if (destination.readText() != previous) return true
+            if (waited >= LAND_TIMEOUT_MS) return false
+            pause.sleep(LAND_POLL_MS)
+            waited += LAND_POLL_MS
+        }
+    }
+
+    /**
+     * Writes [text] over a field currently holding [previous] and only reports success once it is
+     * observed to have landed, retrying a swallowed write once. The caret move is deliberately
+     * issued *after* landing: sent straight behind the write it races the field's recomposition
+     * and makes a Compose field re-apply its stale value, undoing the write (the root cause of
+     * the final transcript failing to replace the live preview in Hermes Relay).
+     */
+    private fun writeConfirmed(destination: TextDestination, previous: String, text: String, pause: WritePause): Boolean {
+        repeat(2) { attempt ->
+            if (!destination.replaceAllText(text)) return false
+            if (awaitLanded(destination, previous, text, pause)) {
+                destination.placeCaretAtEnd(text.length)
+                return true
+            }
+            diagnostic("Write reported success but the field is unchanged (attempt ${attempt + 1} of 2)")
+        }
+        return false
+    }
+
     /**
      * The ordinary one-shot delivery of a finished transcript into [destination].
      *
@@ -140,7 +205,7 @@ object DictationTextWriter {
      * disagree about where the caret really is (#140) or about the separator before dictated text
      * (#144).
      */
-    fun commit(destination: TextDestination, text: String): TextCommitResult {
+    fun commit(destination: TextDestination, text: String, pause: WritePause = WritePause.REAL): TextCommitResult {
         destination.prepareForWrite()
 
         if (destination.acceptsDirectWrite()) {
@@ -151,7 +216,7 @@ object DictationTextWriter {
                 destination.selectionEnd(),
                 text,
             )
-            if (destination.replaceAllText(updated)) {
+            if (writeConfirmed(destination, current, updated, pause)) {
                 return TextCommitResult(InjectMethod.DIRECT, priorText = current)
             }
         }
@@ -176,12 +241,13 @@ object DictationTextWriter {
         destination: TextDestination,
         span: StreamingSpan,
         text: String,
+        pause: WritePause = WritePause.REAL,
     ): TextCommitResult {
         if (!destination.refresh()) return TextCommitResult(InjectMethod.NONE)
         val current = destination.readText()
         val updated = reconcileStreamingSpan(current, span, text, isFinalInjectionTarget = true)
             ?: return TextCommitResult(InjectMethod.NONE)
-        return if (destination.replaceAllText(updated)) {
+        return if (writeConfirmed(destination, current, updated, pause)) {
             TextCommitResult(InjectMethod.DIRECT, priorText = current)
         } else {
             TextCommitResult(InjectMethod.NONE)
@@ -194,7 +260,7 @@ object DictationTextWriter {
      * silently orphaned in a field nobody is about to overwrite. Best-effort: a destination that has
      * gone stale by now simply has nothing left to revert.
      */
-    fun clearStreamingSpan(destination: TextDestination, span: StreamingSpan) {
+    fun clearStreamingSpan(destination: TextDestination, span: StreamingSpan, pause: WritePause = WritePause.REAL) {
         if (!destination.refresh()) return
         val current = destination.readText()
         val cleared = reconcileStreamingSpan(
@@ -203,6 +269,6 @@ object DictationTextWriter {
             finalText = "",
             isFinalInjectionTarget = false,
         ) ?: return
-        destination.replaceAllText(cleared)
+        writeConfirmed(destination, current, cleared, pause)
     }
 }
