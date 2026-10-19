@@ -28,12 +28,25 @@ import android.view.accessibility.AccessibilityNodeInfo
  *     adb shell am broadcast -n com.trevornk.ramblr/.DebugDeliverReceiver \
  *         -a com.trevornk.ramblr.DEBUG_PARTIAL_CANCEL
  *
+ * Feed a Cloud Live (Gemini) interim through the live-preview field path exactly as the service's
+ * `onCloudLiveInterim` does (display as received, no smartCapitalize). `--ez normalize true` first runs
+ * it through the same [CloudInterimNormalizer] DictationRuntime applies per attempt; `--ez reset true`
+ * starts a fresh attempt's normalizer:
+ *
+ *     adb shell am broadcast -n com.trevornk.ramblr/.DebugDeliverReceiver \
+ *         -a com.trevornk.ramblr.DEBUG_CLOUD_INTERIM --es text "send areport to" --ez normalize true
+ *
  * Log the editable nodes of the active window (class, focus, selection, hint flags, text length,
- * first 40 chars of text) under tag PhoneWhisper:
+ * first 40 chars of text -- up to 4000 with `--ez full true`) under tag PhoneWhisper:
  *
  *     adb shell am broadcast -n com.trevornk.ramblr/.DebugDeliverReceiver -a com.trevornk.ramblr.DEBUG_DUMP
  */
 class DebugDeliverReceiver : BroadcastReceiver() {
+    private companion object {
+        var cloudNormalizer = CloudInterimNormalizer()
+        var dumpFull = false
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         val service = WhisperAccessibilityService.instance
         if (service == null) {
@@ -55,9 +68,16 @@ class DebugDeliverReceiver : BroadcastReceiver() {
                 val text = intent.getStringExtra("text") ?: return
                 service.maybeInjectPartial(text, requireRecording = false)
             }
+            "com.trevornk.ramblr.DEBUG_CLOUD_INTERIM" -> {
+                if (intent.getBooleanExtra("reset", false)) cloudNormalizer = CloudInterimNormalizer()
+                val text = intent.getStringExtra("text") ?: return
+                val shown = if (intent.getBooleanExtra("normalize", false)) cloudNormalizer.normalize(text) else text
+                service.maybeInjectPartial(shown, requireRecording = false, alreadyCased = true)
+            }
             "com.trevornk.ramblr.DEBUG_PARTIAL_CANCEL" -> service.runtimeListener.onStreamingTeardown()
             "com.trevornk.ramblr.DEBUG_DUMP" -> {
                 val root = service.rootInActiveWindow ?: return
+                dumpFull = intent.getBooleanExtra("full", false)
                 walk(root)
             }
         }
@@ -70,7 +90,7 @@ class DebugDeliverReceiver : BroadcastReceiver() {
                 "DUMP class=${node.className} focused=${node.isFocused} editable=${node.isEditable} " +
                     "showingHint=${node.isShowingHintText} hint=${node.hintText} " +
                     "sel=${node.textSelectionStart}/${node.textSelectionEnd} len=${node.text?.length} " +
-                    "text=${node.text?.toString()?.take(40)?.replace("\n", "\\n")}",
+                    "text=${node.text?.toString()?.take(if (dumpFull) 4000 else 40)?.replace("\n", "\\n")}",
             )
         }
         for (i in 0 until node.childCount) node.getChild(i)?.let { walk(it) }
