@@ -22,6 +22,7 @@ import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewOutlineProvider
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -270,7 +271,6 @@ open class WhisperAccessibilityService : AccessibilityService() {
         private const val BTN_DP = 44
         private const val PAD_DP = 10
         private const val MARGIN_DP = 8
-        private const val TAP_THRESHOLD_DP = 10
         /** Default/reference ring diameter that [BTN_DP]/[PAD_DP] are proportioned against; the
          *  actual on-screen size comes from [OverlayAppearancePrefs] (#43/#53) and is scaled by
          *  the same ratio, so an unconfigured install looks pixel-identical to before that setting
@@ -283,8 +283,6 @@ open class WhisperAccessibilityService : AccessibilityService() {
          *  extra breathing room instead of the ordinary screen-edge margin. */
         private const val RING_AVOID_MARGIN_DP = 20
 
-        /** Hold the button this long while TRANSCRIBING to cancel (see overlay.setOnTouchListener). */
-        private const val LONG_PRESS_CANCEL_MS = 500L
         /** Grace period before wiping the clipboard after a paste-style injection reads it. */
         private const val CLIPBOARD_CLEAR_DELAY_MS = 30_000L
         /** How long "undo last insertion" / "retry with raw text" stay available after an injection (#27). */
@@ -1105,34 +1103,68 @@ open class WhisperAccessibilityService : AccessibilityService() {
         lastScreenW = screenW
         lastScreenH = screenH
 
+        // Where the ring window sat, and where the finger was, at ACTION_DOWN. The ring is only
+        // moved once the gesture has been classified as a drag (see RingGestureTracker), so a held
+        // thumb's natural roll never nudges it.
         var startX = 0; var startY = 0
         var touchX = 0f; var touchY = 0f
-        var lastRawX = 0f; var lastRawY = 0f
+        // Tap / long-press / drag disambiguation (#322) lives in the pure RingGestureTracker so it
+        // is unit-tested; this listener only performs the side effects.
+        val viewConfiguration = ViewConfiguration.get(this)
+        val gesture = RingGestureTracker(
+            dragSlopPx = RingGestureTracker.dragSlopPx(dp, viewConfiguration.scaledTouchSlop),
+            postLongPressSlopPx = RingGestureTracker.postLongPressSlopPx(dp, viewConfiguration.scaledTouchSlop),
+            longPressTimeoutMs = RingGestureTracker.longPressTimeoutMs(ViewConfiguration.getLongPressTimeout()),
+        )
         // Long-press behavior is entirely state-driven -- see overlayLongPressActionFor's doc for
         // the full state -> action map (cancel while TRANSCRIBING, undo while IDLE with a pending
         // injection (#27), or the #53 style/cleanup menu in the one remaining reachable state:
         // IDLE with nothing pending). RECORDING never arms the timer at all, exactly as before.
-        var longPressFired = false
+        //
         // Set only when this gesture's long-press actually opened the style menu (#57) -- lets
-        // ACTION_MOVE single out "the menu I just opened" from cancel-transcription/undo already
-        // having fired, neither of which is a persistent overlay that needs dismissing on drag.
+        // a hold-then-drag single out "the menu I just opened" from cancel-transcription/undo
+        // already having fired, neither of which is a persistent overlay that needs dismissing.
         var styleMenuOpenedByLongPress = false
-        // Set when ACTION_DOWN consumed this gesture as a peek-restore tap (Feature A) -- ACTION_UP
-        // must then no-op instead of falling through to onTap()/drag-snap using touchX/touchY that
-        // were never updated for this gesture (still holding whatever the previous gesture left).
+        // Set when ACTION_DOWN consumed this gesture as a peek-restore tap (Feature A) -- the rest
+        // of the gesture must then no-op instead of falling through to onTap()/drag-snap using
+        // tracker state that was never updated for this gesture.
         var consumedByPeekRestore = false
         val longPressAction = Runnable {
             val action = overlayLongPressActionFor(runtime.currentState(), hasPendingInjection = pendingInjection != null)
-            val moved = abs(lastRawX - touchX) + abs(lastRawY - touchY)
-            if (!shouldFireLongPress(action, movedPastThreshold = moved >= TAP_THRESHOLD_DP * dp)) return@Runnable
-            longPressFired = true
+            // Drag wins (#57): a hold that already became a drag never fires a long-press. Either
+            // way the touch can no longer end as a tap (#322).
+            if (!gesture.onLongPressTimer()) return@Runnable
+            if (action == OverlayLongPressAction.NONE) return@Runnable
+            gesture.markLongPressFired()
             armIdlePeekTimer()
             when (action) {
                 OverlayLongPressAction.CANCEL_TRANSCRIPTION -> cancelTranscription()
                 OverlayLongPressAction.UNDO_INJECTION -> undoLastInjection()
                 OverlayLongPressAction.SHOW_STYLE_MENU -> { showStyleMenu(); styleMenuOpenedByLongPress = true }
-                OverlayLongPressAction.NONE -> longPressFired = false
+                OverlayLongPressAction.NONE -> Unit
             }
+        }
+
+        // A drag finished (or was cancelled by the system): settle the ring on the nearest edge.
+        fun settleRingAfterDrag(v: View) {
+            params.x = if (params.x + ringSize / 2 > screenW / 2)
+                screenW - ringSize - margin else margin
+            // Clamp y into the on-screen band too (M1): FLAG_LAYOUT_NO_LIMITS disables
+            // WindowManager's own clamping (needed for peek), so a drag that ends near
+            // the top/bottom edge could otherwise park the ring wholly off-screen with
+            // no on-screen affordance left to recover it.
+            params.y = params.y.coerceIn(margin, (screenH - ringSize - margin).coerceAtLeast(margin))
+            wm.updateViewLayout(v, params)
+            feedbackLayoutParams?.let {
+                positionFeedback(it, params, feedbackView?.height ?: 0)
+                wm.updateViewLayout(feedbackView, it)
+            }
+            // Persist the newly-settled drag position (#101) so it survives a later
+            // service recreation instead of only living in this in-memory params
+            // object. Deliberately NOT called from ACTION_MOVE (would fire on every
+            // drag frame) -- only here, once the gesture has actually finalized a
+            // resting position.
+            persistOverlayPosition(params.x, params.y)
         }
 
         overlay.setOnTouchListener { v, ev ->
@@ -1145,6 +1177,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
                     // edge-swipe gesture, or landing on the window's transparent padding) were
                     // indistinguishable in logcat -- both left "zero trace". This one line is the
                     // discriminator: if it's absent for a failed tap, the touch never reached us.
+                    // Its counterpart "Ring touch UP/CANCEL" (#322) records how the gesture ended.
                     Log.i(TAG, "Ring touch DOWN: peeked=$isPeeked state=${runtime.currentState()} x=${params.x}")
                     // A touch-down on a currently-peeked ring is a restore tap, not the start of a
                     // normal drag/tap/long-press gesture (Feature A): consume it here so it can
@@ -1157,8 +1190,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
                     // tap/long-press/drag setup used below for a normal (non-peeked) touch-down --
                     // reusing that existing disambiguation rather than inventing a new one means a
                     // long-press or a drag started from a peeked ring still resolves correctly;
-                    // only a genuine tap (ACTION_UP with movement under TAP_THRESHOLD_DP, exactly
-                    // as below) ends up calling onTap().
+                    // only a genuine tap (see RingGestureTracker) ends up calling onTap().
+                    // The restore animates the window, so a drag that begins on a just-restored ring
+                    // must be measured from where the animation is heading, not the peeked x.
+                    val restoreTargetX = if (isPeeked) prePeekX else null
                     if (isPeeked) {
                         restoreFromPeek()
                         if (!SingleTapRestoreToggle.isEnabled(this)) {
@@ -1166,34 +1201,44 @@ open class WhisperAccessibilityService : AccessibilityService() {
                             return@setOnTouchListener true
                         }
                     }
-                    startX = params.x; startY = params.y
+                    startX = restoreTargetX ?: params.x; startY = params.y
                     touchX = ev.rawX; touchY = ev.rawY
-                    lastRawX = ev.rawX; lastRawY = ev.rawY
-                    longPressFired = false
                     styleMenuOpenedByLongPress = false
                     val pendingAction = overlayLongPressActionFor(runtime.currentState(), hasPendingInjection = pendingInjection != null)
-                    if (pendingAction != OverlayLongPressAction.NONE) {
-                        handler.postDelayed(longPressAction, LONG_PRESS_CANCEL_MS)
-                    }
+                    val armed = pendingAction != OverlayLongPressAction.NONE
+                    // Honour a longer system long-press delay (accessibility) but never shorten
+                    // below RingGestureTracker.MIN_LONG_PRESS_MS; re-read every touch so a settings change applies
+                    // immediately.
+                    gesture.longPressTimeoutMs = RingGestureTracker.longPressTimeoutMs(ViewConfiguration.getLongPressTimeout())
+                    gesture.onDown(ev.rawX, ev.rawY, ev.eventTime, longPressArmed = armed)
+                    if (armed) handler.postDelayed(longPressAction, gesture.longPressTimeoutMs)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (consumedByPeekRestore) return@setOnTouchListener true
-                    lastRawX = ev.rawX; lastRawY = ev.rawY
-                    params.x = startX + (ev.rawX - touchX).toInt()
-                    params.y = startY + (ev.rawY - touchY).toInt()
-                    wm.updateViewLayout(v, params)
-                    feedbackLayoutParams?.let {
-                        positionFeedback(it, params, feedbackView?.height ?: 0)
-                        wm.updateViewLayout(feedbackView, it)
+                    val move = gesture.onMove(ev.rawX, ev.rawY)
+                    if (move == RingMoveResult.DRAG_STARTED) {
+                        handler.removeCallbacks(longPressAction)
+                        // A SingleTapRestoreToggle restore may still be animating the window; the
+                        // finger now owns it.
+                        peekAnimator?.cancel()
+                        // The hold that opened the style menu (#57) has turned into a drag --
+                        // dismiss the now-unwanted menu and fall back to plain drag-to-reposition.
+                        if (gesture.dragStartedAfterLongPress && styleMenuOpenedByLongPress) {
+                            dismissStyleMenu()
+                            styleMenuOpenedByLongPress = false
+                        }
                     }
-                    // The hold that opened the style menu (#57) has turned into a drag -- dismiss
-                    // the now-unwanted menu and fall back to plain drag-to-reposition; ACTION_UP's
-                    // existing moved-based branch takes it from here exactly as an ordinary drag.
-                    if (styleMenuOpenedByLongPress && abs(ev.rawX - touchX) + abs(ev.rawY - touchY) >= TAP_THRESHOLD_DP * dp) {
-                        dismissStyleMenu()
-                        styleMenuOpenedByLongPress = false
-                        longPressFired = false
+                    // Inside the slop the ring stays put: a held thumb's natural roll must not nudge
+                    // it. Once dragging, it tracks the finger 1:1 from the DOWN point.
+                    if (move != RingMoveResult.HOLDING) {
+                        params.x = startX + (ev.rawX - touchX).toInt()
+                        params.y = startY + (ev.rawY - touchY).toInt()
+                        wm.updateViewLayout(v, params)
+                        feedbackLayoutParams?.let {
+                            positionFeedback(it, params, feedbackView?.height ?: 0)
+                            wm.updateViewLayout(feedbackView, it)
+                        }
                     }
                     true
                 }
@@ -1201,34 +1246,35 @@ open class WhisperAccessibilityService : AccessibilityService() {
                     handler.removeCallbacks(longPressAction)
                     armIdlePeekTimer()
                     if (consumedByPeekRestore) return@setOnTouchListener true
-                    if (longPressFired) return@setOnTouchListener true
-                    val moved = abs(ev.rawX - touchX) + abs(ev.rawY - touchY)
-                    if (moved < TAP_THRESHOLD_DP * dp) {
-                        onTap()
-                    } else {
-                        params.x = if (params.x + ringSize / 2 > screenW / 2)
-                            screenW - ringSize - margin else margin
-                        // Clamp y into the on-screen band too (M1): FLAG_LAYOUT_NO_LIMITS disables
-                        // WindowManager's own clamping (needed for peek), so a drag that ends near
-                        // the top/bottom edge could otherwise park the ring wholly off-screen with
-                        // no on-screen affordance left to recover it.
-                        params.y = params.y.coerceIn(margin, (screenH - ringSize - margin).coerceAtLeast(margin))
-                        wm.updateViewLayout(v, params)
-                        feedbackLayoutParams?.let {
-                            positionFeedback(it, params, feedbackView?.height ?: 0)
-                            wm.updateViewLayout(feedbackView, it)
-                        }
-                        // Persist the newly-settled drag position (#101) so it survives a later
-                        // service recreation instead of only living in this in-memory params
-                        // object. Deliberately NOT called from ACTION_MOVE (would fire on every
-                        // drag frame) -- only here, once the gesture has actually finalized a
-                        // resting position.
-                        persistOverlayPosition(params.x, params.y)
+                    val outcome = gesture.onUp(ev.rawX, ev.rawY, ev.eventTime)
+                    val stateAtUp = runtime.currentState()
+                    // The hold outlasted the long-press time but the main thread hadn't run the
+                    // timer yet: run the long-press now rather than mis-reading the lift as a tap.
+                    if (outcome == RingGestureOutcome.HOLD_DUE) longPressAction.run()
+                    // #322: the missing UP line is why a long-press that recorded was undiagnosable.
+                    Log.i(
+                        TAG,
+                        "Ring touch UP: outcome=$outcome held=${gesture.heldMs(ev.eventTime)}ms " +
+                            "moved=${gesture.displacementPx(ev.rawX, ev.rawY).toInt()}px/" +
+                            "${(gesture.displacementPx(ev.rawX, ev.rawY) / dp).toInt()}dp " +
+                            "max=${gesture.maxDisplacementPx.toInt()}px longPressFired=${gesture.longPressFired} state=$stateAtUp"
+                    )
+                    when (outcome) {
+                        RingGestureOutcome.TAP -> onTap()
+                        RingGestureOutcome.DRAG -> settleRingAfterDrag(v)
+                        RingGestureOutcome.HOLD_CONSUMED, RingGestureOutcome.HOLD_DUE -> Unit
                     }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     handler.removeCallbacks(longPressAction)
+                    if (!consumedByPeekRestore) {
+                        val wasDragging = gesture.onCancel()
+                        Log.i(TAG, "Ring touch CANCEL: dragging=$wasDragging max=${gesture.maxDisplacementPx.toInt()}px")
+                        // A system cancel mid-drag must still settle the ring on an edge instead of
+                        // stranding it wherever the finger stopped.
+                        if (wasDragging) settleRingAfterDrag(v)
+                    }
                     true
                 }
                 else -> false
