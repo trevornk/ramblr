@@ -16,6 +16,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -25,7 +26,10 @@ import kotlin.concurrent.thread
 
 /** Voice-only IME shell. It deliberately contains no conventional key rows or typing features. */
 class RamblrImeService : InputMethodService() {
-    companion object { private const val TAG = "RamblrImeService" }
+    companion object {
+        private const val TAG = "RamblrImeService"
+        private const val PICKER_HOST_TAG = "ime_style_picker_host"
+    }
 
     private val destination = ImeDestinationGuard()
     private var editorGeneration = 0L
@@ -45,6 +49,17 @@ class RamblrImeService : InputMethodService() {
     private var partialView: TextView? = null
     private var micButton: ImageButton? = null
     private var lastRenderedState: ImeUiState? = null
+    // #312: cleanup-style picker + quick edit keys.
+    private var mainPanel: LinearLayout? = null
+    private var pickerView: ImeStylePickerView? = null
+    private var styleChip: TextView? = null
+    private var backspaceKey: View? = null
+    private var spaceKey: View? = null
+    private var enterKey: ImageButton? = null
+    private val backspaceRepeater = KeyRepeater(
+        post = { r, delay -> mainHandler.postDelayed(r, delay) },
+        cancel = { r -> mainHandler.removeCallbacks(r) },
+    ) { performEditKey(ImeEditKey.BACKSPACE) }
     /** Theme-wrapped context the current input view was inflated with; see [panelContext]. */
     private var inflationContext: Context? = null
 
@@ -91,6 +106,13 @@ class RamblrImeService : InputMethodService() {
                 setColor(resolveColor(com.google.android.material.R.attr.colorSurface, Color.WHITE))
             }
         }
+        // The dictation controls live in [main] so the style picker can swap in over them inside
+        // the same window (see ImeStylePickerView) without the keyboard changing height.
+        val main = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        mainPanel = main
 
         statusView = TextView(context).apply {
             text = getString(R.string.ime_status_idle)
@@ -121,34 +143,94 @@ class RamblrImeService : InputMethodService() {
             bottomMargin = dp(8)
         }
 
-        val actions = LinearLayout(context).apply {
+        val colors = panelColors()
+        styleChip = styleChip(context, colors)
+        // Mic row: [style chip | mic | balance]. The chip sits beside the mic so the keyboard keeps
+        // its original height instead of gaining a row.
+        val micRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
-        actions.addView(actionButton(R.drawable.ic_keyboard_switch, R.string.ime_switch_keyboard) {
-            switchIme(
-                tryPrevious = { runCatching { switchToPreviousInputMethod() }.getOrDefault(false) },
-                showPicker = {
-                    (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-                        ?.showInputMethodPicker()
+            gravity = Gravity.CENTER_VERTICAL
+            addView(
+                FrameLayout(context).apply {
+                    addView(styleChip, FrameLayout.LayoutParams(-2, dp(48), Gravity.END or Gravity.CENTER_VERTICAL).apply { marginEnd = dp(14) })
                 },
+                LinearLayout.LayoutParams(0, -1, 1f),
             )
-        })
-        actions.addView(space(dp(24)))
-        actions.addView(actionButton(R.drawable.ic_settings, R.string.ime_open_settings) {
-            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        })
+            addView(micButton, micParams)
+            addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+        }
 
-        root.addView(statusView, LinearLayout.LayoutParams(-1, dp(28)))
-        root.addView(partialView, LinearLayout.LayoutParams(-1, dp(44)))
-        root.addView(micButton, micParams)
-        root.addView(actions, LinearLayout.LayoutParams(-1, dp(52)))
+        // Bottom row: [switch keyboard | backspace | space | enter | settings].
+        val keyWidth = dp(56)
+        backspaceKey = editKey(context, colors, R.drawable.ic_backspace, R.string.ime_key_backspace).also {
+            ImeKeyStyle.makeHoldable(it, backspaceRepeater) { performEditKey(ImeEditKey.BACKSPACE) }
+        }
+        spaceKey = TextView(context).apply {
+            text = getString(R.string.ime_key_space)
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(colors.onSurfaceVariant)
+            minHeight = dp(48)
+            isClickable = true
+            isFocusable = true
+            background = ImeKeyStyle.keyBackground(context, colors)
+            contentDescription = getString(R.string.ime_key_space)
+            setOnClickListener { performEditKey(ImeEditKey.SPACE) }
+        }
+        enterKey = editKey(context, colors, R.drawable.ic_keyboard_return, R.string.ime_key_enter_generic).also {
+            it.setOnClickListener { performEditKey(ImeEditKey.ENTER) }
+        }
+        val actions = MaxWidthLinearLayout(context, dp(560)).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(actionButton(R.drawable.ic_keyboard_switch, R.string.ime_switch_keyboard) {
+                switchIme(
+                    tryPrevious = { runCatching { switchToPreviousInputMethod() }.getOrDefault(false) },
+                    showPicker = {
+                        (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                            ?.showInputMethodPicker()
+                    },
+                )
+            })
+            addView(space(dp(8)))
+            addView(backspaceKey, LinearLayout.LayoutParams(keyWidth, dp(48)))
+            addView(space(dp(6)))
+            addView(spaceKey, LinearLayout.LayoutParams(0, dp(48), 1f))
+            addView(space(dp(6)))
+            addView(enterKey, LinearLayout.LayoutParams(keyWidth, dp(48)))
+            addView(space(dp(8)))
+            addView(actionButton(R.drawable.ic_settings, R.string.ime_open_settings) {
+                startActivity(Intent(this@RamblrImeService, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            })
+        }
+
+        main.addView(statusView, LinearLayout.LayoutParams(-1, dp(28)))
+        main.addView(partialView, LinearLayout.LayoutParams(-1, dp(44)))
+        main.addView(micRow, LinearLayout.LayoutParams(-1, -2))
+        main.addView(actions, LinearLayout.LayoutParams(-1, dp(52)))
+        root.addView(main, LinearLayout.LayoutParams(-1, -2))
+        pickerView = ImeStylePickerView(
+            context, colors,
+            onClose = ::closeStylePicker,
+            onToggleCleanup = ::onPickerToggleCleanup,
+            onPick = ::onPickerPersona,
+        ).apply { visibility = View.GONE }
+        root.addView(
+            MaxWidthLinearLayout(context, dp(560)).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(pickerView, LinearLayout.LayoutParams(-1, -1))
+                visibility = View.GONE
+                tag = PICKER_HOST_TAG
+            },
+            LinearLayout.LayoutParams(-1, -2),
+        )
         if (editorPolicy.allowsDictation) {
             ensureRuntime()
             renderState(ImeUiState.IDLE)
         } else {
             renderState(ImeUiState.SECURE_FIELD)
         }
+        refreshPanelChrome()
         return root
     }
 
@@ -184,6 +266,7 @@ class RamblrImeService : InputMethodService() {
             renderPartial("")
             renderState(ImeUiState.SECURE_FIELD)
         }
+        refreshPanelChrome()
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
@@ -202,9 +285,12 @@ class RamblrImeService : InputMethodService() {
             renderPartial("")
             renderState(ImeUiState.SECURE_FIELD)
         }
+        refreshPanelChrome()
     }
 
     override fun onFinishInput() {
+        backspaceRepeater.release()
+        closeStylePicker()
         loseLifecycle(ImeLifecycleLoss.INPUT_FINISHED)
         holdProcessForDetachedTranscription()
         editorGeneration++
@@ -216,6 +302,8 @@ class RamblrImeService : InputMethodService() {
     }
 
     override fun onWindowHidden() {
+        backspaceRepeater.release()
+        closeStylePicker()
         loseLifecycle(ImeLifecycleLoss.HIDDEN)
         holdProcessForDetachedTranscription()
         super.onWindowHidden()
@@ -290,6 +378,7 @@ class RamblrImeService : InputMethodService() {
             // accessibility API involved, no polling.
             isPackageExcluded = { pkg -> PerAppExclusionStore.isExcluded(this, pkg) },
             isRecording = { runtime?.isRecording() ?: false },
+            onCommitSettled = { refreshPanelChrome() },
             backgroundSink = BackgroundResultSink(
                 copyToClipboard = { ClipboardUtil.copy(this, it) },
                 postNotice = { BackgroundDictationNotifications.postResult(this, it) },
@@ -400,6 +489,7 @@ class RamblrImeService : InputMethodService() {
         })
         micButton?.isEnabled = imeMicEnabled(state)
         micButton?.alpha = if (imeMicEnabled(state)) 1f else 0.6f
+        refreshPanelChrome()
     }
 
     /** Durable history write; invoked only by [ImeHistoryWriteExecutor]. */
@@ -438,6 +528,167 @@ class RamblrImeService : InputMethodService() {
         runCatching {
             getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(callback)
         }.onFailure { Log.w(TAG, "Could not unregister network callback", it) }
+    }
+
+    // ---- #312: cleanup-style picker + quick edit keys ----
+
+    private fun panelColors() = ImePanelColors(
+        onSurface = resolveColor(com.google.android.material.R.attr.colorOnSurface, Color.DKGRAY),
+        onSurfaceVariant = resolveColor(com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY),
+        keyFill = resolveColor(com.google.android.material.R.attr.colorSurfaceVariant, Color.LTGRAY),
+        accent = resolveColor(com.google.android.material.R.attr.colorPrimary, Color.rgb(33, 96, 180)),
+    )
+
+    private fun styleChip(context: Context, colors: ImePanelColors): TextView = TextView(context).apply {
+        textSize = 14f
+        maxLines = 1
+        ellipsize = android.text.TextUtils.TruncateAt.END
+        gravity = Gravity.CENTER_VERTICAL
+        minHeight = dp(48)
+        maxWidth = dp(150)
+        setTextColor(colors.onSurface)
+        setPadding(dp(12), 0, dp(4), 0)
+        compoundDrawablePadding = dp(2)
+        setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, R.drawable.ic_arrow_drop_down, 0)
+        compoundDrawableTintList = android.content.res.ColorStateList.valueOf(colors.onSurface)
+        isClickable = true
+        isFocusable = true
+        background = ImeKeyStyle.keyBackground(context, colors)
+        setOnClickListener { openStylePicker() }
+    }
+
+    private fun editKey(context: Context, colors: ImePanelColors, icon: Int, description: Int): ImageButton =
+        ImageButton(context).apply {
+            setImageResource(icon)
+            contentDescription = getString(description)
+            setColorFilter(colors.onSurface)
+            background = ImeKeyStyle.keyBackground(context, colors)
+            minimumWidth = dp(48)
+            minimumHeight = dp(48)
+        }
+
+    /** Main-thread only. Live state for gating: what's painted, corrected by the runtime's truth. */
+    private fun gatingState(): ImeUiState {
+        val rendered = lastRenderedState ?: ImeUiState.IDLE
+        if (rendered == ImeUiState.SECURE_FIELD) return rendered
+        return when (runtime?.currentState()) {
+            RecordingStateMachine.State.RECORDING -> ImeUiState.RECORDING
+            RecordingStateMachine.State.TRANSCRIBING ->
+                if (rendered == ImeUiState.CLEANING) rendered else ImeUiState.TRANSCRIBING
+            else -> rendered
+        }
+    }
+
+    private fun commitPending(): Boolean = panelController?.isCommitPending() == true
+
+    private fun enterResolution() = resolveEnterKey(editorIdentity.inputType, editorIdentity.imeOptions)
+
+    private fun editKeyAllowed(key: ImeEditKey): Boolean =
+        imeEditKeyEnabled(key, gatingState(), commitPending(), enterResolution())
+
+    /** Runs one edit key against the live InputConnection. Returns false when nothing was done. */
+    private fun performEditKey(key: ImeEditKey): Boolean {
+        if (Looper.myLooper() != Looper.getMainLooper()) return false
+        if (!editKeyAllowed(key)) return false
+        val ic = currentInputConnection
+        return when (key) {
+            ImeEditKey.BACKSPACE -> ImeEditActions.backspace(ic)
+            ImeEditKey.SPACE -> ImeEditActions.space(ic)
+            ImeEditKey.ENTER -> ImeEditActions.enter(ic, editorIdentity.inputType, editorIdentity.imeOptions)
+        }
+    }
+
+    private fun enterKeyDescription(): Int = when (val action = enterResolution()) {
+        EnterKeyAction.InsertNewline -> R.string.ime_key_enter_newline
+        EnterKeyAction.SendEnterKey -> R.string.ime_key_enter_generic
+        is EnterKeyAction.PerformEditorAction -> when (action.actionId) {
+            EditorInfo.IME_ACTION_GO -> R.string.ime_key_enter_go
+            EditorInfo.IME_ACTION_SEARCH -> R.string.ime_key_enter_search
+            EditorInfo.IME_ACTION_SEND -> R.string.ime_key_enter_send
+            EditorInfo.IME_ACTION_DONE -> R.string.ime_key_enter_done
+            EditorInfo.IME_ACTION_NEXT -> R.string.ime_key_enter_next
+            EditorInfo.IME_ACTION_PREVIOUS -> R.string.ime_key_enter_previous
+            else -> R.string.ime_key_enter_generic
+        }
+    }
+
+    private fun setKeyEnabled(view: View?, enabled: Boolean) {
+        view ?: return
+        view.isEnabled = enabled
+        view.alpha = if (enabled) 1f else 0.38f
+        if (!enabled) view.isPressed = false
+    }
+
+    /** Re-derives everything that depends on dictation state, the bound editor or the style prefs. */
+    private fun refreshPanelChrome() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { refreshPanelChrome() }
+            return
+        }
+        val state = gatingState()
+        val pending = commitPending()
+        for ((key, view) in listOf(ImeEditKey.BACKSPACE to backspaceKey, ImeEditKey.SPACE to spaceKey, ImeEditKey.ENTER to enterKey)) {
+            setKeyEnabled(view, imeEditKeyEnabled(key, state, pending, enterResolution()))
+        }
+        if (!imeEditKeyEnabled(ImeEditKey.BACKSPACE, state, pending, enterResolution())) backspaceRepeater.release()
+        enterKey?.contentDescription = getString(enterKeyDescription())
+
+        val pickerAllowed = imeStylePickerEnabled(state, pending)
+        val model = CleanupStyleMenu.load(this, editorIdentity.packageName)
+        styleChip?.let { chip ->
+            chip.text = if (model.cleanupEnabled) model.current.title else getString(R.string.ime_style_chip_off)
+            chip.contentDescription = when {
+                !pickerAllowed -> getString(R.string.ime_style_chip_busy_desc, if (model.cleanupEnabled) model.current.title else getString(R.string.ime_style_chip_off))
+                model.cleanupEnabled -> getString(R.string.ime_style_chip_desc, model.current.title)
+                else -> getString(R.string.ime_style_chip_off_desc)
+            }
+        }
+        setKeyEnabled(styleChip, pickerAllowed)
+        if (!pickerAllowed) closeStylePicker()
+    }
+
+    private fun openStylePicker() {
+        val main = mainPanel ?: return
+        val picker = pickerView ?: return
+        if (!imeStylePickerEnabled(gatingState(), commitPending())) return
+        val host = picker.parent as? View ?: return
+        // Pin the picker to the controls' current height so opening it never resizes the keyboard.
+        val height = main.height.coerceAtLeast(dp(224))
+        picker.bind(CleanupStyleMenu.load(this, editorIdentity.packageName))
+        host.layoutParams = (host.layoutParams as LinearLayout.LayoutParams).apply { this.height = height }
+        main.visibility = View.GONE
+        host.visibility = View.VISIBLE
+        picker.visibility = View.VISIBLE
+    }
+
+    private fun closeStylePicker() {
+        val picker = pickerView ?: return
+        (picker.parent as? View)?.visibility = View.GONE
+        picker.visibility = View.GONE
+        mainPanel?.visibility = View.VISIBLE
+    }
+
+    private fun onPickerToggleCleanup() {
+        val result = CleanupStyleMenu.toggleCleanup(this)
+        closeStylePicker()
+        showMessage(getString(when (result) {
+            CleanupStyleMenu.ToggleResult.TURNED_ON -> R.string.ime_cleanup_now_on
+            CleanupStyleMenu.ToggleResult.TURNED_OFF -> R.string.ime_cleanup_now_off
+            CleanupStyleMenu.ToggleResult.NEEDS_SETTINGS -> R.string.ime_cleanup_needs_settings
+        }))
+        refreshPanelChrome()
+    }
+
+    private fun onPickerPersona(persona: CleanupPersona) {
+        // Writes the same prefs as the ring menu and Settings; applies to the NEXT dictation (the
+        // picker is unavailable while one is in flight -- see imeStylePickerEnabled).
+        val selection = CleanupStyleMenu.select(this, editorIdentity.packageName, persona)
+        closeStylePicker()
+        showMessage(getString(
+            if (selection.cleanupEnabled) R.string.ime_style_changed else R.string.ime_style_changed_needs_settings,
+            persona.title,
+        ))
+        refreshPanelChrome()
     }
 
     private fun actionButton(icon: Int, description: Int, action: () -> Unit): ImageButton =

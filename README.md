@@ -64,11 +64,21 @@ the look — size, border, fill, glyph color, or a fully custom icon image — a
   <img src="docs/screenshots/voice-keyboard.png" width="230" alt="The Ramblr Voice keyboard panel showing dictation status">
 </p>
 
-A voice-only input method: mic, live status, keyboard switcher, settings shortcut. It inserts text
-through Android's standard `InputConnection`, so it works **with the accessibility service turned
-off entirely**.
+A voice-only input method: mic, live status, a cleanup-style picker, three quick edit keys,
+keyboard switcher, settings shortcut. It inserts text through Android's standard `InputConnection`,
+so it works **with the accessibility service turned off entirely**.
 
-It is deliberately **not a full keyboard** — no letter, number, or symbol rows, no swipe typing,
+- **Cleanup style chip** (beside the mic): shows the current style, or "Cleanup off". Tap it to
+  switch cleanup on/off or pick a style without leaving the app — the same choices as the floating
+  ring's long-press menu, and they stay in sync with it and with Settings. A change applies to the
+  *next* dictation; the chip is disabled while one is recording or being processed.
+- **Edit keys** for small corrections: **Backspace** (deletes the selection, or one character;
+  hold to repeat), **Space**, and **Enter**. Enter inserts a new line in multi-line fields and runs
+  the field's action (Search / Go / Done / Next …) in single-line ones. It never submits a
+  multi-line field (e.g. a chat box), and while a dictation is in flight an Enter that would leave
+  the field is held back so the form can't be sent before the dictated text arrives.
+
+It is deliberately **not a full keyboard** — no letter, number, or symbol rows (the edit keys are only for fixing dictation), no swipe typing,
 autocorrect, suggestions, clipboard, or emoji UI. Switch back to your usual keyboard to type.
 The panel follows your system light/dark theme.
 

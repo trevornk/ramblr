@@ -162,6 +162,10 @@ internal class ImePanelController(
      *  and where a failed one reports. Null in tests that don't exercise it: the fallback is then
      *  exactly the pre-#284 "history + in-panel message". */
     private val backgroundSink: BackgroundResultSink? = null,
+    /** #312: fired on the main thread once a delivered dictation's guarded commit attempt has run
+     *  (success, stale, rejected or abandoned), so the keyboard can re-enable keys it held back
+     *  while [isCommitPending]. */
+    private val onCommitSettled: () -> Unit = {},
 ) {
     private var active = true
     private var deliveryTerminal = false
@@ -170,6 +174,15 @@ internal class ImePanelController(
     @Volatile private var cachedPackageName: String? = null
     @Volatile private var editorPolicy = ImeEditorPolicy(allowsDictation = true, allowsRetention = true)
     @Volatile private var sessionAllowsRetention = true
+    @Volatile private var commitPending = false
+
+    /**
+     * True from the moment a finished dictation is handed to [listener]'s `deliverText` until its
+     * guarded, exactly-once commit attempt has run. The UI reports IDLE inside this window (the
+     * durable history write is async and the commit hops back to main), so the keyboard's
+     * submit-capable Enter key consults this rather than the rendered state alone (#312).
+     */
+    fun isCommitPending(): Boolean = commitPending
 
     val listener: RuntimeListener = object : RuntimeListener {
         override fun onRecordingStartRequested() {
@@ -255,6 +268,7 @@ internal class ImePanelController(
 
             // File read/parse/rewrite is unbounded and must never run on the IME main thread. The
             // immutable ticket is revalidated only after the durable write returns to main.
+            commitPending = true
             if (sessionAllowsRetention) {
                 val accepted = runCatching {
                     runHistoryWrite {
@@ -282,6 +296,21 @@ internal class ImePanelController(
     }
 
     private fun completeDelivery(
+        ticket: ImeDestinationTicket?,
+        text: String,
+        cleanupError: String?,
+        historySaved: Boolean,
+        retentionAllowed: Boolean,
+    ) {
+        try {
+            completeDeliveryGuarded(ticket, text, cleanupError, historySaved, retentionAllowed)
+        } finally {
+            commitPending = false
+            onCommitSettled()
+        }
+    }
+
+    private fun completeDeliveryGuarded(
         ticket: ImeDestinationTicket?,
         text: String,
         cleanupError: String?,
@@ -353,6 +382,7 @@ internal class ImePanelController(
         @Suppress("UNUSED_VARIABLE") val lifecycleReason = reason
         if (!active) return
         active = false
+        commitPending = false
         sessionAllowsRetention = false
         deliveryTicket = null
         latestUiTicket = null

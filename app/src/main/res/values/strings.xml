@@ -39,6 +39,33 @@
     <string name="ime_mic_stop">Stop recording and transcribe</string>
     <string name="ime_switch_keyboard">Switch keyboard</string>
     <string name="ime_open_settings">Open Ramblr settings</string>
+    <!-- #312: cleanup-style picker + quick edit keys on the voice keyboard -->
+    <string name="ime_style_chip_off">Cleanup off</string>
+    <string name="ime_style_chip_desc">Cleanup style: %1$s. Tap to change</string>
+    <string name="ime_style_chip_off_desc">Cleanup is off. Tap to choose a style</string>
+    <string name="ime_style_chip_busy_desc">Cleanup style: %1$s. Can be changed when dictation finishes</string>
+    <string name="ime_style_picker_title">Cleanup style</string>
+    <string name="ime_style_picker_close">Close style picker</string>
+    <string name="ime_style_cleanup_on">Cleanup: On</string>
+    <string name="ime_style_cleanup_off">Cleanup: Off</string>
+    <string name="ime_style_cleanup_on_hint">Tap to turn cleanup off</string>
+    <string name="ime_style_cleanup_off_hint">Tap to turn cleanup on</string>
+    <string name="ime_style_selected_desc">%1$s, selected</string>
+    <string name="ime_style_changed">Style: %1$s</string>
+    <string name="ime_style_changed_needs_settings">Style: %1$s (enable cleanup in Settings)</string>
+    <string name="ime_cleanup_now_on">Cleanup on</string>
+    <string name="ime_cleanup_now_off">Cleanup off</string>
+    <string name="ime_cleanup_needs_settings">Enable cleanup once in Ramblr settings first</string>
+    <string name="ime_key_backspace">Backspace</string>
+    <string name="ime_key_space">Space</string>
+    <string name="ime_key_enter_newline">New line</string>
+    <string name="ime_key_enter_generic">Enter</string>
+    <string name="ime_key_enter_go">Go</string>
+    <string name="ime_key_enter_search">Search</string>
+    <string name="ime_key_enter_send">Send</string>
+    <string name="ime_key_enter_done">Done</string>
+    <string name="ime_key_enter_next">Next field</string>
+    <string name="ime_key_enter_previous">Previous field</string>
 
     <!-- #285: audio-file transcription and record-now/transcribe-later. -->
     <string name="audio_share_label">Transcribe with Ramblr</string>

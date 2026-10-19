@@ -2023,12 +2023,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
     // --- Long-press style/cleanup menu (#53, #103) ---
 
-    /** Personas shown in the long-press style menu (#103): the user's persisted quick-menu
-     *  selection (built-in and/or custom, 5-8 entries, see [QuickMenuPersonaStore]), resolved to
-     *  full [CleanupPersona] objects in the user's chosen order. Falls back to
-     *  [QuickMenuPersonaStore.defaultSelection] (the five #103 built-ins) for a fresh install. */
-    private fun quickMenuPersonas(): List<CleanupPersona> =
-        QuickMenuPersonaStore.load(this).map { PersonaRegistry.resolve(this, it) }
+    // The persona list, current style and cleanup state come from [CleanupStyleMenu] (#312) -- shared
+    // with the keyboard's style picker.
 
     /**
      * Opens the long-press menu (see overlayLongPressActionFor's state map) letting the user
@@ -2173,7 +2169,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun buildStyleMenuContent(): LinearLayout {
         val container = styleMenuContainer()
 
-        val cleanupEnabled = PostProcessingToggle.isEnabled(this)
+        // #312: the model (cleanup state, current style, the list) comes from the helper the
+        // keyboard's picker also uses, so the two surfaces can never disagree.
+        val model = CleanupStyleMenu.load(this, currentForegroundPackageName())
+        val cleanupEnabled = model.cleanupEnabled
         val cleanupIcon = getDrawable(R.drawable.ic_cleanup)?.mutate()?.apply {
             setTint(if (cleanupEnabled) COLOR_CLEANUP_ON else COLOR_CLEANUP_OFF)
         }
@@ -2187,18 +2186,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
         container.addView(styleMenuDivider())
 
-        val globalPersona = PersonaRegistry.currentPersona(
-            this,
-            prefs().getString("cleanup_style", null),
-            PostProcessor.effectiveSavedPrompt(prefs().getString("post_processing_prompt", null), prefs().getString("cleanup_style", null))
-        )
-        val current = if (PerAppPersonaToggle.isEnabled(this)) {
-            PerAppPersonaStore.resolvePersona(this, currentForegroundPackageName(), globalPersona)
-        } else {
-            globalPersona
-        }
-        for (persona in quickMenuPersonas()) {
-            val title = if (persona == current) "✓ ${persona.title}" else persona.title
+        for (persona in model.personas) {
+            val title = if (persona == model.current) "✓ ${persona.title}" else persona.title
             container.addView(styleMenuRow(icon = null, title = title, subtitle = persona.subtitle) {
                 onStyleMenuPersonaTapped(persona)
             })
@@ -2336,28 +2325,13 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * send local transcripts off-device without the warning they'd get there.
      */
     private fun onStyleMenuCleanupToggleTapped() {
-        val enabling = !PostProcessingToggle.isEnabled(this)
-        if (enabling && !ensureCleanupEnabled()) {
-            dismissStyleMenu()
-            toast("Enable cleanup once in Ramblr settings first")
-            return
-        }
-        if (!enabling) PostProcessingToggle.setEnabled(this, false)
+        val result = CleanupStyleMenu.toggleCleanup(this)
         dismissStyleMenu()
-        showFeedback(if (enabling) "Cleanup on" else "Cleanup off", durationMs = 1200)
-    }
-
-    /** Turns cleanup on if it isn't already, respecting the same local-cleanup consent gate (#23)
-     *  [onStyleMenuCleanupToggleTapped] enforces. Returns whether cleanup ended up enabled --
-     *  true if it was already on or turning it on just succeeded, false if blocked on consent. */
-    private fun ensureCleanupEnabled(): Boolean {
-        if (PostProcessingToggle.isEnabled(this)) return true
-        val useLocal = prefs().getBoolean("use_local", true)
-        val hasConsented = prefs().getBoolean("local_cleanup_consent_seen", false)
-        val cleanupIsLocalOnly = !CloudFeatureToggle.cleanupEnabled(this)
-        if (LocalCleanupConsent.shouldPrompt(useLocal, usePostProcessing = true, hasConsented = hasConsented, cleanupIsLocalOnly = cleanupIsLocalOnly)) return false
-        PostProcessingToggle.setEnabled(this, true)
-        return true
+        when (result) {
+            CleanupStyleMenu.ToggleResult.NEEDS_SETTINGS -> toast("Enable cleanup once in Ramblr settings first")
+            CleanupStyleMenu.ToggleResult.TURNED_ON -> showFeedback("Cleanup on", durationMs = 1200)
+            CleanupStyleMenu.ToggleResult.TURNED_OFF -> showFeedback("Cleanup off", durationMs = 1200)
+        }
     }
 
     /**
@@ -2371,17 +2345,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * cleanup is now running.
      */
     private fun onStyleMenuPersonaTapped(persona: CleanupPersona) {
-        if (PerAppPersonaToggle.isEnabled(this)) {
-            PerAppPersonaStore.record(this, currentForegroundPackageName(), persona)
-        }
-        prefs().edit()
-            .putString("cleanup_style", persona.key)
-            .putString("post_processing_prompt", CleanupPersonas.promptForExplicitSelection(persona))
-            .apply()
-        val cleanupEnabled = ensureCleanupEnabled()
+        val selection = CleanupStyleMenu.select(this, currentForegroundPackageName(), persona)
         dismissStyleMenu()
         showFeedback(
-            if (cleanupEnabled) "Style: ${persona.title}" else "Style: ${persona.title} (enable cleanup in Settings)",
+            if (selection.cleanupEnabled) "Style: ${persona.title}" else "Style: ${persona.title} (enable cleanup in Settings)",
             durationMs = 1200
         )
     }
