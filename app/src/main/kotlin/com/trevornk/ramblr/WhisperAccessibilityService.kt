@@ -443,7 +443,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // (the exact risk #245 flagged for naive interim injection). Preview-before-inject
         // is honored because maybeInjectPartial() itself branches on that toggle first.
         override fun onCloudLiveInterim(text: String) {
-            maybeInjectPartial(text)
+            // Gemini's interim is already cased and punctuated: display it as received. Only the
+            // on-device model's raw ALL-CAPS partials go through smartCapitalize (which would
+            // lowercase "I", names and acronyms here).
+            maybeInjectPartial(text, requireRecording = true, alreadyCased = true)
         }
 
         override fun deliverText(
@@ -2563,7 +2566,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
     /** [requireRecording] is false only for the debug-build `DEBUG_PARTIAL` test seam, which drives
      *  this path without a live recording; every production caller goes through the overload above. */
-    internal fun maybeInjectPartial(text: String, requireRecording: Boolean) {
+    internal fun maybeInjectPartial(text: String, requireRecording: Boolean, alreadyCased: Boolean = false) {
         if (requireRecording && !runtime.isRecording()) return // stale post after stop/cancel raced this
         if (text.isBlank()) return
         val now = System.currentTimeMillis()
@@ -2579,7 +2582,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 livePreviewEnabled = prefs().getBoolean("streaming_preview_enabled", false),
             )
         ) {
-            updateLivePreviewBubble(text, now)
+            updateLivePreviewBubble(text, now, alreadyCased)
             return
         }
 
@@ -2594,7 +2597,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 candidate.isEditable,
                 candidate.isFocused,
             )
-            val displayText = smartCapitalize(text)
+            val displayText = if (alreadyCased) text else smartCapitalize(text)
             // #300: the first partial replaces the same range a one-shot injection would, so a
             // ranged selection is overwritten instead of the partial landing in front of it. The
             // selection comes off the destination, which applies the WebView select-all correction
@@ -2633,7 +2636,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
             session.node.isEditable,
             session.node.isFocused,
         )
-        val displayText = smartCapitalize(text)
+        val displayText = if (alreadyCased) text else smartCapitalize(text)
         // #144: recomputed rather than remembered, and deliberately safe to recompute -- the
         // character it reads sits before insertionStart, upstream of the span being rewritten, so
         // it's identical on every partial of the session.
@@ -2655,11 +2658,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * start once recording stops and cleanup actually produces a candidate (see [beginPreview]).
      * Not touchable, since there's nothing to commit yet at this stage.
      */
-    private fun updateLivePreviewBubble(text: String, nowMs: Long) {
+    private fun updateLivePreviewBubble(text: String, nowMs: Long, alreadyCased: Boolean = false) {
         if (!shouldInjectPartial(text, lastBubblePartialText, lastBubblePartialAtMs, nowMs, STREAMING_PARTIAL_MIN_INTERVAL_MS)) return
         lastBubblePartialText = text
         lastBubblePartialAtMs = nowMs
-        val displayText = smartCapitalize(text)
+        val displayText = if (alreadyCased) text else smartCapitalize(text)
         val truncated = displayText.take(PREVIEW_PREVIEW_CHARS)
         val suffix = if (displayText.length > truncated.length) "…" else ""
         showFeedback("$truncated$suffix", STREAMING_PARTIAL_MIN_INTERVAL_MS * 3, touchable = false)

@@ -222,15 +222,16 @@ class AccessibilityCloudLiveWiringTest {
             .apply { isAccessible = true }
         val listener = listenerField.get(service) as RuntimeListener
 
-        listener.onCloudLiveInterim("hello from cloud live")
+        listener.onCloudLiveInterim("Hello from Cloud Live, I think")
         shadowOf(Looper.getMainLooper()).idle()
 
         val feedbackViewField = WhisperAccessibilityService::class.java.getDeclaredField("feedbackView")
             .apply { isAccessible = true }
         val feedbackView = feedbackViewField.get(service) as android.widget.TextView
         assertEquals(
-            "the interim must land in the same feedback surface local streaming partials use",
-            "Hello from cloud live",
+            "the interim must land in the same feedback surface local streaming partials use, " +
+                "shown as Gemini cased it (not run through the ALL-CAPS-model smartCapitalize)",
+            "Hello from Cloud Live, I think",
             feedbackView.text.toString(),
         )
     }
@@ -265,10 +266,34 @@ class AccessibilityCloudLiveWiringTest {
         prefs().edit().putBoolean("streaming_preview_enabled", false).apply()
         val (service, listener) = recordingServiceWithOverlay()
 
-        listener.onCloudLiveInterim("hello from cloud live")
+        listener.onCloudLiveInterim("Hello from cloud live")
         shadowOf(Looper.getMainLooper()).idle()
 
         assertEquals("Hello from cloud live", feedbackText(service))
+    }
+
+    /** smartCapitalize exists for the on-device model's unpunctuated ALL-CAPS partials. Gemini's
+     *  interims are already cased: lowercasing them turned "I", names and acronyms into mush. */
+    @Test
+    fun `a cloud-live interim keeps the casing Gemini gave it`() {
+        PreviewBeforeInjectToggle.setEnabled(app, false)
+        prefs().edit().putBoolean("streaming_preview_enabled", false).apply()
+        val (service, listener) = recordingServiceWithOverlay()
+
+        listener.onCloudLiveInterim("Then I told Wyatt that Q3 is up 12%")
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("Then I told Wyatt that Q3 is up 12%", feedbackText(service))
+    }
+
+    @Test
+    fun `a local streaming partial is still smart-capitalized`() {
+        PreviewBeforeInjectToggle.setEnabled(app, false)
+        prefs().edit().putBoolean("streaming_preview_enabled", false).apply()
+        val (service, _) = recordingServiceWithOverlay()
+
+        service.maybeInjectPartial("THEN I TOLD WYATT", requireRecording = false)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("Then i told wyatt", feedbackText(service))
     }
 
     @Test

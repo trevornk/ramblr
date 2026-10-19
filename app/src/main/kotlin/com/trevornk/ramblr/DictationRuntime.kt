@@ -229,6 +229,8 @@ class DictationRuntime internal constructor(
          *  arrived can still report that setup landed and interims flowed -- otherwise the most
          *  interesting failure on a real device (mid-stream drop) would log nothing but nulls. */
         var lastTiming: CloudLiveTiming? = null
+        /** Display-only spacing repair for this attempt's interims; see [CloudInterimNormalizer]. */
+        val interimText = CloudInterimNormalizer()
     }
 
     @Volatile private var cloudLiveAttempt: CloudLiveAttempt? = null
@@ -813,7 +815,9 @@ class DictationRuntime internal constructor(
                         attempt.lastTiming = timing
                         if (sessionLease === lease &&
                             stateMachine.current() == RecordingStateMachine.State.RECORDING && !attempt.claimed) {
-                            listener.onCloudLiveInterim(text)
+                            // Gemini's cumulative interims intermittently lose the space at a revised
+                            // seam; repair it once here so field, bubble and IME all show the same text.
+                            listener.onCloudLiveInterim(attempt.interimText.normalize(text))
                         }
                     }
                 }
