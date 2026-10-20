@@ -156,10 +156,37 @@ object TranscriptChunker {
      * Piece size when the on-device model IS the last step. The executor splits each piece
      * further into sentence-aligned model-sized chunks ([LocalCleanupChunker], #325), so the model
      * still never sees more than ~300 characters at a time, but paragraph breaks land every ~1500
-     * characters instead of every ~300. 1500 characters is ~5 chunks: at the 20 s per-chunk
-     * ceiling that is 100 s worst case, inside the runner's 240 s per-piece latch.
+     * characters instead of every ~300. 1500 characters is ~5-6 chunks; the executor's adaptive
+     * per-chunk allowance and [AUDIO_LOCAL_STEP_BUDGET_MS] per piece bound it, and the runner's
+     * latch ([pieceTimeoutSecondsFor]) is derived from that budget so it cannot cut a piece off.
      */
     const val LOCAL_TERMINAL_MAX_CHARS = 1_500
+
+    /** Cloud/other pieces: one request per piece, which has never needed more than this. */
+    const val DEFAULT_PIECE_TIMEOUT_SECONDS = 240L
+
+    /** True when an on-device model is the last step, i.e. the executor chunks each piece itself. */
+    private fun chunksLocally(waterfall: CleanupWaterfall) =
+        waterfall.steps.lastOrNull()?.group == CleanupStepGroup.LOCAL_LLM
+
+    /**
+     * Ceiling handed to the executor for one piece's chunked on-device cleanup. A phone that
+     * decodes slowly needs more than live dictation's 240 s for ~6 chunks; there is no 400 s
+     * watchdog on an audio job, and it can be cancelled (#325 follow-up).
+     */
+    fun localStepBudgetMsFor(waterfall: CleanupWaterfall): Long =
+        if (chunksLocally(waterfall)) AUDIO_LOCAL_STEP_BUDGET_MS else LOCAL_CHUNKED_TOTAL_BUDGET_MS
+
+    /**
+     * How long the runner waits for one piece before cancelling it. Must exceed the executor's
+     * own step budget for the piece, or the runner would cancel a chunked run that is still
+     * within budget and throw away the chunks it had already cleaned.
+     */
+    fun pieceTimeoutSecondsFor(waterfall: CleanupWaterfall): Long =
+        if (chunksLocally(waterfall)) AUDIO_LOCAL_STEP_BUDGET_MS / 1_000 + PIECE_TIMEOUT_MARGIN_SECONDS
+        else DEFAULT_PIECE_TIMEOUT_SECONDS
+
+    private const val PIECE_TIMEOUT_MARGIN_SECONDS = 30L
 
     /** The piece size to cut a transcript into for [waterfall]'s cleanup chain. */
     fun pieceCharsFor(waterfall: CleanupWaterfall): Int = when {

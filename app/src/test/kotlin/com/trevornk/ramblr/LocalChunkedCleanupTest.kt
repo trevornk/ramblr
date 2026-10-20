@@ -21,6 +21,15 @@ class LocalChunkedCleanupTest {
         val userTexts = mutableListOf<String>()
         val systemPrompts = mutableListOf<String>()
         val deadlines = mutableListOf<Long>()
+        var prepared = 0
+        var preparedAtCall = -1
+        var prepareThrows = false
+        override fun prepare(modelPath: String) {
+            prepared++
+            preparedAtCall = userTexts.size
+            if (prepareThrows) error("load failed")
+        }
+
         override fun complete(
             systemPrompt: String,
             userText: String,
@@ -51,6 +60,7 @@ class LocalChunkedCleanupTest {
         nowMs: () -> Long = { System.currentTimeMillis() },
         transport: CleanupHttpTransport = CleanupHttpTransport { _, _, _, _, _, _ -> error("no cloud step expected") },
         credential: String = "",
+        stepBudgetMs: Long = LOCAL_CHUNKED_TOTAL_BUDGET_MS,
     ): PostProcessor.Result {
         var captured: PostProcessor.Result? = null
         CleanupWaterfallExecutor.execute(
@@ -66,6 +76,7 @@ class LocalChunkedCleanupTest {
             localPrompt = prompt,
             localVocabulary = vocabulary,
             nowMs = nowMs,
+            localStepBudgetMs = stepBudgetMs,
             callback = { captured = it },
         )
         return captured ?: error("callback never fired")
@@ -90,17 +101,25 @@ class LocalChunkedCleanupTest {
         val max = LocalCleanupChunker.maxChunkChars(prompt)
         assertTrue(engine.userTexts.all { it.length <= max })
         assertTrue("same system prompt for every chunk", engine.systemPrompts.all { it == prompt })
-        // Each chunk gets its own full budget, not whatever is left of one shared deadline.
-        assertTrue(engine.deadlines.all { it >= before + LOCAL_CHUNK_BUDGET_MS && it <= after + LOCAL_CHUNK_BUDGET_MS })
+        // Each chunk gets its own allowance, not whatever is left of one shared deadline: the
+        // roomy initial one for the first chunk (nothing measured yet), then the floor on a
+        // device this fast.
+        val initial = LocalCleanupChunkBudget.INITIAL_BUDGET_MS
+        val floor = LocalCleanupChunkBudget.MIN_BUDGET_MS
+        assertTrue(engine.deadlines.first() >= before + initial && engine.deadlines.first() <= after + initial)
+        assertTrue(engine.deadlines.drop(1).all { it >= before + floor && it <= after + floor })
         // The output is every chunk cleaned, in order, and nothing was dropped.
         val reassembled = result.text!!.replace("[", "").replace("]", "")
         assertEquals(text, reassembled)
     }
 
-    @Test fun `chunk budget is generous enough to matter for a slow phone but far below the watchdog`() {
-        assertTrue(LOCAL_CHUNK_BUDGET_MS > TERMINAL_LOCAL_LLM_STEP_BUDGET_MS)
+    @Test fun `chunk budgets never undercut the flat budget that shipped and stay far below the watchdog`() {
+        assertTrue(LocalCleanupChunkBudget.MIN_BUDGET_MS >= 20_000L)
+        assertTrue(LocalCleanupChunkBudget.MIN_BUDGET_MS > TERMINAL_LOCAL_LLM_STEP_BUDGET_MS)
+        assertTrue(LocalCleanupChunkBudget.INITIAL_BUDGET_MS in LocalCleanupChunkBudget.MIN_BUDGET_MS..LocalCleanupChunkBudget.MAX_BUDGET_MS)
+        // One stuck chunk can never use the whole step, and both stay under the 400 s watchdog.
+        assertTrue(LocalCleanupChunkBudget.MAX_BUDGET_MS < LOCAL_CHUNKED_TOTAL_BUDGET_MS)
         assertTrue(LOCAL_CHUNKED_TOTAL_BUDGET_MS < 400_000L)
-        assertTrue(LOCAL_CHUNKED_TOTAL_BUDGET_MS >= 10 * LOCAL_CHUNK_BUDGET_MS / 2)
     }
 
     @Test fun `paragraph breaks in the transcript survive chunked cleanup`() {
@@ -254,17 +273,19 @@ class LocalChunkedCleanupTest {
         assertTrue(engine.userTexts.size > LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS)
     }
 
-    @Test fun `the total budget ends the run and the remaining chunks are delivered raw`() {
-        var now = 1_000_000L
-        val engine = ScriptedEngine(onCall = { _, t -> cleaned(t) }, onAfterCall = { now += 60_000L }) // 60s per chunk
+    @Test fun `a chunk that cannot fit in what is left of the step is not started`() {
+        val clock = FakeClock()
+        val device = SimulatedDevice(clock, msPerChar = 200.0) // ~58 s per 290-character chunk
         val text = sentences(60)
-        val result = run(text, engine, nowMs = { now })
+        val result = run(text, device, nowMs = clock::now)
 
-        val expectedCalls = (LOCAL_CHUNKED_TOTAL_BUDGET_MS / 60_000L).toInt() // 4
-        assertEquals(expectedCalls, engine.userTexts.size)
         assertNull(result.error)
-        assertEquals(expectedCalls, result.partial!!.cleanedChunks)
-        assertTrue(result.partial!!.totalChunks > expectedCalls)
+        assertEquals("no chunk ran into its deadline", 0, device.timedOut)
+        assertTrue("never ran past the step ceiling: ${clock.elapsed}", clock.elapsed <= LOCAL_CHUNKED_TOTAL_BUDGET_MS)
+        val partial = result.partial!!
+        assertEquals(device.calls, partial.cleanedChunks)
+        assertTrue(partial.totalChunks > device.calls)
+        assertTrue("several chunks fit before the ceiling, got ${device.calls}", device.calls in 3..5)
         assertEquals(text, result.text!!.replace("[", "").replace("]", ""))
     }
 
@@ -289,6 +310,164 @@ class LocalChunkedCleanupTest {
         assertNull(result.text)
         assertEquals("Cleanup cancelled", result.error)
         assertEquals(2, engine.userTexts.size)
+    }
+
+    // ---- budget fits the device (#325 follow-up) ---------------------------------------------------
+
+    /** Deterministic stand-in for wall time: only the engines advance it. */
+    private class FakeClock(var t: Long = 1_000_000L) {
+        private val start = t
+        fun now() = t
+        val elapsed get() = t - start
+    }
+
+    /**
+     * A device that decodes at a fixed pace, honouring the deadline it is given like the real
+     * engine does: a chunk that needs longer than its allowance burns exactly the allowance and
+     * reports [LocalInferenceResult.TimedOut].
+     */
+    private class SimulatedDevice(
+        private val clock: FakeClock,
+        private val msPerChar: Double,
+        private val jitter: (callIndex: Int) -> Double = { 1.0 },
+    ) : LocalInferenceEngine {
+        var calls = 0
+        var timedOut = 0
+        val allowances = mutableListOf<Long>()
+        val durations = mutableListOf<Long>()
+        var preparedAtMs: Long? = null
+        override fun prepare(modelPath: String) { preparedAtMs = clock.now() }
+        override fun complete(
+            systemPrompt: String,
+            userText: String,
+            modelPath: String,
+            deadlineAtMs: Long,
+            isCancelled: () -> Boolean,
+        ): LocalInferenceResult {
+            val needed = (msPerChar * userText.length * jitter(calls)).toLong()
+            val allowed = (deadlineAtMs - clock.now()).coerceAtLeast(0)
+            allowances += allowed
+            calls++
+            return if (needed > allowed) {
+                clock.t += allowed
+                durations += allowed
+                timedOut++
+                LocalInferenceResult.TimedOut("Local cleanup timed out")
+            } else {
+                clock.t += needed
+                durations += needed
+                LocalInferenceResult.Success("[$userText]")
+            }
+        }
+    }
+
+    @Test fun `a fast device finishes every chunk and is never given less than the old budget`() {
+        val clock = FakeClock()
+        val device = SimulatedDevice(clock, msPerChar = 25.0) // ~7.5 s per chunk, LFM2.5 on a Pixel 10a
+        val text = sentences(60)
+        val result = run(text, device, nowMs = clock::now)
+
+        assertNull(result.partial)
+        assertEquals(0, device.timedOut)
+        assertEquals(text, result.text!!.replace("[", "").replace("]", ""))
+        assertTrue(device.allowances.all { it >= LocalCleanupChunkBudget.MIN_BUDGET_MS })
+    }
+
+    @Test fun `the model is prepared once, before the first chunk, outside the chunk clock`() {
+        val engine = ScriptedEngine { _, t -> cleaned(t) }
+        run(sentences(30), engine)
+        assertEquals(1, engine.prepared)
+        assertEquals("prepared before any chunk ran", 0, engine.preparedAtCall)
+    }
+
+    @Test fun `a failing prepare does not fail the run -- the first chunk reports the real error`() {
+        val engine = ScriptedEngine { _, t -> cleaned(t) }.apply { prepareThrows = true }
+        val result = run(sentences(30), engine)
+        assertNull(result.error)
+        assertTrue(engine.userTexts.size > 1)
+    }
+
+    @Test fun `a short transcript never prepares or chunks`() {
+        val engine = ScriptedEngine { _, _ -> LocalInferenceResult.Success("Cleaned.") }
+        run("a short dictation.", engine)
+        assertEquals(0, engine.prepared)
+    }
+
+    @Test fun `the 10a with Mumble cleans every chunk even when some run past 20 seconds`() {
+        // Measured: median 10-14 s per chunk, cleaned chunks up to 18.3 s, and 3 of 40 chunks
+        // needed more than the flat 20 s. Jitter reproduces that spread around ~13 s.
+        val spread = doubleArrayOf(1.0, 0.9, 1.15, 1.7, 0.8, 1.0, 1.35, 1.9, 0.95, 1.1)
+        val clock = FakeClock()
+        val device = SimulatedDevice(clock, msPerChar = 47.0, jitter = { spread[it % spread.size] })
+        val text = sentences(36) // ~1,600 characters => 6 chunks, inside one audio piece's budget
+        val result = run(text, device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS)
+
+        assertTrue("some chunk really did need more than 20 s", device.durations.any { it > 20_000L })
+        assertEquals("no chunk timed out", 0, device.timedOut)
+        assertNull("everything cleaned", result.partial)
+        assertEquals(text, result.text!!.replace("[", "").replace("]", ""))
+    }
+
+    @Test fun `a phone several times slower than the 10a is given the time it needs`() {
+        val clock = FakeClock()
+        val device = SimulatedDevice(clock, msPerChar = 130.0) // ~38 s per chunk
+        val text = sentences(36)
+        val result = run(text, device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS)
+
+        assertEquals(0, device.timedOut)
+        assertNull(result.partial)
+        assertTrue("every chunk was allowed well above the old flat 20 s", device.allowances.all { it > 30_000L })
+    }
+
+    @Test fun `a first chunk slower than the initial allowance times out once and then the allowance grows`() {
+        val clock = FakeClock()
+        val device = SimulatedDevice(clock, msPerChar = 250.0) // ~72 s per chunk > the 60 s initial allowance
+        val text = sentences(36)
+        val result = run(text, device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS)
+
+        assertEquals("only the unmeasured first chunk timed out", 1, device.timedOut)
+        assertTrue(device.allowances[1] > device.allowances[0])
+        assertNotNull(result.partial)
+        assertEquals(1, result.partial!!.totalChunks - result.partial!!.cleanedChunks)
+        assertEquals(text, result.text!!.replace("[", "").replace("]", ""))
+    }
+
+    @Test fun `a device that cannot decode a chunk at all stops after two timeouts and delivers raw`() {
+        val clock = FakeClock()
+        val device = SimulatedDevice(clock, msPerChar = 2_000.0) // ~10 minutes per chunk
+        val text = sentences(60)
+        val result = run(text, device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS)
+
+        assertEquals(LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS, device.calls)
+        assertNull(result.text)
+        assertEquals("All cleanup steps failed: Local cleanup timed out", result.error)
+        // 60 s + 120 s: the second timeout is at the ceiling, and nothing else was attempted.
+        assertEquals(LocalCleanupChunkBudget.INITIAL_BUDGET_MS + LocalCleanupChunkBudget.MAX_BUDGET_MS, clock.elapsed)
+    }
+
+    @Test fun `each chunk's allowance tracks the measured pace of the chunks before it`() {
+        val clock = FakeClock()
+        val device = SimulatedDevice(clock, msPerChar = 100.0)
+        run(sentences(36), device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS)
+        // Chunk lengths differ a little; 2.5 x 100 ms/char x ~290 chars ~= 72 s.
+        assertTrue(device.allowances.drop(1).all { it in 55_000L..80_000L })
+    }
+
+    @Test fun `a cancel during a slow chunk run is honoured at the next boundary without another attempt`() {
+        val holder = InFlightCall()
+        val clock = FakeClock()
+        val inner = SimulatedDevice(clock, msPerChar = 100.0)
+        var calls = 0
+        val engine = object : LocalInferenceEngine {
+            override fun complete(systemPrompt: String, userText: String, modelPath: String, deadlineAtMs: Long, isCancelled: () -> Boolean): LocalInferenceResult {
+                val r = inner.complete(systemPrompt, userText, modelPath, deadlineAtMs, isCancelled)
+                if (++calls == 2) holder.cancel()
+                return r
+            }
+        }
+        val result = run(sentences(60), engine, holder = holder, nowMs = clock::now)
+        assertEquals("Cleanup cancelled", result.error)
+        assertEquals(2, inner.calls)
     }
 
     // ---- misc ----------------------------------------------------------------------------------------

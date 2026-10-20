@@ -139,8 +139,25 @@ class TranscriptPieceSizingTest {
         assertEquals(3_000, TranscriptChunker.pieceCharsFor(CleanupWaterfall(listOf(step(CleanupStepGroup.OPENAI_DIRECT)))))
     }
 
-    @Test fun `terminal pieces stay within five model chunks so the 240 second piece latch holds`() {
-        assertTrue(TranscriptChunker.LOCAL_TERMINAL_MAX_CHARS / LocalCleanupChunker.MAX_CHUNK_CHARS <= 5)
-        assertTrue(5 * LOCAL_CHUNK_BUDGET_MS < 240_000L)
+    @Test fun `a terminal-local piece stays within a handful of model chunks`() {
+        assertTrue(TranscriptChunker.LOCAL_TERMINAL_MAX_CHARS / LocalCleanupChunker.MAX_CHUNK_CHARS <= 6)
+    }
+
+    @Test fun `a slow phone gets a piece budget that holds every chunk at the per-chunk ceiling`() {
+        val terminalLocal = CleanupWaterfall(listOf(step(CleanupStepGroup.LOCAL_LLM)))
+        val chunksPerPiece = TranscriptChunker.LOCAL_TERMINAL_MAX_CHARS / LocalCleanupChunker.MAX_CHUNK_CHARS + 1
+        assertTrue(TranscriptChunker.localStepBudgetMsFor(terminalLocal) > LOCAL_CHUNKED_TOTAL_BUDGET_MS)
+        // ~6 chunks at 100 s each is what a phone several times slower than a Pixel 10a needs.
+        assertTrue(TranscriptChunker.localStepBudgetMsFor(terminalLocal) >= chunksPerPiece * 100_000L)
+    }
+
+    @Test fun `the runner's piece latch always outlasts the executor's budget for that piece`() {
+        val terminalLocal = CleanupWaterfall(listOf(step(CleanupStepGroup.LOCAL_LLM)))
+        assertTrue(TranscriptChunker.pieceTimeoutSecondsFor(terminalLocal) * 1_000L > TranscriptChunker.localStepBudgetMsFor(terminalLocal))
+        val cloud = CleanupWaterfall(listOf(step(CleanupStepGroup.OPENAI_DIRECT)))
+        assertEquals(TranscriptChunker.DEFAULT_PIECE_TIMEOUT_SECONDS, TranscriptChunker.pieceTimeoutSecondsFor(cloud))
+        assertEquals(LOCAL_CHUNKED_TOTAL_BUDGET_MS, TranscriptChunker.localStepBudgetMsFor(cloud))
+        val localThenCloud = CleanupWaterfall(listOf(step(CleanupStepGroup.LOCAL_LLM), step(CleanupStepGroup.OPENAI_DIRECT)))
+        assertEquals(TranscriptChunker.DEFAULT_PIECE_TIMEOUT_SECONDS, TranscriptChunker.pieceTimeoutSecondsFor(localThenCloud))
     }
 }

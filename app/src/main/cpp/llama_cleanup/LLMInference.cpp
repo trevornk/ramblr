@@ -26,6 +26,11 @@
 //     system+user pair (upstream only ever cleared _messages in loadModel) and clears the partial
 //     UTF-8 accumulator so an aborted multi-byte sequence can't prepend garbage to the next
 //     response. Upstream never reused an instance with storeChats=false, so none of this bit it.
+//   - resetConversation() returns a reused instance to its just-loaded state (no messages, empty KV
+//     cache, empty prefix-reuse record) without unloading the model (#325). Needed after a
+//     completion that ends abnormally -- chiefly a deadline abort, which leaves only part of the
+//     prompt in the KV cache while _cachedTokens claims all of it -- so the Kotlin holder can keep
+//     the model instead of paying a multi-second reload per timeout.
 #include "LLMInference.h"
 #include <android/log.h>
 #include <cstring>
@@ -521,6 +526,27 @@ LLMInference::stopCompletion() {
     // One line per completion with the load/prompt-eval/generation split, so a slow local cleanup
     // in the field can be attributed to a phase instead of guessed at.
     logPerfMetrics();
+}
+
+void
+LLMInference::resetConversation() {
+    for (llama_chat_message &message: _messages) {
+        free(const_cast<char *>(message.role));
+        free(const_cast<char *>(message.content));
+    }
+    _messages.clear();
+    _response.clear();
+    _cacheResponseTokens.clear();
+    // The prefix-reuse record must describe the cache exactly; after an abort it cannot, so
+    // forget it and clear the cache with it. `true` also zeroes the buffers, which resets the
+    // recurrent state of hybrid models (LFM2) rather than just the position bookkeeping.
+    _cachedTokens.clear();
+    _reusedPrefixLen = 0;
+    llama_memory_clear(llama_get_memory(_ctx), true);
+    if (_sampler) {
+        llama_sampler_reset(_sampler);
+    }
+    _abortAtUs.store(0, std::memory_order_relaxed);
 }
 
 LLMInference::~LLMInference() {

@@ -447,6 +447,9 @@ Output: The meeting has been moved to Thursday at 2 PM. Please confirm whether y
         // single-OpenAI one that #105 used to divert past the executor -- actually reaches
         // CleanupWaterfallExecutor, without making a network call.
         transport: CleanupHttpTransport = RealCleanupHttpTransport,
+        // Ceiling on a chunked on-device cleanup of `text`; see [CleanupWaterfallExecutor.execute].
+        // Live dictation keeps the default, the audio-file path passes its own larger one.
+        localStepBudgetMs: Long = LOCAL_CHUNKED_TOTAL_BUDGET_MS,
         callback: (Result) -> Unit,
     ) {
         val waterfall = ProviderChainRuntime.cleanupWaterfallFor(chain)
@@ -470,6 +473,7 @@ Output: The meeting has been moved to Thursday at 2 PM. Please confirm whether y
             benchmarkContext = benchmarkContext,
             temperatureCacheContext = temperatureCacheContext,
             benchmarkCorrelationId = benchmarkCorrelationId,
+            localStepBudgetMs = localStepBudgetMs,
             callback = callback,
         )
     }

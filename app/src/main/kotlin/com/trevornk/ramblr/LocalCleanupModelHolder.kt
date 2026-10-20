@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit
 class LocalCleanupModelSlot(private val idleUnloadMs: Long = IDLE_UNLOAD_MS) {
     private var loadedPath: String? = null
     private var lastUsedAtMs: Long = 0L
+    private var consecutiveFailures = 0
 
     /** True when serving [requestedPath] requires a (re)load: nothing is held, or a different
      *  model is held (the user switched models in Settings since the last dictation). */
@@ -36,6 +37,32 @@ class LocalCleanupModelSlot(private val idleUnloadMs: Long = IDLE_UNLOAD_MS) {
     fun recordReleased() {
         loadedPath = null
         lastUsedAtMs = 0L
+        consecutiveFailures = 0
+    }
+
+    /** A completion ran to a normal end: the held model is demonstrably healthy. */
+    fun recordSuccess(nowMs: Long) {
+        recordUsed(nowMs)
+        consecutiveFailures = 0
+    }
+
+    /**
+     * A completion on the held model failed. Returns true when the model must be dropped and
+     * reloaded, false when it can serve the next call.
+     *
+     * Most failures are not evidence against the loaded model: a deadline abort on a slow phone,
+     * a user cancel, the 512-piece cap, a repeat loop. Dropping the model for each cost a 4+ s
+     * reload (mumble-cleanup-2stage on a Pixel 10a) that was charged to the *next* chunk's time
+     * budget, so one slow chunk made the following one time out as well (#325). Those keep the
+     * model, provided the native conversation was rolled back ([nativeResetOk], see
+     * [LlamaCppInference.reusableAfterFailure]). Two guards keep that from masking real damage:
+     * a failed rollback drops it, and so does a run of [MAX_CONSECUTIVE_FAILURES] failures with
+     * no success between -- a model that keeps failing after a clean reset is not healthy
+     * regardless of what the individual errors said.
+     */
+    fun recordFailure(nativeResetOk: Boolean): Boolean {
+        consecutiveFailures++
+        return !nativeResetOk || consecutiveFailures >= MAX_CONSECUTIVE_FAILURES
     }
 
     /** True when a held model has sat unused for the full idle window and should be unloaded.
@@ -47,6 +74,9 @@ class LocalCleanupModelSlot(private val idleUnloadMs: Long = IDLE_UNLOAD_MS) {
         /** Matches [CleanupWaterfallCursor]'s 5-minute idle expiry: after this long with no
          *  dictation, the ~1 GB mapped model is not worth keeping resident. */
         const val IDLE_UNLOAD_MS = 5 * 60 * 1000L
+
+        /** Failures in a row (no successful completion between) after which the model is reloaded. */
+        const val MAX_CONSECUTIVE_FAILURES = 3
     }
 }
 
@@ -63,10 +93,13 @@ class LocalCleanupModelSlot(private val idleUnloadMs: Long = IDLE_UNLOAD_MS) {
  * before that fix, a second `complete()` on one instance embedded the first call's system prompt
  * and transcript in its own prompt, masked only by the old load-per-call pattern.
  *
- * The held instance is dropped on: model-path change (reload with the new model), any exception
- * out of the inference block (the native state may be dirty mid-completion -- reload fresh next
- * time rather than trust it), 5 idle minutes ([LocalCleanupModelSlot.IDLE_UNLOAD_MS]), service
- * destroy, and memory pressure (see WhisperAccessibilityService.onTrimMemory).
+ * The held instance is dropped on: model-path change (reload with the new model), a failed
+ * completion whose native state could not be rolled back or a run of consecutive failed
+ * completions ([LocalCleanupModelSlot.recordFailure]), 5 idle minutes
+ * ([LocalCleanupModelSlot.IDLE_UNLOAD_MS]), service destroy, and memory pressure (see
+ * WhisperAccessibilityService.onTrimMemory). An ordinary failed completion (deadline abort,
+ * cancel, piece cap) does NOT drop it: [LlamaCppInference.complete] rolls the native
+ * conversation back to the just-loaded state, so a slow chunk no longer costs a reload (#325).
  */
 object LocalCleanupModelHolder {
     private val slot = LocalCleanupModelSlot()
@@ -84,11 +117,13 @@ object LocalCleanupModelHolder {
      * completions on one native context must be serialized, and this is the same coarse
      * serialization the waterfall executor already implies for the LOCAL_LLM step.
      *
-     * If loading fails the exception propagates with nothing held; if [block] throws, the held
-     * instance is closed and discarded before rethrowing, so the next call reloads fresh instead
-     * of reusing possibly-corrupted native state (a deadline/cancel abort from
-     * [LlamaCompletionAccumulator] lands here too -- rare enough that re-paying one load beats
-     * trusting a context that stopped mid-generation).
+     * If loading fails the exception propagates with nothing held. If [block] throws, the
+     * instance is kept only when [LlamaCppInference.complete] managed to roll the native
+     * conversation back to its just-loaded state and [LocalCleanupModelSlot.recordFailure] sees
+     * no reason to distrust it; otherwise it is closed and discarded before rethrowing, so the
+     * next call reloads fresh. This used to discard on EVERY exception, which turned each
+     * deadline abort into a reload (4.2-4.6 s for mumble-cleanup-2stage on a Pixel 10a) charged
+     * to the next chunk's budget (#325).
      */
     @Synchronized
     fun <R> withInference(modelPath: String, block: (LlamaCppInference) -> R): R {
@@ -117,11 +152,18 @@ object LocalCleanupModelHolder {
             block(inference)
         } catch (t: Throwable) {
             android.util.Log.e("LocalCleanupModelHolder", "Generation threw after ${System.currentTimeMillis() - genStartedAtMs}ms", t)
-            releaseHeld()
+            if (slot.recordFailure(inference.reusableAfterFailure)) {
+                android.util.Log.w("LocalCleanupModelHolder", "Dropping the loaded model after the failed generation")
+                releaseHeld()
+            } else {
+                android.util.Log.i("LocalCleanupModelHolder", "Keeping the loaded model after the failed generation (conversation reset)")
+                slot.recordUsed(System.currentTimeMillis())
+                scheduleIdleUnload()
+            }
             throw t
         }
         android.util.Log.i("LocalCleanupModelHolder", "Generation took ${System.currentTimeMillis() - genStartedAtMs}ms")
-        slot.recordUsed(System.currentTimeMillis())
+        slot.recordSuccess(System.currentTimeMillis())
         scheduleIdleUnload()
         return result
     }

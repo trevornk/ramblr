@@ -332,8 +332,9 @@ internal class AudioJobRunner(
                 localPrompt = localPrompt,
                 localVocabulary = vocabulary,
                 temperatureCacheContext = context.applicationContext,
+                localStepBudgetMs = TranscriptChunker.localStepBudgetMsFor(waterfall),
             ) { r -> result = r; latch.countDown() }
-            if (!latch.await(CLEANUP_PIECE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) inFlight.cancel()
+            if (!latch.await(TranscriptChunker.pieceTimeoutSecondsFor(waterfall), TimeUnit.SECONDS)) inFlight.cancel()
             if (isCancelled(id)) throw Stop(null)
             val cleaned = result?.text?.takeIf { it.isNotBlank() }
             // A piece is cleaned, partly cleaned (a chunked on-device run that left some chunks
@@ -354,7 +355,6 @@ internal class AudioJobRunner(
 
     companion object {
         private const val TAG = "AudioJob"
-        private const val CLEANUP_PIECE_TIMEOUT_SECONDS = 240L
 
         /** Best-effort display name for a content URI (never throws). */
         fun displayNameOf(context: Context, uri: Uri, fallback: String): String = try {

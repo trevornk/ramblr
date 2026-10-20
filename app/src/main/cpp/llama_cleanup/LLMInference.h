@@ -120,5 +120,15 @@ class LLMInference {
 
     void stopCompletion();
 
+    // Returns this instance to the state a freshly loaded one is in -- no messages, no KV cache,
+    // no remembered prompt tokens, no armed deadline -- without unloading the model. For use
+    // after a completion that did NOT run to a normal end (deadline abort, cancel, piece cap,
+    // native error), where the KV cache and `_cachedTokens` may disagree: a decode aborted
+    // mid-prompt leaves only part of the prompt resident while `_cachedTokens` records all of it,
+    // and startCompletion's prefix reuse would then trust KV entries that were never computed.
+    // Cheap (clears buffers; the mmap'd weights stay resident), which is the point: the
+    // alternative was closing the model and paying a multi-second reload on the next chunk.
+    void resetConversation();
+
     ~LLMInference();
 };

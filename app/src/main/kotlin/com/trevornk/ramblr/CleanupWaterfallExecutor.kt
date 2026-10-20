@@ -188,30 +188,39 @@ fun localLlmStepDeadline(
     else minOf(overallDeadlineAtMs, nowMs + LOCAL_LLM_STEP_BUDGET_MS)
 
 /**
- * Wall-clock budget for ONE chunk of a chunked terminal LOCAL_LLM step (#325). A chunk is at most
- * [LocalCleanupChunker.MAX_CHUNK_CHARS] characters (~75 output tokens), so the same 12s a short
- * single-pass dictation gets would already be enough on a Pixel 10a (4-10s measured); 20s widens
- * that to roughly 4 tokens/s of decode speed, which covers a phone a few times slower than the
- * 10a without letting one stuck decode hold a live dictation hostage. It is a per-chunk ceiling,
- * not a total: a 10-minute recording is ~35 chunks and is bounded by
- * [LOCAL_CHUNKED_TOTAL_BUDGET_MS] and [LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS] instead.
- */
-const val LOCAL_CHUNK_BUDGET_MS = 20_000L
-
-/**
- * Ceiling on a whole chunked LOCAL_LLM step (#325). Once it is spent the remaining chunks are
- * delivered raw rather than running on. Below the 400s dictation watchdog (which fires and resets
- * the UI mid-cleanup) so a chunked run always finishes -- partially cleaned -- before it, and at
- * 4 minutes covers ~24 chunks at the 10s worst case, i.e. ~7,000 characters / ~8 minutes of
- * speech inside one live dictation. Longer inputs reach this path as several smaller calls
- * (see [AudioJobRunner]), each with its own budget.
+ * Ceiling on a whole chunked LOCAL_LLM step (#325), unless the caller passes its own (see
+ * [CleanupWaterfallExecutor.execute]'s `localStepBudgetMs`). It exists for live dictation, whose
+ * 400 s watchdog fires and resets the UI mid-cleanup: a chunked run must finish -- partially
+ * cleaned if need be -- before that, with room left for the transcription that precedes it. The
+ * per-chunk allowance is NOT a constant: [LocalCleanupChunkBudget] derives it from how fast this
+ * device has actually been decoding, from [LocalCleanupChunkBudget.MIN_BUDGET_MS] (the flat 20 s
+ * #327 shipped, which a fast phone still gets) up to [LocalCleanupChunkBudget.MAX_BUDGET_MS].
+ *
+ * When the measured pace says the next chunk cannot finish inside what is left of this ceiling,
+ * the chunk is not started and the rest is delivered raw with the honest partial label, instead
+ * of burning the remainder on a chunk killed at the deadline. At 4 minutes this covers ~24
+ * chunks at the Pixel 10a's 10 s (LFM2.5) or ~17 at its 14 s (Mumble) -- ~5,000-7,000
+ * characters of dictation; the audio-file path, which has no watchdog and cleans a long
+ * recording piece by piece, passes [AUDIO_LOCAL_STEP_BUDGET_MS] per piece instead.
  */
 const val LOCAL_CHUNKED_TOTAL_BUDGET_MS = 240_000L
 
 /**
+ * Per-piece ceiling for the audio-file path (see [AudioJobRunner]): a background job with a
+ * visible Cancel and no live-dictation watchdog, whose pieces are at most
+ * [TranscriptChunker.LOCAL_TERMINAL_MAX_CHARS] (~6 chunks). Ten minutes holds six chunks at the
+ * 100 s a chunk may take on a phone several times slower than a Pixel 10a, so a slow phone gets
+ * a fully cleaned file (slowly) instead of raw text, while the admission check still stops a
+ * piece whose measured pace says the rest cannot fit.
+ */
+const val AUDIO_LOCAL_STEP_BUDGET_MS = 600_000L
+
+/**
  * After this many chunks in a row time out, the device is plainly too slow for the model and the
- * remaining chunks are returned raw instead of burning [LOCAL_CHUNK_BUDGET_MS] on each. Validator
- * rejections do not count: those are quick and independent per chunk.
+ * remaining chunks are returned raw instead of burning another budget on each. Each timeout also
+ * raises the next chunk's allowance (see [LocalCleanupChunkBudget]), so two in a row means the
+ * allowance has already grown and still was not enough. Validator rejections do not count: those
+ * are quick and independent per chunk.
  */
 const val LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS = 2
 
@@ -385,6 +394,16 @@ fun interface LocalInferenceEngine {
         deadlineAtMs: Long,
         isCancelled: () -> Boolean,
     ): LocalInferenceResult
+
+    /**
+     * Gets [modelPath] loaded so the first [complete] does not pay the load. A chunked cleanup
+     * calls this once before its first chunk so the multi-second GGUF load (4.2-4.6 s for
+     * mumble-cleanup-2stage on a Pixel 10a, more on a slower phone) is not charged to chunk 1's
+     * time allowance, and so it is not mistaken for decode speed when [LocalCleanupChunkBudget]
+     * measures the device. Best effort: a failure here is not reported -- the first [complete]
+     * hits the same failure and reports it properly. Default: nothing to prepare.
+     */
+    fun prepare(modelPath: String) {}
 }
 
 /**
@@ -455,6 +474,17 @@ object BoundedBlockingCall {
  *  past [deadlineAtMs] -- see its kdoc for why the accumulator's own per-piece deadline check
  *  isn't enough on its own. */
 object RealLocalInferenceEngine : LocalInferenceEngine {
+    /** Longest [prepare] waits for a load. Generous: a cold load of a ~350 MB GGUF on a slow phone. */
+    private const val PREPARE_TIMEOUT_MS = 60_000L
+
+    override fun prepare(modelPath: String) {
+        runCatching {
+            BoundedBlockingCall.runWithDeadline(System.currentTimeMillis() + PREPARE_TIMEOUT_MS) {
+                LocalCleanupModelHolder.withInference(modelPath) { /* load only */ }
+            }
+        }
+    }
+
     override fun complete(
         systemPrompt: String,
         userText: String,
@@ -659,6 +689,9 @@ object CleanupWaterfallExecutor {
         // Casual) and off for rewriting ones (Notes, Email, Concise, custom). LOCAL_LLM output has
         // its own validator and is never checked here.
         fidelityGuard: Boolean = PostProcessor.preservesWording(prompt),
+        // Ceiling on a chunked terminal LOCAL_LLM step (see [LOCAL_CHUNKED_TOTAL_BUDGET_MS]).
+        // Live dictation keeps the default; the audio-file path passes [AUDIO_LOCAL_STEP_BUDGET_MS].
+        localStepBudgetMs: Long = LOCAL_CHUNKED_TOTAL_BUDGET_MS,
         callback: (PostProcessor.Result) -> Unit,
     ) {
         val steps = waterfall.steps
@@ -703,7 +736,7 @@ object CleanupWaterfallExecutor {
                 return
             }
 
-            performStep(steps[index], text, prompt, localPrompt, localVocabulary, credentialLookup, entryCredentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, nowMs, temperatureCacheContext, isLastStep = index == steps.lastIndex) { stepOutcome ->
+            performStep(steps[index], text, prompt, localPrompt, localVocabulary, credentialLookup, entryCredentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, nowMs, temperatureCacheContext, isLastStep = index == steps.lastIndex, localStepBudgetMs = localStepBudgetMs) { stepOutcome ->
                 val outcome = if (fidelityGuard) guardCloudOutput(steps[index], text, stepOutcome) else stepOutcome
                 logStepOutcome(steps[index], startedAtMs, outcome, benchmarkContext, benchmarkCorrelationId)
                 when (outcome) {
@@ -858,7 +891,7 @@ object CleanupWaterfallExecutor {
      * already-loaded model, and re-join them.
      *
      * **Failure policy.** Each chunk stands alone. A chunk whose pass fails (validator rejection,
-     * 512-piece cap, loop detection, its own [LOCAL_CHUNK_BUDGET_MS] expiring, native error) is
+     * 512-piece cap, loop detection, its own allowance expiring, native error) is
      * kept as its raw text and the run continues, so one bad sentence cannot cost the user the
      * other 34 chunks of cleanup. The result is a [CleanupStepOutcome.Success] as long as at least
      * one chunk was cleaned, carrying [PartialCleanup] when any chunk fell back; with no chunk
@@ -867,15 +900,28 @@ object CleanupWaterfallExecutor {
      * Output of a chunk that fails is never mixed in half-way: it is raw or cleaned, nothing else.
      *
      * **Bounds.** Cancellation is checked before every chunk (and inside each pass by the engine),
-     * so a cancel stops the run within one chunk. [LOCAL_CHUNK_BUDGET_MS] bounds each chunk;
-     * [LOCAL_CHUNKED_TOTAL_BUDGET_MS] bounds the step and [LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS]
-     * stops early on a device too slow for the model -- in both cases the unprocessed remainder is
-     * delivered raw. Only the terminal step chunks: a non-terminal local step has a 4s budget that
+     * so a cancel stops the run within one chunk. Three things bound time:
+     *
+     *  - Each chunk's allowance comes from [LocalCleanupChunkBudget]: the device's measured
+     *    ms-per-character times a safety factor, never below the flat 20 s of #327, with a roomy
+     *    allowance for the first chunk (nothing measured yet) and a ceiling for a stuck decode.
+     *    A fixed 20 s was tuned on one phone and timed out 3 of 40 chunks even on a Pixel 10a with
+     *    mumble-cleanup-2stage, whose per-chunk time is 10-18 s; on a slower phone it would time
+     *    out every chunk.
+     *  - [stepBudgetMs] bounds the step. Before each chunk the measured pace is compared with what
+     *    is left: a chunk that cannot finish in the remainder is not started, and everything from
+     *    there is delivered raw (the honest partial result), instead of running a chunk into the
+     *    deadline and wasting its time.
+     *  - [LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS] stops early on a device too slow for the model.
+     *
+     * Only the terminal step chunks: a non-terminal local step has a 4s budget that
      * exists to protect the cloud step behind it, and that step is the better place for a long
      * transcript anyway.
      *
-     * The model stays loaded across chunks ([LocalCleanupModelHolder] reuses it, and each chunk
-     * refreshes its idle clock, so the 5-minute idle unload cannot fire mid-run).
+     * The model is loaded before the first chunk's clock starts ([LocalInferenceEngine.prepare])
+     * and stays loaded across chunks ([LocalCleanupModelHolder] reuses it, including after a
+     * timeout, and each chunk refreshes its idle clock, so the 5-minute idle unload cannot fire
+     * mid-run).
      */
     private fun cleanLocalInChunks(
         text: String,
@@ -885,9 +931,14 @@ object CleanupWaterfallExecutor {
         modelPath: String,
         cancelHolder: InFlightCall,
         nowMs: () -> Long,
+        stepBudgetMs: Long,
     ): CleanupStepOutcome {
         val chunks = LocalCleanupChunker.split(text, LocalCleanupChunker.maxChunkChars(localPrompt))
         val startedAtMs = nowMs()
+        val stepDeadlineAtMs = startedAtMs + stepBudgetMs
+        if (cancelHolder.isCancelled) return CleanupStepOutcome.Cancelled
+        runCatching { localInference.prepare(modelPath) }
+        val budget = LocalCleanupChunkBudget()
         val texts = ArrayList<String>(chunks.size)
         var cleaned = 0
         var consecutiveTimeouts = 0
@@ -896,8 +947,13 @@ object CleanupWaterfallExecutor {
         for ((index, chunk) in chunks.withIndex()) {
             if (cancelHolder.isCancelled) return CleanupStepOutcome.Cancelled
             if (stoppedEarly == null) {
-                if (nowMs() - startedAtMs >= LOCAL_CHUNKED_TOTAL_BUDGET_MS) {
-                    stoppedEarly = "total budget of ${LOCAL_CHUNKED_TOTAL_BUDGET_MS}ms spent"
+                val remainingMs = stepDeadlineAtMs - nowMs()
+                val expectedMs = budget.expectedMs(chunk.text.length)
+                if (remainingMs <= 0 || (expectedMs != null && expectedMs > remainingMs) ||
+                    (expectedMs == null && remainingMs < LocalCleanupChunkBudget.MIN_BUDGET_MS)
+                ) {
+                    stoppedEarly = "step budget of ${stepBudgetMs}ms cannot fit another chunk " +
+                        "(${remainingMs}ms left, ~${expectedMs ?: "?"}ms needed)"
                 } else if (consecutiveTimeouts >= LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS) {
                     stoppedEarly = "$consecutiveTimeouts consecutive chunks timed out"
                 }
@@ -907,9 +963,10 @@ object CleanupWaterfallExecutor {
                 continue
             }
             val chunkStartedAtMs = nowMs()
+            val allowedMs = minOf(budget.budgetMs(chunk.text.length), stepDeadlineAtMs - chunkStartedAtMs)
             val outcome = cleanLocalPass(
                 chunk.text, localPrompt, localVocabulary, localInference, modelPath,
-                chunkStartedAtMs + LOCAL_CHUNK_BUDGET_MS, cancelHolder,
+                chunkStartedAtMs + allowedMs, cancelHolder,
             )
             val tookMs = nowMs() - chunkStartedAtMs
             when (outcome) {
@@ -918,7 +975,8 @@ object CleanupWaterfallExecutor {
                     texts += outcome.text
                     cleaned++
                     consecutiveTimeouts = 0
-                    logChunk(index, chunks.size, chunk.text.length, outcome.text.length, tookMs, "cleaned")
+                    budget.recordCompleted(chunk.text.length, tookMs)
+                    logChunk(index, chunks.size, chunk.text.length, outcome.text.length, tookMs, "cleaned", allowedMs)
                 }
                 else -> {
                     val message = when (outcome) {
@@ -927,9 +985,13 @@ object CleanupWaterfallExecutor {
                         else -> null
                     }
                     lastFailure = message ?: lastFailure
-                    consecutiveTimeouts = if (isTimeoutMessage(message)) consecutiveTimeouts + 1 else 0
+                    val timedOut = isTimeoutMessage(message)
+                    consecutiveTimeouts = if (timedOut) consecutiveTimeouts + 1 else 0
+                    // A timeout is evidence about the device (it ran at least this long); a validator
+                    // rejection is not about speed and is left out of the estimate.
+                    if (timedOut) budget.recordTimedOut(chunk.text.length, allowedMs)
                     texts += chunk.text
-                    logChunk(index, chunks.size, chunk.text.length, chunk.text.length, tookMs, "raw: ${message ?: "failed"}")
+                    logChunk(index, chunks.size, chunk.text.length, chunk.text.length, tookMs, "raw: ${message ?: "failed"}", allowedMs)
                 }
             }
         }
@@ -958,11 +1020,11 @@ object CleanupWaterfallExecutor {
             )
 
     /** Lengths and timing only -- never transcript or model text. */
-    private fun logChunk(index: Int, total: Int, inChars: Int, outChars: Int, tookMs: Long, verdict: String) {
+    private fun logChunk(index: Int, total: Int, inChars: Int, outChars: Int, tookMs: Long, verdict: String, allowedMs: Long) {
         runCatching {
             android.util.Log.i(
                 "CleanupWaterfallExecutor",
-                "Local chunk ${index + 1}/$total: ${inChars}ch -> ${outChars}ch in ${tookMs}ms ($verdict)",
+                "Local chunk ${index + 1}/$total: ${inChars}ch -> ${outChars}ch in ${tookMs}ms of ${allowedMs}ms ($verdict)",
             )
         }
     }
@@ -984,6 +1046,7 @@ object CleanupWaterfallExecutor {
         nowMs: () -> Long,
         temperatureCacheContext: android.content.Context?,
         isLastStep: Boolean,
+        localStepBudgetMs: Long,
         callback: (CleanupStepOutcome) -> Unit,
     ) {
         // LOCAL_LLM branches before the credential check below: it's the one group with no
@@ -1001,7 +1064,7 @@ object CleanupWaterfallExecutor {
             if (isLastStep && LocalCleanupChunker.needsChunking(text, localPrompt)) {
                 callback(
                     cleanLocalInChunks(
-                        text, localPrompt, localVocabulary, localInference, modelPath, cancelHolder, nowMs,
+                        text, localPrompt, localVocabulary, localInference, modelPath, cancelHolder, nowMs, localStepBudgetMs,
                     )
                 )
                 return

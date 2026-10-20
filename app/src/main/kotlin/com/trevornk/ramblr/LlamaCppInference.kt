@@ -91,15 +91,15 @@ class LlamaCppInference : Closeable {
         isCancelled: () -> Boolean = { false },
     ): String {
         check(nativePtr != 0L) { "Model is not loaded. Call load() first." }
-        // Content is sanitized because the native side tokenizes the rendered template with
-        // parse_special=true -- literal <|im_end|>-style text in a transcript would otherwise
-        // become real control tokens and forge turn boundaries (#78).
-        addChatMessage(nativePtr, SpecialTokenSanitizer.sanitize(systemPrompt), "system")
-        startCompletion(nativePtr, SpecialTokenSanitizer.sanitize(userText))
-        // stopCompletion is in the finally so it runs even if arming the budget below throws --
-        // once startCompletion has begun, the native completion state must be torn down cleanly on
-        // any failure, not just a normal/accumulator-thrown return (L5).
+        var finished = false
+        var started = false
         try {
+            // Content is sanitized because the native side tokenizes the rendered template with
+            // parse_special=true -- literal <|im_end|>-style text in a transcript would otherwise
+            // become real control tokens and forge turn boundaries (#78).
+            addChatMessage(nativePtr, SpecialTokenSanitizer.sanitize(systemPrompt), "system")
+            startCompletion(nativePtr, SpecialTokenSanitizer.sanitize(userText))
+            started = true
             // Arm the native wall-clock budget (#92): a single completionLoop() decode is one
             // uninterruptible JNI call, so the accumulator's between-piece deadline check below
             // can't stop a decode that runs pathologically long (mmap page-faults under memory
@@ -109,7 +109,7 @@ class LlamaCppInference : Closeable {
             // first check"; the default Long.MAX_VALUE deadline maps to 0, meaning "no native
             // deadline" (tests / direct callers).
             setInferenceBudgetMs(nativePtr, InferenceBudget.budgetMs(deadlineAtMs, System.currentTimeMillis()))
-            return LlamaCompletionAccumulator.accumulate(
+            val response = LlamaCompletionAccumulator.accumulate(
                 maxPieces = MAX_RESPONSE_TOKENS,
                 endOfGeneration = END_OF_GENERATION,
                 deadlineAtMs = deadlineAtMs,
@@ -119,8 +119,41 @@ class LlamaCppInference : Closeable {
                 // native side hands back bytes and we decode them here instead.
                 nextPiece = { String(completionLoop(nativePtr), Charsets.UTF_8) },
             )
+            finished = true
+            return response
         } finally {
-            stopCompletion(nativePtr)
+            // stopCompletion runs once startCompletion has begun, so the native completion state
+            // is torn down on any failure, not just a normal/accumulator-thrown return (L5).
+            if (started) stopCompletion(nativePtr)
+            if (!finished) resetAfterFailedCompletion()
+        }
+    }
+
+    /**
+     * False once a failed completion could not be rolled back (see [resetAfterFailedCompletion]);
+     * [LocalCleanupModelHolder] then drops this instance instead of reusing it.
+     */
+    @Volatile var reusableAfterFailure: Boolean = true
+        private set
+
+    /**
+     * Rolls the native conversation back to the freshly-loaded state after a completion that did
+     * not run to a normal end (deadline abort, cancel, piece cap, repeat loop, native error),
+     * so the loaded model can serve the next call -- see [LocalCleanupModelHolder] for why that
+     * matters: closing it cost a 4+ s reload that ate the next chunk's budget and made slow
+     * chunks time out in a row (#325).
+     *
+     * Not stopCompletion alone: after a decode aborted mid-prompt the KV cache holds only part of
+     * the prompt while the native prefix-reuse record claims all of it, so the next call would
+     * attend to cache entries that were never computed. The native reset clears both (and the
+     * recurrent state of hybrid models). If the reset itself throws, nothing can be trusted and
+     * the instance is marked unusable.
+     */
+    private fun resetAfterFailedCompletion() {
+        try {
+            resetConversation(nativePtr)
+        } catch (t: Throwable) {
+            reusableAfterFailure = false
         }
     }
 
@@ -152,6 +185,8 @@ class LlamaCppInference : Closeable {
     private external fun completionLoop(modelPtr: Long): ByteArray
 
     private external fun stopCompletion(modelPtr: Long)
+
+    private external fun resetConversation(modelPtr: Long)
 
     private external fun close(modelPtr: Long)
 

@@ -115,6 +115,16 @@ Java_com_trevornk_ramblr_LlamaCppInference_completionLoop(JNIEnv* env, jobject t
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_trevornk_ramblr_LlamaCppInference_resetConversation(JNIEnv* env, jobject thiz, jlong modelPtr) {
+    auto* llmInference = reinterpret_cast<LLMInference*>(modelPtr);
+    try {
+        llmInference->resetConversation();
+    } catch (std::exception& error) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), error.what());
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_trevornk_ramblr_LlamaCppInference_stopCompletion(JNIEnv* env, jobject thiz, jlong modelPtr) {
     auto* llmInference = reinterpret_cast<LLMInference*>(modelPtr);
     llmInference->stopCompletion();
