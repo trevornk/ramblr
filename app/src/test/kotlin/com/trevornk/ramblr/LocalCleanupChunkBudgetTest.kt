@@ -2,6 +2,7 @@ package com.trevornk.ramblr
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -103,5 +104,42 @@ class LocalCleanupChunkBudgetTest {
         b.recordCompleted(100, 1_000) // 10 ms/char
         b.recordCompleted(100, 3_000) // 30 ms/char
         assertEquals(20.0, b.estimateMsPerChar()!!, 1e-9)
+    }
+
+    // ---- LocalCleanupPaceStore ---------------------------------------------------------------
+
+    @Test fun `the store hands back the same budget for a model within the ttl`() {
+        val store = LocalCleanupPaceStore(ttlMs = 1_000)
+        val a = store.budgetFor("/m", 0)
+        a.recordCompleted(300, 10_000)
+        assertSame(a, store.budgetFor("/m", 900))
+    }
+
+    @Test fun `use renews the ttl so a long run never goes stale`() {
+        val store = LocalCleanupPaceStore(ttlMs = 1_000)
+        val a = store.budgetFor("/m", 0)
+        store.touch("/m", 900)
+        assertSame(a, store.budgetFor("/m", 1_800))
+    }
+
+    @Test fun `a stale estimate is dropped and starts from no evidence`() {
+        val store = LocalCleanupPaceStore(ttlMs = 1_000)
+        store.budgetFor("/m", 0).recordCompleted(300, 10_000)
+        val fresh = store.budgetFor("/m", 1_001)
+        assertNull(fresh.estimateMsPerChar())
+        assertEquals(LocalCleanupChunkBudget.INITIAL_BUDGET_MS, fresh.budgetMs(300))
+    }
+
+    @Test fun `each model keeps its own pace`() {
+        val store = LocalCleanupPaceStore()
+        store.budgetFor("/lfm", 0).recordCompleted(300, 7_000)
+        assertNull(store.budgetFor("/mumble", 0).estimateMsPerChar())
+    }
+
+    @Test fun `clear forgets everything`() {
+        val store = LocalCleanupPaceStore()
+        store.budgetFor("/m", 0).recordCompleted(300, 7_000)
+        store.clear()
+        assertNull(store.budgetFor("/m", 1).estimateMsPerChar())
     }
 }

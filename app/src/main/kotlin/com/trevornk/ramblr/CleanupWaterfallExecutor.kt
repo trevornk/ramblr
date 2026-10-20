@@ -692,6 +692,9 @@ object CleanupWaterfallExecutor {
         // Ceiling on a chunked terminal LOCAL_LLM step (see [LOCAL_CHUNKED_TOTAL_BUDGET_MS]).
         // Live dictation keeps the default; the audio-file path passes [AUDIO_LOCAL_STEP_BUDGET_MS].
         localStepBudgetMs: Long = LOCAL_CHUNKED_TOTAL_BUDGET_MS,
+        // Measured on-device pace, shared across chunked cleanups (and so across the pieces of one
+        // audio job); see [LocalCleanupPaceStore]. Tests pass their own to stay independent.
+        localPace: LocalCleanupPaceStore = LocalCleanupPaceStore.shared,
         callback: (PostProcessor.Result) -> Unit,
     ) {
         val steps = waterfall.steps
@@ -736,7 +739,7 @@ object CleanupWaterfallExecutor {
                 return
             }
 
-            performStep(steps[index], text, prompt, localPrompt, localVocabulary, credentialLookup, entryCredentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, nowMs, temperatureCacheContext, isLastStep = index == steps.lastIndex, localStepBudgetMs = localStepBudgetMs) { stepOutcome ->
+            performStep(steps[index], text, prompt, localPrompt, localVocabulary, credentialLookup, entryCredentialLookup, transport, localInference, localModelPath, cancelHolder, deadlineAtMs, nowMs, temperatureCacheContext, isLastStep = index == steps.lastIndex, localStepBudgetMs = localStepBudgetMs, localPace = localPace) { stepOutcome ->
                 val outcome = if (fidelityGuard) guardCloudOutput(steps[index], text, stepOutcome) else stepOutcome
                 logStepOutcome(steps[index], startedAtMs, outcome, benchmarkContext, benchmarkCorrelationId)
                 when (outcome) {
@@ -918,6 +921,9 @@ object CleanupWaterfallExecutor {
      * exists to protect the cloud step behind it, and that step is the better place for a long
      * transcript anyway.
      *
+     * The measured pace comes from [pace] and outlives this call: the pieces of one audio job share
+     * it, so only the very first chunk of the job runs on the roomy first-chunk allowance.
+     *
      * The model is loaded before the first chunk's clock starts ([LocalInferenceEngine.prepare])
      * and stays loaded across chunks ([LocalCleanupModelHolder] reuses it, including after a
      * timeout, and each chunk refreshes its idle clock, so the 5-minute idle unload cannot fire
@@ -932,13 +938,15 @@ object CleanupWaterfallExecutor {
         cancelHolder: InFlightCall,
         nowMs: () -> Long,
         stepBudgetMs: Long,
+        pace: LocalCleanupPaceStore,
     ): CleanupStepOutcome {
         val chunks = LocalCleanupChunker.split(text, LocalCleanupChunker.maxChunkChars(localPrompt))
         val startedAtMs = nowMs()
         val stepDeadlineAtMs = startedAtMs + stepBudgetMs
         if (cancelHolder.isCancelled) return CleanupStepOutcome.Cancelled
         runCatching { localInference.prepare(modelPath) }
-        val budget = LocalCleanupChunkBudget()
+        // Shared with the other pieces of this job: not restarted at the first-chunk allowance.
+        val budget = pace.budgetFor(modelPath, nowMs())
         val texts = ArrayList<String>(chunks.size)
         var cleaned = 0
         var consecutiveTimeouts = 0
@@ -969,6 +977,7 @@ object CleanupWaterfallExecutor {
                 chunkStartedAtMs + allowedMs, cancelHolder,
             )
             val tookMs = nowMs() - chunkStartedAtMs
+            pace.touch(modelPath, nowMs())
             when (outcome) {
                 is CleanupStepOutcome.Cancelled -> return outcome
                 is CleanupStepOutcome.Success -> {
@@ -1047,6 +1056,7 @@ object CleanupWaterfallExecutor {
         temperatureCacheContext: android.content.Context?,
         isLastStep: Boolean,
         localStepBudgetMs: Long,
+        localPace: LocalCleanupPaceStore,
         callback: (CleanupStepOutcome) -> Unit,
     ) {
         // LOCAL_LLM branches before the credential check below: it's the one group with no
@@ -1064,7 +1074,7 @@ object CleanupWaterfallExecutor {
             if (isLastStep && LocalCleanupChunker.needsChunking(text, localPrompt)) {
                 callback(
                     cleanLocalInChunks(
-                        text, localPrompt, localVocabulary, localInference, modelPath, cancelHolder, nowMs, localStepBudgetMs,
+                        text, localPrompt, localVocabulary, localInference, modelPath, cancelHolder, nowMs, localStepBudgetMs, localPace,
                     )
                 )
                 return

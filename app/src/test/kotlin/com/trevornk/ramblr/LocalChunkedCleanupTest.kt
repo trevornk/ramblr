@@ -61,6 +61,7 @@ class LocalChunkedCleanupTest {
         transport: CleanupHttpTransport = CleanupHttpTransport { _, _, _, _, _, _ -> error("no cloud step expected") },
         credential: String = "",
         stepBudgetMs: Long = LOCAL_CHUNKED_TOTAL_BUDGET_MS,
+        pace: LocalCleanupPaceStore = LocalCleanupPaceStore(),
     ): PostProcessor.Result {
         var captured: PostProcessor.Result? = null
         CleanupWaterfallExecutor.execute(
@@ -77,6 +78,7 @@ class LocalChunkedCleanupTest {
             localVocabulary = vocabulary,
             nowMs = nowMs,
             localStepBudgetMs = stepBudgetMs,
+            localPace = pace,
             callback = { captured = it },
         )
         return captured ?: error("callback never fired")
@@ -468,6 +470,97 @@ class LocalChunkedCleanupTest {
         val result = run(sentences(60), engine, holder = holder, nowMs = clock::now)
         assertEquals("Cleanup cancelled", result.error)
         assertEquals(2, inner.calls)
+    }
+
+    // ---- pace carried across the pieces of one job (#325) -------------------------------------------
+
+    @Test fun `a second piece starts from the pace the first one measured, not the first-chunk allowance`() {
+        val clock = FakeClock()
+        val device = SimulatedDevice(clock, msPerChar = 47.0) // Mumble on the 10a
+        val pace = LocalCleanupPaceStore()
+        val piece = sentences(36)
+
+        run(piece, device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS, pace = pace)
+        val firstPieceCalls = device.calls
+        assertEquals("first piece's first chunk had no evidence", LocalCleanupChunkBudget.INITIAL_BUDGET_MS, device.allowances[0])
+
+        run(piece, device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS, pace = pace)
+        val secondFirst = device.allowances[firstPieceCalls]
+        assertTrue("second piece's first chunk used the measured pace, got $secondFirst", secondFirst < 40_000L)
+        assertTrue(secondFirst >= LocalCleanupChunkBudget.MIN_BUDGET_MS)
+    }
+
+    @Test fun `without a shared store every piece restarts at the first-chunk allowance`() {
+        val clock = FakeClock()
+        val device = SimulatedDevice(clock, msPerChar = 47.0)
+        val piece = sentences(36)
+        run(piece, device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS)
+        val n = device.calls
+        run(piece, device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS)
+        assertEquals(LocalCleanupChunkBudget.INITIAL_BUDGET_MS, device.allowances[n])
+    }
+
+    @Test fun `a timeout learnt in one piece raises the allowance of the next piece's first chunk`() {
+        val clock = FakeClock()
+        val device = SimulatedDevice(clock, msPerChar = 250.0) // slower than the 60 s initial allowance
+        val pace = LocalCleanupPaceStore()
+        run(sentences(36), device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS, pace = pace)
+        val n = device.calls
+        run(sentences(36), device, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS, pace = pace)
+        assertTrue(
+            "next piece starts above the allowance that failed: ${device.allowances[n]}",
+            device.allowances[n] > LocalCleanupChunkBudget.INITIAL_BUDGET_MS,
+        )
+    }
+
+    // ---- runaway generation (#325) ----------------------------------------------------------------
+
+    @Test fun `a chunk stopped by the response cap is raw, not a timeout, and does not trip the breaker`() {
+        val engine = ScriptedEngine { _, _ ->
+            LocalInferenceResult.Failure("Local model exceeded max response length (112 pieces) without emitting an end-of-generation token")
+        }
+        run(sentences(60), engine)
+        assertTrue(
+            "the cap is a bad chunk, not a slow device: every chunk is still attempted",
+            engine.userTexts.size > LOCAL_CHUNK_MAX_CONSECUTIVE_TIMEOUTS,
+        )
+    }
+
+    @Test fun `a capped chunk is not counted as pace evidence`() {
+        val clock = FakeClock()
+        val pace = LocalCleanupPaceStore()
+        var calls = 0
+        val engine = object : LocalInferenceEngine {
+            override fun complete(systemPrompt: String, userText: String, modelPath: String, deadlineAtMs: Long, isCancelled: () -> Boolean): LocalInferenceResult {
+                clock.t += 9_000
+                return if (calls++ == 0) LocalInferenceResult.Failure("Local model exceeded max response length (112 pieces)")
+                else LocalInferenceResult.Success("[$userText]")
+            }
+        }
+        run(sentences(36), engine, nowMs = clock::now, stepBudgetMs = AUDIO_LOCAL_STEP_BUDGET_MS, pace = pace)
+        val est = pace.budgetFor("/model.gguf", clock.now()).estimateMsPerChar()!!
+        // The capped chunk was 9 s too, but a failure that is not a timeout is left out; the
+        // estimate comes from the successful chunks only, which all took 9 s each.
+        assertTrue(est in 20.0..45.0)
+    }
+
+    // ---- reset / reload and cancellation interplay ---------------------------------------------------
+
+    @Test fun `a cancel arriving while a chunk is being timed out ends the run without starting another`() {
+        val holder = InFlightCall()
+        val clock = FakeClock()
+        val engine = object : LocalInferenceEngine {
+            var calls = 0
+            override fun complete(systemPrompt: String, userText: String, modelPath: String, deadlineAtMs: Long, isCancelled: () -> Boolean): LocalInferenceResult {
+                calls++
+                clock.t += 30_000
+                holder.cancel()
+                return LocalInferenceResult.TimedOut("Local cleanup timed out")
+            }
+        }
+        val result = run(sentences(60), engine, holder = holder, nowMs = clock::now)
+        assertEquals("Cleanup cancelled", result.error)
+        assertEquals(1, engine.calls)
     }
 
     // ---- misc ----------------------------------------------------------------------------------------

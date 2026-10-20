@@ -77,8 +77,9 @@ class LlamaCppInference : Closeable {
      * user message -- the same two-message shape [PostProcessor.buildRequestBody] sends to every
      * cloud provider (see [LocalCleanupProvider]) -- and returns the concatenated response text.
      *
-     * Generation is capped at [MAX_RESPONSE_TOKENS] pieces via [LlamaCompletionAccumulator] (#60)
-     * -- see that object's kdoc for why. [stopCompletion] still runs before the resulting
+     * Generation is capped via [LlamaCompletionAccumulator] (#60)
+     * -- see that object's kdoc for why -- at [LocalCleanupResponseCap.maxTokensFor] of the input
+     * length, itself never more than [MAX_RESPONSE_TOKENS]. [stopCompletion] still runs before the resulting
      * exception propagates, so the native side tears down cleanly; [RealLocalInferenceEngine]
      * already converts any thrown exception here into an ordinary [LocalInferenceResult.Failure],
      * falling through to the next waterfall step (or raw text) exactly like any other
@@ -110,7 +111,7 @@ class LlamaCppInference : Closeable {
             // deadline" (tests / direct callers).
             setInferenceBudgetMs(nativePtr, InferenceBudget.budgetMs(deadlineAtMs, System.currentTimeMillis()))
             val response = LlamaCompletionAccumulator.accumulate(
-                maxPieces = MAX_RESPONSE_TOKENS,
+                maxPieces = LocalCleanupResponseCap.maxTokensFor(userText.length),
                 endOfGeneration = END_OF_GENERATION,
                 deadlineAtMs = deadlineAtMs,
                 isCancelled = isCancelled,

@@ -49,6 +49,7 @@ class LocalCleanupChunkBudget {
     private val samples = ArrayDeque<Double>()
 
     /** Median ms per input character over the recent window, or null before any evidence. */
+    @Synchronized
     fun estimateMsPerChar(): Double? {
         if (samples.isEmpty()) return null
         val sorted = samples.sorted()
@@ -57,21 +58,26 @@ class LocalCleanupChunkBudget {
     }
 
     /** Wall-clock allowance for a chunk of [chunkChars] characters. */
+    @Synchronized
     fun budgetMs(chunkChars: Int): Long {
         val perChar = estimateMsPerChar() ?: return INITIAL_BUDGET_MS
         return (FACTOR * perChar * chunkChars).toLong().coerceIn(MIN_BUDGET_MS, MAX_BUDGET_MS)
     }
 
     /** Typical (not worst-case) duration of a chunk of [chunkChars], or null before any evidence. */
+    @Synchronized
     fun expectedMs(chunkChars: Int): Long? =
         estimateMsPerChar()?.let { (it * chunkChars).toLong() }
 
     /** Records a chunk that decoded to completion in [tookMs]. */
+    @Synchronized
     fun recordCompleted(chunkChars: Int, tookMs: Long) = add(chunkChars, tookMs.toDouble())
 
     /** Records a chunk that ran out of its [allowedMs] allowance. */
+    @Synchronized
     fun recordTimedOut(chunkChars: Int, allowedMs: Long) = add(chunkChars, allowedMs * TIMEOUT_INFLATION)
 
+    @Synchronized
     private fun add(chunkChars: Int, ms: Double) {
         if (chunkChars <= 0) return
         samples.addLast(ms / chunkChars)
@@ -96,5 +102,52 @@ class LocalCleanupChunkBudget {
 
         /** First chunk, before there is a measurement. */
         const val INITIAL_BUDGET_MS = 60_000L
+    }
+}
+
+/**
+ * Keeps one [LocalCleanupChunkBudget] per model file alive across chunked cleanups, so what was
+ * learnt about this phone's speed is not thrown away at the end of every call (#325).
+ *
+ * An audio file is cleaned as a series of ~1500-character pieces, each its own chunked cleanup.
+ * With a budget object per call, every piece restarted at the 60 s first-chunk allowance, so a
+ * chunk that ran away early in a piece cost 60 s instead of the ~25 s the measured pace allows,
+ * and a slow phone re-learnt its speed by timing out once per piece.
+ *
+ * The estimate is dropped once [ttlMs] has passed with no chunk (default: the model holder's idle
+ * unload window): a phone that has been idle for minutes is in a different thermal and memory
+ * state, and the holder would have unloaded the model by then anyway. Keyed by model path, so
+ * switching models in Settings starts fresh. Pure; the caller passes the time.
+ */
+class LocalCleanupPaceStore(private val ttlMs: Long = LocalCleanupModelSlot.IDLE_UNLOAD_MS) {
+    private class Entry(val budget: LocalCleanupChunkBudget, var lastUsedAtMs: Long)
+
+    private val entries = HashMap<String, Entry>()
+
+    /** The live budget for [modelPath], or a fresh one if none exists or it has gone stale. */
+    @Synchronized
+    fun budgetFor(modelPath: String, nowMs: Long): LocalCleanupChunkBudget {
+        val existing = entries[modelPath]
+        if (existing != null && nowMs - existing.lastUsedAtMs <= ttlMs) {
+            existing.lastUsedAtMs = nowMs
+            return existing.budget
+        }
+        val fresh = Entry(LocalCleanupChunkBudget(), nowMs)
+        entries[modelPath] = fresh
+        return fresh.budget
+    }
+
+    /** Marks [modelPath]'s estimate as just used (call after each chunk so a long run stays fresh). */
+    @Synchronized
+    fun touch(modelPath: String, nowMs: Long) {
+        entries[modelPath]?.lastUsedAtMs = nowMs
+    }
+
+    @Synchronized
+    fun clear() = entries.clear()
+
+    companion object {
+        /** Process-wide store used by production cleanups. Tests pass their own. */
+        val shared = LocalCleanupPaceStore()
     }
 }
