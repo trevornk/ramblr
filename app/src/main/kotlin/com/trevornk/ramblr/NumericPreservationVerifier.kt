@@ -8,7 +8,8 @@ sealed class NumericPreservation {
 
 /**
  * Verifies that local cleanup returned exactly the normalized numeric sequence it received (#155).
- * Formatting is not identity: a ten-digit phone value may gain parentheses, spaces, or hyphens.
+ * Formatting is not identity: a ten-digit phone value may gain parentheses, spaces, or hyphens,
+ * and a number may come back spelled as a word when it reads as the same value (#325).
  * Values may not change, disappear, duplicate, or reorder. Diagnostics contain counts only, never
  * transcript or model output.
  */
@@ -18,14 +19,18 @@ object NumericPreservationVerifier {
         modelOutput: String,
     ): NumericPreservation {
         val actual = NumericValueExtractor.extract(modelOutput)
-        return if (actual == normalization.semanticValues) {
-            NumericPreservation.Valid
-        } else {
-            NumericPreservation.Rejected(
-                "numeric sequence diverged (expected ${normalization.semanticValues.size} value(s), " +
-                    "found ${actual.size})",
-            )
+        if (actual == normalization.semanticValues) return NumericPreservation.Valid
+        // The model may hand a small number back as a word ("3 times" -> "three times", "1st" ->
+        // "first"): same value, different spelling. Read the output through the same normalizer
+        // the input went through and require the identical ordered values. A changed, dropped,
+        // duplicated or reordered number still fails, because it changes the normalized values too.
+        if (SpokenNumberNormalizer.normalize(modelOutput).semanticValues == normalization.semanticValues) {
+            return NumericPreservation.Valid
         }
+        return NumericPreservation.Rejected(
+            "numeric sequence diverged (expected ${normalization.semanticValues.size} value(s), " +
+                "found ${actual.size})",
+        )
     }
 }
 

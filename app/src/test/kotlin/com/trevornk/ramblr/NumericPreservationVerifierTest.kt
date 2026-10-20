@@ -59,4 +59,30 @@ class NumericPreservationVerifierTest {
         val normalized = SpokenNumberNormalizer.normalize("hello there")
         assertTrue(NumericPreservationVerifier.verify(normalized, "Hello there.") is NumericPreservation.Valid)
     }
+
+    // ---- #325: a number written back as a word is the same number ------------------------------
+
+    @Test fun `a small number returned as a word is accepted when the value is unchanged`() {
+        assertValid("and finally I really need to go for a run at least three times this week",
+            "And finally, I really need to go for a run at least three times this week.")
+        assertValid("we leave on the fourth day and stay five nights", "We leave on the fourth day and stay five nights.")
+        assertValid("send four hundred and fifty dollars", "Send four hundred and fifty dollars.")
+        assertValid("the 1st half was good", "The first half was good.")
+    }
+
+    @Test fun `a number returned as a word with a different value is still rejected`() {
+        assertRejected("at least three times this week", "At least four times this week.")
+        assertRejected("send four hundred and fifty dollars", "Send four hundred and sixty dollars.")
+        assertRejected("send four hundred and fifty dollars", "Send one hundred and fifty dollars.")
+        assertRejected("stay five nights", "Stay fifty nights.")
+    }
+
+    @Test fun `a number dropped, duplicated or reordered is still rejected even when words are allowed`() {
+        assertRejected("the three biggest suppliers", "The biggest suppliers.")
+        assertRejected("the three biggest suppliers", "The three biggest suppliers, three of them.")
+        assertRejected("three apples then seven pears", "Seven pears then three apples.")
+        assertRejected("a 1st and a 2nd place", "A second and a first place.")
+        // Spelling out a number and also adding a different one.
+        assertRejected("on the fourth day", "On the fourth day, five hours later.")
+    }
 }
