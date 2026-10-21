@@ -48,7 +48,8 @@ class CleanupActivity : BaseSettingsActivity() {
     private lateinit var rawTextRetrySwitch: MaterialSwitch
     private lateinit var translationLanguagesRowSub: TextView
 
-    private var pendingLocalCleanupSelection = false
+    // internal (not private) only so CleanupLocalSwitchTest can drive the download-completion path.
+    internal var pendingLocalCleanupSelection = false
     private val cleanupModelRows = mutableMapOf<String, ModelRowViews>()
     private val cleanupModelDownloadState = mutableMapOf<String, WorkInfo.State>()
     private val cleanupModelDownloadGate = DownloadCompletionGate()
@@ -503,7 +504,7 @@ class CleanupActivity : BaseSettingsActivity() {
             .observe(this) { infos -> onCleanupModelWorkInfos(model, infos) }
     }
 
-    private fun onCleanupModelWorkInfos(model: Model, infos: List<WorkInfo>) {
+    internal fun onCleanupModelWorkInfos(model: Model, infos: List<WorkInfo>) {
         val views = cleanupModelRows[model.archive] ?: return
         val info = infos.firstOrNull { !it.state.isFinished } ?: infos.firstOrNull()
         cleanupModelDownloadState[model.archive] = info?.state ?: WorkInfo.State.CANCELLED
@@ -537,7 +538,20 @@ class CleanupActivity : BaseSettingsActivity() {
                 views.dlBtn.isEnabled = true
                 if (cleanupModelDownloadGate.shouldActOnSuccess(info.id.toString())) {
                     selectCleanupModel(model.archive)
-                    toast("${model.name} ready — tap Local above to use it for cleanup")
+                    // #345: the user already chose Local before this model existed
+                    // (onSelectSimpleCleanup parked that as pending and told them the switch
+                    // would finish after the download). Finish it now -- without this the radio
+                    // sat on Local while cleanup kept routing to the cloud step. The flag is
+                    // cleared by tapping Cloud or by anything that leaves cleanup on-device, so
+                    // it only fires for a switch the user actually asked for and never finished.
+                    val wasPending = pendingLocalCleanupSelection
+                    if (wasPending) onSelectSimpleCleanup(SimpleCleanupChoice.LOCAL)
+                    // Re-check the flag: onSelectSimpleCleanup clears it only when it really switched.
+                    if (wasPending && !pendingLocalCleanupSelection) {
+                        toast("${model.name} ready — now used for cleanup")
+                    } else {
+                        toast("${model.name} ready — tap Local above to use it for cleanup")
+                    }
                 }
                 refreshCleanupModelRow(model)
             }
@@ -605,7 +619,7 @@ class CleanupActivity : BaseSettingsActivity() {
 
     private fun refreshAllCleanupRows() = LOCAL_CLEANUP_MODEL_CATALOG.forEach { refreshCleanupModelRow(it) }
 
-    private fun onSelectSimpleCleanup(choice: SimpleCleanupChoice) {
+    internal fun onSelectSimpleCleanup(choice: SimpleCleanupChoice) {
         when (choice) {
             SimpleCleanupChoice.LOCAL -> {
                 val model = selectedCleanupModel()
