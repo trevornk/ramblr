@@ -34,6 +34,9 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import android.window.OnBackInvokedDispatcher
+import android.view.KeyEvent
+import android.os.Build
 import kotlin.concurrent.thread
 import kotlin.math.abs
 
@@ -2327,12 +2330,24 @@ open class WhisperAccessibilityService : AccessibilityService() {
         val ringSize = ringParams.width
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
 
-        val scrim = FrameLayout(this).apply { setOnClickListener { dismissStyleMenu() } }
+        // The scrim is focusable so the Back gesture/key reaches the menu and closes it, like any
+        // other popup. FLAG_ALT_FOCUSABLE_IM keeps it from becoming the IME target, so the app's
+        // keyboard isn't torn down just because the menu took focus.
+        val scrim = FrameLayout(this).apply {
+            setOnClickListener { dismissStyleMenu() }
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setOnKeyListener { _, keyCode, event ->
+                if (keyCode != KeyEvent.KEYCODE_BACK) return@setOnKeyListener false
+                if (event.action == KeyEvent.ACTION_UP) dismissStyleMenu()
+                true
+            }
+        }
         val scrimParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
 
@@ -2385,6 +2400,15 @@ open class WhisperAccessibilityService : AccessibilityService() {
         try {
             wm.addView(scrim, scrimParams)
             styleMenuScrim = scrim
+            scrim.requestFocus()
+            // targetSdk 36 means predictive back: the gesture is delivered through the window's
+            // OnBackInvokedDispatcher rather than as KEYCODE_BACK, which the key listener above
+            // still covers for API 30-32 and hardware Back keys.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                scrim.findOnBackInvokedDispatcher()?.registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT
+                ) { dismissStyleMenu() }
+            }
             wm.addView(menu, menuParams)
             styleMenuView = menu
         } catch (e: WindowManager.BadTokenException) {
@@ -2468,7 +2492,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
         // #312: the model (cleanup state, current style, the list) comes from the helper the
         // keyboard's picker also uses, so the two surfaces can never disagree.
-        val model = CleanupStyleMenu.load(this, currentForegroundPackageName())
+        // Read once, while building: once the menu's focusable scrim attaches it becomes the active
+        // window, so a read at tap time would name Ramblr itself instead of the app underneath.
+        val hostPackage = currentForegroundPackageName()
+        val model = CleanupStyleMenu.load(this, hostPackage)
         val cleanupEnabled = model.cleanupEnabled
         val cleanupIcon = getDrawable(R.drawable.ic_cleanup)?.mutate()?.apply {
             setTint(if (cleanupEnabled) COLOR_CLEANUP_ON else COLOR_CLEANUP_OFF)
@@ -2486,7 +2513,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         for (persona in model.personas) {
             val title = if (persona == model.current) "✓ ${persona.title}" else persona.title
             container.addView(styleMenuRow(icon = null, title = title, subtitle = persona.subtitle) {
-                onStyleMenuPersonaTapped(persona)
+                onStyleMenuPersonaTapped(persona, hostPackage)
             })
         }
 
@@ -2741,8 +2768,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * effect the moment cleanup is turned on) but the feedback bubble says so instead of claiming
      * cleanup is now running.
      */
-    private fun onStyleMenuPersonaTapped(persona: CleanupPersona) {
-        val selection = CleanupStyleMenu.select(this, currentForegroundPackageName(), persona)
+    private fun onStyleMenuPersonaTapped(persona: CleanupPersona, hostPackage: String?) {
+        val selection = CleanupStyleMenu.select(this, hostPackage, persona)
         dismissStyleMenu()
         showFeedback(
             if (selection.cleanupEnabled) "Style: ${persona.title}" else "Style: ${persona.title} (enable cleanup in Settings)",
