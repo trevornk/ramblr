@@ -179,17 +179,37 @@ object DictationTextWriter {
      * and makes a Compose field re-apply its stale value, undoing the write (the root cause of
      * the final transcript failing to replace the live preview in Hermes Relay).
      */
-    private fun writeConfirmed(destination: TextDestination, previous: String, text: String, pause: WritePause): Boolean {
+    private fun writeConfirmed(
+        destination: TextDestination,
+        previous: String,
+        text: String,
+        pause: WritePause,
+        caret: Int = text.length,
+    ): Boolean {
         repeat(2) { attempt ->
             if (!destination.replaceAllText(text)) return false
             if (awaitLanded(destination, previous, text, pause)) {
-                destination.placeCaretAtEnd(text.length)
+                destination.placeCaretAtEnd(caret)
                 return true
             }
             diagnostic("Write reported success but the field is unchanged (attempt ${attempt + 1} of 2)")
         }
         return false
     }
+
+    /**
+     * Replaces the destination's whole content [previous] with [updated] and puts the caret at
+     * [caret] once the write is observed to land -- the same confirmed write the injection paths
+     * use, for edits that rewrite text already in the field ("Tap to use raw text", #343). Returns
+     * false when the write failed or never landed.
+     */
+    fun replaceConfirmed(
+        destination: TextDestination,
+        previous: String,
+        updated: String,
+        caret: Int,
+        pause: WritePause = WritePause.REAL,
+    ): Boolean = writeConfirmed(destination, previous, updated, pause, caret.coerceIn(0, updated.length))
 
     /**
      * The ordinary one-shot delivery of a finished transcript into [destination].

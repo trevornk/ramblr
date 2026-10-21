@@ -3444,15 +3444,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         if (pending != null) {
             val ageMs = System.currentTimeMillis() - pending.timestamp
             if (canRetryRaw(ageMs, UNDO_RETRY_WINDOW_MS, pending.rawText, pending.injectedText)) {
-                // #73: reuse the same history row (via existingHistoryTimestamp) instead of
-                // recording a second entry for a dictation that already has one -- "retry with
-                // raw text" is an update to what actually ended up injected, not a new dictation.
-                injectText(
-                    pending.rawText,
-                    feedback = "Raw text copied",
-                    feedbackDurationMs = 2000,
-                    existingHistoryTimestamp = pending.historyTimestamp,
-                )
+                replaceInjectionWithRaw(pending)
                 return
             }
         }
@@ -3460,6 +3452,38 @@ open class WhisperAccessibilityService : AccessibilityService() {
             ClipboardUtil.copy(this, it)
             toast("Copied to clipboard")
         }
+    }
+
+    /**
+     * "Tap to use raw text" (#343): swaps the cleaned text out of the field for the raw transcript.
+     * Re-injecting through [injectText] would insert at the caret *next to* the cleaned text, so a
+     * DIRECT injection whose node is still reachable is rewritten in place ([swapInjectedForRaw]).
+     * Anything else -- a paste-based injection, a gone node, a field the user has since edited --
+     * can't be swapped safely, so the raw text goes to the clipboard instead of being appended.
+     */
+    private fun replaceInjectionWithRaw(pending: PendingInjection) {
+        val node = pending.node
+        val prior = pending.priorNodeText
+        var replaced = false
+        if (node != null && prior != null && isNodeRestorable(node)) {
+            val destination = AccessibilityTextDestination(node)
+            val current = destination.readText()
+            val swap = swapInjectedForRaw(prior, current, pending.injectedText, pending.rawText)
+            if (swap != null) {
+                replaced = DictationTextWriter.replaceConfirmed(destination, current, swap.text, swap.caret)
+            }
+        }
+        if (replaced) {
+            // #73: the dictation already has a history row; update it (same timestamp) so it
+            // records the raw text that actually ended up in the field, not a second entry.
+            recordHistory(pending.rawText, cleanedText = null, existingTimestamp = pending.historyTimestamp)
+            showFeedback("Raw text inserted", 2000)
+        } else {
+            // The field still holds the cleaned text, so history is left as it was.
+            ClipboardUtil.copy(this, pending.rawText)
+            showFeedback("Raw text copied", 2000)
+        }
+        clearPendingInjection()
     }
 
     /** Persists the transcript to local history off the main thread (#25). [existingTimestamp],

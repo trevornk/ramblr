@@ -42,6 +42,56 @@ fun planUndo(
 fun canRetryRaw(ageMs: Long, windowMs: Long, rawText: String, injectedText: String): Boolean =
     ageMs <= windowMs && rawText != injectedText
 
+/** Result of [swapInjectedForRaw]: the field's full new [text] and where to put the caret in it. */
+data class RawSwap(val text: String, val caret: Int)
+
+/**
+ * "Tap to use raw text" (#343): works out the field contents that result from taking the cleaned
+ * text out of where the injection put it and putting [rawText] there instead.
+ *
+ * The injection wrote `prior[0, p) + composed + prior[q, end)`, where `composed` is exactly
+ * [withLeadingSeparator] of [injectedText] at `p` (see [composeOneShotInjection]) and `[p, q)` was
+ * the selection it overwrote (empty for a plain caret insert). The position isn't recorded, so it
+ * is recovered from [priorNodeText] and the field's [currentText]: every `p` for which the current
+ * text really is `prior[0, p) + composed + <a suffix of prior>` is a candidate. The raw text then
+ * replaces `composed` at `p` with its own separator, and the caret goes to the end of it.
+ *
+ * Returns null whenever the field can't be matched to that shape -- the user edited it since, the
+ * injected text isn't there, the app normalised it -- and also when the match is ambiguous (the
+ * same bytes could have been inserted at two places and the swap would differ), because rewriting
+ * the wrong place is worse than not rewriting. The caller falls back to the clipboard.
+ */
+fun swapInjectedForRaw(priorNodeText: String, currentText: String, injectedText: String, rawText: String): RawSwap? {
+    if (injectedText.isEmpty()) return null
+    val prior = priorNodeText
+    val current = currentText
+
+    var maxPrefix = 0
+    val prefixLimit = minOf(prior.length, current.length)
+    while (maxPrefix < prefixLimit && prior[maxPrefix] == current[maxPrefix]) maxPrefix++
+    var maxSuffix = 0
+    val suffixLimit = minOf(prior.length, current.length)
+    while (maxSuffix < suffixLimit &&
+        prior[prior.length - 1 - maxSuffix] == current[current.length - 1 - maxSuffix]
+    ) maxSuffix++
+
+    val results = mutableSetOf<RawSwap>()
+    for (p in 0..maxPrefix) {
+        val composed = withLeadingSeparator(prior, p, injectedText)
+        if (!current.startsWith(composed, p)) continue
+        val suffixStart = p + composed.length
+        val suffixLen = current.length - suffixStart
+        // The tail must be an untouched tail of the prior text that starts at or after p.
+        if (suffixLen > maxSuffix || suffixLen > prior.length - p) continue
+        val replacement = withLeadingSeparator(prior, p, rawText)
+        results += RawSwap(
+            text = current.substring(0, p) + replacement + current.substring(suffixStart),
+            caret = p + replacement.length,
+        )
+    }
+    return results.singleOrNull()
+}
+
 /**
  * Whether to wait and rescan before falling back to the clipboard (see #5). Some apps briefly
  * report no focused/editable node right in the moment the overlay tap hands focus back after

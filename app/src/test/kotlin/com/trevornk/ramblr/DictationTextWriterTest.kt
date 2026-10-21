@@ -24,6 +24,7 @@ private class FakeTextDestination(
     val calls = mutableListOf<String>()
     var writtenText: String? = null
     var focusCount = 0
+    var lastCaret = -1
 
     override fun acceptsDirectWrite(): Boolean {
         calls += "acceptsDirectWrite"
@@ -64,6 +65,7 @@ private class FakeTextDestination(
 
     override fun placeCaretAtEnd(textLength: Int) {
         calls += "placeCaretAtEnd"
+        lastCaret = textLength
     }
 }
 
@@ -447,5 +449,26 @@ class DictationTextWriterTest {
 
         assertEquals(InjectMethod.DIRECT, result.method)
         assertEquals("Final.", destination.writtenText)
+    }
+
+    // --- replaceConfirmed (#343) ---
+
+    @Test fun `replaceConfirmed writes the full text and puts the caret at the requested spot`() {
+        val field = FakeTextDestination(text = "Hello Clean world")
+
+        val ok = DictationTextWriter.replaceConfirmed(field, "Hello Clean world", "Hello raw um world", caret = 12, pause = NO_PAUSE)
+
+        assertTrue(ok)
+        assertEquals("Hello raw um world", field.text)
+        assertEquals(12, field.lastCaret)
+    }
+
+    @Test fun `replaceConfirmed reports failure and leaves the caret alone when the write fails`() {
+        val field = FakeTextDestination(text = "abc", writeSucceeds = false)
+
+        val ok = DictationTextWriter.replaceConfirmed(field, "abc", "abd", caret = 3, pause = NO_PAUSE)
+
+        assertFalse(ok)
+        assertEquals(-1, field.lastCaret)
     }
 }

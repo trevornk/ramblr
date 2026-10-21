@@ -1,6 +1,7 @@
 package com.trevornk.ramblr
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class InjectionRecoveryTest {
@@ -118,5 +119,89 @@ class InjectionRecoveryTest {
         )
 
         assertEquals(ClipboardRestoreOutcome.LeaveAlone, outcome)
+    }
+
+    // --- swapInjectedForRaw (#343) ---
+
+    private fun swap(prior: String, selStart: Int, selEnd: Int, injected: String, raw: String): RawSwap? {
+        val current = composeOneShotInjection(prior, selStart, selEnd, injected)
+        return swapInjectedForRaw(prior, current, injected, raw)
+    }
+
+    @Test fun `raw replaces cleaned text inserted at the end`() {
+        val result = swap("Hello there", 11, 11, "Cleaned text.", "cleaned text uh")
+
+        assertEquals(RawSwap("Hello there cleaned text uh", caret = 27), result)
+    }
+
+    @Test fun `raw replaces cleaned text inserted mid-text and keeps what follows`() {
+        val result = swap("Hello world", 5, 5, "Clean", "raw um")
+
+        assertEquals(RawSwap("Hello raw um world", caret = 12), result)
+    }
+
+    @Test fun `raw replaces cleaned text inserted into an empty field`() {
+        val result = swap("", 0, 0, "Hi there.", "hi there um")
+
+        assertEquals(RawSwap("hi there um", caret = 11), result)
+    }
+
+    @Test fun `the separator composition added is kept for the raw text`() {
+        // "Dear John," + " " + injected: the added space sits inside the diff and must survive.
+        val result = swap("Dear John,", 10, 10, "Body.", "body um")
+
+        assertEquals(RawSwap("Dear John, body um", caret = 18), result)
+    }
+
+    @Test fun `no separator is added after existing whitespace`() {
+        val result = swap("Dear John, ", 11, 11, "Body.", "body")
+
+        assertEquals(RawSwap("Dear John, body", caret = 15), result)
+    }
+
+    @Test fun `a selection the injection overwrote stays replaced`() {
+        val result = swap("select me", 0, 9, "Clean", "raw")
+
+        assertEquals(RawSwap("raw", caret = 3), result)
+    }
+
+    @Test fun `null when the user edited the field after the injection`() {
+        val prior = "Hello there"
+        val current = composeOneShotInjection(prior, 11, 11, "Cleaned text.") + " and more"
+
+        assertNull(swapInjectedForRaw(prior, current, "Cleaned text.", "raw"))
+    }
+
+    @Test fun `null when the user edited the injected text itself`() {
+        val prior = "Hello there"
+        val current = "Hello there Cleaned test."
+
+        assertNull(swapInjectedForRaw(prior, current, "Cleaned text.", "raw"))
+    }
+
+    @Test fun `null when the injected text is not in the field at all`() {
+        assertNull(swapInjectedForRaw("Hello there", "Something else entirely", "Cleaned text.", "raw"))
+        assertNull(swapInjectedForRaw("Hello there", "Hello there", "Cleaned text.", "raw"))
+    }
+
+    @Test fun `null when the injected text could sit in two places`() {
+        // "hi hi" + " hi": the new "hi" is either the middle or the last one; guessing would
+        // rewrite the wrong word half the time.
+        val prior = "hi hi"
+        val current = composeOneShotInjection(prior, 5, 5, "hi")
+
+        assertEquals("hi hi hi", current)
+        assertNull(swapInjectedForRaw(prior, current, "hi", "raw"))
+    }
+
+    @Test fun `unambiguous when the injected text also occurs in the prior text`() {
+        val prior = "Cleaned text. is good"
+        val current = composeOneShotInjection(prior, 21, 21, "Cleaned text.")
+
+        assertEquals(RawSwap("Cleaned text. is good raw", caret = 25), swapInjectedForRaw(prior, current, "Cleaned text.", "raw"))
+    }
+
+    @Test fun `null for an empty injected text`() {
+        assertNull(swapInjectedForRaw("abc", "abc", "", "raw"))
     }
 }
