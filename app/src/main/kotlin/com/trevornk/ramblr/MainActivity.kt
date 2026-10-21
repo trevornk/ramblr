@@ -668,15 +668,7 @@ class MainActivity : BaseSettingsActivity() {
         // symbol is @hide), where the enable switch is one tap away. Targets whichever component
         // the current #156 mode says should be active (the banner only fires in system-controls
         // mode, so in practice this is SystemControlsAccessibilityService).
-        val details = Intent(InvocationSecureSettings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).putExtra(
-            Intent.EXTRA_COMPONENT_NAME,
-            InvocationServiceMode.activeComponent(this).flattenToString(),
-        )
-        try {
-            startActivity(details)
-        } catch (_: android.content.ActivityNotFoundException) {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
+        InvocationSecureSettings.openServiceDetailsSettings(this)
     }
 
     // --- Onboarding wizard (#6/#52/#80/#98) -- kept on MainActivity, see class kdoc ---

@@ -1,9 +1,7 @@
 package com.trevornk.ramblr
 
 import android.app.Activity
-import android.content.Intent
 import android.os.Bundle
-import android.provider.Settings
 import android.widget.Toast
 
 /**
@@ -38,21 +36,7 @@ class ServiceRecoveryActivity : Activity() {
         // Base tier: the OS offers no app-side re-enable, so the best available path is the
         // service's own Settings page. Targets whichever component the current #156 mode says
         // should be active, so the user lands on the right one of the two entries.
-        val details = Intent(InvocationSecureSettings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS)
-            .putExtra(
-                Intent.EXTRA_COMPONENT_NAME,
-                InvocationServiceMode.activeComponent(this).flattenToString(),
-            )
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        try {
-            startActivity(details)
-        } catch (_: android.content.ActivityNotFoundException) {
-            // OEM skins that don't export the per-service details page (the action string is
-            // @hide in the SDK even though AOSP has exported it since API 30 = minSdk).
-            startActivity(
-                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }
+        InvocationSecureSettings.openServiceDetailsSettings(this, newTask = true)
         finish()
         overridePendingTransition(0, 0)
     }

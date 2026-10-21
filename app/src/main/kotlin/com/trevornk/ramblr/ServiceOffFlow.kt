@@ -1,8 +1,6 @@
 package com.trevornk.ramblr
 
 import android.app.Activity
-import android.content.Intent
-import android.provider.Settings
 import android.widget.Toast
 
 /**
@@ -87,14 +85,7 @@ internal object ServiceOffFlow {
      *  OEM skin doesn't resolve the details action -- which is also fine for the mode-switch
      *  flow, since only one Ramblr entry is visible there. */
     fun openServiceDetailsSettings(activity: Activity) {
-        val component = InvocationServiceMode.activeComponent(activity)
-        val details = Intent(InvocationSecureSettings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS)
-            .putExtra(Intent.EXTRA_COMPONENT_NAME, component.flattenToString())
-        try {
-            activity.startActivity(details)
-        } catch (_: android.content.ActivityNotFoundException) {
-            activity.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
+        InvocationSecureSettings.openServiceDetailsSettings(activity)
     }
 
     private fun toast(activity: Activity, message: String) =

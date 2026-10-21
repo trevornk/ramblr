@@ -1,6 +1,8 @@
 package com.trevornk.ramblr
 
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.Settings
 import android.util.Log
@@ -51,10 +53,46 @@ object InvocationSecureSettings {
      * STRING has resolved via the Settings app's exported intent-filter since API 30 (= minSdk).
      * Callers pair it with the public [android.content.Intent.EXTRA_COMPONENT_NAME] (the extra
      * AOSP's AccessibilityDetailsSettingsActivity reads) and keep an
-     * ActivityNotFoundException fallback to ACTION_ACCESSIBILITY_SETTINGS for OEM skins that
-     * don't export it.
+     * fallback to ACTION_ACCESSIBILITY_SETTINGS (via [openServiceDetailsSettings]) for OEM skins
+     * that don't export it or guard it with a permission.
      */
     const val ACTION_ACCESSIBILITY_DETAILS_SETTINGS = "android.settings.ACCESSIBILITY_DETAILS_SETTINGS"
+
+    /**
+     * Deep-links to the ACTIVE component's own Accessibility page, falling back to the top-level
+     * Accessibility list. The single shared implementation behind every "open Ramblr's service
+     * page" call site (#344).
+     *
+     * The fallback fires on [ActivityNotFoundException] (OEM skins that don't export the details
+     * action) AND on [SecurityException]: ACCESSIBILITY_DETAILS_SETTINGS is `@hide`, and some
+     * builds (e.g. Samsung One UI on Android 16) guard it with the signature-level
+     * `android.permission.OPEN_ACCESSIBILITY_DETAILS_SETTINGS`, which a third-party app can never
+     * hold -- `startActivity` then throws instead of failing to resolve. The top-level list uses
+     * the public, unguarded `Settings.ACTION_ACCESSIBILITY_SETTINGS`.
+     *
+     * [newTask] adds FLAG_ACTIVITY_NEW_TASK to whichever intent is launched (needed when
+     * [context] isn't an Activity, or when the caller is a trampoline that finishes itself).
+     * [component] is the flattened service component to target; defaults to the active one.
+     */
+    fun openServiceDetailsSettings(
+        context: Context,
+        newTask: Boolean = false,
+        component: String = serviceComponent(context),
+    ) {
+        fun Intent.withFlags() = if (newTask) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) else this
+        val details = Intent(ACTION_ACCESSIBILITY_DETAILS_SETTINGS)
+            .putExtra(Intent.EXTRA_COMPONENT_NAME, component)
+            .withFlags()
+        try {
+            context.startActivity(details)
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "Accessibility details page not resolvable; falling back to the list", e)
+            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).withFlags())
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Accessibility details page is permission-guarded; falling back to the list", e)
+            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).withFlags())
+        }
+    }
 
     /** The ACTIVE service component (per the current #156 mode) in the full flatten form the OS
      *  itself writes -- what new bindings and deep links must target. */
