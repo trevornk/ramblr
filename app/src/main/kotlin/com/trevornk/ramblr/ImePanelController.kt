@@ -1,6 +1,5 @@
 package com.trevornk.ramblr
 
-import android.text.InputType
 import android.view.inputmethod.EditorInfo
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -24,15 +23,7 @@ internal data class ImeEditorPolicy(
 
 /** Password/PIN fields are never recorded; no-learning fields still dictate but retain no text. */
 internal fun imeEditorPolicy(inputType: Int, imeOptions: Int): ImeEditorPolicy {
-    val inputClass = inputType and InputType.TYPE_MASK_CLASS
-    val variation = inputType and InputType.TYPE_MASK_VARIATION
-    val password = when (inputClass) {
-        InputType.TYPE_CLASS_TEXT -> variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
-        InputType.TYPE_CLASS_NUMBER -> variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
-        else -> false
-    }
+    val password = isPasswordInputType(inputType)
     val noLearning = imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0
     return ImeEditorPolicy(allowsDictation = !password, allowsRetention = !password && !noLearning)
 }

@@ -62,6 +62,9 @@ class AccessibilityTextDestination(
     }
 
     override fun replaceAllText(text: String): Boolean {
+        // Last line of defence: a password node reports its text as "" so a write would also
+        // wipe what the user typed. Never write to one.
+        if (node.isPasswordField()) return false
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
@@ -73,6 +76,7 @@ class AccessibilityTextDestination(
     override fun placeCaretAtEnd(textLength: Int) = nudgeSelectionToEnd(node, textLength)
 
     override fun pasteFromClipboard(): Boolean {
+        if (node.isPasswordField()) return false
         beforePaste()
         findCustomPasteAction(node)?.let { action ->
             val ok = node.performAction(action.id)

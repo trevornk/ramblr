@@ -128,6 +128,14 @@ stores and sends nothing about it. The extra listening is added only while one o
 selected, and is removed again as soon as you switch back to Always. Ramblr doesn't do this for anyone
 who hasn't chosen it.
 
+### Password fields
+
+The floating icon (accessibility service) does not dictate into password fields, the same rule the
+keyboard applies. It checks the focused field (the field's password flag and its password/PIN input
+types) before it starts recording and again before a result is delivered. In a password field no
+recording starts; a result whose field turns out to be a password field is discarded: it is not
+inserted, copied, saved to dictation history, or counted for vocabulary suggestions.
+
 ### Per-app exclusions
 
 Settings → Behavior → App exclusions lets you list specific app packages (banking apps, password

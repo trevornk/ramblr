@@ -475,6 +475,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
             cleanupError: String?,
             feedbackDurationMs: Long,
         ) {
+            // A password field is never a destination, and nothing about the dictation is kept.
+            if (resultTargetsPasswordField(dictationTarget)) {
+                discardPasswordFieldResult()
+                return
+            }
             // #284: the field this dictation was started in is gone (another app or field is in
             // front, or the device locked). Never type into whatever is focused now.
             if (!deliveryTargetIsCurrent()) {
@@ -528,7 +533,12 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
     /** Where the in-flight dictation was started: its package, and the focused node (if any) so a
      *  move to a different field in the same app is detectable. Main thread only. */
-    internal class DictationTarget(val packageName: String, val node: AccessibilityNodeInfo?)
+    internal class DictationTarget(
+        val packageName: String,
+        val node: AccessibilityNodeInfo?,
+        /** The field this dictation was captured in is a password field (see [PasswordFieldGuard]). */
+        val isPassword: Boolean = node?.isPasswordField() == true,
+    )
 
     internal var dictationTarget: DictationTarget? = null
 
@@ -560,6 +570,51 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun clearDictationTarget() {
         dictationTarget?.node?.recycle()
         dictationTarget = null
+    }
+
+    // --- Password fields -------------------------------------------------------------------------
+
+    /** Platform read (test seam): whether the input-focused node right now is a password field.
+     *  An unreadable tree answers false (the pre-existing fail-open stance of the target reads). */
+    internal open fun focusedInputIsPassword(): Boolean {
+        val root = try { rootInActiveWindow } catch (e: RuntimeException) { null } ?: return false
+        return try {
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            try { focused?.isPasswordField() == true } finally { focused?.recycle() }
+        } catch (e: RuntimeException) {
+            false
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /** True when a finished dictation must be discarded because its field -- the one focused now
+     *  or the one it was captured in ([target]) -- is a password field. */
+    private fun resultTargetsPasswordField(target: DictationTarget?): Boolean =
+        PasswordFieldGuard.routeResult(focusedInputIsPassword(), target?.isPassword == true) ==
+            DictationResultRoute.DISCARD_PASSWORD_FIELD
+
+    /**
+     * Drops a finished dictation whose destination is a password field: nothing is inserted, put
+     * on the clipboard, written to history or fed to the vocabulary collector (the callers invoke
+     * this before any of those). A streaming partial left in another field is reverted, and the
+     * undo/retry/copy-again affordances are cleared so none can re-offer the text.
+     */
+    private fun discardPasswordFieldResult(claimedStreamingHandoff: StreamingPreviewSession? = null) {
+        pendingInjectionRetry?.let { handler.removeCallbacks(it) }
+        pendingInjectionRetry = null
+        val streamingHandoff = claimedStreamingHandoff ?: streamingSession ?: pendingStreamingHandoff
+        streamingSession = null
+        pendingStreamingHandoff = null
+        if (streamingHandoff != null) {
+            if (!streamingHandoff.node.isPasswordField()) clearStreamingLeftover(streamingHandoff)
+            streamingHandoff.node.recycle()
+        }
+        runtime.pipelineTiming.abandon()
+        updatePendingInjection(InjectMethod.NONE, "", "", null, null, null, 0L)
+        fallbackClipboardText = null
+        Log.i(TAG, "Dictation discarded: destination is a password field")
+        showFeedback(PASSWORD_FIELD_REFUSAL_MESSAGE, FALLBACK_FEEDBACK_DURATION_MS, touchable = false, isFallback = true)
     }
 
     /** Platform read #1 (test seam): who is in front and focused right now, at transcription
@@ -2782,6 +2837,12 @@ open class WhisperAccessibilityService : AccessibilityService() {
             toast("Ramblr is excluded in this app — see Settings > Privacy")
             return
         }
+        // Every start path (ring tap, QS tile, accessibility button/shortcut) ends here. Like the
+        // keyboard, never record for a password/PIN field; stop/cancel stay reachable.
+        if (PasswordFieldGuard.shouldRefuseRecordingStart(runtime.currentState(), focusedInputIsPassword())) {
+            toast(PASSWORD_FIELD_REFUSAL_MESSAGE)
+            return
+        }
         runtime.onTap()
     }
 
@@ -2830,6 +2891,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
         pendingPreviewTarget = null
         handler.removeCallbacks(previewTimeoutRunnable)
         val resolution = action(preview)
+        if (resultTargetsPasswordField(previewTarget)) {
+            previewTarget?.node?.recycle()
+            discardPasswordFieldResult()
+            return
+        }
         try {
             // #284: the user may have left the field during the preview window. Same rule as the
             // immediate branch of deliverText: never type into whatever is focused now. The
@@ -2920,6 +2986,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
         val session = streamingSession
         if (session == null) {
+            // Focus can reach a password field mid-recording; the candidate scan below would then
+            // fall through to some other field in the window, so refuse before scanning.
+            if (!PasswordFieldGuard.allowsPartialWrite(focusedInputIsPassword())) return
             val candidate = findDirectInjectionCandidate() ?: return
             val current = resolveRealText(
                 candidate.text?.toString(),
@@ -2959,6 +3028,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
         if (!shouldInjectPartial(text, session.lastInjectedText, session.lastInjectedAtMs, now, STREAMING_PARTIAL_MIN_INTERVAL_MS)) return
         if (!refreshNode(session.node)) { endStreamingSession(); return }
+        if (session.node.isPasswordField()) { endStreamingSession(); return }
 
         val current = resolveRealText(
             session.node.text?.toString(),
@@ -2992,6 +3062,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
      */
     private fun updateLivePreviewBubble(text: String, nowMs: Long, alreadyCased: Boolean = false) {
         if (!shouldInjectPartial(text, lastBubblePartialText, lastBubblePartialAtMs, nowMs, STREAMING_PARTIAL_MIN_INTERVAL_MS)) return
+        if (!PasswordFieldGuard.allowsPartialWrite(focusedInputIsPassword())) return
         lastBubblePartialText = text
         lastBubblePartialAtMs = nowMs
         val displayText = if (alreadyCased) text else smartCapitalize(text)
@@ -3082,6 +3153,12 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // unknown = fail open. A user-initiated raw retry has no live target, so it is unguarded.
         deliveryTargetPackage: String? = dictationTarget?.packageName,
     ) {
+        // Before the vocabulary collector, history, clipboard or any write: a dictation whose
+        // field is a password field is dropped whole (see [discardPasswordFieldResult]).
+        if (resultTargetsPasswordField(dictationTarget)) {
+            discardPasswordFieldResult()
+            return
+        }
         // Smart vocabulary suggestions (#216): every accepted dictation funnels through this
         // method -- direct injection, cleanup results, and preview-accepts alike (discarded
         // previews never reach here, so they never feed the counters). One fire-and-forget
@@ -3160,6 +3237,12 @@ open class WhisperAccessibilityService : AccessibilityService() {
             val retryTarget = deliveryTargetPackage?.let { DictationTarget(it, null) }
             val retry = Runnable {
                 pendingInjectionRetry = null
+                // Focus may have landed on a password field during the 200 ms: the rescan would
+                // otherwise pick some other field in the window.
+                if (resultTargetsPasswordField(null)) {
+                    discardPasswordFieldResult(streamingHandoff)
+                    return@Runnable
+                }
                 // #284: the 200 ms rescan reads the *active window* again; if the user left in the
                 // meantime, hand over to the background path instead of typing into the new app.
                 if (!deliveryTargetIsCurrent(retryTarget)) {
@@ -3555,8 +3638,12 @@ open class WhisperAccessibilityService : AccessibilityService() {
         root: AccessibilityNodeInfo,
         out: MutableList<AccessibilityNodeInfo>
     ) {
-        root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { out += it }
-        root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)?.let { out += it }
+        listOfNotNull(
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT),
+            root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY),
+        ).forEach { focused ->
+            if (PasswordFieldGuard.allowsInjectionCandidate(focused.isPasswordField())) out += focused else focused.recycle()
+        }
         collectPotentialTargets(root, out)
     }
 
@@ -3579,6 +3666,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
     }
 
     private fun isPotentialInjectionTarget(node: AccessibilityNodeInfo): Boolean {
+        if (!PasswordFieldGuard.allowsInjectionCandidate(node.isPasswordField())) return false
         val className = node.className?.toString().orEmpty()
         return node.isFocused ||
             node.isEditable ||

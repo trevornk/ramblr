@@ -86,6 +86,10 @@ Password, PIN, and web-password fields disable the mic completely. Editors reque
 "no personalized learning" flag still work, but those sessions are excluded from history, quality
 logging, and vocabulary suggestions.
 
+The floating icon follows the same rule: it won't start recording while a password field has focus
+(it shows "Ramblr doesn't dictate into password fields"), and a dictation whose field turns out to
+be a password field is discarded rather than inserted, copied, or saved to history.
+
 ### 3. System controls (accessibility button / volume keys)
 
 Instead of an on-screen ring, trigger dictation from Android's own accessibility button/gesture, or
