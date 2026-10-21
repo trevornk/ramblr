@@ -274,6 +274,12 @@ open class WhisperAccessibilityService : AccessibilityService() {
         private const val BTN_DP = 44
         private const val PAD_DP = 10
         private const val MARGIN_DP = 8
+        // Screen height the long-press menu always leaves uncovered, so the dismiss scrim stays
+        // tappable no matter how many rows the menu has.
+        private const val STYLE_MENU_OUTSIDE_RESERVE_DP = 120
+        // Popup-sized cap on the long-press menu's width; long subtitles wrap rather than
+        // stretching the panel across the screen.
+        private const val STYLE_MENU_MAX_WIDTH_DP = 360
         /** Default/reference ring diameter that [BTN_DP]/[PAD_DP] are proportioned against; the
          *  actual on-screen size comes from [OverlayAppearancePrefs] (#43/#53) and is scaled by
          *  the same ratio, so an unconfigured install looks pixel-identical to before that setting
@@ -2330,7 +2336,26 @@ open class WhisperAccessibilityService : AccessibilityService() {
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
 
-        val menu = content().apply {
+        val margin = (MARGIN_DP * dp).toInt()
+        val panel = content()
+        // The panel scrolls inside a height-capped viewport rather than growing past the screen
+        // (Z Fold8 crash/trap, see styleMenuMaxHeight). The rounded chrome moves to the viewport
+        // so the border frames what's visible instead of scrolling away with the rows.
+        val menu = BoundedScrollView(
+            this,
+            maxWidthPx = styleMenuMaxWidth(screenW, margin, (STYLE_MENU_MAX_WIDTH_DP * dp).toInt()),
+            maxHeightPx = styleMenuMaxHeight(screenH, margin, (STYLE_MENU_OUTSIDE_RESERVE_DP * dp).toInt()),
+        ).apply {
+            background = panel.background
+            setPadding(panel.paddingLeft, panel.paddingTop, panel.paddingRight, panel.paddingBottom)
+            panel.background = null
+            panel.setPadding(0, 0, 0, 0)
+            clipToOutline = true
+            isVerticalFadingEdgeEnabled = true
+            // Keep the scrollbar drawn whenever the rows overflow, so it's obvious there's more.
+            isScrollbarFadingEnabled = false
+            setFadingEdgeLength((24 * dp).toInt())
+            addView(panel)
             // Invisible until positioned (see menu.post below) -- WRAP_CONTENT's real size isn't
             // known until after this first layout pass, so the window is added at a provisional
             // ring-anchored x/y (usually the right screen edge) purely to let it measure itself.
@@ -2413,13 +2438,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
         menuWidth: Int,
         menuHeight: Int
     ) {
-        val margin = (MARGIN_DP * dp).toInt()
-        menuParams.x = if (ringParams.x + ringSize / 2 > screenW / 2) {
-            (ringParams.x + ringSize - menuWidth).coerceAtLeast(margin)
-        } else {
-            ringParams.x.coerceAtMost(screenW - menuWidth - margin)
-        }
-        menuParams.y = (ringParams.y - menuHeight - margin).coerceIn(margin, screenH - menuHeight - margin)
+        val (x, y) = styleMenuPosition(
+            ringParams.x, ringParams.y, ringSize, menuWidth, menuHeight, screenW, screenH, (MARGIN_DP * dp).toInt()
+        )
+        menuParams.x = x
+        menuParams.y = y
     }
 
     /** The style menu's shared chrome (rounded translucent panel), extracted so the "Hide icon"

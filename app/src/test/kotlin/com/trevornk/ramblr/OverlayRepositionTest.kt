@@ -168,4 +168,100 @@ class OverlayRepositionTest {
         assertEquals(margin, clampedX)
         assertEquals(margin, clampedY)
     }
+
+    // --- styleMenuPosition / styleMenuMaxHeight (Z Fold8 long-press crash) ---
+
+    @Test fun `a menu exactly as tall as the screen does not crash placement`() {
+        // The captured crash: inner screen 1848 px tall, menu measured 1848 px, margin 18 px --
+        // the old coerceIn(18, 1848 - 1848 - 18) threw "maximum -18 is less than minimum 18".
+        val (_, y) = styleMenuPosition(
+            ringX = 2200, ringY = 900, ringSize = 130, menuW = 600, menuH = 1848,
+            screenW = 2448, screenH = 1848, margin = 18,
+        )
+        assertEquals(18, y)
+    }
+
+    @Test fun `a menu taller and wider than the screen still places at the margin`() {
+        val (x, y) = styleMenuPosition(
+            ringX = 50, ringY = 50, ringSize = 130, menuW = 3000, menuH = 3000,
+            screenW = 1248, screenH = 1972, margin = 18,
+        )
+        assertEquals(18, x)
+        assertEquals(18, y)
+    }
+
+    @Test fun `a menu that fits opens above a right-edge ring, right-aligned to it`() {
+        val (x, y) = styleMenuPosition(
+            ringX = 1100, ringY = 1500, ringSize = 130, menuW = 500, menuH = 800,
+            screenW = 1248, screenH = 1972, margin = 18,
+        )
+        assertEquals(1100 + 130 - 500, x)
+        assertEquals(1500 - 800 - 18, y)
+    }
+
+    @Test fun `a menu that fits opens above a left-edge ring, left-aligned to it`() {
+        val (x, y) = styleMenuPosition(
+            ringX = 18, ringY = 1500, ringSize = 130, menuW = 500, menuH = 800,
+            screenW = 1248, screenH = 1972, margin = 18,
+        )
+        assertEquals(18, x)
+        assertEquals(1500 - 800 - 18, y)
+    }
+
+    @Test fun `a ring near the top opens the menu below it instead`() {
+        val (x, y) = styleMenuPosition(
+            ringX = 1100, ringY = 100, ringSize = 130, menuW = 500, menuH = 800,
+            screenW = 1248, screenH = 1972, margin = 18,
+        )
+        assertEquals(1100 + 130 - 500, x)
+        assertEquals(100 + 130 + 18, y)
+    }
+
+    @Test fun `a menu too tall for above or below sits beside the ring, not on it`() {
+        // Inner screen, ring high on the right edge -- what the device showed covering the ring.
+        val (x, y) = styleMenuPosition(
+            ringX = 2304, ringY = 309, ringSize = 126, menuW = 810, menuH = 1542,
+            screenW = 2448, screenH = 1848, margin = 18,
+        )
+        assertEquals(2304 - 810 - 18, x)
+        assertTrue(x + 810 <= 2304)
+        assertEquals(18, y)
+    }
+
+    @Test fun `a left-edge ring puts the beside-placed menu to its right`() {
+        val (x, _) = styleMenuPosition(
+            ringX = 18, ringY = 900, ringSize = 126, menuW = 810, menuH = 1700,
+            screenW = 1248, screenH = 1848, margin = 18,
+        )
+        assertEquals(18 + 126 + 18, x)
+    }
+
+    @Test fun `the capped menu always leaves the reserve strip of scrim uncovered`() {
+        val screenH = 1972 // Z Fold8 cover screen
+        val margin = 18
+        val reserve = 270 // 120 dp at 2.25x
+        val maxH = styleMenuMaxHeight(screenH, margin, reserve)
+        assertEquals(screenH - 2 * margin - reserve, maxH)
+        val (_, y) = styleMenuPosition(1100, 1800, 130, 500, maxH, 1248, screenH, margin)
+        val uncovered = y + (screenH - (y + maxH))
+        assertTrue("scrim strip $uncovered px < reserve", uncovered >= reserve)
+    }
+
+    @Test fun `max height never drops below the margin on a degenerate screen`() {
+        assertEquals(18, styleMenuMaxHeight(screenH = 100, margin = 18, outsideReservePx = 270))
+    }
+
+    @Test fun `menu width is capped to a popup size on a wide screen`() {
+        assertEquals(810, styleMenuMaxWidth(screenW = 2448, margin = 18, preferredMaxPx = 810))
+    }
+
+    @Test fun `menu width falls back to the screen less margins on a narrow screen`() {
+        assertEquals(700 - 36, styleMenuMaxWidth(screenW = 700, margin = 18, preferredMaxPx = 810))
+    }
+
+    @Test fun `a width-capped menu that fits above right-aligns to a right-edge ring`() {
+        val maxW = styleMenuMaxWidth(2448, 18, 810)
+        val (x, _) = styleMenuPosition(2304, 1400, 126, maxW, 1000, 2448, 1848, 18)
+        assertEquals(2304 + 126 - maxW, x)
+    }
 }

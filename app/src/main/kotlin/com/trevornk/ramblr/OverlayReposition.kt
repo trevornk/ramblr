@@ -81,3 +81,61 @@ fun clampRestoredPosition(x: Int, y: Int, screenW: Int, screenH: Int, ringSize: 
     val maxY = (screenH - ringSize - margin).coerceAtLeast(margin)
     return x.coerceIn(margin, maxX) to y.coerceIn(margin, maxY)
 }
+
+/**
+ * Tallest the long-press style menu may be on a [screenH]-tall screen: everything but a
+ * [outsideReservePx] strip, so some of the dismiss scrim always stays exposed. An uncapped
+ * WRAP_CONTENT menu (#53) grew past the screen once translation and custom styles were added --
+ * on a Z Fold8 cover screen at font scale 1.3 it filled the whole display and buried the scrim,
+ * the menu's only way out, and on the shorter inner screen it overflowed outright. Overflowing
+ * rows scroll instead. Never below [margin], so a degenerate screen still yields a usable size.
+ */
+fun styleMenuMaxHeight(screenH: Int, margin: Int, outsideReservePx: Int): Int =
+    (screenH - 2 * margin - outsideReservePx).coerceAtLeast(margin)
+
+/**
+ * Widest the long-press style menu may be: [preferredMaxPx] (a popup-sized panel), or the screen
+ * less its margins when that is narrower. Without a cap the menu's single-line persona subtitles
+ * measured ~1500 px at font scale 1.3, stretching the panel across the whole screen and over the
+ * ring; capped, they wrap instead.
+ */
+fun styleMenuMaxWidth(screenW: Int, margin: Int, preferredMaxPx: Int): Int =
+    minOf(preferredMaxPx, screenW - 2 * margin).coerceAtLeast(margin)
+
+/**
+ * Window x/y for the long-press style menu: just above the ring (or below it when there's no room
+ * above), aligned to whichever edge the ring sits nearer; when it fits neither way it sits beside
+ * the ring instead of covering it, and only as a last resort is clamped over it. Every clamp bound is floored at [margin] first so a menu
+ * as big as (or bigger than) the screen can never produce an inverted range -- the
+ * `coerceIn(margin, screenH - menuH - margin)` this replaces threw IllegalArgumentException and
+ * crashed the service when the menu measured the full screen height.
+ */
+fun styleMenuPosition(
+    ringX: Int,
+    ringY: Int,
+    ringSize: Int,
+    menuW: Int,
+    menuH: Int,
+    screenW: Int,
+    screenH: Int,
+    margin: Int,
+): Pair<Int, Int> {
+    val maxX = (screenW - menuW - margin).coerceAtLeast(margin)
+    val maxY = (screenH - menuH - margin).coerceAtLeast(margin)
+    val ringOnRight = ringX + ringSize / 2 > screenW / 2
+    val edgeAlignedX = if (ringOnRight) {
+        (ringX + ringSize - menuW).coerceIn(margin, maxX)
+    } else {
+        ringX.coerceIn(margin, maxX)
+    }
+    val aboveY = ringY - menuH - margin
+    if (aboveY >= margin) return edgeAlignedX to aboveY
+    val belowY = ringY + ringSize + margin
+    if (belowY + menuH + margin <= screenH) return edgeAlignedX to belowY
+    // Too tall to fit above or below without covering the ring: sit beside it, on the side
+    // facing the screen centre, vertically centred on the ring where possible.
+    val besideX = if (ringOnRight) ringX - menuW - margin else ringX + ringSize + margin
+    val centredY = (ringY + ringSize / 2 - menuH / 2).coerceIn(margin, maxY)
+    if (besideX >= margin && besideX + menuW + margin <= screenW) return besideX to centredY
+    return edgeAlignedX to aboveY.coerceIn(margin, maxY)
+}
