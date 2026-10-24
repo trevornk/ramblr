@@ -84,6 +84,7 @@
     <string name="ime_translate_failed">Translation failed — inserted untranslated text</string>
     <string name="ime_translate_consent_title">Send text to %1$s?</string>
     <string name="ime_translate_consent_body">Your speech is recognized on this phone. Translation sends the recognized text to %1$s. Ramblr asks only once.</string>
+    <string name="process_text_translate_consent_body">Translating sends the selected text to %1$s. Ramblr asks only once.</string>
     <string name="ime_translate_consent_allow">Allow</string>
     <string name="ime_translate_consent_decline">Not now</string>
     <!-- Voice keyboard / translation settings (from #318) -->

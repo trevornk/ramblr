@@ -12,8 +12,11 @@ internal data class TranslationLanguage(val code: String, val englishName: Strin
  * the keyboard's style picker and the floating icon's long-press menu show one chip per language
  * next to "Original". The chosen target (one shared preference) applies to every dictation that
  * is inserted into a text field: those started from the keyboard and those started from the
- * floating icon. It does NOT apply to Process-text, shared audio files or any other background
- * transcription. Translation is done by a cloud cleanup step ([KeyboardTranslationRouting]), so it
+ * floating icon. It does NOT apply to shared audio files or any other background transcription.
+ * The select-text path (Process-text, [ProcessTextActivity]) does not use the shared target either,
+ * but it offers the same configured languages as one-off "Translate → <language>" rows after its
+ * styles (#360): picking one translates that selection only and leaves the target untouched.
+ * Translation is done by a cloud cleanup step ([KeyboardTranslationRouting]), so it
  * needs a cloud AI provider (on-device cleanup models are too small for it and ignore the prompt).
  * The class and preference names keep their original "keyboard" wording so nothing is migrated.
  */

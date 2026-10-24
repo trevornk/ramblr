@@ -127,7 +127,9 @@ not a live status readout.
 
 Select text in *any* app, tap **Ramblr** in Android's selection menu, pick a style, and the cleaned
 text replaces it (or lands on your clipboard if the field is read-only). Great for tightening a
-message you already typed.
+message you already typed. Any translation languages you've configured also appear in the list as
+**Translate → <language>** (a one-off translation of just that selection; it needs a cloud AI
+provider).
 
 This path touches the accessibility service **not at all** — it doesn't need to be enabled, and
 Ramblr never reads your screen to make it work.

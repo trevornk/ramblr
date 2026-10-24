@@ -163,3 +163,76 @@ fun processTextOutcome(cleanedText: String?, error: String?): ProcessTextOutcome
     } else {
         ProcessTextOutcome.Failed(error?.takeIf { it.isNotBlank() } ?: "unknown error")
     }
+
+/** One row of the select-text picker (#360): a cleanup style, or a one-off translation. */
+internal sealed class ProcessTextChoice {
+    data class Style(val persona: CleanupPersona) : ProcessTextChoice()
+    data class Translate(val language: TranslationLanguage) : ProcessTextChoice()
+}
+
+internal object ProcessTextPicker {
+    /**
+     * The picker rows: every style first (unchanged order), then one "Translate → <language>" row
+     * per language the user configured for dictation translation (Settings, AI cleanup). No
+     * configured languages means no translate rows -- the picker is then exactly what it was
+     * before #360.
+     */
+    fun choices(personas: List<CleanupPersona>, languages: List<TranslationLanguage>): List<ProcessTextChoice> =
+        personas.map { ProcessTextChoice.Style(it) } + languages.map { ProcessTextChoice.Translate(it) }
+
+    fun label(choice: ProcessTextChoice): String = when (choice) {
+        is ProcessTextChoice.Style -> choice.persona.title
+        is ProcessTextChoice.Translate -> "Translate → ${choice.language.nativeName}"
+    }
+
+    /** The preselected row: the user's current style. A translate row is never preselected, so
+     *  the dialog still defaults to "clean up with my usual style". */
+    fun checkedIndex(choices: List<ProcessTextChoice>, currentStyleKey: String): Int =
+        choices.indexOfFirst { it is ProcessTextChoice.Style && it.persona.key == currentStyleKey }.takeIf { it >= 0 } ?: 0
+}
+
+/** What a "Translate → <language>" pick will run, or why it cannot. */
+internal sealed class ProcessTextTranslationPlan {
+    /** [fidelityGuard] is always false: translated output shares no words with the selection, so
+     *  the wording guard would reject every translation (same as dictation translation). */
+    data class Ready(
+        val chain: ProviderChain,
+        val waterfall: CleanupWaterfall,
+        val prompt: String,
+        val fidelityGuard: Boolean,
+    ) : ProcessTextTranslationPlan()
+
+    data class Unavailable(val reason: KeyboardTranslationRouting.Reason) : ProcessTextTranslationPlan()
+}
+
+/**
+ * Routes a one-off translation of selected text through exactly the machinery dictation
+ * translation uses ([KeyboardTranslationRouting]): cloud steps only (an on-device step would
+ * ignore the prompt and "succeed" untranslated), consent and credentials checked the same way.
+ * The prompt is [PostProcessor.TRANSLATE_ONLY_PROMPT] plus the language clause -- never the user's
+ * cleanup style -- so the pick translates and does not also rewrite.
+ *
+ * Nothing here touches the shared `keyboard_translate_to` target: the pick applies to this
+ * selection only.
+ */
+internal fun processTextTranslationPlan(
+    language: TranslationLanguage,
+    effectiveChain: ProviderChain,
+    consentMissing: Boolean,
+    hasCredential: (ProviderChainEntry) -> Boolean,
+    vocabulary: List<String>,
+): ProcessTextTranslationPlan =
+    when (val route = KeyboardTranslationRouting.route(language.englishName, effectiveChain, consentMissing, hasCredential)) {
+        is KeyboardTranslationRouting.Route.Cloud -> ProcessTextTranslationPlan.Ready(
+            chain = route.chain,
+            waterfall = route.waterfall,
+            prompt = KeyboardTranslationRouting.prompt(
+                cleanupEnabled = false, stylePrompt = "", vocabulary = vocabulary, languageName = language.englishName,
+            ),
+            fidelityGuard = false,
+        )
+        is KeyboardTranslationRouting.Route.Unavailable -> ProcessTextTranslationPlan.Unavailable(route.reason)
+        // Unreachable: the target is non-null above.
+        KeyboardTranslationRouting.Route.NotRequested ->
+            ProcessTextTranslationPlan.Unavailable(KeyboardTranslationRouting.Reason.NO_CLOUD_PROVIDER)
+    }

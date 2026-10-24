@@ -98,7 +98,7 @@ class ProcessTextActivity : Activity() {
             is ProcessTextCleanupPlan.Ready -> plan
         }
 
-        showPersonaPicker(request, ready)
+        showPicker(request, ready)
     }
 
     private fun messageFor(reason: ProcessTextUnavailableReason): String = when (reason) {
@@ -110,7 +110,7 @@ class ProcessTextActivity : Activity() {
             "Cleanup needs an OpenAI API key"
     }
 
-    private fun showPersonaPicker(request: ProcessTextRequest, plan: ProcessTextCleanupPlan.Ready) {
+    private fun showPicker(request: ProcessTextRequest, plan: ProcessTextCleanupPlan.Ready) {
         val personas = PersonaRegistry.all(this)
         if (personas.isEmpty()) {
             // Defensive only: BUILT_IN is non-empty by construction, so this cannot happen today.
@@ -121,27 +121,35 @@ class ProcessTextActivity : Activity() {
             prefs().getString(KEY_CLEANUP_STYLE, null),
             PostProcessor.effectiveSavedPrompt(prefs().getString(KEY_POST_PROCESSING_PROMPT, null), prefs().getString(KEY_CLEANUP_STYLE, null)),
         )
-        val checked = personas.indexOfFirst { it.key == current.key }.takeIf { it >= 0 } ?: 0
+        // #360: the languages configured for dictation translation also appear here, after the
+        // styles. A pick is one-off -- the shared keyboard_translate_to target is never written.
+        val choices = ProcessTextPicker.choices(personas, KeyboardTranslation.chosen(this))
+        val checked = ProcessTextPicker.checkedIndex(choices, current.key)
 
         pickerDialog = android.app.AlertDialog.Builder(this)
             .setTitle("Clean up with")
-            .setSingleChoiceItems(personas.map { it.title }.toTypedArray(), checked) { dialog, which ->
+            .setSingleChoiceItems(choices.map(ProcessTextPicker::label).toTypedArray(), checked) { dialog, which ->
                 dialog.dismiss()
-                startCleanup(request, plan, personas[which])
+                when (val choice = choices[which]) {
+                    is ProcessTextChoice.Style -> startCleanup(request, plan, choice.persona)
+                    is ProcessTextChoice.Translate -> startTranslation(request, choice.language)
+                }
             }
             .setNegativeButton("Cancel") { _, _ -> cancelAndFinish() }
             .setOnCancelListener { cancelAndFinish() }
             .show()
     }
 
+    private fun vocabularyTerms() = VocabularyTerms.parse(
+        prefs().getString(KEY_VOCABULARY_TERMS, VocabularyTerms.DEFAULT_SERIALIZED)
+    )
+
     private fun startCleanup(
         request: ProcessTextRequest,
         plan: ProcessTextCleanupPlan.Ready,
         persona: CleanupPersona,
     ) {
-        val vocabulary = VocabularyTerms.parse(
-            prefs().getString(KEY_VOCABULARY_TERMS, VocabularyTerms.DEFAULT_SERIALIZED)
-        )
+        val vocabulary = vocabularyTerms()
         // An explicit pick in the dialog above is an explicit selection, so the persona's own
         // prompt is used verbatim -- the same contract as the overlay's quick style menu.
         val prompt = PostProcessor.withKeepLanguage(
@@ -150,21 +158,88 @@ class ProcessTextActivity : Activity() {
                 vocabulary,
             )
         )
+        runProcessing(
+            request, plan.chain, plan.waterfall, prompt, vocabulary,
+            fidelityGuard = PostProcessor.preservesWording(prompt),
+            kind = ProcessingKind.CLEANUP, what = "persona=${persona.key}",
+        )
+    }
+
+    /**
+     * #360: translate the selection into [language] by the dictation-translation route (cloud steps
+     * only, translate-only prompt, no fidelity guard). If the one-time off-device consent is still
+     * due, ask for it here -- this Activity can show a dialog, unlike the keyboard panel -- and
+     * then continue; any other reason it cannot run is a toast, and the selection is left alone.
+     */
+    private fun startTranslation(request: ProcessTextRequest, language: TranslationLanguage) {
+        val vocabulary = vocabularyTerms()
+        val translation = processTextTranslationPlan(
+            language = language,
+            effectiveChain = KeyboardTranslationReadiness.effectiveChain(this),
+            consentMissing = KeyboardTranslationReadiness.consentMissing(this),
+            hasCredential = { KeyboardTranslationReadiness.hasCredential(this, it) },
+            vocabulary = vocabulary,
+        )
+        when (translation) {
+            is ProcessTextTranslationPlan.Unavailable -> when (translation.reason) {
+                KeyboardTranslationRouting.Reason.CONSENT_MISSING -> askTranslationConsent(request, language)
+                KeyboardTranslationRouting.Reason.NO_CLOUD_PROVIDER -> {
+                    Log.i(TAG, "Translation unavailable for selection: ${translation.reason}")
+                    failAndFinish(getString(KeyboardTranslationRouting.messageRes(translation.reason)))
+                }
+            }
+            is ProcessTextTranslationPlan.Ready -> runProcessing(
+                request, translation.chain, translation.waterfall, translation.prompt, vocabulary,
+                fidelityGuard = translation.fidelityGuard,
+                kind = ProcessingKind.TRANSLATION, what = "language=${language.code}",
+            )
+        }
+    }
+
+    private fun askTranslationConsent(request: ProcessTextRequest, language: TranslationLanguage) {
+        val host = KeyboardTranslationReadiness.consentHost(this)
+        pickerDialog = android.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.ime_translate_consent_title, host))
+            .setMessage(getString(R.string.process_text_translate_consent_body, host))
+            .setPositiveButton(R.string.ime_translate_consent_allow) { _, _ ->
+                KeyboardTranslationReadiness.grantConsent(this)
+                startTranslation(request, language)
+            }
+            .setNegativeButton(R.string.ime_translate_consent_decline) { _, _ -> cancelAndFinish() }
+            .setOnCancelListener { cancelAndFinish() }
+            .show()
+    }
+
+    private enum class ProcessingKind(val progressTitle: String, val progressVerb: String, val failureLabel: String) {
+        CLEANUP("Cleaning up…", "cleaning up", "Cleanup"),
+        TRANSLATION("Translating…", "translating", "Translation"),
+    }
+
+    private fun runProcessing(
+        request: ProcessTextRequest,
+        chain: ProviderChain,
+        waterfall: CleanupWaterfall,
+        prompt: String,
+        vocabulary: List<String>,
+        fidelityGuard: Boolean,
+        kind: ProcessingKind,
+        what: String,
+    ) {
         val localModel = LocalCleanupProvider.selectedModel(this)
         val localPrompt = LocalCleanupProvider.selectedSystemPrompt(this)
         val localModelPath = ModelDownloader.localCleanupModelFile(this, localModel)?.absolutePath
 
         progressDialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Cleaning up…")
-            .setMessage("Ramblr is cleaning up ${request.text.length} characters.")
+            .setTitle(kind.progressTitle)
+            .setMessage("Ramblr is ${kind.progressVerb} ${request.text.length} characters.")
             .setNegativeButton("Cancel") { _, _ -> cancelAndFinish() }
             .setOnCancelListener { cancelAndFinish() }
             .show()
 
         Log.i(
             TAG,
-            "Selection cleanup starting: chars=${request.text.length} readOnly=${request.readOnly} " +
-                "persona=${persona.key} steps=${plan.waterfall.steps.map { it.group }}",
+            "Selection ${kind.name.lowercase()} starting: chars=${request.text.length} readOnly=${request.readOnly} " +
+                "$what steps=${waterfall.steps.map { it.group }}",
         )
 
         worker.execute {
@@ -172,7 +247,7 @@ class ProcessTextActivity : Activity() {
                 PostProcessor.processProviderChain(
                     text = request.text,
                     prompt = prompt,
-                    chain = plan.chain,
+                    chain = chain,
                     cursor = cursor,
                     cancelHolder = inFlightCall,
                     credentialLookup = { kind -> ProviderCredentialStore.getLegacyByKind(this, kind) },
@@ -183,6 +258,10 @@ class ProcessTextActivity : Activity() {
                     // post-pass over its output instead of in its prompt (which broke LFM2.5).
                     localVocabulary = vocabulary,
                     temperatureCacheContext = applicationContext,
+                    // Off for a translation (#360), exactly as for dictation translation: the
+                    // output shares no words with the selection. Otherwise the default the
+                    // prompt implies.
+                    fidelityGuard = fidelityGuard,
                     // Deliberately no benchmarkContext/correlationId: BenchmarkLogger and
                     // QualityLogger exist to correlate a cleanup stage with the transcription
                     // stage of the same dictation (#100/#105), and a selection-menu cleanup has
@@ -195,19 +274,19 @@ class ProcessTextActivity : Activity() {
                     // same shared-store, same-toggle expansion itself rather than relying on any
                     // service that isn't even guaranteed to be running.
                     val expandedText = result.text?.let { SnippetRuntimeSupport.expand(this, it) }
-                    deliver(request, processTextOutcome(expandedText, result.error))
+                    deliver(request, kind, processTextOutcome(expandedText, result.error))
                 }
             } catch (t: Throwable) {
                 // processProviderChain's own steps report failures through the callback; anything
                 // escaping here is a programming/native error that would otherwise leave the
                 // Activity showing a spinner forever.
                 Log.e(TAG, "Selection cleanup threw", t)
-                deliver(request, ProcessTextOutcome.Failed(t.message ?: t.javaClass.simpleName))
+                deliver(request, kind, ProcessTextOutcome.Failed(t.message ?: t.javaClass.simpleName))
             }
         }
     }
 
-    private fun deliver(request: ProcessTextRequest, outcome: ProcessTextOutcome) {
+    private fun deliver(request: ProcessTextRequest, kind: ProcessingKind, outcome: ProcessTextOutcome) {
         handler.post {
             if (abandoned || isFinishing || isDestroyed) {
                 Log.i(TAG, "Dropping cleanup result: activity already gone")
@@ -217,7 +296,7 @@ class ProcessTextActivity : Activity() {
             when (outcome) {
                 is ProcessTextOutcome.Failed -> {
                     Log.w(TAG, "Selection cleanup failed: ${outcome.reason}")
-                    failAndFinish("Cleanup failed (${outcome.reason})")
+                    failAndFinish("${kind.failureLabel} failed (${outcome.reason})")
                 }
                 is ProcessTextOutcome.Cleaned -> {
                     // Always copy first, matching the dictation path's copy-then-write order
