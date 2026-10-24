@@ -20,14 +20,21 @@ enum class OverlayLongPressAction { CANCEL_TRANSCRIPTION, UNDO_INJECTION, SHOW_S
  *   IDLE, hasPendingInjection = false  -> SHOW_STYLE_MENU (new, #53)
  *   RECORDING                          -> NONE (unchanged: a long hold-then-release while
  *                                         recording is still just a tap that stops it)
+ *
+ * With the "Long-press cancels and undoes" setting off ([cancelAndUndoEnabled] = false, #361) the two
+ * destructive actions are removed: TRANSCRIBING -> NONE (so the long-press is not even armed) and
+ * IDLE -> SHOW_STYLE_MENU regardless of [hasPendingInjection].
  */
 fun overlayLongPressActionFor(
     state: RecordingStateMachine.State,
-    hasPendingInjection: Boolean
+    hasPendingInjection: Boolean,
+    cancelAndUndoEnabled: Boolean = true,
 ): OverlayLongPressAction = when (state) {
-    RecordingStateMachine.State.TRANSCRIBING -> OverlayLongPressAction.CANCEL_TRANSCRIPTION
+    RecordingStateMachine.State.TRANSCRIBING ->
+        if (cancelAndUndoEnabled) OverlayLongPressAction.CANCEL_TRANSCRIPTION else OverlayLongPressAction.NONE
     RecordingStateMachine.State.IDLE ->
-        if (hasPendingInjection) OverlayLongPressAction.UNDO_INJECTION else OverlayLongPressAction.SHOW_STYLE_MENU
+        if (hasPendingInjection && cancelAndUndoEnabled) OverlayLongPressAction.UNDO_INJECTION
+        else OverlayLongPressAction.SHOW_STYLE_MENU
     RecordingStateMachine.State.RECORDING -> OverlayLongPressAction.NONE
 }
 

@@ -33,6 +33,7 @@ class BehaviorActivity : BaseSettingsActivity() {
     private lateinit var autoPeekDelayRow: LinearLayout
     private lateinit var peekSizeRow: LinearLayout
     private lateinit var singleTapRestoreSwitch: MaterialSwitch
+    private lateinit var longPressCancelUndoSwitch: MaterialSwitch
     private lateinit var silenceAutoStopSwitch: MaterialSwitch
     private lateinit var silenceAutoStopRow: LinearLayout
     private lateinit var silenceAutoStopThresholdRow: LinearLayout
@@ -219,6 +220,23 @@ class BehaviorActivity : BaseSettingsActivity() {
             singleTapRestoreSwitch.isChecked = newVal
         })
 
+        // #361: lets a user take the two destructive long-press actions (cancel a transcription,
+        // undo the last insertion) off the ring after losing a dictation to an accidental hold.
+        // Independent of auto-hide, so unlike the rows above it is never greyed out in refresh().
+        longPressCancelUndoSwitch = MaterialSwitch(this).apply {
+            isChecked = LongPressCancelUndoToggle.isEnabled(this@BehaviorActivity)
+            isClickable = false
+        }
+        place(Section.ICON, 30, settingsRow(
+            "Long-press cancels and undoes",
+            "Hold the icon to cancel a dictation in progress or undo the last insertion. Off: holding only opens the style menu",
+            longPressCancelUndoSwitch,
+        ) {
+            val newVal = !longPressCancelUndoSwitch.isChecked
+            LongPressCancelUndoToggle.setEnabled(this, newVal)
+            longPressCancelUndoSwitch.isChecked = newVal
+        })
+
         // Silence-based auto-stop (#108, mode 1). Off by default (see SilenceAutoStopToggle's
         // kdoc for why) and a genuine behavior change, so it gets its own paired toggle+threshold
         // rows following autoPeekSwitch/autoPeekDelayRow's existing pattern above.
@@ -375,6 +393,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         ringVisibilityRowSub.text = ringVisibilitySummary()
         autoPeekSwitch.isChecked = AutoPeekToggle.isEnabled(this)
         singleTapRestoreSwitch.isChecked = SingleTapRestoreToggle.isEnabled(this)
+        longPressCancelUndoSwitch.isChecked = LongPressCancelUndoToggle.isEnabled(this)
         silenceAutoStopSwitch.isChecked = SilenceAutoStopToggle.isEnabled(this)
         silenceAutoStopThresholdRow.findViewWithTag<TextView>("subtitle").text = silenceAutoStopThresholdSummary()
         refreshSilenceAutoStopSummary()

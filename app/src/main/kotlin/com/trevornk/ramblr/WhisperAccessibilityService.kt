@@ -1371,6 +1371,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // the full state -> action map (cancel while TRANSCRIBING, undo while IDLE with a pending
         // injection (#27), or the #53 style/cleanup menu in the one remaining reachable state:
         // IDLE with nothing pending). RECORDING never arms the timer at all, exactly as before.
+        // The "Long-press cancels and undoes" setting (#361) is read fresh at touch-down and again
+        // when the timer fires, so a Settings change applies to the very next touch.
         //
         // Set only when this gesture's long-press actually opened the style menu (#57) -- lets
         // a hold-then-drag single out "the menu I just opened" from cancel-transcription/undo
@@ -1381,7 +1383,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // tracker state that was never updated for this gesture.
         var consumedByPeekRestore = false
         val longPressAction = Runnable {
-            val action = overlayLongPressActionFor(runtime.currentState(), hasPendingInjection = pendingInjection != null)
+            val action = overlayLongPressActionFor(
+                runtime.currentState(),
+                hasPendingInjection = pendingInjection != null,
+                cancelAndUndoEnabled = LongPressCancelUndoToggle.isEnabled(this),
+            )
             // Drag wins (#57): a hold that already became a drag never fires a long-press. Either
             // way the touch can no longer end as a tap (#322).
             if (!gesture.onLongPressTimer()) return@Runnable
@@ -1455,7 +1461,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
                     startX = restoreTargetX ?: params.x; startY = params.y
                     touchX = ev.rawX; touchY = ev.rawY
                     styleMenuOpenedByLongPress = false
-                    val pendingAction = overlayLongPressActionFor(runtime.currentState(), hasPendingInjection = pendingInjection != null)
+                    val pendingAction = overlayLongPressActionFor(
+                        runtime.currentState(),
+                        hasPendingInjection = pendingInjection != null,
+                        cancelAndUndoEnabled = LongPressCancelUndoToggle.isEnabled(this),
+                    )
                     val armed = pendingAction != OverlayLongPressAction.NONE
                     // Honour a longer system long-press delay (accessibility) but never shorten
                     // below RingGestureTracker.MIN_LONG_PRESS_MS; re-read every touch so a settings change applies

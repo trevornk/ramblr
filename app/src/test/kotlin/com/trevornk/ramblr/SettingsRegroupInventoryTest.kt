@@ -138,6 +138,7 @@ class SettingsRegroupInventoryTest {
             // Behavior (now Floating icon / Recording / Privacy)
             "Allow hiding the floating icon", "Let automation apps turn Ramblr off", "App exclusions",
             "Auto-hide icon when idle", "Auto-hide delay", "Peeked sliver size", "Single-tap restore and record",
+            "Long-press cancels and undoes",
             "Auto-stop after silence", "Silence threshold", "Show the icon",
             // Overlay Appearance (now Size and colors)
             "Icon size", "Border color", "Fill color (idle only)", "Microphone icon color",

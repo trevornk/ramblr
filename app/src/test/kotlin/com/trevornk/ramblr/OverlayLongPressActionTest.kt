@@ -41,4 +41,45 @@ class OverlayLongPressActionTest {
         )
     }
 
+    // #361: the full state x pending-injection x setting matrix. With the setting on (the default)
+    // nothing changes from the pre-#361 map; with it off both destructive actions disappear.
+    @Test fun `full state by setting matrix`() {
+        data class Case(
+            val state: RecordingStateMachine.State,
+            val pending: Boolean,
+            val enabled: Boolean,
+            val expected: OverlayLongPressAction,
+        )
+        val transcribing = RecordingStateMachine.State.TRANSCRIBING
+        val idle = RecordingStateMachine.State.IDLE
+        val recording = RecordingStateMachine.State.RECORDING
+        val cases = listOf(
+            Case(transcribing, pending = false, enabled = true, expected = OverlayLongPressAction.CANCEL_TRANSCRIPTION),
+            Case(transcribing, pending = true, enabled = true, expected = OverlayLongPressAction.CANCEL_TRANSCRIPTION),
+            Case(transcribing, pending = false, enabled = false, expected = OverlayLongPressAction.NONE),
+            Case(transcribing, pending = true, enabled = false, expected = OverlayLongPressAction.NONE),
+            Case(idle, pending = true, enabled = true, expected = OverlayLongPressAction.UNDO_INJECTION),
+            Case(idle, pending = false, enabled = true, expected = OverlayLongPressAction.SHOW_STYLE_MENU),
+            Case(idle, pending = true, enabled = false, expected = OverlayLongPressAction.SHOW_STYLE_MENU),
+            Case(idle, pending = false, enabled = false, expected = OverlayLongPressAction.SHOW_STYLE_MENU),
+            Case(recording, pending = false, enabled = true, expected = OverlayLongPressAction.NONE),
+            Case(recording, pending = true, enabled = true, expected = OverlayLongPressAction.NONE),
+            Case(recording, pending = false, enabled = false, expected = OverlayLongPressAction.NONE),
+            Case(recording, pending = true, enabled = false, expected = OverlayLongPressAction.NONE),
+        )
+        for (c in cases) {
+            assertEquals(
+                "state=${c.state} pending=${c.pending} enabled=${c.enabled}",
+                c.expected,
+                overlayLongPressActionFor(c.state, hasPendingInjection = c.pending, cancelAndUndoEnabled = c.enabled)
+            )
+        }
+    }
+
+    @Test fun `setting defaults to enabled when omitted`() {
+        assertEquals(
+            OverlayLongPressAction.CANCEL_TRANSCRIPTION,
+            overlayLongPressActionFor(RecordingStateMachine.State.TRANSCRIBING, hasPendingInjection = false)
+        )
+    }
 }

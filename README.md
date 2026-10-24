@@ -53,7 +53,10 @@ Ramblr isn't just the floating button. Pick whichever fits the moment — most c
 
 A draggable mic ring floats above other apps. Tap to record, tap to stop; the cleaned text is
 inserted into whatever field had focus. Long-press does something useful depending on state — cancel
-while transcribing, undo a just-inserted result, or open the style quick-menu when idle.
+while transcribing, undo a just-inserted result, or open the style quick-menu when idle. If you'd
+rather an accidental hold never throw away a dictation, turn off **Long-press cancels and undoes**
+in Settings → Floating icon: holding then only opens the style menu (and does nothing while
+transcribing).
 
 It auto-hides ("peeks") to the screen edge when idle so it isn't in your way, and both the delay and
 the look — size, border, fill, glyph color, or a fully custom icon image — are configurable.
