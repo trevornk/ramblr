@@ -1,0 +1,9 @@
+Floating icon fixes for rotation and landscape.
+
+- A floating icon tucked against the edge no longer disappears off-screen in landscape.
+- The icon stays clear of the navigation buttons when they're on the side of the screen.
+- A docked icon now stays on its edge when you rotate, instead of ending up mid-screen.
+- Turning the phone straight from one landscape to the other now repositions the icon.
+- The icon no longer creeps up with every rotation.
+
+Thanks to jloutsch for all five fixes.
