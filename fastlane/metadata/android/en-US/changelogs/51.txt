@@ -1,0 +1,4 @@
+Two requests from cbenz.
+
+- Translate selected text: your translation languages now appear in the select-text menu as "Translate → <language>". Needs a cloud AI provider.
+- New setting under Floating icon: turn off "Long-press cancels and undoes" so an accidental hold can't throw away a dictation. Holding then only opens the style menu.
