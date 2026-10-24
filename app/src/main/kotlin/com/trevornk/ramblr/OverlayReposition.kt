@@ -1,16 +1,6 @@
 package com.trevornk.ramblr
 
-/**
- * True when a screen-size change looks like a fold/unfold transition -- a genuinely different
- * screen size -- rather than an ordinary rotation, which merely swaps width and height. Rotation
- * has never repositioned the overlay and isn't part of this fix (#41), so a plain W/H swap is left
- * alone to avoid an unrelated, unrequested jump.
- */
-fun isFoldSizeChange(oldW: Int, oldH: Int, newW: Int, newH: Int): Boolean {
-    if (oldW == newW && oldH == newH) return false
-    val isRotationSwap = oldW == newH && oldH == newW
-    return !isRotationSwap
-}
+import kotlin.math.roundToInt
 
 /**
  * True when the display turned 180° (e.g. landscape to the other landscape) without changing size.
@@ -69,13 +59,14 @@ fun peekedPositionForScreenChange(
  * Preserves the ring's vertical position proportionally across a fold/unfold screen-size change
  * (#41) -- e.g. a ring 30% down the old screen stays roughly 30% down the new one -- instead of
  * resetting to a hardcoded center, so a fold transition never fights a position the user dragged
- * to manually. Clamped to stay fully on-screen.
+ * to manually. Clamped to stay fully on-screen. Rounded, not truncated: truncating moved the ring
+ * up a pixel or two on every rotation (#355).
  */
 fun proportionalYForScreenChange(oldY: Int, oldScreenH: Int, newScreenH: Int, ringSize: Int, margin: Int): Int {
     if (oldScreenH <= 0) return oldY
     val oldCenterY = oldY + ringSize / 2
     val ratio = oldCenterY.toFloat() / oldScreenH
-    val newCenterY = (ratio * newScreenH).toInt()
+    val newCenterY = (ratio * newScreenH).roundToInt()
     val maxY = (newScreenH - ringSize - margin).coerceAtLeast(margin)
     return (newCenterY - ringSize / 2).coerceIn(margin, maxY)
 }

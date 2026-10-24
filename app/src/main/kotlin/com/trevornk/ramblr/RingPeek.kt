@@ -8,7 +8,7 @@ package com.trevornk.ramblr
  *
  * Kept as a standalone object of pure functions (no Android/WindowManager dependency) so the
  * edge-detection and peek-position math are directly unit testable, mirroring the existing
- * [overlayShouldBeVisible]/[isFoldSizeChange] pattern rather than leaving this logic buried inline
+ * [overlayShouldBeVisible]/[snappedXForScreenChange] pattern rather than leaving this logic buried inline
  * in WhisperAccessibilityService's touch listener.
  */
 object RingPeek {

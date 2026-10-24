@@ -7,21 +7,6 @@ import org.junit.Test
 
 class OverlayRepositionTest {
 
-    // --- isFoldSizeChange ---
-
-    @Test fun `unchanged size is not a fold change`() {
-        assertFalse(isFoldSizeChange(oldW = 1080, oldH = 2364, newW = 1080, newH = 2364))
-    }
-
-    @Test fun `a plain width-height swap is treated as rotation, not a fold change`() {
-        assertFalse(isFoldSizeChange(oldW = 1080, oldH = 2364, newW = 2364, newH = 1080))
-    }
-
-    @Test fun `a genuinely different size is a fold change`() {
-        // Pixel Fold cover screen closed (1080x2364) to inner screen opened (2076x2152).
-        assertTrue(isFoldSizeChange(oldW = 1080, oldH = 2364, newW = 2076, newH = 2152))
-    }
-
     // --- isFlipWithoutResize (#352) ---
 
     @Test fun `a 180 degree turn is a flip`() {
@@ -88,6 +73,16 @@ class OverlayRepositionTest {
 
         assertTrue(newY >= margin)
         assertTrue(newY <= newScreenH - ringSize - margin)
+    }
+
+    @Test fun `repeated rotations don't walk the ring up the screen`() {
+        // S23+ with 3-button navigation: 2120 px tall in portrait, 1080 in landscape (#355).
+        var y = 1000
+        repeat(10) {
+            y = proportionalYForScreenChange(y, 2120, 1080, 147, 21)
+            y = proportionalYForScreenChange(y, 1080, 2120, 147, 21)
+        }
+        assertEquals(1000f, y.toFloat(), 2f)
     }
 
     // --- peekedPositionForScreenChange ---

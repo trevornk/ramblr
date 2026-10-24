@@ -7,10 +7,8 @@ import org.junit.Test
 /**
  * #128: a rotation while the ring is PEEKED desyncs the peek state from the screen.
  *
- * [isFoldSizeChange] deliberately reports false for a plain width/height swap, so
- * handleScreenSizeChange returns early and never repositions the ring on rotation -- correct for a
- * docked ring (rotation has never moved it), but wrong for a peeked one, whose window x is defined
- * relative to a screen edge that just moved. The peeked ring keeps its old absolute x against the
+ * handleScreenSizeChange used to skip rotation entirely. A peeked ring's window x is defined
+ * relative to a screen edge that just moved, so it kept its old absolute x against the
  * new screen width, so it either floats into the middle of the screen (portrait -> landscape) or
  * falls entirely off it (landscape -> portrait), while isPeeked stays true.
  *
@@ -22,10 +20,6 @@ class PeekRotationTest {
     private val margin = 22
     private val peekVisiblePx = 55
     private val inset = 16
-
-    @Test fun `rotation is still not a fold change`() {
-        assertFalse(isFoldSizeChange(oldW = 1080, oldH = 2400, newW = 2400, newH = 1080))
-    }
 
     @Test fun `peeked ring rotated portrait to landscape re-derives against the new width`() {
         val portraitW = 1080
