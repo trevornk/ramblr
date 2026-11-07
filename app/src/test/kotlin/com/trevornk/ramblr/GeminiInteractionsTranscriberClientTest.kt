@@ -1,9 +1,8 @@
 package com.trevornk.ramblr
 
 import okhttp3.OkHttpClient
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.SocketPolicy
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -39,21 +38,21 @@ class GeminiInteractionsTranscriberClientTest {
         )
     }
 
-    @After fun tearDown() = server.shutdown()
+    @After fun tearDown() = server.close()
 
     private fun audio(name: String = "clip.wav"): File =
         File(temp.root, name).apply { writeBytes(byteArrayOf(1, 2, 3, 4, 5)) }
 
     private fun enqueueSuccessfulUpload() {
         server.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .addHeader("X-Goog-Upload-URL", server.url("/resumable/session-1")),
+            MockResponse.Builder()
+                .code(200)
+                .addHeader("X-Goog-Upload-URL", server.url("/resumable/session-1")).build(),
         )
         server.enqueue(
-            MockResponse().setBody(
+            MockResponse.Builder().body(
                 """{"file":{"name":"files/file-123","uri":"https://files.example/file-123","mimeType":"audio/wav","state":"ACTIVE"}}""",
-            ),
+            ).build(),
         )
     }
 
@@ -84,11 +83,11 @@ class GeminiInteractionsTranscriberClientTest {
         val terms = listOf("Zorbex", "Quillfarm", "Nimbato", "Plinth")
         enqueueSuccessfulUpload()
         server.enqueue(
-            MockResponse().setBody(
+            MockResponse.Builder().body(
                 """{"status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"Zorbex, Quillfarm, Nimbato, Plinth."}]}]}""",
-            ),
+            ).build(),
         )
-        server.enqueue(MockResponse().setBody("{}"))
+        server.enqueue(MockResponse.Builder().body("{}").build())
 
         val (result, callbacks) = awaitResult(vocabulary = terms)
 
@@ -100,11 +99,11 @@ class GeminiInteractionsTranscriberClientTest {
     @Test fun `resumable upload interaction and deletion use the documented request shapes`() {
         enqueueSuccessfulUpload()
         server.enqueue(
-            MockResponse().setBody(
+            MockResponse.Builder().body(
                 """{"status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":" hello "},{"type":"text","text":"world "}]}]}""",
-            ),
+            ).build(),
         )
-        server.enqueue(MockResponse().setBody("{}"))
+        server.enqueue(MockResponse.Builder().body("{}").build())
 
         val (result, callbacks) = awaitResult()
 
@@ -114,26 +113,26 @@ class GeminiInteractionsTranscriberClientTest {
 
         val start = server.takeRequest()
         assertEquals("POST", start.method)
-        assertEquals("/upload/v1beta/files", start.path)
-        assertEquals("test-api-key", start.getHeader("x-goog-api-key"))
-        assertEquals("resumable", start.getHeader("X-Goog-Upload-Protocol"))
-        assertEquals("start", start.getHeader("X-Goog-Upload-Command"))
-        assertEquals("5", start.getHeader("X-Goog-Upload-Header-Content-Length"))
-        assertEquals("audio/wav", start.getHeader("X-Goog-Upload-Header-Content-Type"))
-        assertEquals("ramblr-audio", JSONObject(start.body.readUtf8()).getJSONObject("file").getString("display_name"))
+        assertEquals("/upload/v1beta/files", start.target)
+        assertEquals("test-api-key", start.headers["x-goog-api-key"])
+        assertEquals("resumable", start.headers["X-Goog-Upload-Protocol"])
+        assertEquals("start", start.headers["X-Goog-Upload-Command"])
+        assertEquals("5", start.headers["X-Goog-Upload-Header-Content-Length"])
+        assertEquals("audio/wav", start.headers["X-Goog-Upload-Header-Content-Type"])
+        assertEquals("ramblr-audio", JSONObject(start.body!!.utf8()).getJSONObject("file").getString("display_name"))
 
         val upload = server.takeRequest()
         assertEquals("POST", upload.method)
-        assertEquals("/resumable/session-1", upload.path)
-        assertEquals("upload, finalize", upload.getHeader("X-Goog-Upload-Command"))
-        assertEquals("0", upload.getHeader("X-Goog-Upload-Offset"))
-        assertEquals(listOf<Byte>(1, 2, 3, 4, 5), upload.body.readByteArray().toList())
+        assertEquals("/resumable/session-1", upload.target)
+        assertEquals("upload, finalize", upload.headers["X-Goog-Upload-Command"])
+        assertEquals("0", upload.headers["X-Goog-Upload-Offset"])
+        assertEquals(listOf<Byte>(1, 2, 3, 4, 5), upload.body!!.toByteArray().toList())
 
         val interaction = server.takeRequest()
         assertEquals("POST", interaction.method)
-        assertEquals("/v1beta/interactions", interaction.path)
-        assertEquals("test-api-key", interaction.getHeader("x-goog-api-key"))
-        val body = JSONObject(interaction.body.readUtf8())
+        assertEquals("/v1beta/interactions", interaction.target)
+        assertEquals("test-api-key", interaction.headers["x-goog-api-key"])
+        val body = JSONObject(interaction.body!!.utf8())
         assertEquals("gemini-3.5-transcribe", body.getString("model"))
         assertFalse(body.getBoolean("store"))
         val input = body.getJSONArray("input").getJSONObject(0)
@@ -147,21 +146,21 @@ class GeminiInteractionsTranscriberClientTest {
 
         val delete = server.takeRequest()
         assertEquals("DELETE", delete.method)
-        assertEquals("/v1beta/files/file-123", delete.path)
-        assertEquals("test-api-key", delete.getHeader("x-goog-api-key"))
+        assertEquals("/v1beta/files/file-123", delete.target)
+        assertEquals("test-api-key", delete.headers["x-goog-api-key"])
     }
 
     @Test fun `smart mode is explicit and never encoded as verbatim`() {
         enqueueSuccessfulUpload()
-        server.enqueue(MockResponse().setBody("""{"steps":[{"type":"model_output","content":[{"type":"text","text":"clean"}]}]}"""))
-        server.enqueue(MockResponse().setBody("{}"))
+        server.enqueue(MockResponse.Builder().body("""{"steps":[{"type":"model_output","content":[{"type":"text","text":"clean"}]}]}""").build())
+        server.enqueue(MockResponse.Builder().body("{}").build())
 
         val (result, _) = awaitResult(mode = GeminiInteractionsTranscriberClient.Mode.SMART)
 
         assertEquals("clean", result.text)
         server.takeRequest()
         server.takeRequest()
-        val config = JSONObject(server.takeRequest().body.readUtf8())
+        val config = JSONObject(server.takeRequest().body!!.utf8())
             .getJSONObject("generation_config").getJSONObject("transcription_config")
         assertEquals("smart", config.getJSONObject("mode").getString("type"))
     }
@@ -176,14 +175,14 @@ class GeminiInteractionsTranscriberClientTest {
     @Test fun `both transcription modes use the documented object wire shape`() {
         for (mode in GeminiInteractionsTranscriberClient.Mode.entries) {
             enqueueSuccessfulUpload()
-            server.enqueue(MockResponse().setBody("""{"steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}]}"""))
-            server.enqueue(MockResponse().setBody("{}"))
+            server.enqueue(MockResponse.Builder().body("""{"steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}]}""").build())
+            server.enqueue(MockResponse.Builder().body("{}").build())
 
             awaitResult(mode = mode)
 
             server.takeRequest()
             server.takeRequest()
-            val config = JSONObject(server.takeRequest().body.readUtf8())
+            val config = JSONObject(server.takeRequest().body!!.utf8())
                 .getJSONObject("generation_config").getJSONObject("transcription_config")
             val encoded = config.opt("mode")
             assertTrue("mode for $mode must be an object, was ${encoded?.javaClass}", encoded is JSONObject)
@@ -202,16 +201,16 @@ class GeminiInteractionsTranscriberClientTest {
         val attacker = MockWebServer()
         attacker.start()
         try {
-            attacker.enqueue(MockResponse().setBody("""{"file":{"name":"files/pwned","uri":"https://files.example/pwned","mimeType":"audio/wav","state":"ACTIVE"}}"""))
+            attacker.enqueue(MockResponse.Builder().body("""{"file":{"name":"files/pwned","uri":"https://files.example/pwned","mimeType":"audio/wav","state":"ACTIVE"}}""").build())
             server.enqueue(
-                MockResponse()
-                    .setResponseCode(200)
-                    .setHeader("X-Goog-Upload-URL", server.url("/resumable/session-1").toString()),
+                MockResponse.Builder()
+                    .code(200)
+                    .setHeader("X-Goog-Upload-URL", server.url("/resumable/session-1").toString()).build(),
             )
             server.enqueue(
-                MockResponse()
-                    .setResponseCode(302)
-                    .setHeader("Location", attacker.url("/steal").toString()),
+                MockResponse.Builder()
+                    .code(302)
+                    .setHeader("Location", attacker.url("/steal").toString()).build(),
             )
 
             val (result, callbacks) = awaitResult()
@@ -221,7 +220,7 @@ class GeminiInteractionsTranscriberClientTest {
             assertNotNull(result.error)
             assertEquals("attacker host must receive no request", 0, attacker.requestCount)
         } finally {
-            attacker.shutdown()
+            attacker.close()
         }
     }
 
@@ -234,14 +233,14 @@ class GeminiInteractionsTranscriberClientTest {
         attacker.start()
         try {
             attacker.enqueue(
-                MockResponse()
-                    .setResponseCode(200)
-                    .setHeader("X-Goog-Upload-URL", attacker.url("/resumable/evil").toString()),
+                MockResponse.Builder()
+                    .code(200)
+                    .setHeader("X-Goog-Upload-URL", attacker.url("/resumable/evil").toString()).build(),
             )
             server.enqueue(
-                MockResponse()
-                    .setResponseCode(302)
-                    .setHeader("Location", attacker.url("/start").toString()),
+                MockResponse.Builder()
+                    .code(302)
+                    .setHeader("Location", attacker.url("/start").toString()).build(),
             )
 
             val (result, callbacks) = awaitResult()
@@ -251,14 +250,14 @@ class GeminiInteractionsTranscriberClientTest {
             assertNotNull(result.error)
             assertEquals("attacker host must receive no request", 0, attacker.requestCount)
         } finally {
-            attacker.shutdown()
+            attacker.close()
         }
     }
 
     @Test fun `successful callback does not wait for uploaded file deletion`() {
         enqueueSuccessfulUpload()
-        server.enqueue(MockResponse().setBody("""{"steps":[{"type":"model_output","content":[{"type":"text","text":"ready"}]}]}"""))
-        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        server.enqueue(MockResponse.Builder().body("""{"steps":[{"type":"model_output","content":[{"type":"text","text":"ready"}]}]}""").build())
+        server.enqueue(MockResponse.Builder().onResponseStart(mockwebserver3.SocketEffect.Stall).build())
 
         val (result, callbacks) = awaitResult()
 
@@ -284,8 +283,8 @@ class GeminiInteractionsTranscriberClientTest {
 
     @Test fun `interaction HTTP error still deletes uploaded file and callback fires once`() {
         enqueueSuccessfulUpload()
-        server.enqueue(MockResponse().setResponseCode(429).setBody("""{"error":{"message":"quota exceeded"}}"""))
-        server.enqueue(MockResponse().setResponseCode(500).setBody("cleanup failed"))
+        server.enqueue(MockResponse.Builder().code(429).body("""{"error":{"message":"quota exceeded"}}""").build())
+        server.enqueue(MockResponse.Builder().code(500).body("cleanup failed").build())
 
         val (result, callbacks) = awaitResult()
 
@@ -298,10 +297,10 @@ class GeminiInteractionsTranscriberClientTest {
 
     @Test fun `malformed finalization response still deletes a named uploaded artifact`() {
         server.enqueue(
-            MockResponse().addHeader("X-Goog-Upload-URL", server.url("/resumable/session-1")),
+            MockResponse.Builder().addHeader("X-Goog-Upload-URL", server.url("/resumable/session-1")).build(),
         )
-        server.enqueue(MockResponse().setBody("""{"file":{"name":"files/file-123"}}"""))
-        server.enqueue(MockResponse().setBody("{}"))
+        server.enqueue(MockResponse.Builder().body("""{"file":{"name":"files/file-123"}}""").build())
+        server.enqueue(MockResponse.Builder().body("{}").build())
 
         val (result, callbacks) = awaitResult()
 
@@ -313,7 +312,7 @@ class GeminiInteractionsTranscriberClientTest {
 
     @Test fun `upload handshake error has no artifact to delete and does not leak the api key`() {
         val credential = "test-credential-value"
-        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":{"message":"bad key $credential"}}"""))
+        server.enqueue(MockResponse.Builder().code(401).body("""{"error":{"message":"bad key $credential"}}""").build())
 
         val (result, callbacks) = awaitResult(apiKey = credential)
 
@@ -322,14 +321,14 @@ class GeminiInteractionsTranscriberClientTest {
         assertTrue(result.error.orEmpty().contains("bad key"))
         assertEquals(1, server.requestCount)
         val request = server.takeRequest()
-        assertFalse(request.path!!.contains(credential))
-        assertFalse(request.body.readUtf8().contains(credential))
+        assertFalse(request.target.contains(credential))
+        assertFalse(request.body!!.utf8().contains(credential))
     }
 
     @Test fun `cancelling an interaction aborts it cleans up and calls back once`() {
         enqueueSuccessfulUpload()
-        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
-        server.enqueue(MockResponse().setBody("{}"))
+        server.enqueue(MockResponse.Builder().onResponseStart(mockwebserver3.SocketEffect.Stall).build())
+        server.enqueue(MockResponse.Builder().body("{}").build())
         val holder = InFlightCall()
         val latch = CountDownLatch(1)
         val callbacks = AtomicInteger()

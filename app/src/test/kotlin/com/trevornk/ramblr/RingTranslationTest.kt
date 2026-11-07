@@ -11,10 +11,10 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import java.io.File
 import java.time.Duration
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -58,8 +58,8 @@ class RingTranslationTest {
         server = MockWebServer().apply {
             dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
-                    bodies += request.body.readUtf8()
-                    return MockResponse().setBody("""{"choices":[{"message":{"content":"Hola a todos, la entrega llega tarde."}}]}""")
+                    bodies += request.body!!.utf8()
+                    return MockResponse.Builder().body("""{"choices":[{"message":{"content":"Hola a todos, la entrega llega tarde."}}]}""").build()
                 }
             }
             start()
@@ -75,7 +75,7 @@ class RingTranslationTest {
     }
 
     @After fun tearDown() {
-        server.shutdown()
+        server.close()
         ProviderKind.values().forEach { ProviderCredentialStore.clearLegacyByKind(app, it) }
         prefs().edit().clear().apply()
     }

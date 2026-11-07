@@ -5,10 +5,10 @@ import android.app.Application
 import android.os.Looper
 import java.io.File
 import java.util.concurrent.TimeUnit
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.RecordedRequest
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.Dispatcher
+import mockwebserver3.RecordedRequest
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -150,7 +150,7 @@ class DictationRuntimeTest {
 
     @After
     fun tearDown() {
-        batchServer.shutdown()
+        batchServer.close()
     }
 
     private fun idleMainLooper() = shadowOf(Looper.getMainLooper()).idle()
@@ -1087,9 +1087,9 @@ class DictationRuntimeTest {
         ProviderCredentialStore.setLegacyByKind(app, ProviderKind.OPENAI, "test-batch-key")
         batchServer.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when {
-                request.path?.contains("/audio/transcriptions") == true ->
-                    MockResponse().setBody(JSONObject().put("text", transcript).toString())
-                else -> MockResponse().setBody("""{"choices":[{"message":{"content":"cleanup"}}]}""")
+                request.target.contains("/audio/transcriptions") == true ->
+                    MockResponse.Builder().body(JSONObject().put("text", transcript).toString()).build()
+                else -> MockResponse.Builder().body("""{"choices":[{"message":{"content":"cleanup"}}]}""").build()
             }
         }
         app.getSharedPreferences("ramblr", android.content.Context.MODE_PRIVATE).edit()

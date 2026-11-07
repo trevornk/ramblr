@@ -1,7 +1,7 @@
 package com.trevornk.ramblr
 
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -27,15 +27,15 @@ class GeminiTranscriberRetryTest {
         server.start()
     }
 
-    @After fun tearDown() = server.shutdown()
+    @After fun tearDown() = server.close()
 
-    private val overloaded = MockResponse().setResponseCode(503).setBody(
+    private val overloaded = MockResponse.Builder().code(503).body(
         """{"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}""",
-    )
+    ).build()
 
-    private fun transcript(text: String) = MockResponse().setBody(
+    private fun transcript(text: String) = MockResponse.Builder().body(
         """{"candidates":[{"content":{"parts":[{"text":"$text"}]},"finishReason":"STOP"}]}""",
-    )
+    ).build()
 
     private fun transcribe(
         holder: InFlightCall = InFlightCall(),
@@ -76,7 +76,7 @@ class GeminiTranscriberRetryTest {
     }
 
     @Test fun `a non-overload error is reported at once`() {
-        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT"}}"""))
+        server.enqueue(MockResponse.Builder().code(400).body("""{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT"}}""").build())
 
         val result = transcribe()
 

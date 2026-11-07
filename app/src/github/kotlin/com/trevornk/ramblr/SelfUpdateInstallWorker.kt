@@ -102,7 +102,7 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
                 if (!response.isSuccessful) {
                     throw IOException("HTTP ${response.code} downloading update APK")
                 }
-                val body = response.body ?: throw IOException("Empty response body downloading update APK")
+                val body = response.body
                 val total = body.contentLength().takeIf { it > 0 } ?: update.sizeBytes
                 var lastNotifiedPercent = -100
                 tmp.outputStream().use { out ->

@@ -11,7 +11,9 @@ import org.junit.Test
 
 class InFlightCallTest {
 
-    private class FakeCall : Call {
+    private class FakeCall : Call by NetworkClients.shared.newCall(
+        Request.Builder().url("http://localhost/").build(),
+    ) {
         var cancelled = false
             private set
 
