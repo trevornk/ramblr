@@ -62,8 +62,8 @@ object ModelCatalogStore {
     /** Short timeout, separate from [NetworkClients.shared]'s multi-minute dictation timeouts --
      *  a catalog fetch is a small JSON GET that should fail fast rather than block a Settings
      *  screen for up to 3 minutes if the gist is unreachable. */
-    private val client by lazy {
-        NetworkClients.shared.newBuilder()
+    internal val client by lazy {
+        NetworkClients.shared.newBuilder() // Inherits fastFallback=true (#363).
             .callTimeout(8, TimeUnit.SECONDS)
             .build()
     }

@@ -51,8 +51,8 @@ object SelfUpdateChecker {
 
     /** Short timeout, separate from [NetworkClients.shared]'s multi-minute dictation timeouts --
      *  this is a small JSON GET that should fail fast. Mirrors [ModelCatalogStore.client]. */
-    private val client by lazy {
-        NetworkClients.shared.newBuilder()
+    internal val client by lazy {
+        NetworkClients.shared.newBuilder() // Inherits fastFallback=true (#363).
             .callTimeout(8, TimeUnit.SECONDS)
             .build()
     }

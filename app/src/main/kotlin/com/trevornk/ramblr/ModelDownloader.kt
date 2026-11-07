@@ -504,7 +504,9 @@ class DownloadCancelledException : IOException("Download cancelled")
 object ModelDownloader {
     private const val BASE_URL =
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
-    private val client = OkHttpClient.Builder()
+    internal val client = OkHttpClient.Builder()
+        // Race routes so a blackholed IPv6 address cannot delay IPv4 (#363).
+        .fastFallback(true)
         .readTimeout(60, TimeUnit.SECONDS).build()
 
     /** Multiplier applied to a model's compressed archive size to estimate the

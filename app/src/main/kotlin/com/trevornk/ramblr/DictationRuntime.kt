@@ -219,7 +219,8 @@ class DictationRuntime internal constructor(
         const val BUSY_MESSAGE = "Ramblr is already dictating from another input surface"
         private const val NO_SPEECH_MESSAGE = "No speech detected"
 
-        /** Backstop if no transcription/cleanup callback ever fires; covers transcription + cleanup callTimeouts. */
+        /** Backstop: two 180s callTimeouts (transcription + cleanup) plus 40s margin.
+         * Connect timeouts are included in each whole-call budget (#363). */
         private const val WATCHDOG_TIMEOUT_MS = 400_000L
         private const val CLOUD_LIVE_FINAL_WAIT_MS = 2_500L
 

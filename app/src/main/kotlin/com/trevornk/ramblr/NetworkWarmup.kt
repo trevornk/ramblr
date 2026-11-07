@@ -38,6 +38,9 @@ import okhttp3.Request
  * a key; gating on that costs those users nothing and makes the opted-out case silent.
  */
 object NetworkWarmup {
+    // Reuse the shared pool and its fastFallback=true policy (#363).
+    internal val client get() = NetworkClients.shared
+
     /**
      * Distinct hostnames the upcoming dictation might actually call, derived from the same
      * candidate lists [WhisperAccessibilityService] uses to route the real requests. A provider
@@ -96,7 +99,6 @@ object NetworkWarmup {
      */
     fun warmUpAsync(hosts: Set<String>) {
         if (hosts.isEmpty()) return
-        val client = NetworkClients.shared
         hosts.forEach { host ->
             Thread {
                 val t0 = System.currentTimeMillis()

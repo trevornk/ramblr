@@ -10,7 +10,7 @@ import org.junit.Test
  * The bug: a single-OpenAI cleanup chain -- the most common configuration in production -- was
  * special-cased to call a since-deleted `PostProcessor.process()` helper directly through
  * `NetworkClients.shared`
- * (20s connect / 120s read / 180s call), bypassing [CleanupWaterfallExecutor]'s far tighter
+ * (10s connect / 120s read / 180s call), bypassing [CleanupWaterfallExecutor]'s far tighter
  * [CleanupStepTimeouts] and hard cap. A stalled cleanup on the default config could therefore hang
  * for minutes instead of failing over to raw-text injection in seconds, and benchmark correlation
  * ids were silently dropped on that path.
@@ -76,7 +76,7 @@ class PostProcessorProviderChainRoutingTest {
         val (transport, _) = run(chain)
 
         // The substance of #105: these are per-step cleanup timeouts, seconds not minutes. The
-        // bypassed path used NetworkClients.shared's 20s/120s budget sized for audio uploads.
+        // bypassed path used NetworkClients.shared's 10s/120s budget sized for audio uploads.
         val used = transport.timeouts.single()
         assertTrue(
             "connect timeout ${used.connectMs}ms should be a cleanup-sized budget, not an upload-sized one",
