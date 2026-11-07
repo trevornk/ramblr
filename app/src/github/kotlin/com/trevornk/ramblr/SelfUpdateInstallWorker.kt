@@ -287,8 +287,8 @@ class SelfUpdateInstallWorker(ctx: Context, params: WorkerParameters) : Worker(c
          *  in-progress dictation, without hammering the check every half-minute all day long. */
         val GATE_RETRY_BACKOFF = 30L to TimeUnit.MINUTES
 
-        private val client by lazy {
-            NetworkClients.shared.newBuilder()
+        internal val client by lazy {
+            NetworkClients.shared.newBuilder() // Inherits fastFallback=true (#363).
                 .callTimeout(10, TimeUnit.MINUTES)
                 .build()
         }

@@ -550,15 +550,8 @@ object RealLocalInferenceEngine : LocalInferenceEngine {
 
 /** Production [CleanupHttpTransport]: a plain POST with per-step connect/read timeouts (ADR-0001). */
 object RealCleanupHttpTransport : CleanupHttpTransport {
-    override fun send(
-        url: String,
-        headers: Map<String, String>,
-        jsonBody: String,
-        timeouts: CleanupStepTimeouts,
-        cancelHolder: InFlightCall,
-        callback: (CleanupHttpOutcome) -> Unit,
-    ) {
-        val client = NetworkClients.shared.newBuilder()
+    internal fun clientFor(timeouts: CleanupStepTimeouts) =
+        NetworkClients.shared.newBuilder() // Inherits fastFallback=true (#363).
             .connectTimeout(timeouts.connectMs, TimeUnit.MILLISECONDS)
             .readTimeout(timeouts.readMs, TimeUnit.MILLISECONDS)
             .apply {
@@ -568,6 +561,16 @@ object RealCleanupHttpTransport : CleanupHttpTransport {
                 timeouts.callMs?.let { callTimeout(it, TimeUnit.MILLISECONDS) }
             }
             .build()
+
+    override fun send(
+        url: String,
+        headers: Map<String, String>,
+        jsonBody: String,
+        timeouts: CleanupStepTimeouts,
+        cancelHolder: InFlightCall,
+        callback: (CleanupHttpOutcome) -> Unit,
+    ) {
+        val client = clientFor(timeouts)
         val body = jsonBody.toRequestBody("application/json".toMediaType())
         val requestBuilder = Request.Builder().url(url).post(body)
         headers.forEach { (name, value) -> requestBuilder.header(name, value) }

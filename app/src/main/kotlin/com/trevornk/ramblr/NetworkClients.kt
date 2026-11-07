@@ -9,13 +9,15 @@ import java.util.concurrent.TimeUnit
  * uploaded. Timeouts here are sized for that worst case instead. See #14.
  */
 object NetworkClients {
-    const val CONNECT_TIMEOUT_SECONDS = 20L
+    const val CONNECT_TIMEOUT_SECONDS = 10L
     const val READ_TIMEOUT_SECONDS = 120L
     const val WRITE_TIMEOUT_SECONDS = 120L
     const val CALL_TIMEOUT_SECONDS = 180L
 
     val shared: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            // Race routes so a blackholed IPv6 address cannot delay IPv4 (#363).
+            .fastFallback(true)
             .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .writeTimeout(WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -35,7 +37,7 @@ object NetworkClients {
      * response and fail the operation instead.
      */
     val noRedirects: OkHttpClient by lazy {
-        shared.newBuilder()
+        shared.newBuilder() // Inherits fastFallback=true (#363).
             .followRedirects(false)
             .followSslRedirects(false)
             .build()
