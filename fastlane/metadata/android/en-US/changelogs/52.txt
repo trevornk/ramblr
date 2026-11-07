@@ -1,0 +1,4 @@
+Faster cloud transcription on flaky networks.
+
+- On networks where IPv6 is quietly broken, cloud transcription could sit on the spinner for minutes before connecting. Ramblr now tries IPv6 and IPv4 at the same time and uses whichever connects first.
+- A connection that can't be made now gives up after 10 seconds instead of 20.
