@@ -5,10 +5,10 @@ import android.app.Application
 import android.content.Context
 import android.os.Looper
 import java.io.File
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -71,8 +71,8 @@ class DictationRuntimeTranslationTest {
         server = MockWebServer().apply {
             dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
-                    bodies += request.body.readUtf8()
-                    return MockResponse().setBody("""{"choices":[{"message":{"content":"Hallo zusammen, die Lieferung ist spät."}}]}""")
+                    bodies += request.body!!.utf8()
+                    return MockResponse.Builder().body("""{"choices":[{"message":{"content":"Hallo zusammen, die Lieferung ist spät."}}]}""").build()
                 }
             }
             start()
@@ -88,7 +88,7 @@ class DictationRuntimeTranslationTest {
     }
 
     @After fun tearDown() {
-        server.shutdown()
+        server.close()
         ProviderKind.values().forEach { ProviderCredentialStore.clearLegacyByKind(app, it) }
     }
 

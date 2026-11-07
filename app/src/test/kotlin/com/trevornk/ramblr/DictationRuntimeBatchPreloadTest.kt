@@ -7,10 +7,10 @@ import android.os.Looper
 import java.io.File
 import java.util.Collections
 import kotlin.concurrent.thread
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -129,7 +129,7 @@ class DictationRuntimeBatchPreloadTest {
     @After
     fun tearDown() {
         runtime.shutdown()
-        server.shutdown()
+        server.close()
     }
 
     private fun drainOffMain() {
@@ -253,7 +253,7 @@ class DictationRuntimeBatchPreloadTest {
         )
         ProviderCredentialStore.setLegacyByKind(app, ProviderKind.OPENAI, "test-key")
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse = MockResponse().setResponseCode(500).setBody("{}")
+            override fun dispatch(request: RecordedRequest): MockResponse = MockResponse.Builder().code(500).body("{}").build()
         }
         prefs.edit().putBoolean("use_local", false).commit()
         newRuntime { thread { it() } }

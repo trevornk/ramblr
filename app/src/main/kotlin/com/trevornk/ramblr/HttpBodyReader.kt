@@ -17,7 +17,7 @@ object HttpBodyReader {
     /** The body as a string (empty if absent), or a failed [Result] carrying the [IOException]
      *  if the read died mid-stream. Never throws. */
     fun read(response: Response): Result<String> = try {
-        Result.success(response.body?.string() ?: "")
+        Result.success(response.body.string())
     } catch (e: IOException) {
         Result.failure(e)
     }

@@ -7,8 +7,8 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import okio.ByteString
 import okio.ByteString.Companion.encodeUtf8
 import org.json.JSONObject
@@ -40,7 +40,7 @@ class GeminiCloudLiveTranscriptionClientTest {
 
     @After fun tearDown() {
         scheduler.shutdownNow()
-        server.shutdown()
+        server.close()
     }
 
     @Test fun `setup is exact verbatim live transcription shape`() {
@@ -78,13 +78,13 @@ class GeminiCloudLiveTranscriptionClientTest {
     @Test fun `handshake gates activity and copied pcm then preserves wire order`() {
         val received = Collections.synchronizedList(mutableListOf<String>())
         val allMessages = CountDownLatch(4)
-        server.enqueue(MockResponse().withWebSocketUpgrade(object : ClosingWebSocketListener() {
+        server.enqueue(MockResponse.Builder().webSocketUpgrade(object : ClosingWebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 received += text
                 if (received.size == 1) webSocket.send("{\"setupComplete\":{}}")
                 allMessages.countDown()
             }
-        }))
+        }).build())
         val terminal = RecordingListener()
         val session = factory().create(terminal)
         val pcm = byteArrayOf(1, 2, 3, 4)
@@ -97,9 +97,9 @@ class GeminiCloudLiveTranscriptionClientTest {
 
         assertTrue(allMessages.await(5, TimeUnit.SECONDS))
         val upgrade = server.takeRequest(5, TimeUnit.SECONDS)!!
-        assertEquals("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent", upgrade.path)
-        assertEquals("test-key", upgrade.getHeader("x-goog-api-key"))
-        assertFalse(upgrade.path!!.contains("test-key"))
+        assertEquals("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent", upgrade.target)
+        assertEquals("test-key", upgrade.headers["x-goog-api-key"])
+        assertFalse(upgrade.target.contains("test-key"))
         assertEquals(setOf("setup"), JSONObject(received[0]).keys().asSequence().toSet())
         assertTrue(JSONObject(received[1]).getJSONObject("realtimeInput").has("activityStart"))
         val audio = JSONObject(received[2]).getJSONObject("realtimeInput").getJSONObject("audio")
@@ -162,7 +162,7 @@ class GeminiCloudLiveTranscriptionClientTest {
 
     @Test fun `setup and final timeouts fail with distinct reasons`() {
         val setupListener = RecordingListener()
-        server.enqueue(MockResponse().withWebSocketUpgrade(object : ClosingWebSocketListener() {}))
+        server.enqueue(MockResponse.Builder().webSocketUpgrade(object : ClosingWebSocketListener() {}).build())
         factory(setupTimeoutMs = 40).create(setupListener).connect()
         assertTrue(setupListener.done.await(5, TimeUnit.SECONDS))
         assertEquals(CloudLiveFailureReason.SETUP_TIMEOUT, (setupListener.result as CloudLiveTerminal.Failure).reason)
@@ -385,7 +385,7 @@ class GeminiCloudLiveTranscriptionClientTest {
      */
     @Test fun `mid stream server close fails closed without promoting an interim`() {
         val listener = RecordingListener()
-        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+        server.enqueue(MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Thread {
                     webSocket.send("{\"setupComplete\":{}}")
@@ -394,7 +394,7 @@ class GeminiCloudLiveTranscriptionClientTest {
                     webSocket.close(1011, "server gone")
                 }.start()
             }
-        }))
+        }).build())
         // Long final timeout: if the timeout were what rescued this, the test
         // would take 30s. It must terminate from the close itself, in well under that.
         val session = factory(finalTimeoutMs = 30_000).create(listener)
@@ -413,7 +413,7 @@ class GeminiCloudLiveTranscriptionClientTest {
 
     private fun scriptedSocket(vararg events: String, delayMs: Long = 0, binary: Boolean = false): ServerScript {
         val script = ServerScript(events.toList(), delayMs, binary)
-        server.enqueue(MockResponse().withWebSocketUpgrade(script))
+        server.enqueue(MockResponse.Builder().webSocketUpgrade(script).build())
         return script
     }
 

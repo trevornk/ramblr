@@ -4,8 +4,8 @@ import android.Manifest
 import android.app.Application
 import android.os.Looper
 import java.io.File
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -85,7 +85,7 @@ class SnippetRuntimeWiringTest {
 
     @After
     fun tearDown() {
-        cleanupServer.shutdown()
+        cleanupServer.close()
     }
 
     private fun idleMainLooper() = shadowOf(Looper.getMainLooper()).idle()
@@ -175,7 +175,7 @@ class SnippetRuntimeWiringTest {
         // the trigger is absent from the raw ASR text and present only in the cleanup model's
         // (mocked) output, so a pass than ran BEFORE cleanup could never expand it.
         cleanupServer.enqueue(
-            MockResponse().setBody(
+            MockResponse.Builder().body(
                 JSONObject().put(
                     "choices",
                     org.json.JSONArray().put(
@@ -185,7 +185,7 @@ class SnippetRuntimeWiringTest {
                         ),
                     ),
                 ).toString()
-            )
+            ).build()
         )
         val base = cleanupServer.url("/v1").toString().trimEnd('/')
         ProviderChainStore.save(
@@ -223,12 +223,12 @@ class SnippetRuntimeWiringTest {
         ProviderCredentialStore.set(app, entry, "entry-secret")
         app.getSharedPreferences("ramblr", android.content.Context.MODE_PRIVATE).edit()
             .putBoolean("use_post_processing", true).apply()
-        cleanupServer.enqueue(MockResponse().setResponseCode(400).setBody(
+        cleanupServer.enqueue(MockResponse.Builder().code(400).body(
             """{"error":{"type":"unsupported_value","code":"unsupported_value","param":"temperature","message":"temperature is unsupported"}}""",
-        ))
-        cleanupServer.enqueue(MockResponse().setBody(
+        ).build())
+        cleanupServer.enqueue(MockResponse.Builder().body(
             JSONObject().put("choices", org.json.JSONArray().put(JSONObject().put("message", JSONObject().put("content", "first cleanup")))).toString(),
-        ))
+        ).build())
 
         runtime.onTap(); runtime.onTap()
         runtime.handleTranscriptionResult("first raw", token = 1)
@@ -239,18 +239,18 @@ class SnippetRuntimeWiringTest {
         assertEquals(listOf("first cleanup"), listener.delivered.map { it.text })
         val initial = cleanupServer.takeRequest()
         val retry = cleanupServer.takeRequest()
-        assertTrue(initial.body.readUtf8().contains("temperature"))
-        assertFalse(retry.body.readUtf8().contains("temperature"))
-        assertEquals("Bearer entry-secret", initial.getHeader("Authorization"))
-        assertEquals(initial.getHeader("Authorization"), retry.getHeader("Authorization"))
+        assertTrue(initial.body!!.utf8().contains("temperature"))
+        assertFalse(retry.body!!.utf8().contains("temperature"))
+        assertEquals("Bearer entry-secret", initial.headers["Authorization"])
+        assertEquals(initial.headers["Authorization"], retry.headers["Authorization"])
 
         // A fresh runtime/store wrapper reads the durable per-entry negative observation.
         runtime = DictationRuntime(app, listener, leaseRegistry) { cacheDir, stateMachine ->
             FakeRecordingEngine(cacheDir, stateMachine)
         }
-        cleanupServer.enqueue(MockResponse().setBody(
+        cleanupServer.enqueue(MockResponse.Builder().body(
             JSONObject().put("choices", org.json.JSONArray().put(JSONObject().put("message", JSONObject().put("content", "second cleanup")))).toString(),
-        ))
+        ).build())
         runtime.onTap(); runtime.onTap()
         runtime.handleTranscriptionResult("second raw", token = 1)
         val secondDeadline = System.currentTimeMillis() + 5_000
@@ -259,8 +259,8 @@ class SnippetRuntimeWiringTest {
         }
         assertEquals(listOf("first cleanup", "second cleanup"), listener.delivered.map { it.text })
         val cached = cleanupServer.takeRequest()
-        assertFalse(cached.body.readUtf8().contains("temperature"))
-        assertEquals("Bearer entry-secret", cached.getHeader("Authorization"))
+        assertFalse(cached.body!!.utf8().contains("temperature"))
+        assertEquals("Bearer entry-secret", cached.headers["Authorization"])
         assertEquals(3, cleanupServer.requestCount)
     }
 }

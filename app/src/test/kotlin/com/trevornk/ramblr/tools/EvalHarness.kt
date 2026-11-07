@@ -92,7 +92,7 @@ private fun callOpenAi(apiKey: String, model: String, prompt: String, text: Stri
             .header("Authorization", "Bearer $apiKey")
             .post(body.toString().toRequestBody("application/json".toMediaType())).build()
         var response = NetworkClients.shared.newCall(request(original)).execute()
-        var responseBody = response.body?.string().orEmpty()
+        var responseBody = response.body.string()
         if (!knownUnsupported && TemperatureRejectionClassifier.isTemperatureRejection(responseBody, response.code)) {
             response.close()
             evalUnsupportedTemperature[key] = System.currentTimeMillis()
@@ -102,7 +102,7 @@ private fun callOpenAi(apiKey: String, model: String, prompt: String, text: Stri
             }
             val retry = JSONObject(original.toString()).apply { remove("temperature") }
             response = NetworkClients.shared.newCall(request(retry)).execute()
-            responseBody = response.body?.string().orEmpty()
+            responseBody = response.body.string()
         }
         response.use {
             if (!it.isSuccessful && responseBody.isBlank()) PostProcessor.Result(null, "HTTP ${it.code}")
@@ -122,7 +122,7 @@ private fun callAnthropic(apiKey: String, model: String, prompt: String, text: S
 
     return try {
         NetworkClients.shared.newCall(requestBuilder.build()).execute().use { response ->
-            val responseBody = response.body?.string() ?: ""
+            val responseBody = response.body.string()
             if (!response.isSuccessful && responseBody.isBlank()) {
                 PostProcessor.Result(null, "HTTP ${response.code}")
             } else {
@@ -146,7 +146,7 @@ private fun callGemini(apiKey: String, model: String, prompt: String, text: Stri
 
     return try {
         NetworkClients.shared.newCall(request).execute().use { response ->
-            val responseBody = response.body?.string() ?: ""
+            val responseBody = response.body.string()
             if (!response.isSuccessful && responseBody.isBlank()) {
                 PostProcessor.Result(null, "HTTP ${response.code}")
             } else {

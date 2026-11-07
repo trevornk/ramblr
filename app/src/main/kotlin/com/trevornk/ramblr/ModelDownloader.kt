@@ -968,7 +968,7 @@ object ModelDownloader {
                 return
             }
             if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-            val body = response.body ?: throw IOException("Empty response")
+            val body = response.body
 
             val plan = planResume(existingLength, response.code)
             val total = computeTotalBytes(plan.offset, body.contentLength(), response.header("Content-Range"))

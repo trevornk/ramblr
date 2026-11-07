@@ -139,7 +139,7 @@ object ModelCatalogStore {
         val request = Request.Builder().url(CATALOG_URL).get().build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return null
-            val declaredLength = response.body?.contentLength() ?: -1L
+            val declaredLength = response.body.contentLength()
             if (declaredLength > MAX_CATALOG_BYTES) return null
             // peekBody caps how much is read into memory even when the length isn't declared
             // (chunked); an over-cap body simply fails to parse below and degrades to the cache (L6).
