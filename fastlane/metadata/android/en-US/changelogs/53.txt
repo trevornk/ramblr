@@ -1,0 +1,4 @@
+Two fixes for dictation and local cleanup models.
+
+- After dictating into the middle of existing text, the cursor now stays right after the new words instead of jumping to the end of the field, so the view no longer scrolls to the bottom.
+- Local AI cleanup model downloads no longer restart from 0% after reaching 100%. A finished download is now verified and installed, and if something fails you see the reason instead of an endless retry.
