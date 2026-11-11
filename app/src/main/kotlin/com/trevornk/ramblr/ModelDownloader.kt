@@ -682,7 +682,14 @@ object ModelDownloader {
                     availableBytes,
                 )
             }
-            downloadFile(url, tmpFile, isCancelled, onState)
+            // Set when the 416 probe already hashed the file against the pinned checksum, so the
+            // verify step below does not hash hundreds of MB a second time.
+            var verifiedByProbe = false
+            val pinned = model.sha256
+            downloadFile(url, tmpFile, isCancelled, onState) { f ->
+                (pinned != null && runCatching { verifyChecksum(f, pinned) }.isSuccess)
+                    .also { if (it) verifiedByProbe = true }
+            }
             logI("download complete for ${model.archive} (${tmpFile.length()} bytes)")
             // From here the file on disk is complete. Whether it is kept for the next attempt
             // depends on how this attempt ends (see the finally block).
@@ -695,7 +702,7 @@ object ModelDownloader {
             // "Downloading: 100%" and a failure here looks like the download restarting (#368).
             onState(DownloadState.Extracting)
             try {
-                verifyChecksum(tmpFile, expected)
+                if (!verifiedByProbe) verifyChecksum(tmpFile, expected)
                 logI("checksum ok for ${model.archive}")
             } catch (e: ChecksumMismatchException) {
                 // A resumed partial can carry a mix of old and changed-upstream bytes; rather than
@@ -1002,8 +1009,15 @@ object ModelDownloader {
         return if (contentLength >= 0) offset + contentLength else -1L
     }
 
+    /**
+     * [isCompleteLocally] is consulted only on a 416 for a Range we sent, when the response has no
+     * usable unsatisfied-range Content-Range header. Real hosts (Hugging Face -> xet CDN) send NO
+     * Content-Range on that 416 (verified with curl, #368), so the file itself has to prove it is
+     * complete -- the caller passes a checksum probe.
+     */
     private fun downloadFile(
-        url: String, dest: File, isCancelled: () -> Boolean, onState: (DownloadState) -> Unit
+        url: String, dest: File, isCancelled: () -> Boolean, onState: (DownloadState) -> Unit,
+        isCompleteLocally: (File) -> Boolean = { false },
     ) {
         val existingLength = if (dest.isFile) dest.length() else 0L
         val requestBuilder = Request.Builder().url(url)
@@ -1016,11 +1030,17 @@ object ModelDownloader {
             if (shouldRestartAfterRangeNotSatisfiable(existingLength, response.code)) {
                 // The partial may simply be the whole file: a previous attempt downloaded every
                 // byte and was then interrupted (worker stopped / process killed while hashing or
-                // installing). The 416 says so via `Content-Range: bytes */<total>`. Deleting it
-                // here made every such interruption restart at 0% -- forever if the interruption
-                // recurs at the same point (#368). Keep it and let the caller verify it.
+                // installing). Deleting it here made every such interruption restart at 0% --
+                // forever if the interruption recurs at the same point (#368). A server MAY say so
+                // via `Content-Range: bytes */<total>`, but the real hosts omit it, so otherwise
+                // ask the caller whether the bytes on disk already match the pinned checksum.
                 if (isCompleteFromRangeNotSatisfiable(existingLength, response.header("Content-Range"))) {
                     logI("416 reports $existingLength bytes already complete; keeping file for verification")
+                    onState(DownloadState.Downloading(1f))
+                    return
+                }
+                if (isCompleteLocally(dest)) {
+                    logI("416 without Content-Range; $existingLength bytes on disk match the pinned checksum")
                     onState(DownloadState.Downloading(1f))
                     return
                 }
@@ -1028,7 +1048,7 @@ object ModelDownloader {
                 // forever and every future attempt fails with "HTTP 416" (#68).
                 response.close()
                 dest.delete()
-                downloadFile(url, dest, isCancelled, onState) // recurses at most once: no partial -> no Range header
+                downloadFile(url, dest, isCancelled, onState, isCompleteLocally) // recurses at most once: no partial -> no Range header
                 return
             }
             if (!response.isSuccessful) throw IOException("HTTP ${response.code}")

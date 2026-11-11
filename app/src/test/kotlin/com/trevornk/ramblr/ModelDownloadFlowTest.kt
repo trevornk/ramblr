@@ -27,6 +27,8 @@ class ModelDownloadFlowTest {
     private val payloadSha = ModelDownloaderTestHashes.sha256(payload)
     private var fullRequests = 0
     private var rangeRequests = 0
+    /** Real hosts (HF -> xet CDN) send no Content-Range on the 416 (#368); tests flip this off. */
+    private var send416ContentRange = true
 
     private fun model(sha: String? = payloadSha) = Model(
         name = "Test cleanup", archive = "test-cleanup", sizeMb = 1, quality = "t",
@@ -47,8 +49,9 @@ class ModelDownloadFlowTest {
                 rangeRequests++
                 val start = range.removePrefix("bytes=").removeSuffix("-").toLong()
                 if (start >= payload.size) {
-                    return MockResponse.Builder().code(416)
-                        .addHeader("Content-Range", "bytes */${payload.size}").build()
+                    val b = MockResponse.Builder().code(416)
+                    if (send416ContentRange) b.addHeader("Content-Range", "bytes */${payload.size}")
+                    return b.build()
                 }
                 return MockResponse.Builder().code(206)
                     .addHeader("Content-Range", "bytes $start-${payload.size - 1}/${payload.size}")
@@ -99,6 +102,35 @@ class ModelDownloadFlowTest {
         val r = run(model(), tmp)
         assertTrue(r.states.toString(), r.done)
         assertEquals("must not re-download the body", 0, fullRequests)
+        assertEquals(1, rangeRequests)
+    }
+
+    @Test fun `416 without Content-Range - complete correct leftover is verified and installed with no body transfer`() {
+        send416ContentRange = false
+        val tmp = File(root, "cache/m.gguf").also { it.parentFile!!.mkdirs(); it.writeBytes(payload) }
+        val r = run(model(), tmp)
+        assertTrue(r.states.toString(), r.done)
+        assertEquals("must not re-download the body", 0, fullRequests)
+        assertEquals(1, rangeRequests)
+        assertTrue(ModelDownloader.isInstalledDir(File(root, "files/cleanup_models/test-cleanup")))
+    }
+
+    @Test fun `416 without Content-Range - equal-length wrong bytes restart from zero and install the right file`() {
+        send416ContentRange = false
+        val tmp = File(root, "cache/m.gguf").also { it.parentFile!!.mkdirs(); it.writeBytes(ByteArray(payload.size) { 1 }) }
+        val r = run(model(), tmp)
+        assertTrue(r.states.toString(), r.done)
+        assertEquals(1, fullRequests)
+        assertEquals(1, rangeRequests)
+        assertEquals(payloadSha, ModelDownloader.sha256(File(root, "files/cleanup_models/test-cleanup/m.gguf")))
+    }
+
+    @Test fun `416 without Content-Range - shorter partial still resumes via 206`() {
+        send416ContentRange = false
+        val tmp = File(root, "cache/m.gguf").also { it.parentFile!!.mkdirs(); it.writeBytes(payload.copyOf(1000)) }
+        val r = run(model(), tmp)
+        assertTrue(r.states.toString(), r.done)
+        assertEquals(0, fullRequests)
         assertEquals(1, rangeRequests)
     }
 
