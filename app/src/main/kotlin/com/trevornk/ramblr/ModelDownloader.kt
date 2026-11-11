@@ -509,6 +509,12 @@ class DownloadCancelledException : IOException("Download cancelled")
 object ModelDownloader {
     private const val BASE_URL =
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
+    private const val TAG = "ModelDownloader"
+
+    /** Log without ever failing the download: plain-JVM unit tests have no android.util.Log. */
+    private fun logI(msg: String) { try { Log.i(TAG, msg) } catch (_: RuntimeException) {} }
+    private fun logW(msg: String, e: Throwable) { try { Log.w(TAG, msg, e) } catch (_: RuntimeException) {} }
+
     internal val client = OkHttpClient.Builder()
         // Race routes so a blackholed IPv6 address cannot delay IPv4 (#363).
         .fastFallback(true)
@@ -677,6 +683,7 @@ object ModelDownloader {
                 )
             }
             downloadFile(url, tmpFile, isCancelled, onState)
+            logI("download complete for ${model.archive} (${tmpFile.length()} bytes)")
             // From here the file on disk is complete. Whether it is kept for the next attempt
             // depends on how this attempt ends (see the finally block).
             discardTmp = true
@@ -689,6 +696,7 @@ object ModelDownloader {
             onState(DownloadState.Extracting)
             try {
                 verifyChecksum(tmpFile, expected)
+                logI("checksum ok for ${model.archive}")
             } catch (e: ChecksumMismatchException) {
                 // A resumed partial can carry a mix of old and changed-upstream bytes; rather than
                 // fail terminally and force a manual re-tap, delete the stale partial and retry once
@@ -701,6 +709,7 @@ object ModelDownloader {
                 discardTmp = true
                 onState(DownloadState.Extracting)
                 verifyChecksum(tmpFile, expected)
+                logI("checksum ok for ${model.archive} (after clean restart)")
             }
             // The bytes are verified good from here on. If installing fails (disk full, odd
             // filesystem) keep the file: the next attempt then resumes at 100%, re-verifies and
@@ -716,8 +725,11 @@ object ModelDownloader {
                 throw ModelInstallException("Downloaded ${model.name} but could not install it: ${e.message}", e)
             }
             discardTmp = true
+            logI("install ok for ${model.archive}")
             onState(DownloadState.Done)
         } catch (e: Exception) {
+            // Class + message only; messages never carry URLs with query strings.
+            logW("download failed for ${model.archive} (${e.javaClass.simpleName}: ${e.message})", e)
             onState(DownloadState.Error(e.message ?: "Unknown error", e))
         } finally {
             // Checksum mismatch: fully present but wrong, so resuming cannot help -- delete it so
@@ -1008,6 +1020,7 @@ object ModelDownloader {
                 // here made every such interruption restart at 0% -- forever if the interruption
                 // recurs at the same point (#368). Keep it and let the caller verify it.
                 if (isCompleteFromRangeNotSatisfiable(existingLength, response.header("Content-Range"))) {
+                    logI("416 reports $existingLength bytes already complete; keeping file for verification")
                     onState(DownloadState.Downloading(1f))
                     return
                 }
