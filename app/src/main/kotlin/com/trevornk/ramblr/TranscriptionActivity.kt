@@ -590,9 +590,13 @@ class TranscriptionActivity : BaseSettingsActivity() {
                 views.dlBtn.isEnabled = false
                 views.progress.visibility = View.VISIBLE
                 val phase = info.progress.getString(ModelDownloadWorker.KEY_PHASE)
+                val retryText = ModelDownloadWorker.retryStatusFor(info.state, info.progress)
                 if (phase == ModelDownloadWorker.PHASE_EXTRACTING) {
                     views.progress.isIndeterminate = true
                     views.subtitle.text = "Extracting..."
+                } else if (retryText != null) {
+                    views.progress.isIndeterminate = true
+                    views.subtitle.text = retryText
                 } else {
                     val pct = info.progress.getFloat(ModelDownloadWorker.KEY_PROGRESS, 0f)
                     views.progress.isIndeterminate = false

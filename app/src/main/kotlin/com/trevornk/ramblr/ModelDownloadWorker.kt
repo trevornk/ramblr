@@ -89,6 +89,16 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
         // a notification as before. Retries stay silent: the foreground notification simply
         // reappears when the next attempt starts.
         if (shouldRetry(failed.cause, runAttemptCount)) {
+            // WorkManager reports a backing-off retry as plain ENQUEUED, which the UI used to
+            // render as "Starting download..." forever -- carry the reason along (#368).
+            setProgressAsync(
+                Data.Builder()
+                    .putString(KEY_PHASE, PHASE_RETRYING)
+                    .putString(KEY_ERROR, failed.message.take(RETRY_MESSAGE_MAX_CHARS))
+                    .putInt(KEY_ATTEMPT, runAttemptCount + 1)
+                    .putInt(KEY_MAX_ATTEMPTS, MAX_ATTEMPTS)
+                    .build()
+            )
             return Result.retry()
         }
         DownloadNotifications.postFailure(applicationContext, archive, model.name, failed.message)
@@ -145,6 +155,29 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
         const val KEY_ERROR = "error"
         const val PHASE_DOWNLOADING = "downloading"
         const val PHASE_EXTRACTING = "extracting"
+        const val PHASE_RETRYING = "retrying"
+        const val KEY_ATTEMPT = "attempt"
+        const val KEY_MAX_ATTEMPTS = "max_attempts"
+        const val RETRY_MESSAGE_MAX_CHARS = 120
+
+        /** "Retrying (2 of 3): <message>" -- the message is trimmed, capped and omitted if blank. */
+        fun retryStatusText(attempt: Int, max: Int, message: String?): String {
+            val head = "Retrying ($attempt of $max)"
+            val msg = message?.trim().orEmpty().take(RETRY_MESSAGE_MAX_CHARS)
+            return if (msg.isEmpty()) head else "$head: $msg"
+        }
+
+        /** The retry line for a work row, or null unless it is an ENQUEUED job that reported
+         *  [PHASE_RETRYING] progress. */
+        fun retryStatusFor(state: WorkInfo.State, progress: Data): String? {
+            if (state != WorkInfo.State.ENQUEUED) return null
+            if (progress.getString(KEY_PHASE) != PHASE_RETRYING) return null
+            return retryStatusText(
+                progress.getInt(KEY_ATTEMPT, 1),
+                progress.getInt(KEY_MAX_ATTEMPTS, MAX_ATTEMPTS),
+                progress.getString(KEY_ERROR),
+            )
+        }
 
         /** Unique WorkManager work name for a model's archive. Enqueuing under this
          *  name with [ExistingWorkPolicy.KEEP] gives single-flight semantics for
