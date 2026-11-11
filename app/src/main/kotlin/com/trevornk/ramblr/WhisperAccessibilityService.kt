@@ -3129,7 +3129,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 candidate, write.span.insertionStart, write.span.previousLength, write.span.replacedText, text, now,
                 trace = write.span.trace,
             )
-            scheduleCaretNudgeAfterLanding(candidate, write.updatedText)
+            scheduleCaretNudgeAfterLanding(candidate, write.updatedText, write.span.insertionStart + write.span.previousLength)
             return
         }
 
@@ -3153,7 +3153,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         if (!setNodeText(session.node, write.updatedText)) { endStreamingSession(); return }
         session.lastPartialLength = write.trackedLength
         session.trace = write.trace
-        scheduleCaretNudgeAfterLanding(session.node, write.updatedText)
+        scheduleCaretNudgeAfterLanding(session.node, write.updatedText, session.insertionStart + write.trackedLength)
         session.lastInjectedText = text
         session.lastInjectedAtMs = now
     }
@@ -3204,13 +3204,13 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * made the field re-apply its stale value -- silently undoing the write. Only the newest
      * partial's nudge is kept; a session that ended in the meantime skips it.
      */
-    private fun scheduleCaretNudgeAfterLanding(node: AccessibilityNodeInfo, expected: String) {
+    private fun scheduleCaretNudgeAfterLanding(node: AccessibilityNodeInfo, expected: String, caret: Int) {
         partialCaretNudge?.let(handler::removeCallbacks)
         val nudge = Runnable {
             partialCaretNudge = null
             if (streamingSession?.node !== node) return@Runnable
             val destination = AccessibilityTextDestination(node)
-            if (destination.refresh() && destination.readText() == expected) destination.placeCaretAtEnd(expected.length)
+            if (destination.refresh() && destination.readText() == expected) destination.placeCaret(caret)
         }
         partialCaretNudge = nudge
         handler.postDelayed(nudge, PARTIAL_CARET_NUDGE_DELAY_MS)

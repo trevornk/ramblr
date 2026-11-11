@@ -104,9 +104,25 @@ fun withLeadingSeparator(current: String, insertionStart: Int, insertText: Strin
  * them -- which is exactly what mutation testing caught here. Keeping the whole composition behind
  * one function reduces the untestable surface to a single delegating line.
  */
-fun composeOneShotInjection(current: String, selStart: Int, selEnd: Int, text: String): String {
+fun composeOneShotInjection(current: String, selStart: Int, selEnd: Int, text: String): String =
+    composeOneShotInjectionWrite(current, selStart, selEnd, text).updatedText
+
+/**
+ * A composed whole-field write plus where the caret belongs once it lands: directly after the
+ * dictated text (#367). Whole-field replacement (`ACTION_SET_TEXT`) leaves the platform caret at
+ * the end of the field, so a mid-text dictation used to be followed by a caret move to the *end of
+ * the field*, which scrolled the view to the bottom. The caret must go back to where the insertion
+ * ended so the view stays where the user was working.
+ */
+data class InjectionWrite(val updatedText: String, val caret: Int)
+
+fun composeOneShotInjectionWrite(current: String, selStart: Int, selEnd: Int, text: String): InjectionWrite {
     val span = resolveReplacementSpan(selStart, selEnd, current.length)
-    return current.replaceRange(span.start, span.endExclusive, withLeadingSeparator(current, span.start, text))
+    val inserted = withLeadingSeparator(current, span.start, text)
+    return InjectionWrite(
+        updatedText = current.replaceRange(span.start, span.endExclusive, inserted),
+        caret = span.start + inserted.length,
+    )
 }
 
 /**
@@ -341,19 +357,31 @@ fun reconcileStreamingSpan(
     session: StreamingSpan?,
     finalText: String,
     isFinalInjectionTarget: Boolean
-): String? {
+): String? = reconcileStreamingSpanWithCaret(current, session, finalText, isFinalInjectionTarget)?.updatedText
+
+/** [reconcileStreamingSpan] plus the caret position at the end of whatever now occupies the span (#367). */
+fun reconcileStreamingSpanWithCaret(
+    current: String,
+    session: StreamingSpan?,
+    finalText: String,
+    isFinalInjectionTarget: Boolean
+): InjectionWrite? {
     if (session == null) return null
     // #300: reverting must hand back whatever the first partial overwrote. Applied verbatim, with
     // no separator -- it is the user's own text, already correctly placed before it was replaced.
     val previousLength = effectivePreviousLength(current, session.previousLength, session.trace)
     if (!isFinalInjectionTarget) {
-        return replacePartialInField(current, session.insertionStart, previousLength, session.replacedText)
+        return InjectionWrite(
+            replacePartialInField(current, session.insertionStart, previousLength, session.replacedText),
+            session.insertionStart + session.replacedText.length,
+        )
     }
     // #144: routed through composeStreamingPartial so closing the span applies the same separator
     // rule the partials inside it were built with -- otherwise closing strips it back off and the
     // final text re-glues itself to the preceding draft. The clear path passes "", which
     // leadingSeparatorFor never decorates, so it stays a pure deletion.
-    return composeStreamingPartial(current, session.insertionStart, previousLength, finalText).updatedText
+    val write = composeStreamingPartial(current, session.insertionStart, previousLength, finalText)
+    return InjectionWrite(write.updatedText, session.insertionStart + write.trackedLength)
 }
 
 /**
