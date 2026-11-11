@@ -186,7 +186,8 @@ class ModelDownloadWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, 
             return when (cause) {
                 // DownloadCancelledException is terminal: a user cancel must not be retried by the
                 // backoff (L10). ChecksumMismatch/NotEnoughSpace are terminal for their own reasons.
-                is DownloadCancelledException, is ChecksumMismatchException, is NotEnoughSpaceException -> false
+                is DownloadCancelledException, is ChecksumMismatchException, is NotEnoughSpaceException,
+                is ModelInstallException -> false
                 is IOException -> true
                 else -> false
             }

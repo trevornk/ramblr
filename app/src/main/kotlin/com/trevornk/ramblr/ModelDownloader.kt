@@ -496,6 +496,11 @@ class ChecksumMismatchException(expected: String, actual: String) : IOException(
     "Checksum mismatch: expected $expected, got $actual"
 )
 
+/** Thrown when a downloaded-and-verified model cannot be moved into place. Terminal for
+ *  [ModelDownloadWorker.shouldRetry]: the network is not at fault, and a blind WorkManager retry
+ *  used to re-download the entire file from byte 0 only to fail the same way (#368). */
+class ModelInstallException(message: String, cause: Throwable?) : IOException(message, cause)
+
 /** Thrown when a download is aborted because the WorkManager job was cancelled (L10). A distinct
  *  type so [ModelDownloadWorker.shouldRetry] classifies it terminal -- a user-cancelled download
  *  must not be retried by WorkManager's backoff. */
@@ -641,16 +646,29 @@ object ModelDownloader {
         }
         val url = model.sourceUrl ?: "$BASE_URL/${model.archive}.tar.bz2"
         val tmpFile = File(ctx.cacheDir, model.fileName ?: "${model.archive}.tar.bz2")
-        val staging = stagingDir(ctx, model)
-        val finalDir = modelDir(ctx, model)
+        val availableBytes = minOf(ctx.cacheDir.usableSpace, ctx.filesDir.usableSpace)
+        runDownload(model, url, tmpFile, stagingDir(ctx, model), modelDir(ctx, model), availableBytes, isCancelled, onState)
+    }
+
+    /** Context-free body of [download], split out so the whole download -> verify -> install state
+     *  machine is testable against a MockWebServer and temp directories (#368). */
+    internal fun runDownload(
+        model: Model,
+        url: String,
+        tmpFile: File,
+        staging: File,
+        finalDir: File,
+        availableBytes: Long,
+        isCancelled: () -> Boolean,
+        onState: (DownloadState) -> Unit,
+    ) {
 
         // Only cleared once downloadFile() returns successfully, i.e. the
         // archive on disk is complete. If a network error interrupts the
         // download partway, tmpFile is left in place so the next call can
         // resume it via HTTP Range instead of restarting from byte 0.
-        var downloadComplete = false
+        var discardTmp = false
         try {
-            val availableBytes = minOf(ctx.cacheDir.usableSpace, ctx.filesDir.usableSpace)
             val resumedBytes = if (tmpFile.isFile) tmpFile.length() else 0L
             if (!hasEnoughSpace(availableBytes, model.sizeMb, model.isSingleFile, resumedBytes)) {
                 throw NotEnoughSpaceException(
@@ -659,11 +677,16 @@ object ModelDownloader {
                 )
             }
             downloadFile(url, tmpFile, isCancelled, onState)
-            downloadComplete = true
+            // From here the file on disk is complete. Whether it is kept for the next attempt
+            // depends on how this attempt ends (see the finally block).
+            discardTmp = true
             // IllegalStateException, not IOException: a missing pinned hash is a catalog bug,
             // terminal for retry-classification purposes (#86), not a network condition.
             val expected = model.sha256
                 ?: throw IllegalStateException("No checksum configured for ${model.archive}; refusing to install unverified")
+            // Hashing 200-400 MB takes seconds on a phone; without a phase change the UI sits at
+            // "Downloading: 100%" and a failure here looks like the download restarting (#368).
+            onState(DownloadState.Extracting)
             try {
                 verifyChecksum(tmpFile, expected)
             } catch (e: ChecksumMismatchException) {
@@ -673,24 +696,33 @@ object ModelDownloader {
                 // upstream/catalog mismatch and propagates as terminal.
                 if (!shouldCleanRetryAfterChecksumMismatch(resumedBytes)) throw e
                 tmpFile.delete()
+                discardTmp = false
                 downloadFile(url, tmpFile, isCancelled, onState)
+                discardTmp = true
+                onState(DownloadState.Extracting)
                 verifyChecksum(tmpFile, expected)
             }
-            if (model.isSingleFile) {
-                onState(DownloadState.Extracting) // no real extraction, but keeps the UI phase consistent
-                installSingleFile(tmpFile, finalDir, model.fileName ?: model.archive)
-            } else {
-                onState(DownloadState.Extracting)
-                extractAndInstall(tmpFile, staging, finalDir, model.archive)
+            // The bytes are verified good from here on. If installing fails (disk full, odd
+            // filesystem) keep the file: the next attempt then resumes at 100%, re-verifies and
+            // retries only the install instead of re-downloading hundreds of MB (#368).
+            discardTmp = false
+            try {
+                if (model.isSingleFile) {
+                    installSingleFile(tmpFile, finalDir, model.fileName ?: model.archive)
+                } else {
+                    extractAndInstall(tmpFile, staging, finalDir, model.archive)
+                }
+            } catch (e: Exception) {
+                throw ModelInstallException("Downloaded ${model.name} but could not install it: ${e.message}", e)
             }
+            discardTmp = true
             onState(DownloadState.Done)
         } catch (e: Exception) {
             onState(DownloadState.Error(e.message ?: "Unknown error", e))
         } finally {
-            // A checksum mismatch also lands here with downloadComplete == true:
-            // the archive is fully present but wrong, so resuming it wouldn't
-            // help -- delete it and let the next attempt start clean.
-            if (downloadComplete) tmpFile.delete()
+            // Checksum mismatch: fully present but wrong, so resuming cannot help -- delete it so
+            // the next attempt starts clean. Success: the file has been moved/consumed.
+            if (discardTmp) tmpFile.delete()
         }
     }
 
@@ -939,6 +971,14 @@ object ModelDownloader {
     fun shouldRestartAfterRangeNotSatisfiable(existingLength: Long, responseCode: Int): Boolean =
         existingLength > 0 && responseCode == 416
 
+    /** True when a 416 response's unsatisfied-range Content-Range header ("bytes", then star, slash, total) reports a total equal to what is
+     *  already on disk -- i.e. the partial file is in fact the complete asset (#368). */
+    fun isCompleteFromRangeNotSatisfiable(existingLength: Long, contentRange: String?): Boolean {
+        val total = contentRange?.trim()?.takeIf { it.startsWith("bytes */") }
+            ?.substringAfter("bytes */")?.toLongOrNull() ?: return false
+        return existingLength > 0 && total == existingLength
+    }
+
     data class ResumePlan(val offset: Long, val append: Boolean)
 
     /** Total size of the full download, combining [offset] (bytes already on
@@ -962,6 +1002,15 @@ object ModelDownloader {
         // combined with the (since-fixed) 416 wedge to leak one connection per retry tap.
         client.newCall(requestBuilder.build()).execute().use { response ->
             if (shouldRestartAfterRangeNotSatisfiable(existingLength, response.code)) {
+                // The partial may simply be the whole file: a previous attempt downloaded every
+                // byte and was then interrupted (worker stopped / process killed while hashing or
+                // installing). The 416 says so via `Content-Range: bytes */<total>`. Deleting it
+                // here made every such interruption restart at 0% -- forever if the interruption
+                // recurs at the same point (#368). Keep it and let the caller verify it.
+                if (isCompleteFromRangeNotSatisfiable(existingLength, response.header("Content-Range"))) {
+                    onState(DownloadState.Downloading(1f))
+                    return
+                }
                 // Without this, download()'s keep-partial-for-resume logic retains the stale file
                 // forever and every future attempt fails with "HTTP 416" (#68).
                 response.close()
@@ -990,6 +1039,12 @@ object ModelDownloader {
                             onState(DownloadState.Downloading(downloaded.toFloat() / total))
                     }
                 }
+            }
+            // A stream that ends early without an error would otherwise reach the checksum step
+            // as a "complete" file, fail verification and be thrown away. Fail as a plain
+            // (retryable) IOException instead and keep the partial for Range resume.
+            if (total > 0 && downloaded != total) {
+                throw IOException("Download ended early: got $downloaded of $total bytes")
             }
         }
     }
