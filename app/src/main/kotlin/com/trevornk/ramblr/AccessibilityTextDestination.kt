@@ -73,7 +73,7 @@ class AccessibilityTextDestination(
         return ok
     }
 
-    override fun placeCaretAtEnd(textLength: Int) = nudgeSelectionToEnd(node, textLength)
+    override fun placeCaret(position: Int) = nudgeSelection(node, position)
 
     override fun pasteFromClipboard(): Boolean {
         if (node.isPasswordField()) return false
@@ -133,10 +133,10 @@ class AccessibilityTextDestination(
          * the old one -- while ACTION_SET_TEXT has already reported true. Callers place the caret
          * only once the write has been observed to land ([DictationTextWriter]).
          */
-        private fun nudgeSelectionToEnd(node: AccessibilityNodeInfo, textLength: Int) {
+        private fun nudgeSelection(node: AccessibilityNodeInfo, position: Int) {
             val args = Bundle().apply {
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, textLength)
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, textLength)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, position)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, position)
             }
             try {
                 node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)

@@ -63,9 +63,9 @@ private class FakeTextDestination(
         return paste
     }
 
-    override fun placeCaretAtEnd(textLength: Int) {
-        calls += "placeCaretAtEnd"
-        lastCaret = textLength
+    override fun placeCaret(position: Int) {
+        calls += "placeCaret"
+        lastCaret = position
     }
 }
 
@@ -110,7 +110,7 @@ private class ComposeLikeDestination(
         return true
     }
     override fun pasteFromClipboard() = false
-    override fun placeCaretAtEnd(textLength: Int) {
+    override fun placeCaret(position: Int) {
         caretCalls++
         if (pending != null) { pending = null } else caretPlacedAfterLanding = true
     }
@@ -470,5 +470,68 @@ class DictationTextWriterTest {
 
         assertFalse(ok)
         assertEquals(-1, field.lastCaret)
+    }
+
+    // --- #367: the caret follows the insertion, not the end of the field ---
+
+    @Test
+    fun `mid-text commit puts the caret right after the dictated text, not at the end of the field`() {
+        // "one two three" with the caret after "one": the view must not jump to "three".
+        val destination = FakeTextDestination(text = "one two three", selStart = 3, selEnd = 3)
+
+        DictationTextWriter.commit(destination, "hello", NO_PAUSE)
+
+        assertEquals("one hello two three", destination.writtenText)
+        assertEquals("caret after 'hello'", 9, destination.lastCaret)
+    }
+
+    @Test
+    fun `append commit still lands the caret at the end of the field`() {
+        val destination = FakeTextDestination(text = "draft", selStart = 5, selEnd = 5)
+
+        DictationTextWriter.commit(destination, "hello", NO_PAUSE)
+
+        assertEquals("draft hello", destination.writtenText)
+        assertEquals(11, destination.lastCaret)
+    }
+
+    @Test
+    fun `a ranged selection is replaced and the caret lands after the replacement`() {
+        val destination = FakeTextDestination(text = "aaa bbb ccc", selStart = 4, selEnd = 7)
+
+        DictationTextWriter.commit(destination, "xyz", NO_PAUSE)
+
+        assertEquals("aaa xyz ccc", destination.writtenText)
+        assertEquals(7, destination.lastCaret)
+    }
+
+    @Test
+    fun `closing a mid-text streaming span puts the caret after the final text`() {
+        val first = composeFirstStreamingPartial("one two three", 3, 3, "hel")
+        val destination = FakeTextDestination(text = first.updatedText)
+
+        val result = DictationTextWriter.commitClosingStreamingSpan(destination, first.span, "hello there", NO_PAUSE)
+
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals("one hello there two three", destination.writtenText)
+        assertEquals(15, destination.lastCaret)
+    }
+
+    @Test
+    fun `reverting a mid-text streaming span leaves the caret where the insertion began`() {
+        val first = composeFirstStreamingPartial("one two three", 3, 3, "hel")
+        val destination = FakeTextDestination(text = first.updatedText)
+
+        DictationTextWriter.clearStreamingSpan(destination, first.span, NO_PAUSE)
+
+        assertEquals("one two three", destination.writtenText)
+        assertEquals(3, destination.lastCaret)
+    }
+
+    @Test
+    fun `composeOneShotInjectionWrite reports the caret after the separator and text`() {
+        val w = composeOneShotInjectionWrite("abc def", 3, 3, "X")
+        assertEquals("abc X def", w.updatedText)
+        assertEquals(5, w.caret)
     }
 }

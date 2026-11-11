@@ -109,12 +109,15 @@ interface TextDestination {
     fun pasteFromClipboard(): Boolean
 
     /**
-     * Moves the caret to the end of the destination's text, which is [textLength] characters long.
-     * Best-effort; failure never invalidates the write that preceded it.
+     * Moves the caret to [position] (a collapsed selection). Best-effort; failure never
+     * invalidates the write that preceded it.
      *
-     * Accessibility: `ACTION_SET_SELECTION`. IME: `setSelection(textLength, textLength)`.
+     * This is the end of the *dictated text*, not necessarily the end of the field: a mid-text
+     * insertion that parks the caret at the field's end scrolls the view to the bottom (#367).
+     *
+     * Accessibility: `ACTION_SET_SELECTION`. IME: `setSelection(position, position)`.
      */
-    fun placeCaretAtEnd(textLength: Int)
+    fun placeCaret(position: Int)
 }
 
 /** Injectable pause so the write-confirmation loop is deterministic under test. */
@@ -184,12 +187,12 @@ object DictationTextWriter {
         previous: String,
         text: String,
         pause: WritePause,
-        caret: Int = text.length,
+        caret: Int,
     ): Boolean {
         repeat(2) { attempt ->
             if (!destination.replaceAllText(text)) return false
             if (awaitLanded(destination, previous, text, pause)) {
-                destination.placeCaretAtEnd(caret)
+                destination.placeCaret(caret)
                 return true
             }
             diagnostic("Write reported success but the field is unchanged (attempt ${attempt + 1} of 2)")
@@ -231,13 +234,13 @@ object DictationTextWriter {
 
         if (destination.acceptsDirectWrite()) {
             val current = destination.readText()
-            val updated = composeOneShotInjection(
+            val write = composeOneShotInjectionWrite(
                 current,
                 destination.selectionStart(),
                 destination.selectionEnd(),
                 text,
             )
-            if (writeConfirmed(destination, current, updated, pause)) {
+            if (writeConfirmed(destination, current, write.updatedText, pause, write.caret)) {
                 return TextCommitResult(InjectMethod.DIRECT, priorText = current)
             }
         }
@@ -266,9 +269,9 @@ object DictationTextWriter {
     ): TextCommitResult {
         if (!destination.refresh()) return TextCommitResult(InjectMethod.NONE)
         val current = destination.readText()
-        val updated = reconcileStreamingSpan(current, span, text, isFinalInjectionTarget = true)
+        val write = reconcileStreamingSpanWithCaret(current, span, text, isFinalInjectionTarget = true)
             ?: return TextCommitResult(InjectMethod.NONE)
-        return if (writeConfirmed(destination, current, updated, pause)) {
+        return if (writeConfirmed(destination, current, write.updatedText, pause, write.caret)) {
             TextCommitResult(InjectMethod.DIRECT, priorText = current)
         } else {
             TextCommitResult(InjectMethod.NONE)
@@ -284,12 +287,12 @@ object DictationTextWriter {
     fun clearStreamingSpan(destination: TextDestination, span: StreamingSpan, pause: WritePause = WritePause.REAL) {
         if (!destination.refresh()) return
         val current = destination.readText()
-        val cleared = reconcileStreamingSpan(
+        val cleared = reconcileStreamingSpanWithCaret(
             current,
             span,
             finalText = "",
             isFinalInjectionTarget = false,
         ) ?: return
-        writeConfirmed(destination, current, cleared, pause)
+        writeConfirmed(destination, current, cleared.updatedText, pause, cleared.caret)
     }
 }
