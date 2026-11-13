@@ -16,8 +16,11 @@ package com.trevornk.ramblr
  *
  * An EMPTY field has nothing a whole-field write could destroy, so empty WebView composers (Sable
  * and other web chat boxes, the common case) keep the established direct-write behaviour.
- * [currentTextIsEmpty] must be the *resolved* text ([resolveRealText]): Chromium reports an empty
- * composer as `"\n"`, which resolves to empty.
+ * [currentTextIsEmpty] must come from the RAW node values (`isShowingHintText || text.isNullOrBlank()`),
+ * NOT from [resolveRealText]: that one also blanks a focused editable reporting selection -1/-1 (the
+ * #140 placeholder heuristic for native EditTexts), which would make a populated contenteditable look
+ * empty and let a single SET_TEXT wipe the whole body. Chromium reports an empty composer as `"\n"`,
+ * which is blank and so still counts as empty.
  */
 fun isLossyWholeFieldDestination(
     isEditable: Boolean,

@@ -43,6 +43,23 @@ class AccessibilityRichTextDestinationTest {
         assertFalse(AccessibilityTextDestination(field(inWebView = true, children = 1, body = "\n")).wholeFieldWriteIsLossy())
     }
 
+    @Test fun `a focused populated WebView editor reporting selection -1 -1 is still lossy`() {
+        // resolveRealText treats a focused editable at -1/-1 as a placeholder and reads "", which
+        // must not make a populated contenteditable look empty (one SET_TEXT would wipe the body).
+        val node = field(inWebView = true, children = 2, body = "one\ntwo") {
+            isFocused = true
+            setTextSelection(-1, -1)
+        }
+        val destination = AccessibilityTextDestination(node)
+        assertTrue(destination.readText().isEmpty())
+        assertTrue(destination.wholeFieldWriteIsLossy())
+    }
+
+    @Test fun `a hint-showing WebView editor is not lossy`() {
+        val node = field(inWebView = true, children = 1, body = "Write a message") { isShowingHintText = true }
+        assertFalse(AccessibilityTextDestination(node).wholeFieldWriteIsLossy())
+    }
+
     @Test fun `a WebView textarea without children is not lossy`() {
         assertFalse(AccessibilityTextDestination(field(inWebView = true, children = 0, body = "one\ntwo")).wholeFieldWriteIsLossy())
     }

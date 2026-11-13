@@ -83,7 +83,9 @@ class AccessibilityTextDestination(
             isEditable = editable,
             inWebView = editable && children > 0 && hasWebViewAncestor(node),
             childCount = children,
-            currentTextIsEmpty = readText().isEmpty(),
+            // Raw node values, never readText(): resolveRealText blanks a focused editable at selection
+            // -1/-1 (the #140 placeholder heuristic), which would make a populated body look empty.
+            currentTextIsEmpty = node.isShowingHintText || node.text.isNullOrBlank(),
         )
     }
 
