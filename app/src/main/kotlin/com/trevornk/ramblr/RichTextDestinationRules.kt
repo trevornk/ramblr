@@ -8,11 +8,13 @@ package com.trevornk.ramblr
  * the loss happens because the read already flattened newlines or because the editor normalises the
  * written string. Such a field has to be written by inserting at the caret instead.
  *
- * The signal is structural, never a package name. Chromium exposes an `<input>`/`<textarea>` as a
- * childless, atomic field (a flat string *is* its whole model, so SET_TEXT is lossless), whereas a
- * `contenteditable` root has descendant nodes (paragraphs, runs, line breaks). Native `EditText` and
- * Compose fields have no accessibility children either, so the WebView-ancestor requirement keeps
- * them out even if a custom view happens to expose children.
+ * The signal is structural, never a package name: an editable, multi-line field under a WebView.
+ * Child nodes are NOT usable for this: on real devices (Outlook, Gmail) Chromium exposes the
+ * contenteditable mail body as a childless multi-line `EditText` whose read is newline-flattened.
+ * A multi-line WebView field that is really a `<textarea>` also takes the caret paste, which is a
+ * correct (lossless) insertion there too; the only cost is the clipboard round-trip, whose safety
+ * is tracked separately (#378). Single-line WebView inputs, native fields (no WebView ancestor)
+ * and empty composers keep the direct write.
  *
  * An EMPTY field has nothing a whole-field write could destroy, so empty WebView composers (Sable
  * and other web chat boxes, the common case) keep the established direct-write behaviour.
@@ -25,6 +27,6 @@ package com.trevornk.ramblr
 fun isLossyWholeFieldDestination(
     isEditable: Boolean,
     inWebView: Boolean,
-    childCount: Int,
+    isMultiLine: Boolean,
     currentTextIsEmpty: Boolean,
-): Boolean = isEditable && inWebView && childCount > 0 && !currentTextIsEmpty
+): Boolean = isEditable && inWebView && isMultiLine && !currentTextIsEmpty

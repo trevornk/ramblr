@@ -75,14 +75,14 @@ class AccessibilityTextDestination(
 
     override fun placeCaret(position: Int) = nudgeSelection(node, position)
 
-    // #376: the WebView-ancestor walk only runs for an editable node that has children.
+    // #376: the WebView-ancestor walk only runs for an editable multi-line node.
     override fun wholeFieldWriteIsLossy(): Boolean {
         val editable = acceptsDirectWrite()
-        val children = node.childCount
+        val multiLine = node.isMultiLine
         return isLossyWholeFieldDestination(
             isEditable = editable,
-            inWebView = editable && children > 0 && hasWebViewAncestor(node),
-            childCount = children,
+            inWebView = editable && multiLine && hasWebViewAncestor(node),
+            isMultiLine = multiLine,
             // Raw node values, never readText(): resolveRealText blanks a focused editable at selection
             // -1/-1 (the #140 placeholder heuristic), which would make a populated body look empty.
             currentTextIsEmpty = rawTextIsEmpty(node),
@@ -190,12 +190,14 @@ class AccessibilityTextDestination(
             val lossy = isLossyWholeFieldDestination(
                 isEditable = AccessibilityTextDestination(node).acceptsDirectWrite(),
                 inWebView = inWebView,
-                childCount = children,
+                isMultiLine = node.isMultiLine,
                 currentTextIsEmpty = rawTextIsEmpty(node),
             )
+            // A role name (e.g. "textbox"), never field content.
+            val chromeRole = node.extras?.getCharSequence("AccessibilityNodeInfo.chromeRole")
             Log.d(
                 TAG,
-                "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} multiLine=${node.isMultiLine} textLength=${text?.length ?: 0} newlines=${text?.count { it == '\n' } ?: 0} childCount=$children inWebView=$inWebView lossy=$lossy actions=[$actions]"
+                "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} multiLine=${node.isMultiLine} textLength=${text?.length ?: 0} newlines=${text?.count { it == '\n' } ?: 0} childCount=$children chromeRole=$chromeRole inWebView=$inWebView lossy=$lossy actions=[$actions]"
             )
         }
     }

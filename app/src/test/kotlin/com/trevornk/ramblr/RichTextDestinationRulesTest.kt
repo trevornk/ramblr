@@ -8,11 +8,11 @@ class RichTextDestinationRulesTest {
     private fun lossy(
         editable: Boolean = true,
         inWebView: Boolean = true,
-        children: Int = 2,
+        multiLine: Boolean = true,
         empty: Boolean = false,
-    ) = isLossyWholeFieldDestination(editable, inWebView, children, empty)
+    ) = isLossyWholeFieldDestination(editable, inWebView, multiLine, empty)
 
-    @Test fun `an editable WebView contenteditable with content is lossy`() {
+    @Test fun `an editable multi-line WebView field with content is lossy`() {
         assertTrue(lossy())
     }
 
@@ -20,11 +20,11 @@ class RichTextDestinationRulesTest {
         assertFalse(lossy(empty = true))
     }
 
-    @Test fun `a WebView textarea or input has no children and is not lossy`() {
-        assertFalse(lossy(children = 0))
+    @Test fun `a single-line WebView input is not lossy`() {
+        assertFalse(lossy(multiLine = false))
     }
 
-    @Test fun `a native EditText with children outside a WebView is not lossy`() {
+    @Test fun `a native multi-line EditText outside a WebView is not lossy`() {
         assertFalse(lossy(inWebView = false))
     }
 
