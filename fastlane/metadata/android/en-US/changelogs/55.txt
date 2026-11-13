@@ -1,0 +1,3 @@
+Fixes the floating button staying visible on the lock screen and always-on display.
+
+- The ring now hides whenever the screen is off or not interactive, not only when the keyguard is locked, and returns when the screen is back on. Thanks to brrl4al for reporting.
