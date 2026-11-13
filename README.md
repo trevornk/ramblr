@@ -217,6 +217,33 @@ On-device cleanup uses **Mumble Cleanup 2-Stage** (352 MB, Apache-2.0, a Qwen2.5
 trained specifically for transcript cleanup) by default; LFM2.5 350M (219 MB) is available as an
 alternative. A separate 57 MB streaming model powers Live Preview.
 
+### Languages
+
+Ramblr is not English-only, but "language" means three different things here:
+
+- **App interface: English only.** Menus, settings, and messages have no translations yet. Only
+  your *speech* and *output* can be another language.
+- **Dictating in another language.** Set **Settings → Transcription → Dictation language**
+  (default: auto-detect). Cloud transcription sends it to OpenAI, Gemini, Groq, and other
+  OpenAI-compatible servers as a language hint, which stops short or accented clips from being
+  mistaken for English; it also stops cleanup from translating your text. The picker offers about
+  55 languages, limited to ones those models transcribe well. Accuracy is whatever your chosen
+  model delivers in that language. On-device, Parakeet 0.6B (v3) covers 25 European languages and
+  Canary 180M Flash covers English, Spanish, German, and French (it follows Dictation language).
+  Parakeet Unified and Parakeet 110M are English-only. A server-side language setting (for
+  example Open WebUI's) overrides the hint Ramblr sends.
+- **Translating what you say.** Pick up to about 30 target languages under **Settings → AI
+  cleanup → Translation**. They appear under **Translate to** on the keyboard and in the floating
+  ring's long-press menu; the next dictation comes out translated, and the choice sticks until you
+  pick Original. Select text and tap Ramblr for a one-off **Translate → <language>**. Translation
+  needs a cloud AI provider; with none, text is inserted untranslated and Ramblr says why.
+
+<p align="center">
+  <img src="docs/screenshots/transcription-language.png" width="230" alt="Dictation language and Canary language settings">
+  <img src="docs/screenshots/dictation-language-picker.png" width="230" alt="Dictation language picker">
+  <img src="docs/screenshots/translation-languages-picker.png" width="230" alt="Translation languages picker">
+</p>
+
 ---
 
 ## Cleanup styles, vocabulary, and per-app behavior
