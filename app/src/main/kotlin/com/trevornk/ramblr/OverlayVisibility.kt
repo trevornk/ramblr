@@ -21,6 +21,11 @@ package com.trevornk.ramblr
  * the overlay visible for onboarding's "Try it out" step must never bypass the keyguard's own
  * hide-while-locked security guarantee.
  *
+ * [screenOff] (#373) is true while the display is off / dozing (Always On Display): the
+ * keyguard can still report unlocked at SCREEN_OFF (it engages after the broadcast, or the user
+ * has no lock screen), yet TYPE_ACCESSIBILITY_OVERLAY would draw over the AOD. Same tier as
+ * [lockedByKeyguard], so [forceVisibleOverride] can never bypass it either.
+ *
  * [excludedForeground] is #256's per-app exclusion signal (see [ExclusionGating.ringHiddenForExclusion]):
  * true only when the foreground app's package identity is positively known AND on the user's
  * exclusion list. Checked in the same tier as [lockedByKeyguard] -- before [forceVisibleOverride]
@@ -40,8 +45,9 @@ fun overlayShouldBeVisible(
     forceVisibleOverride: Boolean = false,
     excludedForeground: Boolean = false,
     hiddenByVisibilityMode: Boolean = false,
+    screenOff: Boolean = false,
 ): Boolean =
-    if (lockedByKeyguard) false
+    if (lockedByKeyguard || screenOff) false
     else if (excludedForeground) false
     else if (forceVisibleOverride) !hiddenByUser
     else !mainActivityForeground && !hiddenByUser && !hiddenByVisibilityMode

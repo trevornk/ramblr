@@ -90,6 +90,25 @@ class OverlayVisibilityTest {
         )
     }
 
+    // --- #373: screen off / AOD ---
+
+    @Test fun `hidden while the screen is off even when keyguard reports unlocked`() {
+        assertEquals(false, overlayShouldBeVisible(mainActivityForeground = false, hiddenByUser = false, lockedByKeyguard = false, screenOff = true))
+    }
+
+    @Test fun `screen off wins over force-visible override`() {
+        assertEquals(false, overlayShouldBeVisible(mainActivityForeground = true, hiddenByUser = false, lockedByKeyguard = false, forceVisibleOverride = true, screenOff = true))
+    }
+
+    @Test fun `interactive and unlocked shows the overlay`() {
+        assertEquals(true, overlayShouldBeVisible(mainActivityForeground = false, hiddenByUser = false, lockedByKeyguard = false, screenOff = false))
+    }
+
+    @Test fun `screen off combined with keyguard is hidden and screen on alone does not unhide a locked keyguard`() {
+        assertEquals(false, overlayShouldBeVisible(mainActivityForeground = false, hiddenByUser = false, lockedByKeyguard = true, screenOff = true))
+        assertEquals(false, overlayShouldBeVisible(mainActivityForeground = false, hiddenByUser = false, lockedByKeyguard = true, screenOff = false))
+    }
+
     // --- Ring visibility mode ---
 
     @Test fun `hidden by visibility mode hides an otherwise visible overlay`() {
