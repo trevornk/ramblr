@@ -85,7 +85,7 @@ class AccessibilityTextDestination(
             childCount = children,
             // Raw node values, never readText(): resolveRealText blanks a focused editable at selection
             // -1/-1 (the #140 placeholder heuristic), which would make a populated body look empty.
-            currentTextIsEmpty = node.isShowingHintText || node.text.isNullOrBlank(),
+            currentTextIsEmpty = rawTextIsEmpty(node),
         )
     }
 
@@ -107,6 +107,10 @@ class AccessibilityTextDestination(
 
         /** Same bound the service uses to decide whether a node lives in a WebView page. */
         private const val WEBVIEW_ANCESTOR_DEPTH = 40
+
+        /** Emptiness from raw node values (never [resolveRealText]); see [isLossyWholeFieldDestination]. */
+        private fun rawTextIsEmpty(node: AccessibilityNodeInfo): Boolean =
+            node.isShowingHintText || node.text.isNullOrBlank()
 
         /** True when [node] sits under an `android.webkit.WebView` container. Does not recycle [node]. */
         private fun hasWebViewAncestor(node: AccessibilityNodeInfo): Boolean {
@@ -178,9 +182,20 @@ class AccessibilityTextDestination(
             val actions = node.actionList.joinToString { action ->
                 action.label?.toString() ?: action.id.toString()
             }
+            // Walk the ancestors once and reuse it for both the log and the classifier. Counts only:
+            // the device capture that settles whether the read flattens or the write normalizes (#376).
+            val inWebView = hasWebViewAncestor(node)
+            val children = node.childCount
+            val text = node.text
+            val lossy = isLossyWholeFieldDestination(
+                isEditable = AccessibilityTextDestination(node).acceptsDirectWrite(),
+                inWebView = inWebView,
+                childCount = children,
+                currentTextIsEmpty = rawTextIsEmpty(node),
+            )
             Log.d(
                 TAG,
-                "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} childCount=${node.childCount} inWebView=${hasWebViewAncestor(node)} lossy=${AccessibilityTextDestination(node).wholeFieldWriteIsLossy()} actions=[$actions]"
+                "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} multiLine=${node.isMultiLine} textLength=${text?.length ?: 0} newlines=${text?.count { it == '\n' } ?: 0} childCount=$children inWebView=$inWebView lossy=$lossy actions=[$actions]"
             )
         }
     }
