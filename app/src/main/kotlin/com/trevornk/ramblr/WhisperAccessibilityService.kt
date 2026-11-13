@@ -3394,6 +3394,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         var priorNodeText: String? = null
         var injectedNode: AccessibilityNodeInfo? = null
         var handledStreamingHandoff = false
+        var imeCommitTried = false
         // Staged at most once, right before the first paste attempt or for the NONE fallback --
         // never up front, so a DIRECT injection leaves the user's clipboard (and any clipboard
         // history / Android 13+ copy preview) completely untouched.
@@ -3412,6 +3413,22 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 // alongside the final text (see reconcileStreamingSpan). Every other candidate goes
                 // through the normal, unmodified path.
                 val trackedSession = streamingHandoff?.takeIf { candidate == it.node }
+                // Termux exposes no editable node and rejects ACTION_PASTE, but its terminal IS a
+                // text editor with an input connection, so commit through the accessibility input
+                // method (API 33+). Tried BEFORE the normal path: that path stages the clipboard
+                // for a paste Termux always rejects, and every staging can pop the OEM's
+                // "Copied to clipboard" toast. The connection belongs to the focused editor, not
+                // to this candidate, so it is tried at most once. DIRECT: commitText never
+                // touches the clipboard.
+                if (trackedSession == null && !imeCommitTried &&
+                    A11yInputCommit.prefersInputConnection(candidate.packageName)
+                ) {
+                    imeCommitTried = true
+                    if (A11yInputCommit.commit(this, text, candidate.packageName?.toString())) {
+                        method = InjectMethod.DIRECT
+                        break
+                    }
+                }
                 val attempt = if (trackedSession != null) {
                     tryCloseStreamingSpan(candidate, trackedSession, text)
                 } else {
