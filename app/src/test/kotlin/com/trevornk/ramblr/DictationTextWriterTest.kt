@@ -683,6 +683,36 @@ class DictationTextWriterTest {
     }
 
     @Test
+    fun `flattened read with trailing blank lines and a caret past the read length pastes without a separator`() = withDiagnostics { notes ->
+        // model "one\ntwo\n" reads as "onetwo" (6 chars) while the caret is 8: the read lost chars.
+        val d = RichTextDestination("one\ntwo\n", selStart = 8, flattenRead = true)
+        val result = richCommit(d)
+        assertPastedOnly(d, result, "dictated")
+        assertEquals("one\ntwo\ndictated", d.model)
+        assertEquals(listOf("caret 8 past read length 6; no separator"), notes)
+    }
+
+    @Test
+    fun `non-flattened end of text after a letter still gets the separator and raises no diagnostic`() = withDiagnostics { notes ->
+        val d = RichTextDestination("one two", selStart = 7)
+        assertPastedOnly(d, richCommit(d), " dictated")
+        assertEquals(emptyList<String>(), notes)
+    }
+
+    @Test
+    fun `a zero caret reported on non-empty text keeps the append behaviour with a separator`() {
+        val d = RichTextDestination("one two", selStart = 0)
+        assertPastedOnly(d, richCommit(d), " dictated")
+    }
+
+    @Test
+    fun `composeOneShotPastePayload drops the separator only when the caret is past the read text`() {
+        assertEquals("x", composeOneShotPastePayload("onetwo", 8, 8, "x"))
+        assertEquals(" x", composeOneShotPastePayload("onetwo", 6, 6, "x"))
+        assertEquals(" x", composeOneShotPastePayload("onetwo", 0, 0, "x"))
+    }
+
+    @Test
     fun `a swallowed paste is reported as pasted, never retried and never rewritten`() = withDiagnostics { notes ->
         val d = RichTextDestination("one\ntwo", selStart = 7, pasteMode = RichTextDestination.PasteMode.SWALLOWED)
         val result = richCommit(d)

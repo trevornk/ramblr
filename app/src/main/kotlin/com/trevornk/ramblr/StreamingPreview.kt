@@ -251,6 +251,9 @@ fun shouldRouteStreamingPartialToBubble(
     lossyFieldSession: Boolean = false,
 ): Boolean = previewBeforeInjectEnabled || !livePreviewEnabled || lossyFieldSession
 
+/** True when a reported caret ([selStart] >= 0) lies beyond the end of the read [current] text. */
+fun caretPastReadText(current: String, selStart: Int): Boolean = selStart >= 0 && selStart > current.length
+
 /**
  * The text a lossy (rich-text) destination must paste at the caret for a one-shot injection of
  * [text] (#376): the #144 separator for the *resolved* insertion start (#140/#300 selection rules,
@@ -258,6 +261,10 @@ fun shouldRouteStreamingPartialToBubble(
  * separator derived from the text it replaces -- only the character before the range matters.
  */
 fun composeOneShotPastePayload(current: String, selStart: Int, selEnd: Int, text: String): String {
+    // A caret beyond the read text means the read lost characters (flattened newlines), so the char
+    // before the real caret is unknown. Most likely the user pressed Enter and is on a new line:
+    // emit no separator rather than guess from the wrong character.
+    if (caretPastReadText(current, selStart)) return text
     val span = resolveReplacementSpan(selStart, selEnd, current.length)
     return withLeadingSeparator(current, span.start, text)
 }

@@ -214,7 +214,11 @@ object DictationTextWriter {
      */
     private fun commitByPasteOnly(destination: TextDestination, text: String, pause: WritePause): TextCommitResult {
         val current = destination.readText()
-        val payload = composeOneShotPastePayload(current, destination.selectionStart(), destination.selectionEnd(), text)
+        val selStart = destination.selectionStart()
+        if (caretPastReadText(current, selStart)) {
+            diagnostic("caret $selStart past read length ${current.length}; no separator")
+        }
+        val payload = composeOneShotPastePayload(current, selStart, destination.selectionEnd(), text)
         if (!destination.pasteFromClipboard(payload)) return TextCommitResult(InjectMethod.NONE)
         // Bounded look at whether anything changed; informational only, there is no retry.
         var waited = 0L
