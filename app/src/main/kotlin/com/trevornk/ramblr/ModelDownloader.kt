@@ -206,9 +206,12 @@ val MODEL_CATALOG = listOf(
     // blank-pref fallback (first *installed* model -- see WhisperAccessibilityService.
     // initLocalModel and TranscriptionActivity) never consult this flag, so existing installs
     // keep whatever model they have; only fresh-install onboarding downloads this instead.
+    // sha256 re-pinned 2026-11-13: the asr-models release asset was re-uploaded on 2026-11-07
+    // with new bytes (now 487,211,443), so the original pin rejected every download.
+    // Verified against both a local `sha256sum` of the download and GitHub's asset digest.
     Model("Parakeet 0.6B", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
         487, "★★★★ Recommended · Multilingual", recommended = true,
-        sha256 = "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
+        sha256 = "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9",
         license = CC_BY_4_0),
     // Smallest and fastest entry in the catalog (104MB; #198 on-device benchmark: 0.23s/0.19s
     // decode for a 7.4s clip). No longer `recommended` since #177: the measured eval put it at
