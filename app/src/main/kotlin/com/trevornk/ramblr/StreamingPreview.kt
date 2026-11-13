@@ -261,10 +261,9 @@ fun caretPastReadText(current: String, selStart: Int): Boolean = selStart >= 0 &
  * separator derived from the text it replaces -- only the character before the range matters.
  */
 fun composeOneShotPastePayload(current: String, selStart: Int, selEnd: Int, text: String): String {
-    // A caret beyond the read text means the read lost characters (flattened newlines), so the char
-    // before the real caret is unknown. Most likely the user pressed Enter and is on a new line:
-    // emit no separator rather than guess from the wrong character.
-    if (caretPastReadText(current, selStart)) return text
+    // A caret past the read text means the read lost characters (flattened newlines). The separator
+    // is then a guess from the last read char: right at the end of a line of text (the common #376
+    // case), a stray leading space on a fresh blank line (known limitation).
     val span = resolveReplacementSpan(selStart, selEnd, current.length)
     return withLeadingSeparator(current, span.start, text)
 }

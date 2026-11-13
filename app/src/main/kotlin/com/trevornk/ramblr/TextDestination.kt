@@ -223,7 +223,7 @@ object DictationTextWriter {
         val current = destination.readText()
         val selStart = destination.selectionStart()
         if (caretPastReadText(current, selStart)) {
-            diagnostic("caret $selStart past read length ${current.length}; no separator")
+            diagnostic("caret $selStart past read length ${current.length}; separator guessed from last read char")
         }
         val payload = composeOneShotPastePayload(current, selStart, destination.selectionEnd(), text)
         if (!destination.pasteFromClipboard(payload)) return TextCommitResult(InjectMethod.NONE, lossyPathTaken = true)

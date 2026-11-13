@@ -624,12 +624,11 @@ class DictationTextWriterTest {
 
     @Test
     fun `lossy destination with a flattening read is pasted into once and keeps its paragraphs`() {
-        // Read is "onetwo" (6) but the caret is 7: the read lost a char, so the char before the real
-        // caret is unknown and no separator is guessed (see the caret-past-read tests).
+        // Read is "onetwo" (6) but the caret is 7: the separator is derived from the last read char.
         val d = RichTextDestination("one\ntwo", selStart = 7, flattenRead = true)
         val result = richCommit(d)
-        assertPastedOnly(d, result, "dictated")
-        assertEquals("one\ntwodictated", d.model)
+        assertPastedOnly(d, result, " dictated")
+        assertEquals("one\ntwo dictated", d.model)
     }
 
     @Test
@@ -685,13 +684,14 @@ class DictationTextWriterTest {
     }
 
     @Test
-    fun `flattened read with trailing blank lines and a caret past the read length pastes without a separator`() = withDiagnostics { notes ->
-        // model "one\ntwo\n" reads as "onetwo" (6 chars) while the caret is 8: the read lost chars.
+    fun `known limitation - flattened read on a fresh blank line gets a stray leading space`() = withDiagnostics { notes ->
+        // model "one\ntwo\n" reads as "onetwo" (6 chars) while the caret is 8: the read lost chars, so
+        // the separator is guessed from the last read char and a fresh line gets a leading space.
         val d = RichTextDestination("one\ntwo\n", selStart = 8, flattenRead = true)
         val result = richCommit(d)
-        assertPastedOnly(d, result, "dictated")
-        assertEquals("one\ntwo\ndictated", d.model)
-        assertEquals(listOf("caret 8 past read length 6; no separator"), notes)
+        assertPastedOnly(d, result, " dictated")
+        assertEquals("one\ntwo\n dictated", d.model)
+        assertEquals(listOf("caret 8 past read length 6; separator guessed from last read char"), notes)
     }
 
     @Test
@@ -708,8 +708,9 @@ class DictationTextWriterTest {
     }
 
     @Test
-    fun `composeOneShotPastePayload drops the separator only when the caret is past the read text`() {
-        assertEquals("x", composeOneShotPastePayload("onetwo", 8, 8, "x"))
+    fun `composeOneShotPastePayload derives the separator from the read text even with the caret past it`() {
+        assertEquals(" x", composeOneShotPastePayload("onetwo", 8, 8, "x"))
+        assertEquals(" x", composeOneShotPastePayload("onetwo", 7, 7, "x"))
         assertEquals(" x", composeOneShotPastePayload("onetwo", 6, 6, "x"))
         assertEquals(" x", composeOneShotPastePayload("onetwo", 0, 0, "x"))
     }
