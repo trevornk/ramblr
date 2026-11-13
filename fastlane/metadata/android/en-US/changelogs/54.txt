@@ -1,0 +1,3 @@
+Fixes the recommended Parakeet 0.6B speech model failing to finish downloading.
+
+- The model's upstream archive was re-uploaded with new contents, so every download ended in a checksum mismatch and blocked onboarding. The expected checksum is updated and the new archive was verified to transcribe correctly. Thanks to Kenssnog for reporting and fixing this.
