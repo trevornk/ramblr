@@ -1051,6 +1051,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
         val listener = object : DisplayManager.DisplayListener {
             override fun onDisplayChanged(displayId: Int) {
                 if (displayId != Display.DEFAULT_DISPLAY) return
+                // #373: doze/AOD transitions arrive here; already on the handler.
+                applyOverlayVisibility()
                 val rotation = dm.getDisplay(displayId)?.rotation ?: return
                 val flipped = isFlipWithoutResize(lastRotation, rotation)
                 lastRotation = rotation
@@ -1847,7 +1849,11 @@ open class WhisperAccessibilityService : AccessibilityService() {
     @Volatile private var screenOffSeen = false
 
     private fun isScreenOff(): Boolean =
-        screenOffSeen || (getSystemService(POWER_SERVICE) as? android.os.PowerManager)?.isInteractive == false
+        screenOffSeen ||
+            (getSystemService(POWER_SERVICE) as? android.os.PowerManager)?.isInteractive == false ||
+            // Third signal: Samsung AOD leaves the display in a doze state (#373).
+            (getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)
+                ?.state?.let { displayIsOff(it) } ?: false)
 
     private fun isKeyguardLocked(): Boolean =
         (getSystemService(KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked ?: false
@@ -2323,6 +2329,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
     private fun showFeedback(text: String, durationMs: Long = 2000, touchable: Boolean = false, isFallback: Boolean = false, targetBounds: Rect? = null) {
         handler.post {
+            // #373: never draw (or make touchable) a bubble over the lock screen / AOD. Dropped,
+            // not queued, so nothing stale replays on wake. Dictation itself is unaffected.
+            if (!feedbackBubbleAllowed(isKeyguardLocked(), isScreenOff())) return@post
             val view = feedbackView ?: return@post
             val bubbleParams = layoutParams ?: return@post
             val feedbackParams = feedbackLayoutParams ?: return@post

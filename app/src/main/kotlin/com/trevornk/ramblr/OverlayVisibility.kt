@@ -53,6 +53,23 @@ fun overlayShouldBeVisible(
     else !mainActivityForeground && !hiddenByUser && !hiddenByVisibilityMode
 
 /**
+ * #373: whether a [android.view.Display] state means the panel is not fully on. Samsung's Always
+ * On Display keeps the display in DOZE / DOZE_SUSPEND / ON_SUSPEND while SCREEN_OFF and
+ * isInteractive may not be trustworthy. UNKNOWN is treated as not-off (fail open on no info; the
+ * other screen-off signals still apply).
+ */
+fun displayIsOff(state: Int): Boolean =
+    state != android.view.Display.STATE_ON && state != android.view.Display.STATE_UNKNOWN
+
+/**
+ * #373: whether the feedback bubble may be drawn. It is a TYPE_ACCESSIBILITY_OVERLAY window too,
+ * so it must not appear over the lock screen / AOD (e.g. a dictation finishing after the phone
+ * was locked). Presentation only: depends solely on keyguard + screen state, never on dictation.
+ */
+fun feedbackBubbleAllowed(lockedByKeyguard: Boolean, screenOff: Boolean): Boolean =
+    !lockedByKeyguard && !screenOff
+
+/**
  * Whether the user's [RingVisibilityMode] hides the ring right now. Never while dictation is
  * running (the user needs the ring to stop it) or while a feedback/preview bubble is up (it may
  * still need a tap: clipboard fallback, raw-text retry, preview commit). [TEXT_FIELD] also counts
