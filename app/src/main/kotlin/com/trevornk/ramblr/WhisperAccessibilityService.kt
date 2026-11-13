@@ -1088,6 +1088,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun registerScreenStateReceiver() {
         val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> screenOffSeen = true
+                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> screenOffSeen = false
+                }
                 applyOverlayVisibility()
                 // USER_PRESENT only (#135): the unlock is the natural checkpoint to restore a
                 // swiped-away recovery notification -- the user is present, looking at the screen,
@@ -1779,6 +1783,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
             overlayForceVisibleOverride,
             excludedForeground,
             hiddenByVisibilityMode,
+            isScreenOff(),
         )
         setOverlayTouchable(visible)
         // alpha, not View.GONE (Pixel Fold display-transition stall, root-caused via Opus + real
@@ -1836,6 +1841,14 @@ open class WhisperAccessibilityService : AccessibilityService() {
      *  fails open to "not locked" only if the system service is somehow unavailable, since an
      *  overlay staying hidden a moment too long is a far smaller problem than one appearing where
      *  it shouldn't. */
+    /** #373: display off / dozing (AOD). True if SCREEN_OFF was seen and not yet followed by
+     *  SCREEN_ON/USER_PRESENT, or the platform reports the device non-interactive -- either alone
+     *  suffices, so a receiver/keyguard ordering race can't leave the ring over the AOD. */
+    @Volatile private var screenOffSeen = false
+
+    private fun isScreenOff(): Boolean =
+        screenOffSeen || (getSystemService(POWER_SERVICE) as? android.os.PowerManager)?.isInteractive == false
+
     private fun isKeyguardLocked(): Boolean =
         (getSystemService(KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardLocked ?: false
 
