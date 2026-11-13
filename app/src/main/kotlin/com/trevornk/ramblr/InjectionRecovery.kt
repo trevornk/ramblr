@@ -154,3 +154,18 @@ class ClipboardStaging(private val copy: (String) -> Unit) {
         stagedPayload = payload
     }
 }
+
+/**
+ * Whether the candidate loop in `finishInjection` may try the next candidate after [attempt] (#376).
+ * A lossy rich-text candidate (Outlook's body) that failed must END the loop: the next candidate
+ * could be a sibling field (Subject/To) that would accept a direct write, and the dictation would
+ * land in the wrong field. The caller goes straight to the NONE clipboard fallback instead.
+ */
+fun shouldTryNextCandidate(attempt: TextCommitResult): Boolean =
+    attempt.method == InjectMethod.NONE && !attempt.lossyPathTaken
+
+/**
+ * The once-per-recording decision behind the lossy streaming flag (#376): the first lossy partial
+ * latches it for the session, a new recording clears it.
+ */
+fun lossyStreamingSessionAfterPartial(current: Boolean, fieldIsLossy: Boolean): Boolean = current || fieldIsLossy

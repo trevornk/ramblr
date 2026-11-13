@@ -149,7 +149,12 @@ fun interface WritePause {
  * content *before* replacement, captured only on the [InjectMethod.DIRECT] path -- that is the only
  * case where undo (#27) can restore it.
  */
-data class TextCommitResult(val method: InjectMethod, val priorText: String? = null)
+data class TextCommitResult(
+    val method: InjectMethod,
+    val priorText: String? = null,
+    /** True when [DictationTextWriter.commit] took the lossy paste-only path (#376), success or not. */
+    val lossyPathTaken: Boolean = false,
+)
 
 /**
  * The destination-agnostic half of text delivery: given a [TextDestination] and the text to land,
@@ -219,7 +224,7 @@ object DictationTextWriter {
             diagnostic("caret $selStart past read length ${current.length}; no separator")
         }
         val payload = composeOneShotPastePayload(current, selStart, destination.selectionEnd(), text)
-        if (!destination.pasteFromClipboard(payload)) return TextCommitResult(InjectMethod.NONE)
+        if (!destination.pasteFromClipboard(payload)) return TextCommitResult(InjectMethod.NONE, lossyPathTaken = true)
         // Bounded look at whether anything changed; informational only, there is no retry.
         var waited = 0L
         while (destination.refresh() && destination.readText() == current) {
@@ -230,7 +235,7 @@ object DictationTextWriter {
             pause.sleep(LAND_POLL_MS)
             waited += LAND_POLL_MS
         }
-        return TextCommitResult(InjectMethod.FROM_CLIPBOARD)
+        return TextCommitResult(InjectMethod.FROM_CLIPBOARD, lossyPathTaken = true)
     }
 
     /**

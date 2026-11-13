@@ -3121,7 +3121,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
             // bubble, and the final text is pasted at the caret (no span to reconcile or clear).
             if (AccessibilityTextDestination(candidate).wholeFieldWriteIsLossy()) {
                 candidate.recycle()
-                lossyStreamingField = true
+                lossyStreamingField = lossyStreamingSessionAfterPartial(lossyStreamingField, fieldIsLossy = true)
                 updateLivePreviewBubble(text, now, alreadyCased)
                 return
             }
@@ -3449,6 +3449,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
                     handledStreamingHandoff = trackedSession != null
                     break
                 }
+                // #376: a failed lossy rich-text candidate must not fall through to a sibling field.
+                if (!shouldTryNextCandidate(attempt)) break
             }
         } finally {
             candidates.forEach { it.recycle() }

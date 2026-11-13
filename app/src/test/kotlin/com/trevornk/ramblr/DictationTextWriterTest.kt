@@ -624,10 +624,12 @@ class DictationTextWriterTest {
 
     @Test
     fun `lossy destination with a flattening read is pasted into once and keeps its paragraphs`() {
+        // Read is "onetwo" (6) but the caret is 7: the read lost a char, so the char before the real
+        // caret is unknown and no separator is guessed (see the caret-past-read tests).
         val d = RichTextDestination("one\ntwo", selStart = 7, flattenRead = true)
         val result = richCommit(d)
-        assertPastedOnly(d, result, " dictated")
-        assertEquals("one\ntwo dictated", d.model)
+        assertPastedOnly(d, result, "dictated")
+        assertEquals("one\ntwodictated", d.model)
     }
 
     @Test
@@ -741,6 +743,25 @@ class DictationTextWriterTest {
         assertEquals(0, d.caretCalls)
         assertEquals(1, d.pastedPayloads.size)
         assertEquals("one\ntwo", d.model)
+    }
+
+    @Test
+    fun `a failed lossy paste is flagged so the candidate loop stops instead of trying a sibling field`() {
+        val failed = richCommit(RichTextDestination("one", selStart = 3, pasteMode = RichTextDestination.PasteMode.FAILS))
+        assertEquals(true, failed.lossyPathTaken)
+        assertFalse(shouldTryNextCandidate(failed))
+
+        val landed = richCommit(RichTextDestination("one", selStart = 3))
+        assertEquals(true, landed.lossyPathTaken)
+    }
+
+    @Test
+    fun `a failed non-lossy candidate still lets the loop try the next one`() {
+        val d = FakeTextDestination(text = "abc", selStart = 3, selEnd = 3, direct = false, paste = false)
+        val result = DictationTextWriter.commit(d, "X", NO_PAUSE)
+        assertEquals(InjectMethod.NONE, result.method)
+        assertEquals(false, result.lossyPathTaken)
+        assertTrue(shouldTryNextCandidate(result))
     }
 
     @Test

@@ -240,4 +240,38 @@ class InjectionRecoveryTest {
         assertEquals(false, staging.isStaged)
         assertNull(staging.stagedPayload)
     }
+
+    @Test fun `the NONE fallback re-stages the plain transcript after a failed lossy paste and restore compares against it`() {
+        val copied = mutableListOf<String>()
+        val staging = ClipboardStaging { copied += it }
+        staging.stage(" dictated")          // beforePaste of the failed lossy paste
+        staging.stage("dictated")           // NONE fallback stages the plain transcript
+        assertEquals(listOf(" dictated", "dictated"), copied)
+        assertEquals(
+            ClipboardRestoreOutcome.Restore("PRIOR"),
+            clipboardRestoreOutcomeFor("dictated", staging.stagedPayload ?: "dictated", "PRIOR"),
+        )
+    }
+
+    // --- shouldTryNextCandidate / lossyStreamingSessionAfterPartial ---
+
+    @Test fun `only a failure outside the lossy path moves on to the next candidate`() {
+        assertEquals(true, shouldTryNextCandidate(TextCommitResult(InjectMethod.NONE)))
+        assertEquals(false, shouldTryNextCandidate(TextCommitResult(InjectMethod.NONE, lossyPathTaken = true)))
+        assertEquals(false, shouldTryNextCandidate(TextCommitResult(InjectMethod.DIRECT)))
+        assertEquals(false, shouldTryNextCandidate(TextCommitResult(InjectMethod.FROM_CLIPBOARD, lossyPathTaken = true)))
+    }
+
+    @Test fun `the lossy streaming flag latches on the first lossy partial and a new recording starts clear`() {
+        var flag = false
+        flag = lossyStreamingSessionAfterPartial(flag, fieldIsLossy = false)
+        assertEquals(false, flag)
+        flag = lossyStreamingSessionAfterPartial(flag, fieldIsLossy = true)
+        assertEquals(true, flag)
+        flag = lossyStreamingSessionAfterPartial(flag, fieldIsLossy = false)
+        assertEquals(true, flag)
+        // Per-recording reset is the service assigning false; the routing it feeds:
+        assertEquals(true, shouldRouteStreamingPartialToBubble(false, livePreviewEnabled = true, lossyFieldSession = flag))
+        assertEquals(false, shouldRouteStreamingPartialToBubble(false, livePreviewEnabled = true, lossyFieldSession = false))
+    }
 }
