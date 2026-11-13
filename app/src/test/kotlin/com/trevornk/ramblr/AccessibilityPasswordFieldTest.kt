@@ -128,7 +128,7 @@ class AccessibilityPasswordFieldTest {
         val destination = AccessibilityTextDestination(passwordNode { isPassword = true; isEditable = true }) { staged = true }
 
         assertFalse(destination.replaceAllText("hunter2"))
-        assertFalse(destination.pasteFromClipboard())
+        assertFalse(destination.pasteFromClipboard("hunter2"))
         assertFalse("the dictation must not reach the clipboard for a password node", staged)
     }
 

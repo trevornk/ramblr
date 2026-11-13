@@ -384,6 +384,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
             flushPendingStreamingHandoff()
             lastBubblePartialText = null
             lastBubblePartialAtMs = 0L
+            lossyStreamingField = false
             // The previous dictation's translation bookkeeping (and any unshown skip notice) ends
             // with it; a new dictation asks again when its cleanup starts.
             translationRequested = false
@@ -909,6 +910,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
     // real field via [streamingSession] exactly as before this fix.
     private var lastBubblePartialText: String? = null
     private var lastBubblePartialAtMs: Long = 0L
+
+    // #376: set by the first partial when the target is a non-empty rich-text editor, so the whole
+    // session routes to the bubble without rescanning. Reset with the bubble state per recording.
+    private var lossyStreamingField = false
 
     // Captured once a recording concludes (#45): the streaming session's tracked span, preserved
     // here (instead of recycled outright) so the eventual final injection can still reconcile it
@@ -3098,6 +3103,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         if (shouldRouteStreamingPartialToBubble(
                 PreviewBeforeInjectToggle.isEnabled(this),
                 livePreviewEnabled = prefs().getBoolean("streaming_preview_enabled", false),
+                lossyFieldSession = lossyStreamingField,
             )
         ) {
             updateLivePreviewBubble(text, now, alreadyCased)
@@ -3110,6 +3116,15 @@ open class WhisperAccessibilityService : AccessibilityService() {
             // fall through to some other field in the window, so refuse before scanning.
             if (!PasswordFieldGuard.allowsPartialWrite(focusedInputIsPassword())) return
             val candidate = findDirectInjectionCandidate() ?: return
+            // #376: a non-empty rich-text editor is destroyed by any whole-field write, partials
+            // included. Decide once per session: the field stays untouched, partials show in the
+            // bubble, and the final text is pasted at the caret (no span to reconcile or clear).
+            if (AccessibilityTextDestination(candidate).wholeFieldWriteIsLossy()) {
+                candidate.recycle()
+                lossyStreamingField = true
+                updateLivePreviewBubble(text, now, alreadyCased)
+                return
+            }
             val current = resolveRealText(
                 candidate.text?.toString(),
                 candidate.isShowingHintText,
@@ -3410,13 +3425,10 @@ open class WhisperAccessibilityService : AccessibilityService() {
         // Staged at most once, right before the first paste attempt or for the NONE fallback --
         // never up front, so a DIRECT injection leaves the user's clipboard (and any clipboard
         // history / Android 13+ copy preview) completely untouched.
-        var clipboardStaged = false
-        val stageClipboard = {
-            if (!clipboardStaged) {
-                ClipboardUtil.copy(this, text)
-                clipboardStaged = true
-            }
-        }
+        // #376: tracks the payload actually staged (a lossy rich-text paste stages separator + text),
+        // which is what the restore below must compare the clipboard against.
+        val clipboardStaging = ClipboardStaging { ClipboardUtil.copy(this, it) }
+        val stageClipboard = clipboardStaging::stage
         try {
             for (candidate in candidates) {
                 // #45: when this candidate is the exact node the streaming session was tracking,
@@ -3453,7 +3465,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
 
         Log.i(TAG, if (method != InjectMethod.NONE) "Text injection action reported success" else "No injection action succeeded; clipboard fallback only")
         // NONE: the clipboard is the deliverable the user pastes from manually (#5).
-        if (method == InjectMethod.NONE) stageClipboard()
+        if (method == InjectMethod.NONE) stageClipboard(text)
 
         // #115: write the end-to-end pipeline benchmark line the moment injection has actually
         // resolved (success or clipboard fallback) -- this IS the "text appears in the focused
@@ -3523,12 +3535,13 @@ open class WhisperAccessibilityService : AccessibilityService() {
         }
         displayFeedback?.let { showFeedback(it, duration, touchable = retryRawOffered || isFallback, isFallback = isFallback, targetBounds = targetBounds) }
 
-        when (val action = clipboardClearActionFor(method, clipboardStaged, CLIPBOARD_CLEAR_DELAY_MS)) {
-            ClipboardClearAction.Immediate -> restoreClipboardAfterInjection(text, priorClipboard)
+        val stagedText = clipboardStaging.stagedPayload ?: text
+        when (val action = clipboardClearActionFor(method, clipboardStaging.isStaged, CLIPBOARD_CLEAR_DELAY_MS)) {
+            ClipboardClearAction.Immediate -> restoreClipboardAfterInjection(stagedText, priorClipboard)
             is ClipboardClearAction.Delayed -> {
                 val restore = Runnable {
                     pendingClipboardRestore = null
-                    restoreClipboardAfterInjection(text, priorClipboard)
+                    restoreClipboardAfterInjection(stagedText, priorClipboard)
                 }
                 pendingClipboardRestore = restore
                 handler.postDelayed(restore, action.delayMs)
@@ -3889,7 +3902,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * (which covers most apps, including Discord's message box) avoids the clipboard entirely and
      * with it that toast, while apps that genuinely need paste still get it as the fallback.
      */
-    private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String, stageClipboard: () -> Unit): TextCommitResult =
+    private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String, stageClipboard: (String) -> Unit): TextCommitResult =
         DictationTextWriter.commit(AccessibilityTextDestination(node, beforePaste = stageClipboard), text)
 
     private fun findCustomPasteAction(node: AccessibilityNodeInfo): AccessibilityNodeInfo.AccessibilityAction? =

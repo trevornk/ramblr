@@ -18,12 +18,12 @@ import android.view.accessibility.AccessibilityNodeInfo
  * candidate scan already owns that lifecycle, and a destination that recycled its own node would
  * break the undo snapshot (#27), which keeps a separate obtained copy.
  *
- * [beforePaste] runs right before any paste attempt so the caller can put the dictated text on the
+ * [beforePaste] runs right before any paste attempt with the payload about to be pasted, so the caller can put it on the
  * clipboard only when a paste actually needs it, instead of on every injection.
  */
 class AccessibilityTextDestination(
     val node: AccessibilityNodeInfo,
-    private val beforePaste: () -> Unit = {},
+    private val beforePaste: (String) -> Unit = {},
 ) : TextDestination {
 
     override fun acceptsDirectWrite(): Boolean =
@@ -75,9 +75,21 @@ class AccessibilityTextDestination(
 
     override fun placeCaret(position: Int) = nudgeSelection(node, position)
 
-    override fun pasteFromClipboard(): Boolean {
+    // #376: the WebView-ancestor walk only runs for an editable node that has children.
+    override fun wholeFieldWriteIsLossy(): Boolean {
+        val editable = acceptsDirectWrite()
+        val children = node.childCount
+        return isLossyWholeFieldDestination(
+            isEditable = editable,
+            inWebView = editable && children > 0 && hasWebViewAncestor(node),
+            childCount = children,
+            currentTextIsEmpty = readText().isEmpty(),
+        )
+    }
+
+    override fun pasteFromClipboard(payload: String): Boolean {
         if (node.isPasswordField()) return false
-        beforePaste()
+        beforePaste(payload)
         findCustomPasteAction(node)?.let { action ->
             val ok = node.performAction(action.id)
             Log.i(TAG, "Custom action '${action.label}' (${action.id}) => $ok")
@@ -166,7 +178,7 @@ class AccessibilityTextDestination(
             }
             Log.d(
                 TAG,
-                "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} actions=[$actions]"
+                "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} childCount=${node.childCount} inWebView=${hasWebViewAncestor(node)} lossy=${AccessibilityTextDestination(node).wholeFieldWriteIsLossy()} actions=[$actions]"
             )
         }
     }

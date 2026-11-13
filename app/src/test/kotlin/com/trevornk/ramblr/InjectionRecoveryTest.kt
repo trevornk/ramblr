@@ -204,4 +204,40 @@ class InjectionRecoveryTest {
     @Test fun `null for an empty injected text`() {
         assertNull(swapInjectedForRaw("abc", "abc", "", "raw"))
     }
+
+    // --- #376: lossy paste injections and the staged payload ---
+
+    @Test fun `a paste injection with no prior node text can only be undone through the clipboard`() {
+        val plan = planUndo(ageMs = 1000, windowMs = 10_000, nodeAvailable = false, priorNodeText = null, priorClipboard = "clip")
+        assertEquals(UndoPlan.ClipboardOnly("clip"), plan)
+    }
+
+    @Test fun `restore compares against the staged payload so a separator-prefixed paste is still restored`() {
+        val staging = ClipboardStaging { }
+        staging.stage(" dictated")
+        assertEquals(
+            ClipboardRestoreOutcome.Restore("PRIOR"),
+            clipboardRestoreOutcomeFor(" dictated", staging.stagedPayload!!, "PRIOR"),
+        )
+        // Compared against the plain transcript instead, the restore would never run.
+        assertEquals(ClipboardRestoreOutcome.LeaveAlone, clipboardRestoreOutcomeFor(" dictated", "dictated", "PRIOR"))
+    }
+
+    @Test fun `staging a different payload replaces the earlier one and the same payload is copied once`() {
+        val copied = mutableListOf<String>()
+        val staging = ClipboardStaging { copied += it }
+        assertEquals(false, staging.isStaged)
+        staging.stage(" dictated")
+        staging.stage(" dictated")
+        staging.stage("dictated")
+        assertEquals(listOf(" dictated", "dictated"), copied)
+        assertEquals("dictated", staging.stagedPayload)
+    }
+
+    @Test fun `a clipboard that refuses the copy leaves nothing marked as staged`() {
+        val staging = ClipboardStaging { throw IllegalStateException("denied") }
+        try { staging.stage("x") } catch (_: IllegalStateException) {}
+        assertEquals(false, staging.isStaged)
+        assertNull(staging.stagedPayload)
+    }
 }

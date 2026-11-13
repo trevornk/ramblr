@@ -133,3 +133,24 @@ fun clipboardRestoreOutcomeFor(
     priorClipboard != null -> ClipboardRestoreOutcome.Restore(priorClipboard)
     else -> ClipboardRestoreOutcome.Clear
 }
+
+/**
+ * Tracks what was actually put on the clipboard for a paste-style injection, so the post-injection
+ * restore compares against the *staged payload* rather than the plain transcript (#376): a lossy
+ * rich-text paste stages `separator + text`, and a restore that compared against `text` would see a
+ * mismatch and leave the dictated text on the user's clipboard. Staging again with a different
+ * payload (e.g. the plain transcript for the NONE fallback) replaces the earlier one.
+ */
+class ClipboardStaging(private val copy: (String) -> Unit) {
+    /** The text currently staged, or null when nothing was staged by this injection. */
+    var stagedPayload: String? = null
+        private set
+
+    val isStaged: Boolean get() = stagedPayload != null
+
+    fun stage(payload: String) {
+        if (stagedPayload == payload) return
+        copy(payload)
+        stagedPayload = payload
+    }
+}

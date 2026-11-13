@@ -376,6 +376,18 @@ class StreamingPreviewTest {
         assertFalse(shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled = false))
     }
 
+    @Test fun `partials of a session on a lossy rich-text field go to the bubble whatever the settings say`() {
+        assertTrue(shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled = false, livePreviewEnabled = true, lossyFieldSession = true))
+        assertFalse(shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled = false, livePreviewEnabled = true, lossyFieldSession = false))
+    }
+
+    @Test fun `the paste payload carries the separator for the resolved insertion start only`() {
+        assertEquals(" X", composeOneShotPastePayload("foo bar", 3, 7, "X"))
+        assertEquals("X", composeOneShotPastePayload("foo bar", 4, 7, "X"))
+        assertEquals("X", composeOneShotPastePayload("one\n\n", 5, 5, "X"))
+        assertEquals(composeOneShotInjectionWrite("abc def", 3, 3, "X").updatedText, "abc" + composeOneShotPastePayload("abc def", 3, 3, "X") + " def")
+    }
+
     // --- smartCapitalize (display-only sentence case, #42) ---
 
     @Test fun `empty string stays empty`() {

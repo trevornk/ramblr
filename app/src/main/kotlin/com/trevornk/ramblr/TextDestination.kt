@@ -98,15 +98,30 @@ interface TextDestination {
     fun replaceAllText(text: String): Boolean
 
     /**
-     * Asks the destination to pull the current clipboard contents into itself. Used only when
-     * [acceptsDirectWrite] is false or a direct write failed. Returns false when no paste route
-     * worked.
+     * True when replacing this destination's *entire* content ([replaceAllText]) would destroy
+     * something the read cannot see: a rich-text (contenteditable) editor inside a WebView, whose
+     * line breaks, formatting, signature and quoted thread live in a DOM that a flat string does not
+     * carry (#376). Such a destination must only ever be written by inserting at the caret
+     * ([pasteFromClipboard]); [DictationTextWriter.commit] never calls [replaceAllText] on it and
+     * never falls back to it. Read live, after [prepareForWrite].
      *
-     * Accessibility: stages the dictated text on the clipboard (only now, never ahead of time), then
-     * a labelled custom paste action, else `ACTION_PASTE`.
-     * IME: `performContextMenuAction(android.R.id.paste)`.
+     * Accessibility: [isLossyWholeFieldDestination] over the node's structure (editable, WebView
+     * ancestor, children, non-empty resolved text).
+     * IME: constant `false` -- `commitText` already inserts at the caret and never rewrites the field.
      */
-    fun pasteFromClipboard(): Boolean
+    fun wholeFieldWriteIsLossy(): Boolean
+
+    /**
+     * Asks the destination to pull [payload] into itself at the caret, replacing any selection.
+     * Used when [acceptsDirectWrite] is false, a direct write failed, or [wholeFieldWriteIsLossy].
+     * [payload] is exactly what must end up in the field (for the lossy path it already carries the
+     * #144 separator). Returns false when no paste route worked.
+     *
+     * Accessibility: stages [payload] on the clipboard (only now, never ahead of time), then a
+     * labelled custom paste action, else `ACTION_PASTE`.
+     * IME: `commitText(payload, 1)`, or stage [payload] and `performContextMenuAction(android.R.id.paste)`.
+     */
+    fun pasteFromClipboard(payload: String): Boolean
 
     /**
      * Moves the caret to [position] (a collapsed selection). Best-effort; failure never
@@ -176,6 +191,45 @@ object DictationTextWriter {
     }
 
     /**
+     * Counts-only note when a confirmed whole-field write came back with fewer line breaks than
+     * were written (#376): the signature of a target that flattens or normalises newlines. Never a
+     * failure (targets that normalise would loop on rewrites) and never carries field content.
+     */
+    private fun noteLostLineBreaks(destination: TextDestination, expected: String) {
+        val expectedBreaks = expected.count { it == '\n' }
+        if (expectedBreaks == 0) return
+        val observedBreaks = destination.readText().count { it == '\n' }
+        if (observedBreaks < expectedBreaks) {
+            diagnostic("line breaks: expected $expectedBreaks, observed $observedBreaks")
+        }
+    }
+
+    /**
+     * Delivery for a [TextDestination.wholeFieldWriteIsLossy] destination (#376): one paste of the
+     * separator-prefixed text at the caret, nothing else. Never [TextDestination.replaceAllText]
+     * (it would flatten or normalise the editor's paragraphs), never a second paste (that would
+     * duplicate if the first merely landed late), never [TextDestination.placeCaret] (Chromium
+     * offsets are unreliable, #300; a paste leaves the caret after the inserted text). The result
+     * carries no priorText, so undo (#27) and raw-text swap (#343) degrade to clipboard-only.
+     */
+    private fun commitByPasteOnly(destination: TextDestination, text: String, pause: WritePause): TextCommitResult {
+        val current = destination.readText()
+        val payload = composeOneShotPastePayload(current, destination.selectionStart(), destination.selectionEnd(), text)
+        if (!destination.pasteFromClipboard(payload)) return TextCommitResult(InjectMethod.NONE)
+        // Bounded look at whether anything changed; informational only, there is no retry.
+        var waited = 0L
+        while (destination.refresh() && destination.readText() == current) {
+            if (waited >= LAND_TIMEOUT_MS) {
+                diagnostic("Paste reported success but the field is unchanged")
+                break
+            }
+            pause.sleep(LAND_POLL_MS)
+            waited += LAND_POLL_MS
+        }
+        return TextCommitResult(InjectMethod.FROM_CLIPBOARD)
+    }
+
+    /**
      * Writes [text] over a field currently holding [previous] and only reports success once it is
      * observed to have landed, retrying a swallowed write once. The caret move is deliberately
      * issued *after* landing: sent straight behind the write it races the field's recomposition
@@ -192,6 +246,7 @@ object DictationTextWriter {
         repeat(2) { attempt ->
             if (!destination.replaceAllText(text)) return false
             if (awaitLanded(destination, previous, text, pause)) {
+                noteLostLineBreaks(destination, text)
                 destination.placeCaret(caret)
                 return true
             }
@@ -232,6 +287,10 @@ object DictationTextWriter {
     fun commit(destination: TextDestination, text: String, pause: WritePause = WritePause.REAL): TextCommitResult {
         destination.prepareForWrite()
 
+        if (destination.acceptsDirectWrite() && destination.wholeFieldWriteIsLossy()) {
+            return commitByPasteOnly(destination, text, pause)
+        }
+
         if (destination.acceptsDirectWrite()) {
             val current = destination.readText()
             val write = composeOneShotInjectionWrite(
@@ -245,7 +304,7 @@ object DictationTextWriter {
             }
         }
 
-        if (destination.pasteFromClipboard()) return TextCommitResult(InjectMethod.FROM_CLIPBOARD)
+        if (destination.pasteFromClipboard(text)) return TextCommitResult(InjectMethod.FROM_CLIPBOARD)
 
         return TextCommitResult(InjectMethod.NONE)
     }
