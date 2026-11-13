@@ -60,3 +60,13 @@ fun correctWebViewSelectAllEnd(
     inWebView: () -> Boolean,
 ): Int =
     if (selStart == 0 && selEnd == 1 && textLength > 1 && inWebView()) textLength else selEnd
+
+/**
+ * True for a multi-line field in a WebView page, where dictated text must be pasted at the caret
+ * rather than written over the whole field (#376). Outlook's email body, a Chromium
+ * contenteditable, reports its text with every line break removed; writing that text back
+ * flattened the email onto one line. [hasWebViewAncestor] is only consulted for multi-line nodes,
+ * so single-line fields never pay for the walk.
+ */
+fun requiresPasteAtCaret(isMultiLine: Boolean, hasWebViewAncestor: () -> Boolean): Boolean =
+    isMultiLine && hasWebViewAncestor()

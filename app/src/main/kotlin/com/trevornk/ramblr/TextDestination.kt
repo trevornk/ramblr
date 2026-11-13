@@ -98,15 +98,25 @@ interface TextDestination {
     fun replaceAllText(text: String): Boolean
 
     /**
-     * Asks the destination to pull the current clipboard contents into itself. Used only when
-     * [acceptsDirectWrite] is false or a direct write failed. Returns false when no paste route
-     * worked.
+     * True when a whole-field replacement would destroy content the destination never reported,
+     * so text must be pasted at the caret instead (#376). Read after [prepareForWrite].
      *
-     * Accessibility: stages the dictated text on the clipboard (only now, never ahead of time), then
+     * Accessibility: a multi-line field inside a WebView. Outlook's email body (a Chromium
+     * contenteditable) reports its text with every line break removed, so writing that text back
+     * flattens the whole email onto one line.
+     */
+    fun requiresPasteAtCaret(): Boolean = false
+
+    /**
+     * Asks the destination to insert [text] at the caret through the clipboard. Used when
+     * [acceptsDirectWrite] is false, [requiresPasteAtCaret] is true, or a direct write failed.
+     * Returns false when no paste route worked.
+     *
+     * Accessibility: stages [text] on the clipboard (only now, never ahead of time), then
      * a labelled custom paste action, else `ACTION_PASTE`.
      * IME: `performContextMenuAction(android.R.id.paste)`.
      */
-    fun pasteFromClipboard(): Boolean
+    fun pasteFromClipboard(text: String): Boolean
 
     /**
      * Moves the caret to [position] (a collapsed selection). Best-effort; failure never
@@ -232,6 +242,20 @@ object DictationTextWriter {
     fun commit(destination: TextDestination, text: String, pause: WritePause = WritePause.REAL): TextCommitResult {
         destination.prepareForWrite()
 
+        // #376: a field that hides content from readText() can't be rewritten whole without losing
+        // it, so the text goes in at the caret. The separator still applies, read off the
+        // characters the field does report.
+        if (destination.requiresPasteAtCaret()) {
+            val current = destination.readText()
+            val start = resolveReplacementSpan(destination.selectionStart(), destination.selectionEnd(), current.length).start
+            val pasted = withLeadingSeparator(current, start, text)
+            return if (destination.pasteFromClipboard(pasted)) {
+                TextCommitResult(InjectMethod.FROM_CLIPBOARD)
+            } else {
+                TextCommitResult(InjectMethod.NONE)
+            }
+        }
+
         if (destination.acceptsDirectWrite()) {
             val current = destination.readText()
             val write = composeOneShotInjectionWrite(
@@ -245,7 +269,7 @@ object DictationTextWriter {
             }
         }
 
-        if (destination.pasteFromClipboard()) return TextCommitResult(InjectMethod.FROM_CLIPBOARD)
+        if (destination.pasteFromClipboard(text)) return TextCommitResult(InjectMethod.FROM_CLIPBOARD)
 
         return TextCommitResult(InjectMethod.NONE)
     }

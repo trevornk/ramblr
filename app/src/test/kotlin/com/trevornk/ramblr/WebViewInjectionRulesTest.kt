@@ -113,4 +113,19 @@ class WebViewInjectionRulesTest {
         assertEquals("", real)
         assertEquals("Dictated", composeOneShotInjection(real, 0, corrected(0, 0, real.length), "Dictated"))
     }
+
+    @Test fun `a multi-line field in a WebView must be pasted into at the caret`() {
+        assertTrue(requiresPasteAtCaret(isMultiLine = true) { true })
+    }
+
+    @Test fun `single-line WebView fields and native multi-line fields keep the direct write`() {
+        assertFalse(requiresPasteAtCaret(isMultiLine = false) { true })
+        assertFalse(requiresPasteAtCaret(isMultiLine = true) { false })
+    }
+
+    @Test fun `the ancestor walk is skipped for single-line fields`() {
+        var walks = 0
+        requiresPasteAtCaret(isMultiLine = false) { walks++; true }
+        assertEquals(0, walks)
+    }
 }

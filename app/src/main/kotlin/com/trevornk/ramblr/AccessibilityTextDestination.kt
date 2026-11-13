@@ -18,16 +18,18 @@ import android.view.accessibility.AccessibilityNodeInfo
  * candidate scan already owns that lifecycle, and a destination that recycled its own node would
  * break the undo snapshot (#27), which keeps a separate obtained copy.
  *
- * [beforePaste] runs right before any paste attempt so the caller can put the dictated text on the
- * clipboard only when a paste actually needs it, instead of on every injection.
+ * [beforePaste] runs right before any paste attempt with the text to paste, so the caller can put
+ * it on the clipboard only when a paste actually needs it, instead of on every injection.
  */
 class AccessibilityTextDestination(
     val node: AccessibilityNodeInfo,
-    private val beforePaste: () -> Unit = {},
+    private val beforePaste: (String) -> Unit = {},
 ) : TextDestination {
 
     override fun acceptsDirectWrite(): Boolean =
         node.isEditable || node.className?.toString()?.contains("EditText") == true
+
+    override fun requiresPasteAtCaret(): Boolean = requiresPasteAtCaret(node.isMultiLine) { hasWebViewAncestor(node) }
 
     override fun refresh(): Boolean =
         try {
@@ -75,9 +77,9 @@ class AccessibilityTextDestination(
 
     override fun placeCaret(position: Int) = nudgeSelection(node, position)
 
-    override fun pasteFromClipboard(): Boolean {
+    override fun pasteFromClipboard(text: String): Boolean {
         if (node.isPasswordField()) return false
-        beforePaste()
+        beforePaste(text)
         findCustomPasteAction(node)?.let { action ->
             val ok = node.performAction(action.id)
             Log.i(TAG, "Custom action '${action.label}' (${action.id}) => $ok")

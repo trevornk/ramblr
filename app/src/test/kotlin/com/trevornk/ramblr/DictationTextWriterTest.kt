@@ -20,9 +20,11 @@ private class FakeTextDestination(
     private val paste: Boolean = false,
     private val writeSucceeds: Boolean = true,
     private val stale: Boolean = false,
+    private val pasteAtCaret: Boolean = false,
 ) : TextDestination {
     val calls = mutableListOf<String>()
     var writtenText: String? = null
+    var pastedText: String? = null
     var focusCount = 0
     var lastCaret = -1
 
@@ -58,8 +60,11 @@ private class FakeTextDestination(
         return true
     }
 
-    override fun pasteFromClipboard(): Boolean {
+    override fun requiresPasteAtCaret(): Boolean = pasteAtCaret
+
+    override fun pasteFromClipboard(text: String): Boolean {
         calls += "pasteFromClipboard"
+        pastedText = text
         return paste
     }
 
@@ -109,7 +114,7 @@ private class ComposeLikeDestination(
         settle()
         return true
     }
-    override fun pasteFromClipboard() = false
+    override fun pasteFromClipboard(text: String) = false
     override fun placeCaret(position: Int) {
         caretCalls++
         if (pending != null) { pending = null } else caretPlacedAfterLanding = true
@@ -143,6 +148,46 @@ class DictationTextWriterTest {
         assertEquals(InjectMethod.FROM_CLIPBOARD, result.method)
         assertNull("paste never captures prior text; undo can't restore it", result.priorText)
         assertFalse("no direct write may be attempted on a non-editable destination", destination.calls.contains("replaceAllText"))
+    }
+
+    @Test
+    fun `commit pastes at the caret instead of rewriting a field that hides its line breaks`() {
+        // #376: Outlook's body reports "one" + "two" with the line break between them removed.
+        val destination = FakeTextDestination(text = "onetwo", selStart = 6, selEnd = 6, paste = true, pasteAtCaret = true)
+
+        val result = DictationTextWriter.commit(destination, "hello")
+
+        assertEquals(InjectMethod.FROM_CLIPBOARD, result.method)
+        assertFalse("a whole-field write would flatten the hidden line breaks", destination.calls.contains("replaceAllText"))
+        assertEquals(" hello", destination.pastedText)
+    }
+
+    @Test
+    fun `commit pastes without a separator after whitespace in a paste-at-caret field`() {
+        val destination = FakeTextDestination(text = "one ", selStart = 4, selEnd = 4, paste = true, pasteAtCaret = true)
+
+        DictationTextWriter.commit(destination, "hello")
+
+        assertEquals("hello", destination.pastedText)
+    }
+
+    @Test
+    fun `commit reports NONE without a direct write when a paste-at-caret field refuses the paste`() {
+        val destination = FakeTextDestination(text = "one", selStart = 3, selEnd = 3, paste = false, pasteAtCaret = true)
+
+        val result = DictationTextWriter.commit(destination, "hello")
+
+        assertEquals(InjectMethod.NONE, result.method)
+        assertFalse(destination.calls.contains("replaceAllText"))
+    }
+
+    @Test
+    fun `commit pastes the raw text when falling back after a refused direct write`() {
+        val destination = FakeTextDestination(text = "one", selStart = 3, selEnd = 3, direct = false, paste = true)
+
+        DictationTextWriter.commit(destination, "hello")
+
+        assertEquals("hello", destination.pastedText)
     }
 
     @Test
