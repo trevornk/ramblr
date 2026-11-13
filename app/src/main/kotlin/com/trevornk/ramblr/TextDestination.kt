@@ -106,8 +106,9 @@ interface TextDestination {
      * never falls back to it. Read live, after [prepareForWrite].
      *
      * Accessibility: [isLossyWholeFieldDestination] over the node's structure (editable, WebView
-     * ancestor, children, non-empty resolved text).
-     * IME: constant `false` -- `commitText` already inserts at the caret and never rewrites the field.
+     * ancestor, children, non-empty raw text).
+     * Only [AccessibilityTextDestination] implements this today; there is no IME implementation
+     * (RamblrImeService does not implement [TextDestination]).
      */
     fun wholeFieldWriteIsLossy(): Boolean
 
@@ -119,7 +120,8 @@ interface TextDestination {
      *
      * Accessibility: stages [payload] on the clipboard (only now, never ahead of time), then a
      * labelled custom paste action, else `ACTION_PASTE`.
-     * IME: `commitText(payload, 1)`, or stage [payload] and `performContextMenuAction(android.R.id.paste)`.
+     * Only [AccessibilityTextDestination] implements this today; RamblrImeService does not implement
+     * [TextDestination].
      */
     fun pasteFromClipboard(payload: String): Boolean
 
