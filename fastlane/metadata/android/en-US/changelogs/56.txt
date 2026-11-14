@@ -1,0 +1,4 @@
+Dictating into the middle of a text area in Chrome and other web views now leaves the cursor right after the inserted words instead of jumping to the top.
+
+- Dictation now goes straight into Termux, without touching the clipboard. Thanks to Kenssnog.
+- The floating button and feedback bubble are hidden over Samsung's Always On Display. This needs confirmation on real Samsung hardware.
