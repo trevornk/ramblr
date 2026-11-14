@@ -98,11 +98,24 @@ interface TextDestination {
     fun replaceAllText(text: String): Boolean
 
     /**
+     * Delivers [text] through an input-method channel instead of the clipboard: an insert at the
+     * caret, with no clipboard round-trip. Tried by [DictationTextWriter.commit] before
+     * [pasteFromClipboard] (the ordinary fallback and the lossy rich-text path), because a paste leaves the
+     * dictation on the clipboard and a background accessibility service on Android 10+ cannot read
+     * the clipboard to restore what the user had (#378). Returns true when the text was handed to
+     * the input connection; that does not prove it landed, so the caller reads the field back.
+     * Default false: the destination has no such channel and the caller falls through to a paste.
+     *
+     * Accessibility: `AccessibilityInputConnection.commitText` (API 33+), for the focused editor.
+     */
+    fun commitViaInputConnection(text: String): Boolean = false
+
+    /**
      * True when replacing this destination's *entire* content ([replaceAllText]) would destroy
      * something the read cannot see: a rich-text (contenteditable) editor inside a WebView, whose
      * line breaks, formatting, signature and quoted thread live in a DOM that a flat string does not
      * carry (#376). Such a destination must only ever be written by inserting at the caret
-     * ([pasteFromClipboard]); [DictationTextWriter.commit] never calls [replaceAllText] on it and
+     * ([commitViaInputConnection], else [pasteFromClipboard]); [DictationTextWriter.commit] never calls [replaceAllText] on it and
      * never falls back to it. Read live, after [prepareForWrite].
      *
      * Accessibility: [isLossyWholeFieldDestination] over the node's structure (editable, WebView
@@ -199,8 +212,16 @@ object DictationTextWriter {
      * rather than being rewritten and then reported as a failure. A destination that cannot be
      * re-read is given the benefit of the doubt -- there is nothing to verify against.
      */
-    private fun awaitLanded(destination: TextDestination, previous: String, expected: String, pause: WritePause): Boolean {
-        if (expected == previous) return true
+    private fun awaitLanded(
+        destination: TextDestination,
+        previous: String,
+        expected: String,
+        pause: WritePause,
+        // False for an insert (input-connection commit), where [expected] is the inserted text, not
+        // the whole field: a field already equal to it must still change if the commit landed.
+        unchangedIsLanded: Boolean = true,
+    ): Boolean {
+        if (unchangedIsLanded && expected == previous) return true
         var waited = 0L
         while (true) {
             if (!destination.refresh()) return true
@@ -240,6 +261,13 @@ object DictationTextWriter {
             diagnostic("caret $selStart past read length ${current.length}; separator guessed from last read char")
         }
         val payload = composeOneShotPastePayload(current, selStart, destination.selectionEnd(), text)
+        // #378: an input-connection commit inserts at the caret like a paste but never touches the clipboard.
+        if (destination.commitViaInputConnection(payload)) {
+            if (awaitLanded(destination, current, payload, pause, unchangedIsLanded = false)) {
+                return TextCommitResult(InjectMethod.DIRECT, lossyPathTaken = true)
+            }
+            diagnostic("Input-connection commit was sent but the field is unchanged; falling back to paste")
+        }
         if (!destination.pasteFromClipboard(payload)) return TextCommitResult(InjectMethod.NONE, lossyPathTaken = true)
         // Bounded look at whether anything changed; informational only, there is no retry.
         var waited = 0L
@@ -350,6 +378,16 @@ object DictationTextWriter {
             if (writeConfirmed(destination, current, write.updatedText, pause, write.caret)) {
                 return TextCommitResult(InjectMethod.DIRECT, priorText = current)
             }
+        }
+
+        // #378: avoid the clipboard when a paste would be needed. A paste leaves the dictation on
+        // the clipboard and the prior clip cannot be restored from a background service.
+        val beforeCommit = destination.readText()
+        if (destination.commitViaInputConnection(text)) {
+            if (awaitLanded(destination, beforeCommit, text, pause, unchangedIsLanded = false)) {
+                return TextCommitResult(InjectMethod.DIRECT, priorText = beforeCommit)
+            }
+            diagnostic("Input-connection commit was sent but the field is unchanged; falling back to paste")
         }
 
         if (destination.pasteFromClipboard(text)) return TextCommitResult(InjectMethod.FROM_CLIPBOARD)

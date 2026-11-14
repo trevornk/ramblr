@@ -29,7 +29,8 @@ private class NativeInsertDestination(
         return true
     }
     override fun placeCaret(position: Int) { caret = position }
-    override fun pasteFromClipboard() = false
+    override fun wholeFieldWriteIsLossy() = false
+    override fun pasteFromClipboard(payload: String) = false
     override fun insertAtCaretNatively(text: String): Boolean {
         if (!offersInsert) return false
         inserted = text
@@ -98,7 +99,8 @@ class DictationNativeInsertTest {
             override fun prepareForWrite() {}
             override fun replaceAllText(text: String) = true
             override fun placeCaret(position: Int) {}
-            override fun pasteFromClipboard() = false
+            override fun wholeFieldWriteIsLossy() = false
+    override fun pasteFromClipboard(payload: String) = false
         }
         assertFalse(d.insertAtCaretNatively("x"))
     }

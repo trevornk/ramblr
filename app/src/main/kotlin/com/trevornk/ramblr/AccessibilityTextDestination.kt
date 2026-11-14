@@ -101,6 +101,17 @@ class AccessibilityTextDestination(
         )
     }
 
+    // #378: input-connection commit for any focused editor (no WebView restriction), so a paste
+    // fallback is avoided and the dictation stays off the clipboard.
+    override fun commitViaInputConnection(text: String): Boolean {
+        val commit = insertAtCaret ?: return false
+        if (node.isPasswordField()) return false
+        // The input connection belongs to whichever editor has input focus, not to this node, so
+        // only use it when this node is that editor.
+        if (!refresh() || !node.isFocused) return false
+        return commit(text)
+    }
+
     override fun pasteFromClipboard(payload: String): Boolean {
         if (node.isPasswordField()) return false
         beforePaste(payload)

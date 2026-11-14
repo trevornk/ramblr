@@ -111,6 +111,21 @@ class InjectionRecoveryTest {
         assertEquals(ClipboardRestoreOutcome.LeaveAlone, outcome)
     }
 
+    @Test fun `leaves the clipboard alone when it cannot be read and nothing was captured`() {
+        // Android 10+ denies a background service clipboard reads: both sides read as null.
+        assertEquals(
+            ClipboardRestoreOutcome.LeaveAlone,
+            clipboardRestoreOutcomeFor(currentClipboard = null, injectedText = "dictated text", priorClipboard = null),
+        )
+    }
+
+    @Test fun `leaves a changed clipboard alone even when no prior clip was captured`() {
+        assertEquals(
+            ClipboardRestoreOutcome.LeaveAlone,
+            clipboardRestoreOutcomeFor(currentClipboard = "copied later", injectedText = "dictated text", priorClipboard = null),
+        )
+    }
+
     @Test fun `leaves the clipboard alone when it was emptied out from under the injection`() {
         val outcome = clipboardRestoreOutcomeFor(
             currentClipboard = null,
