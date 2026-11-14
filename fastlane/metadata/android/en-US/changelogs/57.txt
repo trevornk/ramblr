@@ -1,0 +1,5 @@
+Dictating into Outlook and Gmail email bodies no longer flattens your paragraphs, and dictation in those fields no longer ends up on the clipboard.
+
+- Dictation is now inserted at the cursor in web-based rich-text editors instead of rewriting the whole field, so existing line breaks stay.
+- On Android 13 and newer, dictation goes straight into the field without using the clipboard, so what you had copied is left alone. Older versions fall back to pasting.
+- Thanks to jloutsch for the report and testing.
