@@ -18,14 +18,14 @@ import android.view.accessibility.AccessibilityNodeInfo
  * candidate scan already owns that lifecycle, and a destination that recycled its own node would
  * break the undo snapshot (#27), which keeps a separate obtained copy.
  *
- * [beforePaste] runs right before any paste attempt so the caller can put the dictated text on the
+ * [beforePaste] runs right before any paste attempt with the payload about to be pasted, so the caller can put it on the
  * clipboard only when a paste actually needs it, instead of on every injection.
  */
 class AccessibilityTextDestination(
     val node: AccessibilityNodeInfo,
     // Declared before [beforePaste] so a trailing lambda still binds to it.
     private val insertAtCaret: ((String) -> Boolean)? = null,
-    private val beforePaste: () -> Unit = {},
+    private val beforePaste: (String) -> Unit = {},
 ) : TextDestination {
 
     override fun acceptsDirectWrite(): Boolean =
@@ -87,9 +87,34 @@ class AccessibilityTextDestination(
         return insert(text)
     }
 
-    override fun pasteFromClipboard(): Boolean {
+    // #376: the WebView-ancestor walk only runs for an editable multi-line node.
+    override fun wholeFieldWriteIsLossy(): Boolean {
+        val editable = acceptsDirectWrite()
+        val multiLine = node.isMultiLine
+        return isLossyWholeFieldDestination(
+            isEditable = editable,
+            inWebView = editable && multiLine && hasWebViewAncestor(node),
+            isMultiLine = multiLine,
+            // Raw node values, never readText(): resolveRealText blanks a focused editable at selection
+            // -1/-1 (the #140 placeholder heuristic), which would make a populated body look empty.
+            currentTextIsEmpty = rawTextIsEmpty(node),
+        )
+    }
+
+    // #378: input-connection commit for any focused editor (no WebView restriction), so a paste
+    // fallback is avoided and the dictation stays off the clipboard.
+    override fun commitViaInputConnection(text: String): Boolean {
+        val commit = insertAtCaret ?: return false
         if (node.isPasswordField()) return false
-        beforePaste()
+        // The input connection belongs to whichever editor has input focus, not to this node, so
+        // only use it when this node is that editor.
+        if (!refresh() || !node.isFocused) return false
+        return commit(text)
+    }
+
+    override fun pasteFromClipboard(payload: String): Boolean {
+        if (node.isPasswordField()) return false
+        beforePaste(payload)
         findCustomPasteAction(node)?.let { action ->
             val ok = node.performAction(action.id)
             Log.i(TAG, "Custom action '${action.label}' (${action.id}) => $ok")
@@ -105,6 +130,10 @@ class AccessibilityTextDestination(
 
         /** Same bound the service uses to decide whether a node lives in a WebView page. */
         private const val WEBVIEW_ANCESTOR_DEPTH = 40
+
+        /** Emptiness from raw node values (never [resolveRealText]); see [isLossyWholeFieldDestination]. */
+        private fun rawTextIsEmpty(node: AccessibilityNodeInfo): Boolean =
+            node.isShowingHintText || node.text.isNullOrBlank()
 
         /** True when [node] sits under an `android.webkit.WebView` container. Does not recycle [node]. */
         private fun hasWebViewAncestor(node: AccessibilityNodeInfo): Boolean {
@@ -176,9 +205,22 @@ class AccessibilityTextDestination(
             val actions = node.actionList.joinToString { action ->
                 action.label?.toString() ?: action.id.toString()
             }
+            // Walk the ancestors once and reuse it for both the log and the classifier. Counts only:
+            // the device capture that settles whether the read flattens or the write normalizes (#376).
+            val inWebView = hasWebViewAncestor(node)
+            val children = node.childCount
+            val text = node.text
+            val lossy = isLossyWholeFieldDestination(
+                isEditable = AccessibilityTextDestination(node).acceptsDirectWrite(),
+                inWebView = inWebView,
+                isMultiLine = node.isMultiLine,
+                currentTextIsEmpty = rawTextIsEmpty(node),
+            )
+            // A role name (e.g. "textbox"), never field content.
+            val chromeRole = node.extras?.getCharSequence("AccessibilityNodeInfo.chromeRole")
             Log.d(
                 TAG,
-                "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} actions=[$actions]"
+                "$prefix package=${node.packageName} class=${node.className} focused=${node.isFocused} editable=${node.isEditable} multiLine=${node.isMultiLine} textLength=${text?.length ?: 0} newlines=${text?.count { it == '\n' } ?: 0} childCount=$children chromeRole=$chromeRole inWebView=$inWebView lossy=$lossy actions=[$actions]"
             )
         }
     }

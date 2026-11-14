@@ -125,10 +125,10 @@ class AccessibilityPasswordFieldTest {
 
     @Test fun `writes and pastes into a password node are refused and never stage the clipboard`() {
         var staged = false
-        val destination = AccessibilityTextDestination(passwordNode { isPassword = true; isEditable = true }) { staged = true }
+        val destination = AccessibilityTextDestination(passwordNode { isPassword = true; isEditable = true }, beforePaste = { staged = true })
 
         assertFalse(destination.replaceAllText("hunter2"))
-        assertFalse(destination.pasteFromClipboard())
+        assertFalse(destination.pasteFromClipboard("hunter2"))
         assertFalse("the dictation must not reach the clipboard for a password node", staged)
     }
 

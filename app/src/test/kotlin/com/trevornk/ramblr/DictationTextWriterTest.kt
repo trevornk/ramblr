@@ -20,6 +20,9 @@ private class FakeTextDestination(
     private val paste: Boolean = false,
     private val writeSucceeds: Boolean = true,
     private val stale: Boolean = false,
+    /** Whether an input-connection channel exists; [imeLands] false models a swallowed commit. */
+    private val ime: Boolean = false,
+    private val imeLands: Boolean = true,
 ) : TextDestination {
     val calls = mutableListOf<String>()
     var writtenText: String? = null
@@ -58,7 +61,16 @@ private class FakeTextDestination(
         return true
     }
 
-    override fun pasteFromClipboard(): Boolean {
+    override fun commitViaInputConnection(text: String): Boolean {
+        calls += "commitViaInputConnection"
+        if (!ime) return false
+        if (imeLands) this.text += text
+        return true
+    }
+
+    override fun wholeFieldWriteIsLossy() = false
+
+    override fun pasteFromClipboard(payload: String): Boolean {
         calls += "pasteFromClipboard"
         return paste
     }
@@ -109,13 +121,86 @@ private class ComposeLikeDestination(
         settle()
         return true
     }
-    override fun pasteFromClipboard() = false
+    override fun wholeFieldWriteIsLossy() = false
+    override fun pasteFromClipboard(payload: String) = false
     override fun placeCaret(position: Int) {
         caretCalls++
         if (pending != null) { pending = null } else caretPlacedAfterLanding = true
     }
     /** What the user ends up looking at once the field has finished recomposing. */
     fun settled(): String { readsSincePending = Int.MAX_VALUE; settle(); return text }
+}
+
+/**
+ * A rich-text (contenteditable-in-WebView) editor, #376. Keeps the true document [model] separate
+ * from what the accessibility read reports: [flattenRead] drops line breaks from [readText],
+ * [normalizeWrite] makes [replaceAllText] drop them from the model, and [pasteMode] picks how a
+ * paste behaves. The model is where the user's paragraphs actually live.
+ */
+private class RichTextDestination(
+    var model: String,
+    var selStart: Int,
+    var selEnd: Int = selStart,
+    private val flattenRead: Boolean = false,
+    private val normalizeWrite: Boolean = false,
+    private val pasteMode: PasteMode = PasteMode.LANDS,
+    private val landsAfterReads: Int = 2,
+    private val imeMode: ImeMode = ImeMode.ABSENT,
+) : TextDestination {
+    enum class ImeMode { ABSENT, LANDS, SWALLOWED }
+
+    val committedPayloads = mutableListOf<String>()
+
+    override fun commitViaInputConnection(text: String): Boolean {
+        if (imeMode == ImeMode.ABSENT) return false
+        committedPayloads += text
+        if (imeMode == ImeMode.LANDS) model = insertedModel(text)
+        return true
+    }
+
+    enum class PasteMode { LANDS, DELAYED, SWALLOWED, FAILS }
+
+    var replaceCalls = 0
+    var caretCalls = 0
+    val pastedPayloads = mutableListOf<String>()
+    private var pending: String? = null
+    private var readsSincePaste = 0
+
+    private fun settle() {
+        val p = pending ?: return
+        if (readsSincePaste >= landsAfterReads) { model = p; pending = null }
+    }
+
+    /** A real editor with no reported selection still has a caret; Chromium puts it somewhere sane. */
+    private fun insertedModel(payload: String): String {
+        val s = if (selStart < 0) model.length else selStart
+        val e = if (selEnd < 0) s else selEnd
+        return model.replaceRange(s, e, payload)
+    }
+
+    override fun acceptsDirectWrite() = true
+    override fun wholeFieldWriteIsLossy() = true
+    override fun refresh(): Boolean { readsSincePaste++; return true }
+    override fun readText(): String { settle(); return if (flattenRead) model.replace("\n", "") else model }
+    override fun selectionStart() = selStart
+    override fun selectionEnd() = selEnd
+    override fun prepareForWrite() {}
+    override fun replaceAllText(text: String): Boolean {
+        replaceCalls++
+        model = if (normalizeWrite) text.replace("\n", "") else text
+        return true
+    }
+    override fun pasteFromClipboard(payload: String): Boolean {
+        pastedPayloads += payload
+        when (pasteMode) {
+            PasteMode.LANDS -> model = insertedModel(payload)
+            PasteMode.DELAYED -> { pending = insertedModel(payload); readsSincePaste = 0 }
+            PasteMode.SWALLOWED -> {}
+            PasteMode.FAILS -> return false
+        }
+        return true
+    }
+    override fun placeCaret(position: Int) { caretCalls++ }
 }
 
 private val NO_PAUSE = WritePause { }
@@ -154,6 +239,75 @@ class DictationTextWriterTest {
         assertEquals(InjectMethod.FROM_CLIPBOARD, result.method)
         assertTrue(destination.calls.contains("replaceAllText"))
         assertTrue(destination.calls.contains("pasteFromClipboard"))
+    }
+
+    @Test
+    fun `commit uses the input connection instead of paste when direct write is unavailable`() {
+        val destination = FakeTextDestination(text = "draft", direct = false, paste = true, ime = true)
+
+        val result = DictationTextWriter.commit(destination, "hello", NO_PAUSE)
+
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals("draft", result.priorText)
+        assertFalse("the clipboard must never be touched", destination.calls.contains("pasteFromClipboard"))
+    }
+
+    @Test
+    fun `commit uses the input connection when an accepted direct write fails`() {
+        val destination = FakeTextDestination(direct = true, writeSucceeds = false, paste = true, ime = true)
+
+        val result = DictationTextWriter.commit(destination, "hello", NO_PAUSE)
+
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertFalse(destination.calls.contains("pasteFromClipboard"))
+    }
+
+    @Test
+    fun `commit lands an input-connection commit into an empty field`() {
+        val destination = FakeTextDestination(text = "", direct = false, paste = true, ime = true)
+
+        assertEquals(InjectMethod.DIRECT, DictationTextWriter.commit(destination, "hello", NO_PAUSE).method)
+        assertEquals("hello", destination.text)
+    }
+
+    @Test
+    fun `commit falls through to paste when there is no input connection`() {
+        val destination = FakeTextDestination(direct = false, paste = true, ime = false)
+
+        val result = DictationTextWriter.commit(destination, "hello", NO_PAUSE)
+
+        assertEquals(InjectMethod.FROM_CLIPBOARD, result.method)
+        assertTrue(destination.calls.contains("pasteFromClipboard"))
+    }
+
+    @Test
+    fun `commit falls through to paste when the input-connection commit is swallowed`() {
+        val destination = FakeTextDestination(text = "draft", direct = false, paste = true, ime = true, imeLands = false)
+        val notes = mutableListOf<String>()
+        DictationTextWriter.diagnostic = { notes += it }
+        try {
+            val result = DictationTextWriter.commit(destination, "hello", NO_PAUSE)
+
+            assertEquals(InjectMethod.FROM_CLIPBOARD, result.method)
+            assertTrue(notes.any { it.contains("falling back to paste") })
+        } finally {
+            DictationTextWriter.diagnostic = {}
+        }
+    }
+
+    @Test
+    fun `a swallowed commit is not mistaken for landed when the field already equals the dictated text`() {
+        val destination = FakeTextDestination(text = "hello", direct = false, paste = true, ime = true, imeLands = false)
+
+        assertEquals(InjectMethod.FROM_CLIPBOARD, DictationTextWriter.commit(destination, "hello", NO_PAUSE).method)
+    }
+
+    @Test
+    fun `commit never attempts the input connection when the direct write landed`() {
+        val destination = FakeTextDestination(direct = true, ime = true)
+
+        assertEquals(InjectMethod.DIRECT, DictationTextWriter.commit(destination, "hello", NO_PAUSE).method)
+        assertFalse(destination.calls.contains("commitViaInputConnection"))
     }
 
     @Test
@@ -533,5 +687,220 @@ class DictationTextWriterTest {
         val w = composeOneShotInjectionWrite("abc def", 3, 3, "X")
         assertEquals("abc X def", w.updatedText)
         assertEquals(5, w.caret)
+    }
+
+    // --- rich-text (lossy whole-field) destinations, #376 ---
+
+    private fun richCommit(d: RichTextDestination, text: String = "dictated") =
+        DictationTextWriter.commit(d, text, NO_PAUSE)
+
+    private fun assertPastedOnly(d: RichTextDestination, result: TextCommitResult, payload: String) {
+        assertEquals(InjectMethod.FROM_CLIPBOARD, result.method)
+        assertNull("a lossy paste must never record priorText for in-place undo", result.priorText)
+        assertEquals(0, d.replaceCalls)
+        assertEquals("a lossy paste must not move the caret", 0, d.caretCalls)
+        assertEquals(listOf(payload), d.pastedPayloads)
+    }
+
+    private inline fun <T> withDiagnostics(block: (MutableList<String>) -> T): T {
+        val notes = mutableListOf<String>()
+        val previous = DictationTextWriter.diagnostic
+        DictationTextWriter.diagnostic = { notes += it }
+        try {
+            return block(notes)
+        } finally {
+            DictationTextWriter.diagnostic = previous
+        }
+    }
+
+    @Test
+    fun `lossy destination takes the input connection first so the clipboard is never used`() {
+        val d = RichTextDestination("one\ntwo", selStart = 7, flattenRead = true, imeMode = RichTextDestination.ImeMode.LANDS)
+        val result = richCommit(d)
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals(true, result.lossyPathTaken)
+        assertNull(result.priorText)
+        assertEquals(listOf(" dictated"), d.committedPayloads)
+        assertEquals("no clipboard paste", emptyList<String>(), d.pastedPayloads)
+        assertEquals(0, d.replaceCalls)
+        assertEquals("one\ntwo dictated", d.model)
+    }
+
+    @Test
+    fun `lossy destination falls back to one paste when the input connection commit never lands`() {
+        val d = RichTextDestination("one\ntwo", selStart = 7, flattenRead = true, imeMode = RichTextDestination.ImeMode.SWALLOWED)
+        val result = richCommit(d)
+        assertEquals(InjectMethod.FROM_CLIPBOARD, result.method)
+        assertEquals(listOf(" dictated"), d.pastedPayloads)
+        assertEquals(0, d.replaceCalls)
+        assertEquals("one\ntwo dictated", d.model)
+    }
+
+    @Test
+    fun `lossy destination with a flattening read is pasted into once and keeps its paragraphs`() {
+        // Read is "onetwo" (6) but the caret is 7: the separator is derived from the last read char.
+        val d = RichTextDestination("one\ntwo", selStart = 7, flattenRead = true)
+        val result = richCommit(d)
+        assertPastedOnly(d, result, " dictated")
+        assertEquals("one\ntwo dictated", d.model)
+    }
+
+    @Test
+    fun `lossy destination with a normalizing write is never rewritten`() {
+        val d = RichTextDestination("one\ntwo", selStart = 7, normalizeWrite = true)
+        val result = richCommit(d)
+        assertPastedOnly(d, result, " dictated")
+        assertEquals("one\ntwo dictated", d.model)
+    }
+
+    @Test
+    fun `mid-field insertion after a word between blank lines gets the separator once`() {
+        val d = RichTextDestination("a\n\nb\nc", selStart = 4)
+        val result = richCommit(d)
+        assertPastedOnly(d, result, " dictated")
+        assertEquals("a\n\nb dictated\nc", d.model)
+    }
+
+    @Test
+    fun `mid-field insertion after a line break needs no separator`() {
+        val d = RichTextDestination("a\n\nb\nc", selStart = 2)
+        val result = richCommit(d)
+        assertPastedOnly(d, result, "dictated")
+        assertEquals("a\ndictated\nb\nc", d.model)
+    }
+
+    @Test
+    fun `caret after trailing blank lines pastes without a separator`() {
+        val d = RichTextDestination("one\n\n", selStart = 5)
+        val result = richCommit(d)
+        assertPastedOnly(d, result, "dictated")
+        assertEquals("one\n\ndictated", d.model)
+    }
+
+    @Test
+    fun `a selected range is replaced by the paste and only the char before it picks the separator`() {
+        val d = RichTextDestination("foo bar", selStart = 3, selEnd = 7)
+        assertPastedOnly(d, richCommit(d, "X"), " X")
+        assertEquals("foo X", d.model)
+
+        val d2 = RichTextDestination("foo bar", selStart = 4, selEnd = 7)
+        assertPastedOnly(d2, richCommit(d2, "X"), "X")
+        assertEquals("foo X", d2.model)
+    }
+
+    @Test
+    fun `an unreported caret composes the same payload a one-shot write would`() {
+        val d = RichTextDestination("one\ntwo", selStart = -1)
+        val result = richCommit(d)
+        val expected = withLeadingSeparator("one\ntwo", resolveReplacementSpan(-1, -1, 7).start, "dictated")
+        assertPastedOnly(d, result, expected)
+        assertEquals("one\ntwo$expected", d.model)
+    }
+
+    @Test
+    fun `known limitation - flattened read on a fresh blank line gets a stray leading space`() = withDiagnostics { notes ->
+        // model "one\ntwo\n" reads as "onetwo" (6 chars) while the caret is 8: the read lost chars, so
+        // the separator is guessed from the last read char and a fresh line gets a leading space.
+        val d = RichTextDestination("one\ntwo\n", selStart = 8, flattenRead = true)
+        val result = richCommit(d)
+        assertPastedOnly(d, result, " dictated")
+        assertEquals("one\ntwo\n dictated", d.model)
+        assertEquals(listOf("caret 8 past read length 6; separator guessed from last read char"), notes)
+    }
+
+    @Test
+    fun `non-flattened end of text after a letter still gets the separator and raises no diagnostic`() = withDiagnostics { notes ->
+        val d = RichTextDestination("one two", selStart = 7)
+        assertPastedOnly(d, richCommit(d), " dictated")
+        assertEquals(emptyList<String>(), notes)
+    }
+
+    @Test
+    fun `a zero caret reported on non-empty text keeps the append behaviour with a separator`() {
+        val d = RichTextDestination("one two", selStart = 0)
+        assertPastedOnly(d, richCommit(d), " dictated")
+    }
+
+    @Test
+    fun `composeOneShotPastePayload derives the separator from the read text even with the caret past it`() {
+        assertEquals(" x", composeOneShotPastePayload("onetwo", 8, 8, "x"))
+        assertEquals(" x", composeOneShotPastePayload("onetwo", 7, 7, "x"))
+        assertEquals(" x", composeOneShotPastePayload("onetwo", 6, 6, "x"))
+        assertEquals(" x", composeOneShotPastePayload("onetwo", 0, 0, "x"))
+    }
+
+    @Test
+    fun `a swallowed paste is reported as pasted, never retried and never rewritten`() = withDiagnostics { notes ->
+        val d = RichTextDestination("one\ntwo", selStart = 7, pasteMode = RichTextDestination.PasteMode.SWALLOWED)
+        val result = richCommit(d)
+        assertPastedOnly(d, result, " dictated")
+        assertEquals("one\ntwo", d.model)
+        assertTrue("a swallowed paste should leave a note", notes.isNotEmpty())
+        assertTrue("diagnostics are counts only", notes.none { it.contains("one") || it.contains("two") || it.contains("dictated") })
+    }
+
+    @Test
+    fun `a delayed paste that lands within the wait pastes once and raises no diagnostic`() = withDiagnostics { notes ->
+        val d = RichTextDestination("one\ntwo", selStart = 7, pasteMode = RichTextDestination.PasteMode.DELAYED)
+        val result = richCommit(d)
+        assertPastedOnly(d, result, " dictated")
+        assertEquals("one\ntwo dictated", d.model)
+        assertTrue(notes.isEmpty())
+    }
+
+    @Test
+    fun `a failed paste on a lossy destination is NONE and never falls back to SET_TEXT`() {
+        val d = RichTextDestination("one\ntwo", selStart = 7, pasteMode = RichTextDestination.PasteMode.FAILS)
+        val result = richCommit(d)
+        assertEquals(InjectMethod.NONE, result.method)
+        assertNull(result.priorText)
+        assertEquals(0, d.replaceCalls)
+        assertEquals(0, d.caretCalls)
+        assertEquals(1, d.pastedPayloads.size)
+        assertEquals("one\ntwo", d.model)
+    }
+
+    @Test
+    fun `a failed lossy paste is flagged so the candidate loop stops instead of trying a sibling field`() {
+        val failed = richCommit(RichTextDestination("one", selStart = 3, pasteMode = RichTextDestination.PasteMode.FAILS))
+        assertEquals(true, failed.lossyPathTaken)
+        assertFalse(shouldTryNextCandidate(failed))
+
+        val landed = richCommit(RichTextDestination("one", selStart = 3))
+        assertEquals(true, landed.lossyPathTaken)
+    }
+
+    @Test
+    fun `a failed non-lossy candidate still lets the loop try the next one`() {
+        val d = FakeTextDestination(text = "abc", selStart = 3, selEnd = 3, direct = false, paste = false)
+        val result = DictationTextWriter.commit(d, "X", NO_PAUSE)
+        assertEquals(InjectMethod.NONE, result.method)
+        assertEquals(false, result.lossyPathTaken)
+        assertTrue(shouldTryNextCandidate(result))
+    }
+
+    @Test
+    fun `a non-lossy destination still writes directly with priorText and the caret`() {
+        val d = FakeTextDestination(text = "abc def", selStart = 3, selEnd = 3)
+        val result = DictationTextWriter.commit(d, "X", NO_PAUSE)
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals("abc def", result.priorText)
+        assertEquals("abc X def", d.writtenText)
+        assertEquals(5, d.lastCaret)
+        assertFalse(d.calls.contains("pasteFromClipboard"))
+    }
+
+    @Test
+    fun `a confirmed write that lost line breaks reports counts only`() = withDiagnostics { notes ->
+        val d = ComposeLikeDestination(text = "secret\nbody", normalize = { it.replace("\n", "") })
+        val result = DictationTextWriter.commit(d, "more", NO_PAUSE)
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals(listOf("line breaks: expected 1, observed 0"), notes)
+    }
+
+    @Test
+    fun `a confirmed write that kept its line breaks raises no diagnostic`() = withDiagnostics { notes ->
+        DictationTextWriter.commit(ComposeLikeDestination(text = "a\nb"), "more", NO_PAUSE)
+        assertTrue(notes.isEmpty())
     }
 }

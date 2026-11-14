@@ -133,3 +133,39 @@ fun clipboardRestoreOutcomeFor(
     priorClipboard != null -> ClipboardRestoreOutcome.Restore(priorClipboard)
     else -> ClipboardRestoreOutcome.Clear
 }
+
+/**
+ * Tracks what was actually put on the clipboard for a paste-style injection, so the post-injection
+ * restore compares against the *staged payload* rather than the plain transcript (#376): a lossy
+ * rich-text paste stages `separator + text`, and a restore that compared against `text` would see a
+ * mismatch and leave the dictated text on the user's clipboard. Staging again with a different
+ * payload (e.g. the plain transcript for the NONE fallback) replaces the earlier one.
+ */
+class ClipboardStaging(private val copy: (String) -> Unit) {
+    /** The text currently staged, or null when nothing was staged by this injection. */
+    var stagedPayload: String? = null
+        private set
+
+    val isStaged: Boolean get() = stagedPayload != null
+
+    fun stage(payload: String) {
+        if (stagedPayload == payload) return
+        copy(payload)
+        stagedPayload = payload
+    }
+}
+
+/**
+ * Whether the candidate loop in `finishInjection` may try the next candidate after [attempt] (#376).
+ * A lossy rich-text candidate (Outlook's body) that failed must END the loop: the next candidate
+ * could be a sibling field (Subject/To) that would accept a direct write, and the dictation would
+ * land in the wrong field. The caller goes straight to the NONE clipboard fallback instead.
+ */
+fun shouldTryNextCandidate(attempt: TextCommitResult): Boolean =
+    attempt.method == InjectMethod.NONE && !attempt.lossyPathTaken
+
+/**
+ * The once-per-recording decision behind the lossy streaming flag (#376): the first lossy partial
+ * latches it for the session, a new recording clears it.
+ */
+fun lossyStreamingSessionAfterPartial(current: Boolean, fieldIsLossy: Boolean): Boolean = current || fieldIsLossy

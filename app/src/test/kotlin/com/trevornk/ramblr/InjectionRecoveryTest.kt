@@ -111,6 +111,21 @@ class InjectionRecoveryTest {
         assertEquals(ClipboardRestoreOutcome.LeaveAlone, outcome)
     }
 
+    @Test fun `leaves the clipboard alone when it cannot be read and nothing was captured`() {
+        // Android 10+ denies a background service clipboard reads: both sides read as null.
+        assertEquals(
+            ClipboardRestoreOutcome.LeaveAlone,
+            clipboardRestoreOutcomeFor(currentClipboard = null, injectedText = "dictated text", priorClipboard = null),
+        )
+    }
+
+    @Test fun `leaves a changed clipboard alone even when no prior clip was captured`() {
+        assertEquals(
+            ClipboardRestoreOutcome.LeaveAlone,
+            clipboardRestoreOutcomeFor(currentClipboard = "copied later", injectedText = "dictated text", priorClipboard = null),
+        )
+    }
+
     @Test fun `leaves the clipboard alone when it was emptied out from under the injection`() {
         val outcome = clipboardRestoreOutcomeFor(
             currentClipboard = null,
@@ -203,5 +218,75 @@ class InjectionRecoveryTest {
 
     @Test fun `null for an empty injected text`() {
         assertNull(swapInjectedForRaw("abc", "abc", "", "raw"))
+    }
+
+    // --- #376: lossy paste injections and the staged payload ---
+
+    @Test fun `a paste injection with no prior node text can only be undone through the clipboard`() {
+        val plan = planUndo(ageMs = 1000, windowMs = 10_000, nodeAvailable = false, priorNodeText = null, priorClipboard = "clip")
+        assertEquals(UndoPlan.ClipboardOnly("clip"), plan)
+    }
+
+    @Test fun `restore compares against the staged payload so a separator-prefixed paste is still restored`() {
+        val staging = ClipboardStaging { }
+        staging.stage(" dictated")
+        assertEquals(
+            ClipboardRestoreOutcome.Restore("PRIOR"),
+            clipboardRestoreOutcomeFor(" dictated", staging.stagedPayload!!, "PRIOR"),
+        )
+        // Compared against the plain transcript instead, the restore would never run.
+        assertEquals(ClipboardRestoreOutcome.LeaveAlone, clipboardRestoreOutcomeFor(" dictated", "dictated", "PRIOR"))
+    }
+
+    @Test fun `staging a different payload replaces the earlier one and the same payload is copied once`() {
+        val copied = mutableListOf<String>()
+        val staging = ClipboardStaging { copied += it }
+        assertEquals(false, staging.isStaged)
+        staging.stage(" dictated")
+        staging.stage(" dictated")
+        staging.stage("dictated")
+        assertEquals(listOf(" dictated", "dictated"), copied)
+        assertEquals("dictated", staging.stagedPayload)
+    }
+
+    @Test fun `a clipboard that refuses the copy leaves nothing marked as staged`() {
+        val staging = ClipboardStaging { throw IllegalStateException("denied") }
+        try { staging.stage("x") } catch (_: IllegalStateException) {}
+        assertEquals(false, staging.isStaged)
+        assertNull(staging.stagedPayload)
+    }
+
+    @Test fun `the NONE fallback re-stages the plain transcript after a failed lossy paste and restore compares against it`() {
+        val copied = mutableListOf<String>()
+        val staging = ClipboardStaging { copied += it }
+        staging.stage(" dictated")          // beforePaste of the failed lossy paste
+        staging.stage("dictated")           // NONE fallback stages the plain transcript
+        assertEquals(listOf(" dictated", "dictated"), copied)
+        assertEquals(
+            ClipboardRestoreOutcome.Restore("PRIOR"),
+            clipboardRestoreOutcomeFor("dictated", staging.stagedPayload ?: "dictated", "PRIOR"),
+        )
+    }
+
+    // --- shouldTryNextCandidate / lossyStreamingSessionAfterPartial ---
+
+    @Test fun `only a failure outside the lossy path moves on to the next candidate`() {
+        assertEquals(true, shouldTryNextCandidate(TextCommitResult(InjectMethod.NONE)))
+        assertEquals(false, shouldTryNextCandidate(TextCommitResult(InjectMethod.NONE, lossyPathTaken = true)))
+        assertEquals(false, shouldTryNextCandidate(TextCommitResult(InjectMethod.DIRECT)))
+        assertEquals(false, shouldTryNextCandidate(TextCommitResult(InjectMethod.FROM_CLIPBOARD, lossyPathTaken = true)))
+    }
+
+    @Test fun `the lossy streaming flag latches on the first lossy partial and a new recording starts clear`() {
+        var flag = false
+        flag = lossyStreamingSessionAfterPartial(flag, fieldIsLossy = false)
+        assertEquals(false, flag)
+        flag = lossyStreamingSessionAfterPartial(flag, fieldIsLossy = true)
+        assertEquals(true, flag)
+        flag = lossyStreamingSessionAfterPartial(flag, fieldIsLossy = false)
+        assertEquals(true, flag)
+        // Per-recording reset is the service assigning false; the routing it feeds:
+        assertEquals(true, shouldRouteStreamingPartialToBubble(false, livePreviewEnabled = true, lossyFieldSession = flag))
+        assertEquals(false, shouldRouteStreamingPartialToBubble(false, livePreviewEnabled = true, lossyFieldSession = false))
     }
 }

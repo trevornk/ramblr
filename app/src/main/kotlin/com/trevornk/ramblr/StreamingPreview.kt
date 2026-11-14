@@ -240,9 +240,33 @@ fun isLivePreviewOn(settingEnabled: Boolean, streamingModelInstalled: Boolean, c
  * [livePreviewEnabled] is the user's own "Live preview" setting. Cloud Live interims (#245) reach
  * the partial path regardless of it, so with the setting off the field must stay untouched until
  * the final text lands -- the partial goes to the feedback bubble instead.
+ *
+ * [lossyFieldSession] (#376) is set once the session's field turned out to be a non-empty rich-text
+ * editor: a partial there would be a whole-field write that destroys its paragraphs, so the field
+ * stays untouched and the final text arrives by paste.
  */
-fun shouldRouteStreamingPartialToBubble(previewBeforeInjectEnabled: Boolean, livePreviewEnabled: Boolean = true): Boolean =
-    previewBeforeInjectEnabled || !livePreviewEnabled
+fun shouldRouteStreamingPartialToBubble(
+    previewBeforeInjectEnabled: Boolean,
+    livePreviewEnabled: Boolean = true,
+    lossyFieldSession: Boolean = false,
+): Boolean = previewBeforeInjectEnabled || !livePreviewEnabled || lossyFieldSession
+
+/** True when a reported caret ([selStart] >= 0) lies beyond the end of the read [current] text. */
+fun caretPastReadText(current: String, selStart: Int): Boolean = selStart >= 0 && selStart > current.length
+
+/**
+ * The text a lossy (rich-text) destination must paste at the caret for a one-shot injection of
+ * [text] (#376): the #144 separator for the *resolved* insertion start (#140/#300 selection rules,
+ * the same ones [composeOneShotInjectionWrite] applies) followed by [text]. A selected range gets no
+ * separator derived from the text it replaces -- only the character before the range matters.
+ */
+fun composeOneShotPastePayload(current: String, selStart: Int, selEnd: Int, text: String): String {
+    // A caret past the read text means the read lost characters (flattened newlines). The separator
+    // is then a guess from the last read char: right at the end of a line of text (the common #376
+    // case), a stray leading space on a fresh blank line (known limitation).
+    val span = resolveReplacementSpan(selStart, selEnd, current.length)
+    return withLeadingSeparator(current, span.start, text)
+}
 
 /**
  * Formats a raw partial hypothesis for display only (#42). The bundled streaming model
