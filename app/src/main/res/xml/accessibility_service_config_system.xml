@@ -21,7 +21,7 @@
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeViewFocused"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagRequestAccessibilityButton"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagRequestAccessibilityButton|flagInputMethodEditor"
     android:canRetrieveWindowContent="true"
     android:notificationTimeout="100"
     android:description="@string/accessibility_description" />
