@@ -24,6 +24,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 class AccessibilityTextDestination(
     val node: AccessibilityNodeInfo,
     private val beforePaste: () -> Unit = {},
+    private val inputCommit: ((String) -> Boolean)? = null,
 ) : TextDestination {
 
     override fun acceptsDirectWrite(): Boolean =
@@ -74,6 +75,15 @@ class AccessibilityTextDestination(
     }
 
     override fun placeCaret(position: Int) = nudgeSelection(node, position)
+
+    override fun commitViaInputConnection(text: String): Boolean {
+        val commit = inputCommit ?: return false
+        if (node.isPasswordField()) return false
+        // The input connection belongs to whichever editor has input focus, not to this node, so
+        // only use it when this node is that editor.
+        if (!refresh() || !node.isFocused) return false
+        return commit(text)
+    }
 
     override fun pasteFromClipboard(): Boolean {
         if (node.isPasswordField()) return false

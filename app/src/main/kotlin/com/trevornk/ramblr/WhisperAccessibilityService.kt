@@ -3916,7 +3916,14 @@ open class WhisperAccessibilityService : AccessibilityService() {
      * with it that toast, while apps that genuinely need paste still get it as the fallback.
      */
     private fun tryInjectIntoNode(node: AccessibilityNodeInfo, text: String, stageClipboard: () -> Unit): TextCommitResult =
-        DictationTextWriter.commit(AccessibilityTextDestination(node, beforePaste = stageClipboard), text)
+        DictationTextWriter.commit(
+            AccessibilityTextDestination(
+                node,
+                beforePaste = stageClipboard,
+                inputCommit = { A11yInputCommit.commit(this, it, node.packageName?.toString()) },
+            ),
+            text,
+        )
 
     private fun findCustomPasteAction(node: AccessibilityNodeInfo): AccessibilityNodeInfo.AccessibilityAction? =
         AccessibilityTextDestination.findCustomPasteAction(node)

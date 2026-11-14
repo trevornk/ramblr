@@ -20,6 +20,9 @@ private class FakeTextDestination(
     private val paste: Boolean = false,
     private val writeSucceeds: Boolean = true,
     private val stale: Boolean = false,
+    /** Whether an input-connection channel exists; [imeLands] false models a swallowed commit. */
+    private val ime: Boolean = false,
+    private val imeLands: Boolean = true,
 ) : TextDestination {
     val calls = mutableListOf<String>()
     var writtenText: String? = null
@@ -55,6 +58,13 @@ private class FakeTextDestination(
         if (!writeSucceeds) return false
         writtenText = text
         this.text = text
+        return true
+    }
+
+    override fun commitViaInputConnection(text: String): Boolean {
+        calls += "commitViaInputConnection"
+        if (!ime) return false
+        if (imeLands) this.text += text
         return true
     }
 
@@ -154,6 +164,75 @@ class DictationTextWriterTest {
         assertEquals(InjectMethod.FROM_CLIPBOARD, result.method)
         assertTrue(destination.calls.contains("replaceAllText"))
         assertTrue(destination.calls.contains("pasteFromClipboard"))
+    }
+
+    @Test
+    fun `commit uses the input connection instead of paste when direct write is unavailable`() {
+        val destination = FakeTextDestination(text = "draft", direct = false, paste = true, ime = true)
+
+        val result = DictationTextWriter.commit(destination, "hello", NO_PAUSE)
+
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertEquals("draft", result.priorText)
+        assertFalse("the clipboard must never be touched", destination.calls.contains("pasteFromClipboard"))
+    }
+
+    @Test
+    fun `commit uses the input connection when an accepted direct write fails`() {
+        val destination = FakeTextDestination(direct = true, writeSucceeds = false, paste = true, ime = true)
+
+        val result = DictationTextWriter.commit(destination, "hello", NO_PAUSE)
+
+        assertEquals(InjectMethod.DIRECT, result.method)
+        assertFalse(destination.calls.contains("pasteFromClipboard"))
+    }
+
+    @Test
+    fun `commit lands an input-connection commit into an empty field`() {
+        val destination = FakeTextDestination(text = "", direct = false, paste = true, ime = true)
+
+        assertEquals(InjectMethod.DIRECT, DictationTextWriter.commit(destination, "hello", NO_PAUSE).method)
+        assertEquals("hello", destination.text)
+    }
+
+    @Test
+    fun `commit falls through to paste when there is no input connection`() {
+        val destination = FakeTextDestination(direct = false, paste = true, ime = false)
+
+        val result = DictationTextWriter.commit(destination, "hello", NO_PAUSE)
+
+        assertEquals(InjectMethod.FROM_CLIPBOARD, result.method)
+        assertTrue(destination.calls.contains("pasteFromClipboard"))
+    }
+
+    @Test
+    fun `commit falls through to paste when the input-connection commit is swallowed`() {
+        val destination = FakeTextDestination(text = "draft", direct = false, paste = true, ime = true, imeLands = false)
+        val notes = mutableListOf<String>()
+        DictationTextWriter.diagnostic = { notes += it }
+        try {
+            val result = DictationTextWriter.commit(destination, "hello", NO_PAUSE)
+
+            assertEquals(InjectMethod.FROM_CLIPBOARD, result.method)
+            assertTrue(notes.any { it.contains("falling back to paste") })
+        } finally {
+            DictationTextWriter.diagnostic = {}
+        }
+    }
+
+    @Test
+    fun `a swallowed commit is not mistaken for landed when the field already equals the dictated text`() {
+        val destination = FakeTextDestination(text = "hello", direct = false, paste = true, ime = true, imeLands = false)
+
+        assertEquals(InjectMethod.FROM_CLIPBOARD, DictationTextWriter.commit(destination, "hello", NO_PAUSE).method)
+    }
+
+    @Test
+    fun `commit never attempts the input connection when the direct write landed`() {
+        val destination = FakeTextDestination(direct = true, ime = true)
+
+        assertEquals(InjectMethod.DIRECT, DictationTextWriter.commit(destination, "hello", NO_PAUSE).method)
+        assertFalse(destination.calls.contains("commitViaInputConnection"))
     }
 
     @Test

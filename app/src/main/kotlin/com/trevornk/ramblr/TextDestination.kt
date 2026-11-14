@@ -98,6 +98,20 @@ interface TextDestination {
     fun replaceAllText(text: String): Boolean
 
     /**
+     * Delivers [text] through an input-method channel instead of the clipboard: an insert at the
+     * caret, with no clipboard round-trip. Tried by [DictationTextWriter.commit] only after a direct
+     * write was unavailable or failed, and *before* [pasteFromClipboard], because a paste leaves the
+     * dictation on the clipboard and a background accessibility service on Android 10+ cannot read
+     * the clipboard to restore what the user had (#378). Returns true when the text was handed to
+     * the input connection; that does not prove it landed, so the caller reads the field back.
+     * Default false: the destination has no such channel and the caller falls through to a paste.
+     *
+     * Accessibility: `AccessibilityInputConnection.commitText` (API 33+), for the focused editor.
+     * IME: `commitText(text, 1)`.
+     */
+    fun commitViaInputConnection(text: String): Boolean = false
+
+    /**
      * Asks the destination to pull the current clipboard contents into itself. Used only when
      * [acceptsDirectWrite] is false or a direct write failed. Returns false when no paste route
      * worked.
@@ -163,8 +177,16 @@ object DictationTextWriter {
      * rather than being rewritten and then reported as a failure. A destination that cannot be
      * re-read is given the benefit of the doubt -- there is nothing to verify against.
      */
-    private fun awaitLanded(destination: TextDestination, previous: String, expected: String, pause: WritePause): Boolean {
-        if (expected == previous) return true
+    private fun awaitLanded(
+        destination: TextDestination,
+        previous: String,
+        expected: String,
+        pause: WritePause,
+        // False for an insert (input-connection commit), where [expected] is the inserted text, not
+        // the whole field: a field already equal to it must still change if the commit landed.
+        unchangedIsLanded: Boolean = true,
+    ): Boolean {
+        if (unchangedIsLanded && expected == previous) return true
         var waited = 0L
         while (true) {
             if (!destination.refresh()) return true
@@ -243,6 +265,16 @@ object DictationTextWriter {
             if (writeConfirmed(destination, current, write.updatedText, pause, write.caret)) {
                 return TextCommitResult(InjectMethod.DIRECT, priorText = current)
             }
+        }
+
+        // #378: avoid the clipboard when a paste would be needed. A paste leaves the dictation on
+        // the clipboard and the prior clip cannot be restored from a background service.
+        val beforeCommit = destination.readText()
+        if (destination.commitViaInputConnection(text)) {
+            if (awaitLanded(destination, beforeCommit, text, pause, unchangedIsLanded = false)) {
+                return TextCommitResult(InjectMethod.DIRECT, priorText = beforeCommit)
+            }
+            diagnostic("Input-connection commit was sent but the field is unchanged; falling back to paste")
         }
 
         if (destination.pasteFromClipboard()) return TextCommitResult(InjectMethod.FROM_CLIPBOARD)
