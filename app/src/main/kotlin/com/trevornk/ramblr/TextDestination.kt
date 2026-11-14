@@ -118,6 +118,20 @@ interface TextDestination {
      * Accessibility: `ACTION_SET_SELECTION`. IME: `setSelection(position, position)`.
      */
     fun placeCaret(position: Int)
+
+    /**
+     * Inserts [text] at the destination's real caret through the input-method channel, for
+     * destinations where a whole-field rewrite cannot keep the view on the insertion (#367: a
+     * Chrome `<textarea>` ignores accessibility selection changes for scrolling, but scrolls its
+     * caret into view natively for a real input-connection edit). The caller has already applied
+     * the separator (#144) and replaces any selection itself, so [text] is exactly what lands at
+     * the caret. Returns true when the text was handed over; that does not prove it landed, so the
+     * caller reads the field back. Default false: use the whole-field write.
+     *
+     * Accessibility: `AccessibilityInputConnection.commitText` (API 33+), WebView text fields only.
+     * IME: `commitText(text, 1)`.
+     */
+    fun insertAtCaretNatively(text: String): Boolean = false
 }
 
 /** Injectable pause so the write-confirmation loop is deterministic under test. */
@@ -215,6 +229,29 @@ object DictationTextWriter {
     ): Boolean = writeConfirmed(destination, previous, updated, pause, caret.coerceIn(0, updated.length))
 
     /**
+     * #367: tries to land [write] as a real insert at the caret instead of a whole-field rewrite,
+     * so a destination that cannot scroll to a rewrite's caret keeps the insertion in view. A
+     * non-empty selection is replaced by the commit itself. Returns false -- and the caller does
+     * the whole-field write -- when the destination does not offer the channel, the commit was not
+     * handed over, or the field still reads back unchanged.
+     */
+    private fun insertedNatively(
+        destination: TextDestination,
+        current: String,
+        selStart: Int,
+        selEnd: Int,
+        write: InjectionWrite,
+        pause: WritePause,
+    ): Boolean {
+        val span = resolveReplacementSpan(selStart, selEnd, current.length)
+        val inserted = write.updatedText.substring(span.start, write.caret)
+        if (inserted.isEmpty() || !destination.insertAtCaretNatively(inserted)) return false
+        if (awaitLanded(destination, current, write.updatedText, pause)) return true
+        diagnostic("Native insert was sent but the field is unchanged; using the whole-field write")
+        return false
+    }
+
+    /**
      * The ordinary one-shot delivery of a finished transcript into [destination].
      *
      * Direct write is tried before paste (#111): an ordinary editable field supports a whole-field
@@ -234,12 +271,12 @@ object DictationTextWriter {
 
         if (destination.acceptsDirectWrite()) {
             val current = destination.readText()
-            val write = composeOneShotInjectionWrite(
-                current,
-                destination.selectionStart(),
-                destination.selectionEnd(),
-                text,
-            )
+            val selStart = destination.selectionStart()
+            val selEnd = destination.selectionEnd()
+            val write = composeOneShotInjectionWrite(current, selStart, selEnd, text)
+            if (insertedNatively(destination, current, selStart, selEnd, write, pause)) {
+                return TextCommitResult(InjectMethod.DIRECT, priorText = current)
+            }
             if (writeConfirmed(destination, current, write.updatedText, pause, write.caret)) {
                 return TextCommitResult(InjectMethod.DIRECT, priorText = current)
             }

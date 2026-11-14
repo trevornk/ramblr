@@ -23,6 +23,8 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 class AccessibilityTextDestination(
     val node: AccessibilityNodeInfo,
+    // Declared before [beforePaste] so a trailing lambda still binds to it.
+    private val insertAtCaret: ((String) -> Boolean)? = null,
     private val beforePaste: () -> Unit = {},
 ) : TextDestination {
 
@@ -74,6 +76,16 @@ class AccessibilityTextDestination(
     }
 
     override fun placeCaret(position: Int) = nudgeSelection(node, position)
+
+    // #367: only a WebView text field (Chrome <textarea>), whose view ignores accessibility
+    // selection changes for scrolling. Elsewhere the whole-field write is unchanged.
+    override fun insertAtCaretNatively(text: String): Boolean {
+        val insert = insertAtCaret ?: return false
+        if (node.isPasswordField() || !hasWebViewAncestor(node)) return false
+        // The input connection belongs to whichever editor has input focus, not to this node.
+        if (!refresh() || !node.isFocused) return false
+        return insert(text)
+    }
 
     override fun pasteFromClipboard(): Boolean {
         if (node.isPasswordField()) return false
