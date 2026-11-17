@@ -1783,16 +1783,34 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 RecordingStateMachine.State.IDLE,
             bubbleShowing = feedbackShowing || pendingPreview != null,
         )
+        val screenOff = isScreenOff()
+        val keyguardLocked = isKeyguardLocked()
         val visible = overlayShouldBeVisible(
             mainActivityForeground,
             IconHiddenState.isHidden(this),
-            isKeyguardLocked(),
+            keyguardLocked,
             overlayForceVisibleOverride,
             excludedForeground,
             hiddenByVisibilityMode,
-            isScreenOff(),
+            screenOff,
         )
-        setOverlayTouchable(visible)
+        // #373: window-level alpha, only while hidden AND the screen is off. While the display is
+        // off/dozing the app renders no frame, so the View-alpha hide below never reaches the
+        // screen and SurfaceFlinger keeps compositing the ring's stale buffer onto the Samsung
+        // AOD. Window alpha is applied by WMS without an app frame. Deliberately confined to the
+        // screen-off period: every other hidden case (keyguard with screen on, MainActivity,
+        // hide-icon, exclusion, visibility mode) keeps window alpha 1 so the window's
+        // visibility/registration is exactly as before (see the Pixel Fold note below). Every
+        // later SCREEN_ON/USER_PRESENT/display change re-runs this and restores 1f.
+        val windowAlpha = if (!visible && screenOff) 0f else 1f
+        Log.d(
+            TAG,
+            "overlayVisibility visible=$visible screenOff=$screenOff keyguard=$keyguardLocked " +
+                "display=${getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)?.state} " +
+                "interactive=${(getSystemService(POWER_SERVICE) as? android.os.PowerManager)?.isInteractive} " +
+                "windowAlpha=$windowAlpha",
+        )
+        setOverlayTouchable(visible, windowAlpha)
         // alpha, not View.GONE (Pixel Fold display-transition stall, root-caused via Opus + real
         // on-device logcat capture: this runs on the same SCREEN_ON/SCREEN_OFF/USER_PRESENT/
         // keyguard events that drive a fold's own WindowManager DeferredDisplayUpdater display-
@@ -1866,11 +1884,12 @@ open class WhisperAccessibilityService : AccessibilityService() {
     /** Adds/removes FLAG_NOT_TOUCHABLE on the ring window so a hidden overlay (#35) lets touches
      *  fall through to whatever's underneath -- e.g. MainActivity's Settings switches -- instead
      *  of the window silently swallowing them despite its view being GONE. */
-    private fun setOverlayTouchable(touchable: Boolean) {
+    private fun setOverlayTouchable(touchable: Boolean, windowAlpha: Float) {
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         fun WindowManager.LayoutParams.applyTouchable() {
             flags = if (touchable) flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
             else flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            alpha = windowAlpha // #373, see applyOverlayVisibility
         }
         layoutParams?.let { it.applyTouchable(); overlayView?.let { v -> wm.updateViewLayout(v, it) } }
     }
