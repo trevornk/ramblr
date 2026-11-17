@@ -1,0 +1,4 @@
+This should stop the floating button from staying on Samsung's Always On Display after you lock the phone.
+
+- Earlier versions already treated the button as hidden when the screen turned off, but Always On Display kept showing the last drawn image of it. The button is now hidden at the window level, which doesn't need the app to redraw while the screen is off.
+- Thanks to JoeRibs and brrl4al for the reports and videos.
