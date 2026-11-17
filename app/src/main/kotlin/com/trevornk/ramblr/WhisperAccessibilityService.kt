@@ -154,6 +154,12 @@ private data class PendingInjection(
 open class WhisperAccessibilityService : AccessibilityService() {
 
     companion object {
+        /** Window alpha while hidden with the screen off (#373). 1/255, never 0: SurfaceFlinger
+         *  treats an alpha-0 layer as not visible and can drop it from the accessibility window
+         *  set (same failure mode as the Pixel Fold View.GONE stall). At 1/255 the stale buffer is
+         *  invisible on the AOD while the view itself is already alpha 0. */
+        internal const val SCREEN_OFF_WINDOW_ALPHA = 1f / 255f
+
         /** The connected service instance, whichever of the two #156 components it is: this
          *  companion is shared by [WhisperAccessibilityService] and its empty subclass
          *  [SystemControlsAccessibilityService] (JVM statics live on the base class), and
@@ -1783,16 +1789,39 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 RecordingStateMachine.State.IDLE,
             bubbleShowing = feedbackShowing || pendingPreview != null,
         )
+        val screenOff = isScreenOff()
+        val keyguardLocked = isKeyguardLocked()
         val visible = overlayShouldBeVisible(
             mainActivityForeground,
             IconHiddenState.isHidden(this),
-            isKeyguardLocked(),
+            keyguardLocked,
             overlayForceVisibleOverride,
             excludedForeground,
             hiddenByVisibilityMode,
-            isScreenOff(),
+            screenOff,
         )
-        setOverlayTouchable(visible)
+        // #373: window-level alpha, only while hidden AND the screen is off. While the display is
+        // off/dozing the app renders no frame, so the View-alpha hide below never reaches the
+        // screen and SurfaceFlinger keeps compositing the ring's stale buffer onto the Samsung
+        // AOD. Window alpha is applied by WMS without an app frame. It is SCREEN_OFF_WINDOW_ALPHA
+        // (1/255), not 0: a layer with alpha exactly 0 is classified not-visible by
+        // SurfaceFlinger, which can drop the overlay from the accessibility window set (the same
+        // failure mode as the Pixel Fold View.GONE stall below). Deliberately confined to the
+        // screen-off period: every other hidden case (keyguard with screen on, MainActivity,
+        // hide-icon, exclusion, visibility mode) keeps window alpha 1 so the window's
+        // visibility/registration is exactly as before. Every later SCREEN_ON/USER_PRESENT/
+        // display change re-runs this and restores 1f.
+        val windowAlpha = if (!visible && screenOff) SCREEN_OFF_WINDOW_ALPHA else 1f
+        setOverlayTouchable(visible, windowAlpha) { changedFlags, changedAlpha ->
+            Log.d(
+                TAG,
+                "overlayVisibility visible=$visible screenOff=$screenOff keyguard=$keyguardLocked " +
+                    "displayState=${getSystemService(DisplayManager::class.java)
+                        ?.getDisplay(Display.DEFAULT_DISPLAY)?.state} " +
+                    "interactive=${(getSystemService(POWER_SERVICE) as? android.os.PowerManager)?.isInteractive} " +
+                    "windowAlpha=$changedAlpha flags=0x${Integer.toHexString(changedFlags)}",
+            )
+        }
         // alpha, not View.GONE (Pixel Fold display-transition stall, root-caused via Opus + real
         // on-device logcat capture: this runs on the same SCREEN_ON/SCREEN_OFF/USER_PRESENT/
         // keyguard events that drive a fold's own WindowManager DeferredDisplayUpdater display-
@@ -1866,13 +1895,22 @@ open class WhisperAccessibilityService : AccessibilityService() {
     /** Adds/removes FLAG_NOT_TOUCHABLE on the ring window so a hidden overlay (#35) lets touches
      *  fall through to whatever's underneath -- e.g. MainActivity's Settings switches -- instead
      *  of the window silently swallowing them despite its view being GONE. */
-    private fun setOverlayTouchable(touchable: Boolean) {
-        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        fun WindowManager.LayoutParams.applyTouchable() {
-            flags = if (touchable) flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-            else flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        }
-        layoutParams?.let { it.applyTouchable(); overlayView?.let { v -> wm.updateViewLayout(v, it) } }
+    private fun setOverlayTouchable(
+        touchable: Boolean,
+        windowAlpha: Float,
+        onChanged: (flags: Int, alpha: Float) -> Unit = { _, _ -> },
+    ) {
+        val params = layoutParams ?: return
+        val view = overlayView ?: return
+        val newFlags = if (touchable) params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        else params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        // Compare against the live params, not a cache: showOverlay builds them with alpha 1 and
+        // no NOT_TOUCHABLE, so a hidden first apply still differs and is pushed.
+        if (newFlags == params.flags && windowAlpha == params.alpha) return
+        params.flags = newFlags
+        params.alpha = windowAlpha // #373, see applyOverlayVisibility
+        (getSystemService(WINDOW_SERVICE) as WindowManager).updateViewLayout(view, params)
+        onChanged(newFlags, windowAlpha)
     }
 
     // --- Auto-hide-to-peek (Feature A, see RingPeek) ---
