@@ -1816,6 +1816,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
             Log.d(
                 TAG,
                 "overlayVisibility visible=$visible screenOff=$screenOff keyguard=$keyguardLocked " +
+                    "displayState=${getSystemService(DisplayManager::class.java)
+                        ?.getDisplay(Display.DEFAULT_DISPLAY)?.state} " +
+                    "interactive=${(getSystemService(POWER_SERVICE) as? android.os.PowerManager)?.isInteractive} " +
                     "windowAlpha=$changedAlpha flags=0x${Integer.toHexString(changedFlags)}",
             )
         }
