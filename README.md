@@ -318,6 +318,7 @@ cloud interim text and falls back to normal batch behavior. Tracked in
 </p>
 
 **Behavior** — auto-stop after silence (off by default, on-device VAD, 2.0 s threshold);
+start/stop vibration tick (off by default, adjustable strength and length, with a Test button);
 auto-hide/peek delay; single-tap restore-and-record; the "tap to use raw text" undo bubble (on by
 default); preview-before-inject; per-app style memory; compressed audio uploads for cloud
 transcription (off by default — quality impact hasn't been measured yet, so it's opt-in).

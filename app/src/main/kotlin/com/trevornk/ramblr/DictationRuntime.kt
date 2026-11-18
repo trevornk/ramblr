@@ -207,6 +207,8 @@ class DictationRuntime internal constructor(
     private val backgroundWork: BackgroundWork = BackgroundWork.None,
     /** Test seam for the recognizer slots (#305); the default is the production behavior. */
     private val transcriberHooks: TranscriberHooks = TranscriberHooks(),
+    /** #385: start/stop haptic tick. Lazy-safe: with the setting off (the default) it never touches the vibrator. */
+    private val haptics: HapticFeedback = DictationHaptics.forContext(context),
     /** Test seam: lets host-side unit tests substitute a fake engine at the capture boundary.
      *  The default is exactly the pre-extraction construction. */
     private val engineFactory: (File, RecordingStateMachine) -> RecordingEngine =
@@ -829,6 +831,11 @@ class DictationRuntime internal constructor(
         // Placed after the `started` check so a failed recorder start never acquires.
             acquireTranscriptionWakeLock()
             listener.onRecordingStarted()
+            // #385: only now -- engine.start succeeded and the UI already knows -- so a failed
+            // start never ticks and vibration never sits ahead of recording on the start path.
+            // Accepted: the buzz can land in the first ~25 ms of the clip, and (on stop) in at
+            // most one read buffer of the tail.
+            haptics.onRecordingStarted()
         } finally {
             if (!recordingStarted) {
                 cancelCloudLiveAttempt(liveAttempt)
@@ -895,6 +902,10 @@ class DictationRuntime internal constructor(
     internal fun stopAndTranscribe() {
         val lease = sessionLease ?: return
         if (!stateMachine.tryStartTranscribing()) return
+        // #385: the one stop path for the ring/IME/tile/automation taps AND silence auto-stop
+        // (which posts here). There is no cancel-while-recording: a long-press while recording is
+        // just a stop tap. Shutdown / keyboard dismissal mid-recording deliberately gives no tick.
+        haptics.onRecordingStopped()
         activeToken = guard.start()
         cloudLiveAttempt?.takeIf { it.lease === lease }?.let { attempt ->
             runCatching { attempt.session?.endActivity() }
@@ -1014,6 +1025,7 @@ class DictationRuntime internal constructor(
     internal fun resetToIdle(expectedLease: DictationSessionLease) {
         if (sessionLease !== expectedLease) return
         try {
+            haptics.reset()
             cancelCloudLiveAttempt()
             cancelWatchdog()
             guard.cancel()
@@ -1162,6 +1174,8 @@ class DictationRuntime internal constructor(
                 releaseSessionLease(lease)
                 return@post
             }
+            // #385: max-duration cap stop gets the stop tick (ERROR stops deliberately do not).
+            haptics.onRecordingStopped()
             val token = guard.start()
             activeToken = token
             cloudLiveAttempt?.takeIf { it.lease === lease }?.let { attempt ->
@@ -2172,6 +2186,7 @@ class DictationRuntime internal constructor(
         }
         prefs().unregisterOnSharedPreferenceChangeListener(batchPolicyPrefsListener)
         cancelIdleUnload()
+        haptics.reset()
         val lease = sessionLease
         if (recordingEngine != null) shutdownLeaseAwaitingReader = lease
         cancelCloudLiveAttempt()

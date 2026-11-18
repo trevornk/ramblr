@@ -4,6 +4,8 @@
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Optional start/stop haptic tick on dictation (#385); normal permission, no prompt. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Install-time, no user prompt: needed to register the default-network callback that
          resets the cleanup waterfall cursor on SSID/VPN changes (#61, ADR-0001). -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
