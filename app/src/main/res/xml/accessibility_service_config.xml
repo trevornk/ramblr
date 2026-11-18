@@ -12,6 +12,12 @@
      (effective flags = 0), and flagDefault would newly make Ramblr the default handler for its
      feedbackGeneric type, a behavior change unrelated to the window scan.
 
+     flagReportViewIds: without it AccessibilityNodeInfo.viewIdResourceName is always null for
+     this service (UIAutomator sees ids only because it sets the flag itself). resolveRealText
+     needs the id to recognise WhatsApp's search placeholder. It is read-only metadata: no new
+     capability or permission, and unlike flagRequestAccessibilityButton it does not change how
+     the OS classifies the service.
+
      flagRequestAccessibilityButton is deliberately ABSENT here (#156 rework of #211/#220): the
      flag is not just "offer the a11y button" — it also reclassifies the service as
      INVISIBLE_TOGGLE (AccessibilityUtil.getAccessibilityServiceFragmentType reads ONLY
@@ -26,7 +32,7 @@
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeViewFocused"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagInputMethodEditor"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds|flagInputMethodEditor"
     android:canRetrieveWindowContent="true"
     android:notificationTimeout="100"
     android:description="@string/accessibility_description" />

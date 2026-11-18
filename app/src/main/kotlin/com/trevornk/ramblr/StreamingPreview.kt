@@ -460,7 +460,9 @@ fun reconcileStreamingSpanWithCaret(
  * Without this, resolveInsertionStart trusts the 1/1 and splices the dictation at index 1
  * ("S" + dictation + "earch..."). The rule is keyed on the view id: the same string and selection in
  * any other view (including WhatsApp's chat composer, which reports -1/-1 and is handled above, and
- * a restored composer draft at 0/0) is kept as real text.
+ * a restored composer draft at 0/0) is kept as real text. viewIdResourceName is only populated
+ * because both accessibility configs declare flagReportViewIds; without it the id is null and the
+ * rule never matches.
  *
  * Note for maintainers: every parameter is required on purpose. Defaults here would let a new call
  * site silently opt out of the #140 signals and quietly reinstate the bug; a compile error is the
