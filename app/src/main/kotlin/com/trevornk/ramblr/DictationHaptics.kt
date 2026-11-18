@@ -64,9 +64,13 @@ interface HapticFeedback {
     fun onRecordingStarted()
     fun onRecordingStopped()
 
+    /** Forget any pending start tick; called when the runtime goes idle or shuts down. */
+    fun reset()
+
     object None : HapticFeedback {
         override fun onRecordingStarted() {}
         override fun onRecordingStopped() {}
+        override fun reset() {}
     }
 }
 
@@ -77,8 +81,9 @@ interface HapticFeedback {
  * Contract with [DictationRuntime]:
  *  - [onRecordingStarted] is called only after the engine has actually started recording.
  *  - [onRecordingStopped] is called for every real end of a *started* recording that the user (or
- *    silence auto-stop / max-duration cap) caused. Recording-time cancellation is the same stop
- *    path, so it gets the same stop tick. A recording that ends in a recorder ERROR gets no tick
+ *    silence auto-stop / max-duration cap) caused. There is no cancel-while-recording (a
+ *    long-press while recording is just a stop tap), and shutdown / keyboard dismissal
+ *    mid-recording deliberately gives no tick. A recording that ends in a recorder ERROR gets no tick
  *    (it is not a deliberate stop; the user sees an error message instead).
  *  - A stop with no preceding start tick is silent, and each start yields at most one stop tick,
  *    so the pair is always balanced. Settings are re-read at each tick, so toggling takes effect
@@ -100,6 +105,10 @@ class DictationHaptics(
         if (!startTicked) return
         startTicked = false
         tick(requireEnabled = true)
+    }
+
+    override fun reset() {
+        startTicked = false
     }
 
     /** Settings "Test" button: plays with the current strength/length even when the master switch is off. */

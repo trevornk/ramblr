@@ -127,6 +127,25 @@ class DictationHapticsTest {
         assertEquals(2, out.played.size)
     }
 
+    @Test fun `disabled between start and stop suppresses the stop tick`() {
+        val out = FakeOutput()
+        var enabled = true
+        val h = DictationHaptics(settings = { on.copy(enabled = enabled) }, output = { out })
+        h.onRecordingStarted()
+        enabled = false
+        h.onRecordingStopped()
+        assertEquals(1, out.played.size)
+    }
+
+    @Test fun `reset clears a pending start so a later stop is silent`() {
+        val out = FakeOutput()
+        val h = haptics(on, out)
+        h.onRecordingStarted()
+        h.reset()
+        h.onRecordingStopped()
+        assertEquals(1, out.played.size)
+    }
+
     @Test fun `no vibrator or muted system means no tick`() {
         val out = FakeOutput(caps = null)
         val h = haptics(on, out)

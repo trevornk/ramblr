@@ -24,6 +24,7 @@ class HapticsRuntimeWiringTest {
     private lateinit var app: Application
     private lateinit var engines: MutableList<Fake>
     private val ticks = mutableListOf<String>()
+    private var resets = 0
 
     private class Fake(cacheDir: File, private val sm: RecordingStateMachine) : RecordingEngine(cacheDir, sm) {
         var startResult = true
@@ -60,6 +61,7 @@ class HapticsRuntimeWiringTest {
     private val haptics = object : HapticFeedback {
         override fun onRecordingStarted() { ticks += "start" }
         override fun onRecordingStopped() { ticks += "stop" }
+        override fun reset() { resets++ }
     }
 
     @Before fun setUp() {
@@ -106,6 +108,27 @@ class HapticsRuntimeWiringTest {
         engines[0].finish(RecordingEngine.StopReason.MAX_DURATION)
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals(listOf("ui-started", "start", "stop"), ticks)
+    }
+
+    @Test fun `repeated taps around a stop yield exactly one stop tick`() {
+        val r = runtime()
+        r.onTap(); r.onTap(); r.stopAndTranscribe(); r.onTap()
+        assertEquals(1, ticks.count { it == "stop" })
+    }
+
+    @Test fun `tap stop then max duration finish yields exactly one stop tick`() {
+        val r = runtime()
+        r.onTap(); r.onTap()
+        engines[0].finish(RecordingEngine.StopReason.MAX_DURATION)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, ticks.count { it == "stop" })
+    }
+
+    @Test fun `shutdown resets haptics`() {
+        val r = runtime()
+        r.onTap()
+        r.beginShutdown()
+        assertEquals(1, resets)
     }
 
     @Test fun `error stop does not tick`() {
