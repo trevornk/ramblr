@@ -447,6 +447,23 @@ fun reconcileStreamingSpanWithCaret(
  * report for an empty box) is likewise treated as empty regardless of focus or selection: it can
  * never be content worth preserving, and keeping it made every dictation start with a newline.
  *
+ * [viewIdResourceName] covers a second self-drawn placeholder the selection signal cannot see:
+ * WhatsApp's chat-list SEARCH field (`com.whatsapp:id/search_input`, EditText, focused, editable,
+ * inputType 0x2c001). Measured on a Pixel 10a, WhatsApp 2.26.44.90:
+ *  - empty: text="Ask Meta AI or Search" (len 21), isShowingHintText=false, hintText=null,
+ *    selection 1/1 (the cursor of the hidden ZWSP-only content), not Spanned, no leading U+200B
+ *  - typed "abc": text="​abc" (len 4), selection 4/4, hintText="Ask Meta AI or Search", Spanned
+ *  - typed "Ask": text="​Ask", selection 4/4
+ *  - deleted back to empty: returns to the empty state above
+ * Every real text in this view starts with U+200B and the placeholder never does, so in that view
+ * a focused editable [rawText] without the leading ZWSP is the placeholder and resolves to "".
+ * Without this, resolveInsertionStart trusts the 1/1 and splices the dictation at index 1
+ * ("S" + dictation + "earch..."). The rule is keyed on the view id: the same string and selection in
+ * any other view (including WhatsApp's chat composer, which reports -1/-1 and is handled above, and
+ * a restored composer draft at 0/0) is kept as real text. viewIdResourceName is only populated
+ * because both accessibility configs declare flagReportViewIds; without it the id is null and the
+ * rule never matches.
+ *
  * Note for maintainers: every parameter is required on purpose. Defaults here would let a new call
  * site silently opt out of the #140 signals and quietly reinstate the bug; a compile error is the
  * cheaper failure. An earlier attempt at #140 compared `text == hintText` instead. That was
@@ -464,6 +481,7 @@ fun resolveRealText(
     selectionEnd: Int,
     isEditable: Boolean,
     isFocused: Boolean,
+    viewIdResourceName: String?,
 ): String = when {
     isShowingHintText -> ""
     // A whitespace-only value is never real content. Chromium WebView composers (Sable v2's
@@ -475,8 +493,18 @@ fun resolveRealText(
         isFocused &&
         selectionStart < 0 &&
         selectionEnd < 0 -> ""
+    isEditable &&
+        isFocused &&
+        viewIdResourceName == WHATSAPP_SEARCH_INPUT_ID &&
+        !rawText.startsWith(ZERO_WIDTH_SPACE) -> ""
     else -> rawText.orEmpty()
 }
+
+/** View id of WhatsApp's chat-list search field; see [resolveRealText]. */
+const val WHATSAPP_SEARCH_INPUT_ID = "com.whatsapp:id/search_input"
+
+/** U+200B, which WhatsApp's search field prefixes to every piece of real text; see [resolveRealText]. */
+const val ZERO_WIDTH_SPACE = "​"
 
 /**
  * Decides where the very first partial of a recording should be inserted (#42). Many Android

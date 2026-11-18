@@ -427,6 +427,7 @@ class StreamingPreviewTest {
         selectionEnd = 0,
         isEditable = true,
         isFocused = true,
+        viewIdResourceName = null,
     )
 
     @Test fun `hint text showing is treated as empty, not the hint string itself`() {
@@ -459,6 +460,7 @@ class StreamingPreviewTest {
                 selectionEnd = -1,
                 isEditable = true,
                 isFocused = true,
+                viewIdResourceName = null,
             ),
         )
     }
@@ -475,6 +477,7 @@ class StreamingPreviewTest {
                 selectionEnd = 7,
                 isEditable = true,
                 isFocused = true,
+                viewIdResourceName = null,
             ),
         )
     }
@@ -492,6 +495,7 @@ class StreamingPreviewTest {
                 selectionEnd = 0,
                 isEditable = true,
                 isFocused = true,
+                viewIdResourceName = null,
             ),
         )
     }
@@ -509,6 +513,7 @@ class StreamingPreviewTest {
                 selectionEnd = 0,
                 isEditable = true,
                 isFocused = true,
+                viewIdResourceName = null,
             ),
         )
     }
@@ -525,6 +530,7 @@ class StreamingPreviewTest {
                 selectionEnd = -1,
                 isEditable = true,
                 isFocused = false,
+                viewIdResourceName = null,
             ),
         )
     }
@@ -539,6 +545,7 @@ class StreamingPreviewTest {
                 selectionEnd = -1,
                 isEditable = false,
                 isFocused = true,
+                viewIdResourceName = null,
             ),
         )
     }
@@ -555,6 +562,7 @@ class StreamingPreviewTest {
                 selectionEnd = -1,
                 isEditable = true,
                 isFocused = true,
+                viewIdResourceName = null,
             ),
         )
     }
@@ -569,6 +577,7 @@ class StreamingPreviewTest {
             selectionEnd = selEnd,
             isEditable = true,
             isFocused = focused,
+            viewIdResourceName = null,
         )
 
     @Test fun `a lone newline from an empty WebView composer resolves to empty`() {
@@ -608,6 +617,7 @@ class StreamingPreviewTest {
                 selectionEnd = 3,
                 isEditable = true,
                 isFocused = true,
+                viewIdResourceName = null,
             ),
         )
     }
@@ -625,9 +635,60 @@ class StreamingPreviewTest {
                     selectionEnd = selection,
                     isEditable = true,
                     isFocused = true,
+                    viewIdResourceName = null,
                 ),
             )
         }
+    }
+
+    // --- resolveRealText: WhatsApp chat-list SEARCH field placeholder ---
+    // Measured on a Pixel 10a, WhatsApp 2.26.44.90, view com.whatsapp:id/search_input (EditText,
+    // focused, editable, inputType 0x2c001). Empty: text="Ask Meta AI or Search" (len 21),
+    // isShowingHintText=false, hintText=null, selection 1/1 (the cursor of the hidden ZWSP-only
+    // content), not Spanned, no leading U+200B. After typing "abc": "​abc", selection 4/4,
+    // hintText set. Every real text in this view starts with U+200B, the placeholder never does.
+    // The #140 selection signal cannot see it (1/1, not -1/-1).
+
+    private val whatsAppSearchId = "com.whatsapp:id/search_input"
+    private val whatsAppComposerId = "com.whatsapp:id/entry"
+    private val whatsAppSearchPlaceholder = "Ask Meta AI or Search"
+
+    private fun resolvedInView(raw: String?, selStart: Int, selEnd: Int, viewId: String?) = resolveRealText(
+        rawText = raw,
+        isShowingHintText = false,
+        selectionStart = selStart,
+        selectionEnd = selEnd,
+        isEditable = true,
+        isFocused = true,
+        viewIdResourceName = viewId,
+    )
+
+    @Test fun `WhatsApp search placeholder at selection 1-1 is treated as empty`() {
+        assertEquals("", resolvedInView(whatsAppSearchPlaceholder, 1, 1, whatsAppSearchId))
+    }
+
+    @Test fun `WhatsApp search real typed text starting with a ZWSP is kept`() {
+        assertEquals("​abc", resolvedInView("​abc", 4, 4, whatsAppSearchId))
+        assertEquals("​Ask", resolvedInView("​Ask", 4, 4, whatsAppSearchId))
+    }
+
+    @Test fun `dictating into the empty WhatsApp search field does not splice the placeholder`() {
+        val current = resolvedInView(whatsAppSearchPlaceholder, 1, 1, whatsAppSearchId)
+        assertEquals("Testing one two three", composeOneShotInjection(current, 1, 1, "Testing one two three"))
+        assertEquals(
+            "Testing one two three",
+            composeFirstStreamingPartial(current, 1, 1, "Testing one two three").updatedText,
+        )
+    }
+
+    @Test fun `the search placeholder string is real text under any other view id`() {
+        assertEquals(whatsAppSearchPlaceholder, resolvedInView(whatsAppSearchPlaceholder, 1, 1, null))
+        assertEquals(whatsAppSearchPlaceholder, resolvedInView(whatsAppSearchPlaceholder, 1, 1, whatsAppComposerId))
+    }
+
+    @Test fun `WhatsApp composer placeholder and restored draft behave as before`() {
+        assertEquals("", resolvedInView("Message", -1, -1, whatsAppComposerId))
+        assertEquals("DraftMyDraft", resolvedInView("DraftMyDraft", 0, 0, whatsAppComposerId))
     }
 
     // --- resolveInsertionStart (first-partial insertion point, #42) ---

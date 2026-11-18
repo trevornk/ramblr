@@ -159,6 +159,16 @@ class RingVisibilityEventsTest {
         }
     }
 
+    @Test fun `both configs report view ids so resolveRealText can read viewIdResourceName`() {
+        // Without flagReportViewIds, viewIdResourceName is null in the real service and the
+        // WhatsApp search-placeholder rule never matches.
+        for (f in listOf("accessibility_service_config.xml", "accessibility_service_config_system.xml")) {
+            val flags = Regex("android:accessibilityFlags=\"([^\"]*)\"")
+                .find(xml(f))!!.groupValues[1]
+            assertTrue(f, flags.split('|').contains("flagReportViewIds"))
+        }
+    }
+
     @Test fun `the floating icon service never requests the accessibility button flag`() {
         // flagRequestAccessibilityButton reclassifies a service as an invisible-toggle on newer
         // Android; only the opt-in system-controls twin may carry it.
