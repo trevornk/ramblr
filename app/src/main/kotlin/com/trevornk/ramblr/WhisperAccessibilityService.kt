@@ -2793,31 +2793,24 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun buildHideIconConfirmMenu(): LinearLayout {
         val container = styleMenuContainer()
 
-        container.addView(
-            styleMenuRow(
-                icon = null,
-                title = "Hide the floating icon?",
-                subtitle = "The ring disappears until you bring it back.",
-            ) { /* header row: inert by design, tapping the question does nothing */ }
-        )
-
-        container.addView(styleMenuDivider())
-
-        container.addView(
-            styleMenuRow(
-                icon = null,
-                title = "Hide it",
-                subtitle = "Get it back from the notification, the Quick Settings tile, or Settings > Floating icon",
-            ) { onHideIconConfirmed() }
-        )
-
-        container.addView(styleMenuDivider())
-
-        container.addView(
-            styleMenuRow(icon = null, title = "Cancel", subtitle = "Leave the icon where it is") {
-                dismissStyleMenu()
+        HideIconConfirmMenu.rows.forEachIndexed { i, spec ->
+            if (i > 0) container.addView(styleMenuDivider())
+            val onClick: () -> Unit = when (spec.kind) {
+                ConfirmRowKind.HEADER -> ({})
+                ConfirmRowKind.PRIMARY -> ({ onHideIconConfirmed() })
+                ConfirmRowKind.SECONDARY -> ({ dismissStyleMenu() })
             }
-        )
+            container.addView(
+                styleMenuRow(
+                    icon = null,
+                    title = spec.title,
+                    subtitle = spec.subtitle,
+                    clickable = spec.clickable,
+                    emphasized = spec.kind != ConfirmRowKind.SECONDARY,
+                    onClick = onClick,
+                )
+            )
+        }
 
         return container
     }
@@ -2830,13 +2823,24 @@ open class WhisperAccessibilityService : AccessibilityService() {
         setBackgroundColor(0x33FFFFFF)
     }
 
-    private fun styleMenuRow(icon: Drawable?, title: String, subtitle: String, onClick: () -> Unit): View {
+    private fun styleMenuRow(
+        icon: Drawable?,
+        title: String,
+        subtitle: String,
+        clickable: Boolean = true,
+        emphasized: Boolean = false,
+        onClick: () -> Unit,
+    ): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            isClickable = true
             setPadding((14 * dp).toInt(), (10 * dp).toInt(), (14 * dp).toInt(), (10 * dp).toInt())
-            setOnClickListener { onClick() }
+            // Non-clickable rows (e.g. the confirm page's question header, #373) get no listener at
+            // all so they neither look nor act tappable.
+            if (clickable) {
+                isClickable = true
+                setOnClickListener { onClick() }
+            }
         }
         if (icon != null) {
             row.addView(ImageView(this).apply {
@@ -2852,6 +2856,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 text = title
                 textSize = 15f
                 setTextColor(0xFFFFFFFF.toInt())
+                if (emphasized) setTypeface(typeface, android.graphics.Typeface.BOLD)
             })
             addView(TextView(this@WhisperAccessibilityService).apply {
                 text = subtitle
