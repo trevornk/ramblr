@@ -2,7 +2,6 @@ package com.trevornk.ramblr
 
 import android.content.Context
 import android.media.AudioAttributes
-import android.media.AudioManager
 import android.app.NotificationManager
 import android.os.Build
 import android.os.VibrationAttributes
@@ -54,7 +53,10 @@ object HapticEffectPlanner {
 
 /** The platform seam. Implementations must not block. */
 interface HapticOutput {
-    /** Null when vibrating is not currently appropriate (no vibrator, silent ringer, DND blocking). */
+    /** Null when vibrating is not currently appropriate (no vibrator, or DND total silence/alarms only).
+     *  Ringer mode is deliberately NOT checked: on Pixels an active DND/Bedtime rule reports
+     *  RINGER_MODE_SILENT even though touch-usage vibration is allowed, and the USAGE_TOUCH tag
+     *  already makes the system apply the user's touch-feedback setting. */
     fun capabilities(): HapticCapabilities?
     fun play(spec: HapticEffectSpec)
 }
@@ -149,8 +151,10 @@ class DictationHaptics(
 }
 
 /**
- * Real vibrator. Skips when there is no vibrator, the ringer is SILENT, or Do Not Disturb is
- * "total silence"/"alarms only". Tagged USAGE_TOUCH (API 33+ [VibrationAttributes]; older
+ * Real vibrator. Skipped only when there is no vibrator or DND is total silence/alarms only.
+ * Ringer mode is deliberately NOT checked: on Pixels an active DND/Bedtime rule reports
+ * RINGER_MODE_SILENT even though touch-usage vibration is allowed, and the USAGE_TOUCH tag
+ * already makes the system apply the user's touch-feedback setting. Tagged USAGE_TOUCH (API 33+ [VibrationAttributes]; older
  * [AudioAttributes.USAGE_ASSISTANCE_SONIFICATION]) so the system "touch feedback" setting applies.
  * minSdk is 30, so VibrationEffect.createPredefined/createOneShot and hasAmplitudeControl need no guards.
  */
@@ -168,8 +172,6 @@ class AndroidHapticOutput(private val context: Context) : HapticOutput {
     override fun capabilities(): HapticCapabilities? {
         val v = vibrator ?: return null
         if (!v.hasVibrator()) return null
-        val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        if (audio?.ringerMode == AudioManager.RINGER_MODE_SILENT) return null
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         val filter = nm?.currentInterruptionFilter
         if (filter == NotificationManager.INTERRUPTION_FILTER_NONE ||
