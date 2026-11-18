@@ -1,0 +1,5 @@
+Dictating into WhatsApp's chat-list search box should now land in the right place, and there's a new optional haptic tick.
+
+- Text no longer ends up inside the "Search..." placeholder in WhatsApp's chat-list search. Checked on a Pixel; not yet confirmed on Samsung phones.
+- The "Hide the floating icon?" header is no longer a dead tap target.
+- New optional haptic tick when dictation starts and stops, with strength and length settings and a Test button. Off by default.
