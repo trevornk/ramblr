@@ -36,6 +36,9 @@ class BehaviorActivity : BaseSettingsActivity() {
     private lateinit var longPressCancelUndoSwitch: MaterialSwitch
     private lateinit var silenceAutoStopSwitch: MaterialSwitch
     private lateinit var silenceAutoStopRow: LinearLayout
+    private lateinit var hapticsSwitch: MaterialSwitch
+    private lateinit var hapticsStrengthRow: LinearLayout
+    private lateinit var hapticsLengthRow: LinearLayout
     private lateinit var silenceAutoStopThresholdRow: LinearLayout
     /** Latest WorkManager state for the on-demand Silero VAD model download (#108), used to avoid
      *  double-enqueuing while one is already pending/running. */
@@ -260,6 +263,36 @@ class BehaviorActivity : BaseSettingsActivity() {
         ) { promptSilenceAutoStopThreshold() }
         place(Section.DICTATION, 11, silenceAutoStopThresholdRow)
 
+        // Haptic tick on dictation start/stop (#385). Off by default; strength/length rows are
+        // greyed (not hidden) while off, but "Test" always plays so the user can feel a setting.
+        hapticsSwitch = MaterialSwitch(this).apply {
+            isChecked = HapticPrefs.load(this@BehaviorActivity).enabled
+            isClickable = false
+        }
+        place(Section.DICTATION, 12, settingsRow(
+            "Vibrate on start and stop",
+            "A short haptic tick when dictation starts and stops. Follows your system vibration and touch-feedback settings",
+            hapticsSwitch,
+        ) {
+            val newVal = !hapticsSwitch.isChecked
+            HapticPrefs.setEnabled(this, newVal)
+            hapticsSwitch.isChecked = newVal
+            refresh()
+        })
+        hapticsStrengthRow = settingsRow("Vibration strength", hapticsStrengthSummary(), indent = 1) {
+            promptHapticsStrength()
+        }
+        place(Section.DICTATION, 13, hapticsStrengthRow)
+        hapticsLengthRow = settingsRow("Vibration length", hapticsLengthSummary(), indent = 1) {
+            promptHapticsLength()
+        }
+        place(Section.DICTATION, 14, hapticsLengthRow)
+        place(Section.DICTATION, 15, settingsRow(
+            "Test vibration",
+            "Plays once with the strength and length above, even if the switch is off",
+            indent = 1,
+        ) { DictationHaptics.forContext(this).playTest() })
+
         // Fallback restore path (#Feature B): if the icon is currently hidden -- including for
         // someone who turns the toggle above off while already hidden -- give them a way back
         // that doesn't depend on the notification still being around.
@@ -395,6 +428,11 @@ class BehaviorActivity : BaseSettingsActivity() {
         singleTapRestoreSwitch.isChecked = SingleTapRestoreToggle.isEnabled(this)
         longPressCancelUndoSwitch.isChecked = LongPressCancelUndoToggle.isEnabled(this)
         silenceAutoStopSwitch.isChecked = SilenceAutoStopToggle.isEnabled(this)
+        hapticsSwitch.isChecked = HapticPrefs.load(this).enabled
+        hapticsStrengthRow.findViewWithTag<TextView>("subtitle").text = hapticsStrengthSummary()
+        hapticsLengthRow.findViewWithTag<TextView>("subtitle").text = hapticsLengthSummary()
+        setRowEnabled(hapticsStrengthRow, hapticsSwitch.isChecked)
+        setRowEnabled(hapticsLengthRow, hapticsSwitch.isChecked)
         silenceAutoStopThresholdRow.findViewWithTag<TextView>("subtitle").text = silenceAutoStopThresholdSummary()
         refreshSilenceAutoStopSummary()
         vocabularyRowSub.text = VocabularyEditor.rowSummary(this)
@@ -643,6 +681,44 @@ class BehaviorActivity : BaseSettingsActivity() {
                 val dpValue = input.text.toString().toIntOrNull()
                 if (dpValue != null) PeekVisibleSize.setDp(this, dpValue)
                 refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // --- Haptics (#385) ---
+
+    private fun hapticsStrengthSummary(): String =
+        HapticPrefs.load(this).strength.name.lowercase().replaceFirstChar { it.uppercase() }
+
+    private fun hapticsLengthSummary(): String {
+        val ms = HapticPrefs.load(this).lengthMs
+        return "$ms ms (only on phones whose vibrator supports custom strength)"
+    }
+
+    private fun promptHapticsStrength() {
+        val values = HapticStrength.values()
+        val labels = values.map { it.name.lowercase().replaceFirstChar { c -> c.uppercase() } }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Vibration strength")
+            .setSingleChoiceItems(labels, values.indexOf(HapticPrefs.load(this).strength)) { dialog, which ->
+                HapticPrefs.setStrength(this, values[which])
+                refresh()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun promptHapticsLength() {
+        val presets = HapticPrefs.PRESET_LENGTHS_MS
+        val current = HapticPrefs.load(this).lengthMs
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Vibration length")
+            .setSingleChoiceItems(presets.map { "$it ms" }.toTypedArray(), presets.indexOf(current)) { dialog, which ->
+                HapticPrefs.setLengthMs(this, presets[which])
+                refresh()
+                dialog.dismiss()
             }
             .setNegativeButton("Cancel", null)
             .show()
