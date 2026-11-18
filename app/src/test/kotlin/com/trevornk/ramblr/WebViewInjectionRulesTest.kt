@@ -109,7 +109,7 @@ class WebViewInjectionRulesTest {
 
     @Test fun `whitespace-only webview composer is still treated as empty`() {
         // Sable's empty composer reports "\n" with sel=0/0 (#296); it must resolve to "" and insert plainly.
-        val real = resolveRealText("\n", false, 0, 0, isEditable = true, isFocused = true)
+        val real = resolveRealText("\n", false, 0, 0, isEditable = true, isFocused = true, viewIdResourceName = null)
         assertEquals("", real)
         assertEquals("Dictated", composeOneShotInjection(real, 0, corrected(0, 0, real.length), "Dictated"))
     }

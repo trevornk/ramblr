@@ -3179,6 +3179,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
                 candidate.textSelectionEnd,
                 candidate.isEditable,
                 candidate.isFocused,
+                candidate.viewIdResourceName,
             )
             val displayText = if (alreadyCased) text else smartCapitalize(text)
             // #300: the first partial replaces the same range a one-shot injection would, so a
@@ -3219,6 +3220,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
             session.node.textSelectionEnd,
             session.node.isEditable,
             session.node.isFocused,
+            session.node.viewIdResourceName,
         )
         val displayText = if (alreadyCased) text else smartCapitalize(text)
         // #144: recomputed rather than remembered, and deliberately safe to recompute -- the

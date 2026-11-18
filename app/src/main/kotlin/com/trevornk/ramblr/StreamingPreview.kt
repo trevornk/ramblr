@@ -464,6 +464,7 @@ fun resolveRealText(
     selectionEnd: Int,
     isEditable: Boolean,
     isFocused: Boolean,
+    viewIdResourceName: String?,
 ): String = when {
     isShowingHintText -> ""
     // A whitespace-only value is never real content. Chromium WebView composers (Sable v2's

@@ -46,6 +46,7 @@ class AccessibilityTextDestination(
         node.textSelectionEnd,
         node.isEditable,
         node.isFocused,
+        node.viewIdResourceName,
     )
 
     override fun selectionStart(): Int = node.textSelectionStart
