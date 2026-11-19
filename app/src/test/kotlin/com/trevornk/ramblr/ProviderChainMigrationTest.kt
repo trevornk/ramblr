@@ -109,10 +109,10 @@ class ProviderChainMigrationTest {
 
     @Test fun `does not overwrite an already-set transcriptionModel`() {
         val chain = ProviderChain(listOf(
-            ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.6-luna", transcriptionModel = "whisper-1"),
+            ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.6-luna", transcriptionModel = "some-custom-asr"),
         ))
         val migrated = ProviderChainMigration.migrate(chain)
-        assertEquals("whisper-1", migrated.entries[0].transcriptionModel)
+        assertEquals("some-custom-asr", migrated.entries[0].transcriptionModel)
     }
 
     @Test fun `does not seed transcriptionModel for kinds that don't support transcription`() {
@@ -152,14 +152,6 @@ class ProviderChainMigrationTest {
         assertEquals("gpt-transcribe", migrated.entries[0].transcriptionModel)
     }
 
-    @Test fun `does NOT rewrite a deliberate whisper-1 transcriptionModel -- only the seeded default is superseded`() {
-        val chain = ProviderChain(listOf(
-            ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.6-luna", transcriptionModel = "whisper-1"),
-        ))
-        val migrated = ProviderChainMigration.migrate(chain)
-        assertEquals("whisper-1", migrated.entries[0].transcriptionModel)
-    }
-
     @Test fun `an already-current gpt-transcribe transcriptionModel is untouched`() {
         val chain = ProviderChain(listOf(
             ProviderChainEntry(ProviderKind.OPENAI, "gpt-5.6-luna", transcriptionModel = "gpt-transcribe"),
@@ -168,7 +160,7 @@ class ProviderChainMigrationTest {
         assertEquals(chain, migrated)
     }
 
-    @Test fun `preserves baseUrlOverride when rewriting the transcriptionModel`() {
+    @Test fun `leaves a custom-endpoint gpt-4o-transcribe transcriptionModel untouched`() {
         val chain = ProviderChain(listOf(
             ProviderChainEntry(
                 ProviderKind.OPENAI, "gpt-5.6-luna",
@@ -176,9 +168,61 @@ class ProviderChainMigrationTest {
                 transcriptionModel = "gpt-4o-transcribe",
             ),
         ))
-        val migrated = ProviderChainMigration.migrate(chain)
-        assertEquals("gpt-transcribe", migrated.entries[0].transcriptionModel)
-        assertEquals("https://example.com/v1", migrated.entries[0].baseUrlOverride)
+        assertEquals(chain, ProviderChainMigration.migrate(chain))
+    }
+
+    // --- v5 (#401): whisper-1 / gpt-4o-transcribe / gpt-4o-mini-transcribe retired ---
+
+    private val retiredIds = listOf("whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe")
+
+    @Test fun `v5 rewrites each retired id in model and transcriptionModel on the default OpenAI endpoint`() {
+        for (id in retiredIds) {
+            for (blankUrl in listOf(null, "", "  ")) {
+                val chain = ProviderChain(listOf(
+                    ProviderChainEntry(ProviderKind.OPENAI, id, baseUrlOverride = blankUrl),
+                    ProviderChainEntry(
+                        ProviderKind.OPENAI, "gpt-5.6-luna",
+                        baseUrlOverride = blankUrl, transcriptionModel = id,
+                    ),
+                ))
+                val migrated = ProviderChainMigration.migrate(chain)
+                assertEquals(id, TranscriberClient.DEFAULT_MODEL, migrated.entries[0].model)
+                assertEquals(id, TranscriberClient.DEFAULT_MODEL, migrated.entries[1].transcriptionModel)
+                assertEquals("gpt-5.6-luna", migrated.entries[1].model)
+            }
+        }
+    }
+
+    @Test fun `v5 leaves retired ids untouched on custom endpoints and presets`() {
+        for (id in retiredIds) {
+            val chain = ProviderChain(listOf(
+                ProviderChainEntry(
+                    ProviderKind.OPENAI, id,
+                    baseUrlOverride = "https://api.groq.com/openai/v1", presetId = "groq",
+                    transcriptionModel = id,
+                ),
+                ProviderChainEntry(
+                    ProviderKind.OPENAI, "gpt-5.6-luna",
+                    baseUrlOverride = "http://localhost:8080/v1", transcriptionModel = id,
+                ),
+            ))
+            assertEquals(id, chain, ProviderChainMigration.migrate(chain))
+        }
+    }
+
+    @Test fun `v5 is idempotent`() {
+        val chain = ProviderChain(listOf(
+            ProviderChainEntry(ProviderKind.OPENAI, "whisper-1", transcriptionModel = "gpt-4o-mini-transcribe"),
+            ProviderChainEntry(ProviderKind.OPENAI, "whisper-1", baseUrlOverride = "https://x.example/v1", transcriptionModel = "whisper-1"),
+        ))
+        val once = ProviderChainMigration.migrate(chain)
+        assertEquals(once, ProviderChainMigration.migrate(once))
+    }
+
+    @Test fun `bundled catalog no longer lists retired OpenAI transcription models`() {
+        val ids = BUNDLED_DEFAULT_MODEL_CATALOG.filter { it.provider == ProviderKind.OPENAI }.map { it.modelId }
+        for (id in retiredIds) assertEquals(id, false, id in ids)
+        assertEquals(true, TranscriberClient.DEFAULT_MODEL in ids)
     }
 
     // --- v4 (2026-08-25, #194): cleanup-default refresh ---

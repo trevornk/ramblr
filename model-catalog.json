@@ -33,28 +33,6 @@
     "presetId": null
   },
   {
-    "useCase": "TRANSCRIPTION",
-    "tier": "GOOD",
-    "costPer1MInputUsd": 0,
-    "provider": "OPENAI",
-    "modelId": "gpt-4o-transcribe",
-    "displayName": "GPT-4o Transcribe",
-    "costPer1MOutputUsd": 0,
-    "description": "Previous default \u2014 solid and Ramblr-benchmark-proven, but GPT-Transcribe measures more accurate and costs less.",
-    "presetId": null
-  },
-  {
-    "useCase": "TRANSCRIPTION",
-    "tier": "ADVANCED",
-    "costPer1MInputUsd": 0,
-    "provider": "OPENAI",
-    "modelId": "whisper-1",
-    "displayName": "Whisper-1",
-    "costPer1MOutputUsd": 0,
-    "description": "OpenAI's original ASR model \u2014 highest error rate of the three; only pick it if you specifically need its legacy output formats.",
-    "presetId": null
-  },
-  {
     "useCase": "CLEANUP",
     "tier": "RECOMMENDED",
     "costPer1MInputUsd": 0.3,
