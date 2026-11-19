@@ -1727,7 +1727,7 @@ class DictationRuntime internal constructor(
                     // Honor the entry's base-URL override and TRANSCRIPTION model (#101/#102: a
                     // separate field from entry.model, which is the CLEANUP model -- OpenAI's
                     // chat-completions models like "gpt-5.4-mini" can never serve
-                    // /v1/audio/transcriptions, which needs "whisper-1"/"gpt-4o-transcribe").
+                    // /v1/audio/transcriptions, which needs "gpt-transcribe").
                     // .ifBlank { null } (#104 audit finding): the current UI never persists a
                     // literal "" here, but without this guard a hand-edited SharedPreferences
                     // value or a future regression could send an empty-string model id straight

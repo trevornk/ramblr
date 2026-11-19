@@ -10,7 +10,7 @@ package com.trevornk.ramblr
  * each feature walks the same chain looking for its first capable entry.
  *
  * Capability facts (verified against provider docs, see the Phase 1 architecture task):
- *  - OPENAI: dedicated ASR (Whisper/gpt-4o-transcribe) AND chat completions -- both capabilities.
+ *  - OPENAI: dedicated ASR (gpt-transcribe) AND chat completions -- both capabilities.
  *  - GEMINI: multimodal audio-in (no streaming) AND chat completions -- both capabilities, wired
  *    into live HTTP transports (see GeminiCleanupProvider / GeminiTranscriberClient, #96).
  *  - ANTHROPIC: chat completions only. Claude has no audio-input capability at all, so it can
@@ -87,7 +87,7 @@ fun canFallBackToCloudCleanup(chain: ProviderChain, isConfigured: (ProviderChain
  * [transcriptionModel] is the separate TRANSCRIPTION model for [kind] (#101/#102: cleanup and
  * transcription are genuinely different jobs with disjoint model namespaces on the same
  * provider -- e.g. OpenAI's chat-completions models like "gpt-5.4-mini" can never serve
- * `/v1/audio/transcriptions`, which needs "whisper-1"/"gpt-4o-transcribe" -- so one shared
+ * `/v1/audio/transcriptions`, which needs "gpt-transcribe" (or a custom endpoint's own ASR id) -- so one shared
  * [model] field silently broke transcription the moment a user picked a cleanup-only model id).
  * `null` (not blank) means "no explicit choice yet -- use this [kind]'s current transcription
  * default", the same "unset means use the shipped default" convention [model] already has via

@@ -522,7 +522,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
             modelRadioGroup.removeAllViews()
             // ModelUseCase.CLEANUP filter (#104): entriesFor(catalog, kind) alone returns EVERY
             // catalog entry for kind regardless of use case, including transcription-only entries
-            // like gpt-4o-transcribe/whisper-1 -- the mirror-image of the #101/#102 bug this same
+            // like gpt-transcribe -- the mirror-image of the #101/#102 bug this same
             // provider-chain rework fixed on the transcription side. Without this filter, picking
             // an ASR-only model here saves it as entry.model (the cleanup model), which then gets
             // POSTed to /v1/chat/completions and fails at call time. Matches the same
@@ -562,7 +562,7 @@ class CloudProviderActivity : BaseSettingsActivity() {
         // true. Cleanup and transcription are disjoint model namespaces on the same provider --
         // sharing one picker/field for both was the actual root cause of #102 (a cleanup model
         // id like "gpt-5.4-nano" silently sent to /v1/audio/transcriptions, which needs
-        // "whisper-1"/"gpt-4o-transcribe"). Container starts empty; rebuiltTranscriptionPicker
+        // "gpt-transcribe"). Container starts empty; rebuiltTranscriptionPicker
         // fills it in only when the currently-selected kind actually supports transcription.
         val transcriptionSectionHeader = TextView(this).apply {
             text = "Transcription model"

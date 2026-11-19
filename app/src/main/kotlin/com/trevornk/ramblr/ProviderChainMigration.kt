@@ -38,7 +38,20 @@ object ProviderChainMigration {
      * every version between the device's last-applied version and this one, so a device that
      * skipped several app updates still picks up every intermediate mapping in order.
      */
-    private const val MIGRATION_VERSION = 4
+    private const val MIGRATION_VERSION = 5
+
+    /**
+     * v5 (#401): OpenAI shuts these down 2027-02-26. They are rewritten to
+     * [TranscriberClient.DEFAULT_MODEL] ONLY on the default OpenAI endpoint; an entry with a
+     * non-blank [ProviderChainEntry.baseUrlOverride] (Groq, OpenRouter, self-hosted, Open WebUI)
+     * is left alone because e.g. `whisper-1` is a valid model id on many of those.
+     */
+    private val RETIRED_OPENAI_TRANSCRIPTION_IDS =
+        setOf("whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe")
+
+    private fun isCustomEndpointRetiredId(entry: ProviderChainEntry, modelId: String): Boolean =
+        entry.kind == ProviderKind.OPENAI && !entry.baseUrlOverride.isNullOrBlank() &&
+            modelId in RETIRED_OPENAI_TRANSCRIPTION_IDS
 
     /**
      * (provider, old shipped-default model id) -> new shipped-default model id. Only exact
@@ -70,6 +83,10 @@ object ProviderChainMigration {
         //   3.1-flash-lite), and SUPERSEDED_TRANSCRIPTION_MODELS deliberately has NO entry for
         //   3.1-flash-lite, so every non-null transcriptionModel keeps its value.
         (ProviderKind.GEMINI to "gemini-3.1-flash-lite") to GeminiCleanupProvider.DEFAULT_MODEL,
+        // v5 (#401): OpenAI retires whisper-1 (v1 rule above), gpt-4o-transcribe (v3 rule above)
+        // and gpt-4o-mini-transcribe on 2027-02-26. Legacy shared-`model`-field era entries.
+        // Custom-endpoint entries are exempt, see [isCustomEndpointRetiredId].
+        (ProviderKind.OPENAI to "gpt-4o-mini-transcribe") to TranscriberClient.DEFAULT_MODEL,
     )
 
     /**
@@ -77,13 +94,15 @@ object ProviderChainMigration {
      * Needed because the v2 migration SEEDED transcriptionModel with the then-current default
      * (gpt-4o-transcribe) on every transcription-capable entry -- those seeded values are just
      * as pinned as the v1-era `model` strings were, and [migrate]'s null-seeding path can never
-     * fix a non-null value. Kept as a SEPARATE map deliberately: the main map's
-     * whisper-1 -> current-default entry must NOT apply here, because a non-null whisper-1
-     * transcriptionModel can only be a deliberate picker choice (the field did not exist yet
-     * when whisper-1 was the shipped default; v2 seeded gpt-4o-transcribe, never whisper-1).
+     * fix a non-null value. Kept as a SEPARATE map deliberately. whisper-1 was preserved here
+     * through v4 as a deliberate picker choice; v5 (#401) rewrites it too because OpenAI shuts
+     * it down 2027-02-26 (custom endpoints exempt, see [isCustomEndpointRetiredId]).
      */
     private val SUPERSEDED_TRANSCRIPTION_MODELS: Map<Pair<ProviderKind, String>, String> = mapOf(
         (ProviderKind.OPENAI to "gpt-4o-transcribe") to TranscriberClient.DEFAULT_MODEL,
+        // v5 (#401)
+        (ProviderKind.OPENAI to "whisper-1") to TranscriberClient.DEFAULT_MODEL,
+        (ProviderKind.OPENAI to "gpt-4o-mini-transcribe") to TranscriberClient.DEFAULT_MODEL,
     )
 
     /** Kinds where [ProviderChainEntry.transcriptionModel] is a meaningful, seedable field --
@@ -112,11 +131,13 @@ object ProviderChainMigration {
     internal fun migrate(chain: ProviderChain): ProviderChain {
         val migratedEntries = chain.entries.map { entry ->
             val replacement = SUPERSEDED_MODELS[entry.kind to entry.model]
+                .takeUnless { isCustomEndpointRetiredId(entry, entry.model) }
             val withModelFixed = if (replacement != null) entry.copy(model = replacement) else entry
             // v3: a non-null transcriptionModel that exactly matches a superseded shipped/seeded
             // default is rewritten too (see SUPERSEDED_TRANSCRIPTION_MODELS' kdoc for why this
             // is a separate map from the `model`-field one).
             val transcriptionReplacement = withModelFixed.transcriptionModel
+                ?.takeUnless { isCustomEndpointRetiredId(withModelFixed, it) }
                 ?.let { SUPERSEDED_TRANSCRIPTION_MODELS[withModelFixed.kind to it] }
             val withTranscriptionFixed =
                 if (transcriptionReplacement != null) withModelFixed.copy(transcriptionModel = transcriptionReplacement)

@@ -86,7 +86,7 @@ data class ModelCatalogEntry(
 val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
     // --- OpenAI: cleanup (chat-completions) and transcription (dedicated ASR endpoint) are
     // DISJOINT model namespaces on the same provider -- a cleanup model like gpt-5.4-nano can
-    // never serve /v1/audio/transcriptions, and whisper-1/gpt-4o-transcribe can't serve chat
+    // never serve /v1/audio/transcriptions, and ASR models like gpt-transcribe can't serve chat
     // completions. Tagged CLEANUP vs. TRANSCRIPTION accordingly, never BOTH (#101/#102: the
     // real bug this fixes was a single shared model field silently sending a cleanup model id
     // to the transcription endpoint). ---
@@ -128,26 +128,6 @@ val BUNDLED_DEFAULT_MODEL_CATALOG: List<ModelCatalogEntry> = listOf(
         tier = ModelTier.RECOMMENDED,
         useCase = ModelUseCase.TRANSCRIPTION,
         costPer1MInputUsd = 0.0, // priced per-minute of audio ($0.0045/min), not per-token
-        costPer1MOutputUsd = 0.0,
-    ),
-    ModelCatalogEntry(
-        provider = ProviderKind.OPENAI,
-        modelId = "gpt-4o-transcribe",
-        displayName = "GPT-4o Transcribe",
-        description = "Previous default — solid and Ramblr-benchmark-proven, but GPT-Transcribe measures more accurate and costs less.",
-        tier = ModelTier.GOOD,
-        useCase = ModelUseCase.TRANSCRIPTION,
-        costPer1MInputUsd = 0.0, // priced per-minute of audio, not per-token -- catalog cost fields don't apply
-        costPer1MOutputUsd = 0.0,
-    ),
-    ModelCatalogEntry(
-        provider = ProviderKind.OPENAI,
-        modelId = "whisper-1",
-        displayName = "Whisper-1",
-        description = "OpenAI's original ASR model — highest error rate of the three; only pick it if you specifically need its legacy output formats.",
-        tier = ModelTier.ADVANCED,
-        useCase = ModelUseCase.TRANSCRIPTION,
-        costPer1MInputUsd = 0.0,
         costPer1MOutputUsd = 0.0,
     ),
 

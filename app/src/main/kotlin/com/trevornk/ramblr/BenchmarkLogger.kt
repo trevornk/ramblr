@@ -9,7 +9,7 @@ import org.json.JSONObject
 /**
  * One transcription or cleanup outcome, as attached to a [BenchmarkLogger.log] call. `model` is
  * the actual model id that served the request (not just the provider kind) so a JSONL consumer
- * can tell e.g. "gpt-4o-transcribe" apart from "whisper-1" on the same [ProviderKind.OPENAI].
+ * can tell e.g. "gpt-transcribe" apart from a custom endpoint's model on the same [ProviderKind.OPENAI].
  */
 data class BenchmarkStage(
     val provider: String,
