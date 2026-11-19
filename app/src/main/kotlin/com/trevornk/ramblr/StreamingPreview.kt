@@ -464,6 +464,11 @@ fun reconcileStreamingSpanWithCaret(
  * because both accessibility configs declare flagReportViewIds; without it the id is null and the
  * rule never matches.
  *
+ * #373: the result is LOGICAL text. WhatsApp's search field prepends U+200B to everything it holds
+ * (after ACTION_SET_TEXT "X" it holds "\u200BX", selection reported one past), so the prefix is
+ * removed last, keyed on the view id ([hiddenPrefixLength]); the destination shifts selection and
+ * caret by the same amount so every offset the writer tracks is in the coordinates it wrote.
+ *
  * Note for maintainers: every parameter is required on purpose. Defaults here would let a new call
  * site silently opt out of the #140 signals and quietly reinstate the bug; a compile error is the
  * cheaper failure. An earlier attempt at #140 compared `text == hintText` instead. That was
@@ -497,7 +502,9 @@ fun resolveRealText(
         isFocused &&
         viewIdResourceName == WHATSAPP_SEARCH_INPUT_ID &&
         !rawText.startsWith(ZERO_WIDTH_SPACE) -> ""
-    else -> rawText.orEmpty()
+    // #373: logical text, without the app-added hidden prefix (see [hiddenPrefixLength]); applied
+    // last so every placeholder/blank/hint rule above sees the raw text exactly as before.
+    else -> rawText.orEmpty().substring(hiddenPrefixLength(viewIdResourceName, rawText))
 }
 
 /** View id of WhatsApp's chat-list search field; see [resolveRealText]. */
@@ -516,7 +523,8 @@ private val HIDDEN_PREFIX_BY_VIEW_ID = mapOf(WHATSAPP_SEARCH_INPUT_ID to ZERO_WI
 
 /** Length of the app-added hidden prefix at the start of [rawText] in view [viewId], else 0. */
 fun hiddenPrefixLength(viewId: String?, rawText: String?): Int {
-    return 0
+    val prefix = HIDDEN_PREFIX_BY_VIEW_ID[viewId] ?: return 0
+    return if (rawText != null && rawText.startsWith(prefix)) prefix.length else 0
 }
 
 /** Raw node selection -> logical (text as we wrote it). Negative (unreported) is kept; never below 0. */

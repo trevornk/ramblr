@@ -667,9 +667,9 @@ class StreamingPreviewTest {
         assertEquals("", resolvedInView(whatsAppSearchPlaceholder, 1, 1, whatsAppSearchId))
     }
 
-    @Test fun `WhatsApp search real typed text starting with a ZWSP is kept`() {
-        assertEquals("​abc", resolvedInView("​abc", 4, 4, whatsAppSearchId))
-        assertEquals("​Ask", resolvedInView("​Ask", 4, 4, whatsAppSearchId))
+    @Test fun `WhatsApp search real typed text resolves without its hidden ZWSP prefix (#373)`() {
+        assertEquals("abc", resolvedInView("​abc", 4, 4, whatsAppSearchId))
+        assertEquals("Ask", resolvedInView("​Ask", 4, 4, whatsAppSearchId))
     }
 
     @Test fun `dictating into the empty WhatsApp search field does not splice the placeholder`() {
