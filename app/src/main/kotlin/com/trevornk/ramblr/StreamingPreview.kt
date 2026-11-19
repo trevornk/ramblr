@@ -507,6 +507,26 @@ const val WHATSAPP_SEARCH_INPUT_ID = "com.whatsapp:id/search_input"
 const val ZERO_WIDTH_SPACE = "​"
 
 /**
+ * Hidden prefixes a target app silently prepends to the text it holds, keyed by view id. Measured
+ * on a Pixel 10a: after ACTION_SET_TEXT "X", WhatsApp's chat-list search field holds U+200B + "X"
+ * and reports the selection in those raw coordinates. Keyed on the view id, never a blanket
+ * "strip a leading ZWSP", so another app's text that legitimately starts with U+200B is untouched.
+ */
+private val HIDDEN_PREFIX_BY_VIEW_ID = mapOf(WHATSAPP_SEARCH_INPUT_ID to ZERO_WIDTH_SPACE)
+
+/** Length of the app-added hidden prefix at the start of [rawText] in view [viewId], else 0. */
+fun hiddenPrefixLength(viewId: String?, rawText: String?): Int {
+    return 0
+}
+
+/** Raw node selection -> logical (text as we wrote it). Negative (unreported) is kept; never below 0. */
+fun logicalSelection(rawSelection: Int, prefixLength: Int): Int =
+    if (rawSelection < 0) rawSelection else (rawSelection - prefixLength).coerceAtLeast(0)
+
+/** Logical caret position -> raw node coordinates, for ACTION_SET_SELECTION. */
+fun rawCaret(logicalPosition: Int, prefixLength: Int): Int = logicalPosition + prefixLength
+
+/**
  * Decides where the very first partial of a recording should be inserted (#42). Many Android
  * EditText/keyboard implementations don't reliably report selection state via
  * `AccessibilityNodeInfo` until a real selection-changed event has fired for that field, and can
