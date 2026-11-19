@@ -37,6 +37,21 @@
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Package visibility for the optional bubble shortcut's app picker (BubbleShortcut): only
+         launcher activities and assistant entry points are visible; no QUERY_ALL_PACKAGES. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.ASSIST" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VOICE_COMMAND" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"

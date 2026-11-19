@@ -3,6 +3,7 @@ package com.trevornk.ramblr
 import android.accessibilityservice.AccessibilityService
 import android.app.KeyguardManager
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -2666,6 +2667,18 @@ open class WhisperAccessibilityService : AccessibilityService() {
             }
         )
 
+        // Optional "open an app" shortcut; absent unless the user picked an app that is still installed.
+        BubbleShortcut.resolve(this)?.let { target ->
+            container.addView(styleMenuDivider())
+            container.addView(
+                styleMenuRow(
+                    icon = null,
+                    title = getString(R.string.ring_menu_open_app_title, target.label),
+                    subtitle = getString(R.string.ring_menu_open_app_subtitle),
+                ) { onStyleMenuOpenShortcutTapped(target.component) }
+            )
+        }
+
         if (HideIconToggle.isEnabled(this)) {
             container.addView(styleMenuDivider())
             container.addView(
@@ -2935,6 +2948,12 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun onStyleMenuOpenSettingsTapped() {
         dismissStyleMenu()
         startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    /** Bubble shortcut row: plain explicit launch, no extras, no dictation, no lease. */
+    private fun onStyleMenuOpenShortcutTapped(component: ComponentName) {
+        dismissStyleMenu()
+        BubbleShortcut.launch(this, component)
     }
 
     /** "Hide icon" long-press menu row (Feature B): opens the confirmation page (#135) rather

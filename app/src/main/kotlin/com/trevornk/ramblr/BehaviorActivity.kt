@@ -34,6 +34,7 @@ class BehaviorActivity : BaseSettingsActivity() {
     private lateinit var peekSizeRow: LinearLayout
     private lateinit var singleTapRestoreSwitch: MaterialSwitch
     private lateinit var longPressCancelUndoSwitch: MaterialSwitch
+    private lateinit var bubbleShortcutRow: LinearLayout
     private lateinit var silenceAutoStopSwitch: MaterialSwitch
     private lateinit var silenceAutoStopRow: LinearLayout
     private lateinit var hapticsSwitch: MaterialSwitch
@@ -240,6 +241,13 @@ class BehaviorActivity : BaseSettingsActivity() {
             longPressCancelUndoSwitch.isChecked = newVal
         })
 
+        // Optional long-press-menu shortcut that launches an app the user picks. Off ("Not set") by default.
+        bubbleShortcutRow = settingsRow(
+            getString(R.string.bubble_shortcut_title),
+            bubbleShortcutSummary(),
+        ) { promptBubbleShortcut() }
+        place(Section.ICON, 31, bubbleShortcutRow)
+
         // Silence-based auto-stop (#108, mode 1). Off by default (see SilenceAutoStopToggle's
         // kdoc for why) and a genuine behavior change, so it gets its own paired toggle+threshold
         // rows following autoPeekSwitch/autoPeekDelayRow's existing pattern above.
@@ -427,6 +435,7 @@ class BehaviorActivity : BaseSettingsActivity() {
         autoPeekSwitch.isChecked = AutoPeekToggle.isEnabled(this)
         singleTapRestoreSwitch.isChecked = SingleTapRestoreToggle.isEnabled(this)
         longPressCancelUndoSwitch.isChecked = LongPressCancelUndoToggle.isEnabled(this)
+        bubbleShortcutRow.findViewWithTag<TextView>("subtitle").text = bubbleShortcutSummary()
         silenceAutoStopSwitch.isChecked = SilenceAutoStopToggle.isEnabled(this)
         hapticsSwitch.isChecked = HapticPrefs.load(this).enabled
         hapticsStrengthRow.findViewWithTag<TextView>("subtitle").text = hapticsStrengthSummary()
@@ -681,6 +690,28 @@ class BehaviorActivity : BaseSettingsActivity() {
                 val dpValue = input.text.toString().toIntOrNull()
                 if (dpValue != null) PeekVisibleSize.setDp(this, dpValue)
                 refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // --- Bubble shortcut ---
+
+    private fun bubbleShortcutSummary(): String =
+        BubbleShortcut.resolve(this)?.let { getString(R.string.bubble_shortcut_summary_set, it.label) }
+            ?: getString(R.string.bubble_shortcut_summary_unset)
+
+    private fun promptBubbleShortcut() {
+        val candidates = BubbleShortcut.candidates(this)
+        val current = BubbleShortcut.resolve(this)?.component
+        val labels = (listOf(getString(R.string.bubble_shortcut_none)) + candidates.map { it.label }).toTypedArray()
+        val checked = candidates.indexOfFirst { it.component == current } + 1 // 0 = None
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.bubble_shortcut_dialog_title)
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                BubbleShortcut.set(this, if (which == 0) null else candidates[which - 1].component)
+                refresh()
+                dialog.dismiss()
             }
             .setNegativeButton("Cancel", null)
             .show()

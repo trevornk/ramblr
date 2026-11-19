@@ -80,6 +80,14 @@ contain transcript text. These features use the system file picker and share she
 no storage or media permission for them; recording uses the microphone permission you already grant
 for dictation.
 
+## Bubble shortcut (off by default)
+
+Settings → Behavior → "Bubble shortcut: open an app" lets you pick an app that the floating icon's
+long-press menu can open. Ramblr stores only that app's component name, and lists launchable and
+assistant apps through narrow Android package-visibility queries (it does not hold the
+all-packages permission). Opening it is a plain launch: no transcript text, field contents or
+app context are passed to it, and it does not start a dictation.
+
 ## Quality log (off by default)
 
 Ramblr has an optional diagnostic "quality log" for comparing transcription/cleanup providers. When
