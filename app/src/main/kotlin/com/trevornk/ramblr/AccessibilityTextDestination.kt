@@ -49,15 +49,23 @@ class AccessibilityTextDestination(
         node.viewIdResourceName,
     )
 
-    override fun selectionStart(): Int = node.textSelectionStart
+    // #373: selection and caret are exposed in logical coordinates (the text as we wrote it). WhatsApp's
+    // search field holds a hidden U+200B and reports/accepts selection in raw coordinates, one past.
+    private fun hiddenPrefixLength(): Int =
+        hiddenPrefixLength(node.viewIdResourceName, node.text?.toString())
+
+    override fun selectionStart(): Int = logicalSelection(node.textSelectionStart, hiddenPrefixLength())
 
     // #300: Chromium reports select-all in a WebView composer as 0/1 whatever the text length; see
     // correctWebViewSelectAllEnd. The ancestor walk only runs when that exact signature matches.
-    override fun selectionEnd(): Int = correctWebViewSelectAllEnd(
-        node.textSelectionStart,
-        node.textSelectionEnd,
-        node.text?.length ?: 0,
-    ) { hasWebViewAncestor(node) }
+    override fun selectionEnd(): Int = logicalSelection(
+        correctWebViewSelectAllEnd(
+            node.textSelectionStart,
+            node.textSelectionEnd,
+            node.text?.length ?: 0,
+        ) { hasWebViewAncestor(node) },
+        hiddenPrefixLength(),
+    )
 
     override fun prepareForWrite() {
         logNode("Trying node", node)
@@ -76,7 +84,7 @@ class AccessibilityTextDestination(
         return ok
     }
 
-    override fun placeCaret(position: Int) = nudgeSelection(node, position)
+    override fun placeCaret(position: Int) = nudgeSelection(node, rawCaret(position, hiddenPrefixLength()))
 
     // #367: only a WebView text field (Chrome <textarea>), whose view ignores accessibility
     // selection changes for scrolling. Elsewhere the whole-field write is unchanged.
