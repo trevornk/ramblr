@@ -3,6 +3,7 @@ package com.trevornk.ramblr
 import android.accessibilityservice.AccessibilityService
 import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 
 /**
  * Commit through the accessibility input method (Android 13+).
@@ -92,6 +93,8 @@ object A11yInputCommit {
         }
     }
 
+    /** Only called from [commit], after its `SDK_INT < TIRAMISU` early return. */
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun safeConnection(
         inputMethod: android.accessibilityservice.InputMethod,
     ): android.accessibilityservice.InputMethod.AccessibilityInputConnection? = try {
