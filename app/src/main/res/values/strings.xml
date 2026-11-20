@@ -77,6 +77,11 @@
     <string name="ring_translate_unavailable_consent">Not translated: allow sending text to the cloud first. Pick the language once on the Ramblr keyboard, or turn on AI cleanup in Settings</string>
     <string name="ring_translate_unavailable_cloud">Not translated: translation needs a cloud AI provider with a key (Settings > AI cleanup)</string>
     <string name="ring_menu_open_app_title">Open %1$s</string>
+    <string name="ring_menu_style_title">Style: %1$s</string>
+    <string name="ring_menu_style_subtitle_collapsed">Tap to choose a style</string>
+    <string name="ring_menu_style_subtitle_expanded">Tap to close the list</string>
+    <string name="ring_menu_state_expanded">Expanded</string>
+    <string name="ring_menu_state_collapsed">Collapsed</string>
     <string name="ring_menu_open_app_subtitle">Your bubble shortcut</string>
     <string name="bubble_shortcut_title">Bubble shortcut: open an app</string>
     <string name="bubble_shortcut_summary_set">%1$s. Adds an Open row to the icon\'s long-press menu</string>
