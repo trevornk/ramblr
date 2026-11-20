@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import androidx.core.content.ContextCompat
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -62,7 +63,9 @@ class AutomationOffReceiverTest {
             addAction(AutomationOffReceiver.ACTION_TURN_OFF)
             addAction(AutomationOffReceiver.ACTION_DIAGNOSTIC)
         }
-        app.registerReceiver(target, filter)
+        // EXPORTED mirrors production: the manifest declares this receiver exported="true" so
+        // `am broadcast` and automation apps can reach it.
+        ContextCompat.registerReceiver(app, target, filter, ContextCompat.RECEIVER_EXPORTED)
         try {
             val resultCollector = object : BroadcastReceiver() {
                 override fun onReceive(context: Context, received: Intent) {
