@@ -114,3 +114,52 @@ object CleanupStyleMenu {
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 }
+
+/**
+ * One row of the floating icon's long-press menu, in display order. Pure data so the order and the
+ * style accordion's expanded/collapsed shape can be unit-tested without a window.
+ */
+sealed interface StyleMenuRow {
+    /** The optional bubble shortcut ("Open <app>"); only present when an app is set. */
+    data object Shortcut : StyleMenuRow
+    data object Cleanup : StyleMenuRow
+    /** The single collapsed style row: "Style: <current>" with an expand/collapse affordance. */
+    data class StyleSummary(val currentTitle: String, val expanded: Boolean) : StyleMenuRow
+    /** One style choice, shown only while the accordion is expanded, directly after [StyleSummary]. */
+    data class StyleChoice(val persona: CleanupPersona, val selected: Boolean) : StyleMenuRow
+    data object Translate : StyleMenuRow
+    data object LivePreview : StyleMenuRow
+    data object OpenSettings : StyleMenuRow
+    data object HideIcon : StyleMenuRow
+}
+
+/** What the user did to the style accordion. */
+enum class StyleAccordionEvent { SUMMARY_TAPPED, STYLE_CHOSEN }
+
+/** Next expanded state: tapping the summary toggles it; choosing a style collapses it. */
+fun styleAccordionNext(expanded: Boolean, event: StyleAccordionEvent): Boolean = when (event) {
+    StyleAccordionEvent.SUMMARY_TAPPED -> !expanded
+    StyleAccordionEvent.STYLE_CHOSEN -> false
+}
+
+/**
+ * Row order: Open <app> (if set), Cleanup, Style, Translate, Live preview, Open Ramblr Settings,
+ * Hide icon (if enabled). Collapsed, styles are ONE row naming [current]; expanded, every entry of
+ * [personas] follows that row (the current one marked selected).
+ */
+fun styleMenuRows(
+    shortcutSet: Boolean,
+    hideIconEnabled: Boolean,
+    personas: List<CleanupPersona>,
+    current: CleanupPersona,
+    expanded: Boolean,
+): List<StyleMenuRow> = buildList {
+    if (shortcutSet) add(StyleMenuRow.Shortcut)
+    add(StyleMenuRow.Cleanup)
+    add(StyleMenuRow.StyleSummary(current.title, expanded))
+    if (expanded) personas.forEach { add(StyleMenuRow.StyleChoice(it, it == current)) }
+    add(StyleMenuRow.Translate)
+    add(StyleMenuRow.LivePreview)
+    add(StyleMenuRow.OpenSettings)
+    if (hideIconEnabled) add(StyleMenuRow.HideIcon)
+}

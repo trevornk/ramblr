@@ -1,5 +1,6 @@
-New optional bubble shortcut: pick any app in Settings > Behavior and the icon's long-press menu gets an "Open <app>" row that launches it.
+New optional bubble shortcut: pick an app in Settings > Starting dictation > Floating icon > Bubble shortcut and the icon's long-press menu gets a big "Open <app>" row at the top.
 
 - Off by default; nothing changes until you choose an app.
-- Launches the app plain: no dictation text or context is passed to it, and it does not start a dictation.
-- If the chosen app is uninstalled, the setting reverts to "Not set" and the row disappears.
+- Launches the app plain: no dictation text or context is passed to it.
+- If the app is uninstalled, the setting reverts to "Not set".
+- The long-press menu is more compact: styles are grouped into one row that expands when tapped.

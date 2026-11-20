@@ -78,9 +78,39 @@ class RingStyleMenuSharedHelperTest {
         v!!.performClick()
     }
 
-    @Test fun `menu lists every style the shared model lists`() {
+    @Test fun `collapsed menu shows one Style row naming the current style and no style choices`() {
+        val shown = texts(menuOf(service()))
+
+        val currentTitle = CleanupStyleMenu.load(app, null).current.title
+        assertTrue("one Style row: $shown", shown.any { it.startsWith("Style: $currentTitle") })
+        assertFalse("choices hidden while collapsed: $shown", shown.any { it.startsWith("✓") })
+        assertFalse(shown.any { it == CleanupPersonas.CASUAL.title })
+    }
+
+    @Test fun `style row announces collapsed then expanded and tapping it again collapses`() {
+        val menu = menuOf(service())
+        fun styleRow(): View {
+            var v: View? = menu.getChildAt(0)
+            for (i in 0 until menu.childCount) {
+                val c = menu.getChildAt(i)
+                if (c.isClickable && texts(c).any { it.startsWith("Style:") }) v = c
+            }
+            return v!!
+        }
+        assertEquals("Collapsed", styleRow().stateDescription.toString())
+        styleRow().performClick()
+        assertEquals("Expanded", styleRow().stateDescription.toString())
+        assertTrue(texts(menu).any { it == CleanupPersonas.CASUAL.title })
+        styleRow().performClick()
+        assertEquals("Collapsed", styleRow().stateDescription.toString())
+        assertFalse(texts(menu).any { it == CleanupPersonas.CASUAL.title })
+    }
+
+    @Test fun `menu lists every style the shared model lists once expanded`() {
         val s = service()
-        val shown = texts(menuOf(s))
+        val menu = menuOf(s)
+        tapRowTitled(menu, "Style:")
+        val shown = texts(menu)
 
         val model = CleanupStyleMenu.load(app, "com.example.chat")
         for (persona in model.personas) {
@@ -91,7 +121,9 @@ class RingStyleMenuSharedHelperTest {
     @Test fun `tapping a style row selects it through the shared helper and the ime sees it`() {
         val s = service()
 
-        tapRowTitled(menuOf(s), "Casual")
+        val menu = menuOf(s)
+        tapRowTitled(menu, "Style:")
+        tapRowTitled(menu, "Casual")
 
         assertEquals("casual", prefs().getString("cleanup_style", null))
         assertEquals(CleanupPersonas.promptForExplicitSelection(CleanupPersonas.CASUAL), prefs().getString("post_processing_prompt", null))
@@ -107,7 +139,9 @@ class RingStyleMenuSharedHelperTest {
         val s = service()
         CleanupStyleMenu.select(app, "com.example.chat", CleanupPersonas.NOTES) // picked from the keyboard
 
-        val shown = texts(menuOf(s))
+        val menu = menuOf(s)
+        tapRowTitled(menu, "Style:")
+        val shown = texts(menu)
 
         assertTrue("keyboard pick must show as selected in the ring: $shown", shown.any { it.startsWith("✓") && it.contains(CleanupPersonas.NOTES.title) })
         assertEquals(1, shown.count { it.startsWith("✓") })

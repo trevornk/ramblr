@@ -345,6 +345,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         private const val TRANSLATE_CHIPS_PER_ROW = 3
         /** Fill of the translation language badge on the ring. */
         private const val COLOR_TRANSLATE_BADGE = 0xFF2563EB.toInt()
+        private const val COLOR_SHORTCUT_ROW_BG = 0x662563EB
         /** Busy-ring tint while cleanup runs (#294) -- the same emerald as [COLOR_CLEANUP_ON], so the
          *  ring matches the style menu's "Cleanup: On" row. */
         private const val COLOR_RING_CLEANING = 0xFF34D399.toInt()
@@ -866,6 +867,8 @@ open class WhisperAccessibilityService : AccessibilityService() {
     // field is ever non-null unless the other is too. See showStyleMenu()/dismissStyleMenu().
     private var styleMenuScrim: View? = null
     private var styleMenuView: View? = null
+    // The menu window's params, kept so an in-place content change can re-anchor it (relayoutStyleMenu).
+    private var styleMenuParams: WindowManager.LayoutParams? = null
 
     // Undo / retry-raw state (#27) — last injection only, cleared on use or expiry.
     private var pendingInjection: PendingInjection? = null
@@ -2534,6 +2537,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
             }
             wm.addView(menu, menuParams)
             styleMenuView = menu
+            styleMenuParams = menuParams
         } catch (e: WindowManager.BadTokenException) {
             Log.e(TAG, "Could not attach style menu", e)
             dismissStyleMenu()
@@ -2573,6 +2577,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
         }
         styleMenuView = null
         styleMenuScrim = null
+        styleMenuParams = null
     }
 
     /** Anchors the menu just above the ring, on whichever side has more horizontal room, then
@@ -2613,82 +2618,150 @@ open class WhisperAccessibilityService : AccessibilityService() {
     private fun buildStyleMenuContent(): LinearLayout {
         val container = styleMenuContainer()
 
+        // Read once, while building, and reused by every in-place rebuild (expand/collapse): once
+        // the menu's focusable scrim attaches it becomes the active window, so a read at tap time
+        // would name Ramblr itself instead of the app underneath.
+        val hostPackage = currentForegroundPackageName()
+        // The shortcut is resolved once per open too, so a rebuild can't flicker it in or out.
+        val shortcut = BubbleShortcut.resolve(this)
+        populateStyleMenu(container, hostPackage, shortcut, expanded = false)
+        return container
+    }
+
+    /**
+     * Fills [container] with the menu rows in the order [styleMenuRows] decides. The style list is
+     * an accordion: collapsed it is one "Style: <current>" row; tapping it clears and repopulates
+     * the SAME container with the choices expanded (no new window, no re-read of the foreground
+     * package -- [hostPackage] is the one captured at first build).
+     */
+    private fun populateStyleMenu(
+        container: LinearLayout,
+        hostPackage: String?,
+        shortcut: BubbleShortcut.Target?,
+        expanded: Boolean,
+    ) {
+        container.removeAllViews()
         // #312: the model (cleanup state, current style, the list) comes from the helper the
         // keyboard's picker also uses, so the two surfaces can never disagree.
-        // Read once, while building: once the menu's focusable scrim attaches it becomes the active
-        // window, so a read at tap time would name Ramblr itself instead of the app underneath.
-        val hostPackage = currentForegroundPackageName()
         val model = CleanupStyleMenu.load(this, hostPackage)
-        val cleanupEnabled = model.cleanupEnabled
-        val cleanupIcon = getDrawable(R.drawable.ic_cleanup)?.mutate()?.apply {
-            setTint(if (cleanupEnabled) COLOR_CLEANUP_ON else COLOR_CLEANUP_OFF)
-        }
-        container.addView(
-            styleMenuRow(
-                cleanupIcon,
-                title = if (cleanupEnabled) "Cleanup: On" else "Cleanup: Off",
-                subtitle = "Tap to turn cleanup " + if (cleanupEnabled) "off" else "on"
-            ) { onStyleMenuCleanupToggleTapped() }
+        val rows = styleMenuRows(
+            shortcutSet = shortcut != null,
+            hideIconEnabled = HideIconToggle.isEnabled(this),
+            personas = model.personas,
+            current = model.current,
+            expanded = expanded,
         )
 
-        container.addView(styleMenuDivider())
-
-        for (persona in model.personas) {
-            val title = if (persona == model.current) "✓ ${persona.title}" else persona.title
-            container.addView(styleMenuRow(icon = null, title = title, subtitle = persona.subtitle) {
-                onStyleMenuPersonaTapped(persona, hostPackage)
-            })
-        }
-
-        container.addView(styleMenuDivider())
-
-        addTranslateSection(container)
-
-        container.addView(styleMenuDivider())
-
-        val streamingEnabled = isLivePreviewOn(
-            settingEnabled = prefs().getBoolean("streaming_preview_enabled", false),
-            streamingModelInstalled = ModelDownloader.isInstalled(this, selectedStreamingModel()),
-            cloudLiveEnabled = CloudLiveToggle.isEnabled(this)
-        )
-        container.addView(
-            styleMenuRow(
-                icon = null,
-                title = if (streamingEnabled) "Live preview: On" else "Live preview: Off",
-                subtitle = "Tap to turn live preview " + if (streamingEnabled) "off" else "on"
-            ) { onStyleMenuStreamingToggleTapped() }
-        )
-
-        container.addView(styleMenuDivider())
-
-        container.addView(
-            styleMenuRow(icon = null, title = "Open Ramblr Settings", subtitle = "Full settings, models, history") {
-                onStyleMenuOpenSettingsTapped()
-            }
-        )
-
-        // Optional "open an app" shortcut; absent unless the user picked an app that is still installed.
-        BubbleShortcut.resolve(this)?.let { target ->
-            container.addView(styleMenuDivider())
-            container.addView(
-                styleMenuRow(
-                    icon = null,
-                    title = getString(R.string.ring_menu_open_app_title, target.label),
-                    subtitle = getString(R.string.ring_menu_open_app_subtitle),
-                ) { onStyleMenuOpenShortcutTapped(target.component) }
-            )
-        }
-
-        if (HideIconToggle.isEnabled(this)) {
-            container.addView(styleMenuDivider())
-            container.addView(
-                styleMenuRow(icon = null, title = "Hide icon", subtitle = "Fully hides it — you'll be asked to confirm") {
-                    onStyleMenuHideIconTapped()
+        rows.forEachIndexed { i, row ->
+            val prev = rows.getOrNull(i - 1)
+            val groupedWithPrev = row is StyleMenuRow.StyleChoice && prev != null
+            if (i > 0 && !groupedWithPrev) container.addView(styleMenuDivider())
+            when (row) {
+                StyleMenuRow.Shortcut -> if (shortcut != null) container.addView(shortcutMenuRow(shortcut))
+                StyleMenuRow.Cleanup -> {
+                    val on = model.cleanupEnabled
+                    val cleanupIcon = getDrawable(R.drawable.ic_cleanup)?.mutate()?.apply {
+                        setTint(if (on) COLOR_CLEANUP_ON else COLOR_CLEANUP_OFF)
+                    }
+                    container.addView(
+                        styleMenuRow(
+                            cleanupIcon,
+                            title = if (on) "Cleanup: On" else "Cleanup: Off",
+                            subtitle = "Tap to turn cleanup " + if (on) "off" else "on"
+                        ) { onStyleMenuCleanupToggleTapped() }
+                    )
                 }
-            )
+                is StyleMenuRow.StyleSummary -> container.addView(
+                    styleMenuRow(
+                        icon = null,
+                        title = getString(R.string.ring_menu_style_title, row.currentTitle) +
+                            if (row.expanded) " ▴" else " ▾",
+                        subtitle = getString(
+                            if (row.expanded) R.string.ring_menu_style_subtitle_expanded
+                            else R.string.ring_menu_style_subtitle_collapsed
+                        ),
+                        stateDescription = getString(
+                            if (row.expanded) R.string.ring_menu_state_expanded else R.string.ring_menu_state_collapsed
+                        ),
+                    ) {
+                        val next = styleAccordionNext(row.expanded, StyleAccordionEvent.SUMMARY_TAPPED)
+                        populateStyleMenu(container, hostPackage, shortcut, next)
+                        relayoutStyleMenu()
+                    }
+                )
+                is StyleMenuRow.StyleChoice -> {
+                    val title = if (row.selected) "✓ ${row.persona.title}" else row.persona.title
+                    container.addView(styleMenuRow(icon = null, title = title, subtitle = row.persona.subtitle) {
+                        // Selecting collapses (styleAccordionNext(.., STYLE_CHOSEN) == false); the menu
+                        // is dismissed by the tap handler exactly as before.
+                        onStyleMenuPersonaTapped(row.persona, hostPackage)
+                    })
+                }
+                StyleMenuRow.Translate -> addTranslateSection(container)
+                StyleMenuRow.LivePreview -> {
+                    val streamingEnabled = isLivePreviewOn(
+                        settingEnabled = prefs().getBoolean("streaming_preview_enabled", false),
+                        streamingModelInstalled = ModelDownloader.isInstalled(this, selectedStreamingModel()),
+                        cloudLiveEnabled = CloudLiveToggle.isEnabled(this)
+                    )
+                    container.addView(
+                        styleMenuRow(
+                            icon = null,
+                            title = if (streamingEnabled) "Live preview: On" else "Live preview: Off",
+                            subtitle = "Tap to turn live preview " + if (streamingEnabled) "off" else "on"
+                        ) { onStyleMenuStreamingToggleTapped() }
+                    )
+                }
+                StyleMenuRow.OpenSettings -> container.addView(
+                    styleMenuRow(icon = null, title = "Open Ramblr Settings", subtitle = "Full settings, models, history") {
+                        onStyleMenuOpenSettingsTapped()
+                    }
+                )
+                StyleMenuRow.HideIcon -> container.addView(
+                    styleMenuRow(icon = null, title = "Hide icon", subtitle = "Fully hides it — you'll be asked to confirm") {
+                        onStyleMenuHideIconTapped()
+                    }
+                )
+            }
         }
+    }
 
-        return container
+    /** The bubble shortcut: the menu's biggest target -- taller, accent-tinted, bold title, and the
+     *  target app's own launcher icon when the system will hand it over. */
+    private fun shortcutMenuRow(target: BubbleShortcut.Target): View {
+        val icon = try {
+            packageManager.getActivityIcon(target.component)
+        } catch (_: Exception) {
+            null // no icon is fine: the row just has none
+        }
+        return styleMenuRow(
+            icon = icon,
+            title = getString(R.string.ring_menu_open_app_title, target.label),
+            subtitle = getString(R.string.ring_menu_open_app_subtitle),
+            emphasized = true,
+            prominent = true,
+        ) { onStyleMenuOpenShortcutTapped(target.component) }
+    }
+
+    /**
+     * Re-measures and re-anchors the open menu after its content changed in place (accordion
+     * expand/collapse), so the taller panel is re-capped by [BoundedScrollView] and never pushed
+     * off-screen. A no-op when no menu window is attached (e.g. content built standalone).
+     */
+    private fun relayoutStyleMenu() {
+        val menu = styleMenuView ?: return
+        val menuParams = styleMenuParams ?: return
+        val ringParams = layoutParams ?: return
+        menu.measure(
+            View.MeasureSpec.makeMeasureSpec(screenW, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(screenH, View.MeasureSpec.AT_MOST),
+        )
+        positionStyleMenu(menuParams, ringParams, ringParams.width, menu.measuredWidth, menu.measuredHeight)
+        try {
+            (getSystemService(WINDOW_SERVICE) as WindowManager).updateViewLayout(menu, menuParams)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "Style menu detached during relayout", e)
+        }
     }
 
     /**
@@ -2842,12 +2915,26 @@ open class WhisperAccessibilityService : AccessibilityService() {
         subtitle: String,
         clickable: Boolean = true,
         emphasized: Boolean = false,
+        // The bubble shortcut: taller row, accent-tinted fill, larger icon and title.
+        prominent: Boolean = false,
+        // Announced by TalkBack after the label, e.g. "Expanded"/"Collapsed" on an accordion row.
+        stateDescription: String? = null,
         onClick: () -> Unit,
     ): View {
+        val vPad = if (prominent) 16 else 10
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding((14 * dp).toInt(), (10 * dp).toInt(), (14 * dp).toInt(), (10 * dp).toInt())
+            setPadding((14 * dp).toInt(), (vPad * dp).toInt(), (14 * dp).toInt(), (vPad * dp).toInt())
+            if (prominent) {
+                minimumHeight = (64 * dp).toInt()
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = 8 * dp
+                    setColor(COLOR_SHORTCUT_ROW_BG)
+                }
+            }
+            if (stateDescription != null) this.stateDescription = stateDescription
             // Non-clickable rows (e.g. the confirm page's question header, #373) get no listener at
             // all so they neither look nor act tappable.
             if (clickable) {
@@ -2858,8 +2945,9 @@ open class WhisperAccessibilityService : AccessibilityService() {
         if (icon != null) {
             row.addView(ImageView(this).apply {
                 setImageDrawable(icon)
-                layoutParams = LinearLayout.LayoutParams((20 * dp).toInt(), (20 * dp).toInt()).apply {
-                    marginEnd = (10 * dp).toInt()
+                val iconDp = if (prominent) 36 else 20
+                layoutParams = LinearLayout.LayoutParams((iconDp * dp).toInt(), (iconDp * dp).toInt()).apply {
+                    marginEnd = (12 * dp).toInt()
                 }
             })
         }
@@ -2867,7 +2955,7 @@ open class WhisperAccessibilityService : AccessibilityService() {
             orientation = LinearLayout.VERTICAL
             addView(TextView(this@WhisperAccessibilityService).apply {
                 text = title
-                textSize = 15f
+                textSize = if (prominent) 17f else 15f
                 setTextColor(0xFFFFFFFF.toInt())
                 if (emphasized) setTypeface(typeface, android.graphics.Typeface.BOLD)
             })
